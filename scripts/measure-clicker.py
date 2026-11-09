@@ -11,14 +11,13 @@ counts the clicks the window receives. Periods come from the kernel's
 microsecond timestamps on the virtual mouse's event node, since the window's
 event times are whole milliseconds. Needs read access to /dev/input (the
 `input` group) and a single enabled output. Leave the mouse and keyboard
-alone while it runs.
+alone while it runs. Needs `setpriv` from util-linux.
 """
 
 import contextlib
 import errno
 import os
 import queue
-import signal
 import struct
 import subprocess
 import sys
@@ -46,7 +45,12 @@ def lines_of(stream, sink):
 def spawn(args, cleanup):
     """Starts a process, registered with `cleanup` before anything else can
     fail, and a queue of its stdout lines."""
-    proc = subprocess.Popen(args, stdout=subprocess.PIPE, text=True, bufsize=1)
+    # The kernel sends the child SIGTERM when this script dies, however it
+    # dies (a signal, SIGKILL, a crash), so no clicker outlives it holding a
+    # button; the clicker releases everything on SIGTERM. `cleanup` stops it
+    # on every ordinary exit.
+    guarded = ["setpriv", "--pdeathsig", "TERM", "--", *args]
+    proc = subprocess.Popen(guarded, stdout=subprocess.PIPE, text=True, bufsize=1)
     cleanup.callback(stop, proc)
     lines = queue.Queue()
     threading.Thread(target=lines_of, args=(proc.stdout, lines), daemon=True).start()
@@ -227,15 +231,7 @@ def idle(name, clicker, seconds=60):
     )
 
 
-def exit_on_signal(signum, _frame):
-    sys.exit(128 + signum)
-
-
 def main(argv):
-    # SIGTERM or a closed terminal ends the script through the same `with`
-    # blocks as Ctrl+C, so no clicker outlives it holding a button.
-    for signum in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(signum, exit_on_signal)
     if len(argv) >= 2 and argv[0] == "rate":
         for ms in argv[1:]:
             rate(int(ms))
