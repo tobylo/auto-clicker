@@ -43,6 +43,25 @@ fn release_all_releases_every_held_button_and_key_and_nothing_else() {
 }
 
 #[test]
+fn release_all_releases_in_a_fixed_order_whatever_the_press_order() {
+    let (mut input, log) = FakeBackend::open();
+    input.press_key(key_a()).unwrap();
+    input.press_button(Button::Right).unwrap();
+    input.press_button(Button::Left).unwrap();
+
+    input.release_all().unwrap();
+
+    assert_eq!(
+        calls_after(&log, 3),
+        [
+            up(Button::Left),
+            up(Button::Right),
+            Call::Key(key_a(), PressState::Up)
+        ]
+    );
+}
+
+#[test]
 fn a_press_whose_write_failed_is_still_released() {
     let (mut input, log) = FakeBackend::open();
     log.fail_once(down(Button::Left));
