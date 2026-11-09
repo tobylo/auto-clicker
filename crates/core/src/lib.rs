@@ -1,3 +1,4 @@
-//! Core logic of auto-clicker: the click engine, the recording format and the
-//! config types. Nothing here touches an input device or D-Bus, so all of it
-//! compiles and tests without a session.
+//! Core logic of auto-clicker. Nothing in this crate opens a device, so all of
+//! it compiles and tests without `/dev/uinput`, evdev or a compositor.
+
+pub mod input;
