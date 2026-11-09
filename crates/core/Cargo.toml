@@ -6,5 +6,9 @@ edition.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+# The recording fake input backend, for other crates' tests.
+fake = []
+
 [lints]
 workspace = true
