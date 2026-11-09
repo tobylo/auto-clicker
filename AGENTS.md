@@ -28,6 +28,8 @@ What the product is and what has been decided: [docs/planning/map.md](docs/plann
 - Check arithmetic on counts, intervals and durations for overflow (`checked_*`, `saturating_*`, or a typed duration).
 - Plasma on Wayland (6.8 and later) is the primary target. X11 sessions are not a target; X11 apps under XWayland are, since games run there.
 - Never log or persist keystrokes outside an active recording the user started.
+- Code reaches the machine only from this repository. The program has no network access except an updater, if one is added, and that updater fetches releases only from `tobylo/auto-clicker` and installs nothing whose signature does not verify against the owner's release key (pinned in the program). No third-party update channel, mirror or plugin source, ever. Until an updater exists, the program opens no network sockets.
+- Dependencies come from crates.io only, pinned by the committed `Cargo.lock`, and every build uses `--locked`. A new dependency, or a major version bump, is named in the PR with its reason. Automated dependency PRs are never merged without the owner.
 
 ## How we work
 - **Failures get fixed or taken up with the owner.** Anything you see fail that ought to be looked at is yours once you see it: a tool, script, CI job, test or review step, whether or not it touches your task. A warning, a fallback or a round that carries on does not close it.
@@ -36,8 +38,8 @@ What the product is and what has been decided: [docs/planning/map.md](docs/plann
   - A subagent puts it first in its report, and its parent passes it on to the owner. If it is still open, say so again in your final message.
   - Expected failures don't count: the test you are fixing, or a job whose message says it is waiting.
 - **Branches.** One branch per PR, from origin/main, each in its own worktree: the one T3 created for your thread, or one under .claude/worktrees/.
-- **Gates.** Commit only after `scripts/gates.sh` reports that all gates passed (`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`). Do not edit the tree while the gates run, and commit exactly the tree that passed. After rewriting a test table, compare its case names with the previous commit: a rewrite can drop rows.
-- **Tests that need devices.** Unit tests never need `/dev/uinput`, an input device or a running compositor: they run against a fake backend. Tests that drive real devices are `#[ignore]`d with a reason, run by hand (`cargo test -- --ignored`) on a Plasma session, and the PR says when they last passed and on which Plasma version.
+- **Gates.** Commit only after `scripts/gates.sh` reports that all gates passed (`cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`). Do not edit the tree while the gates run, and commit exactly the tree that passed. After rewriting a test table, compare its case names with the previous commit: a rewrite can drop rows.
+- **Tests that need devices.** Unit tests never need `/dev/uinput`, an input device or a running compositor: they run against a fake backend. Tests that drive real devices are `#[ignore]`d with a reason, run by hand (`cargo test --locked -- --ignored`) on a Plasma session, and the PR says when they last passed and on which Plasma version.
 - **Timing in tests.** Assert outcomes and orders rather than elapsed times; use time bounds only as generous upper limits. CI runners are slow and noisy.
 - **Code Health.** Every source file a commit adds or changes that CodeScene scores (Rust, scripts) scores 10; documentation and data files are exempt. Before pushing, also run `analyze_change_set` against origin/main. If a file can't reach 10, ask before committing.
 - **Reproducible state.** Keep review clones, calibration lists and mutation scripts under the worktree's .claude/local/, which is git-excluded.
