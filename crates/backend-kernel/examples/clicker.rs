@@ -84,9 +84,15 @@ fn try_main() -> Result<(), String> {
 }
 
 async fn click(config: Config, args: &Args) -> Result<(), String> {
+    // A run time too large to add is an error, not "no limit".
     let deadline = args
         .run_for
-        .and_then(|run_for| Instant::now().checked_add(run_for));
+        .map(|run_for| {
+            Instant::now()
+                .checked_add(run_for)
+                .ok_or("RUN_FOR_MS is too large")
+        })
+        .transpose()?;
     let input = KernelBackend::open().map_err(|err| err.to_string())?;
     if let Some(node) = mouse_event_node(input.backend().devices()) {
         println!("mouse {}", node.display());
