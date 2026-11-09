@@ -208,6 +208,13 @@ fn clicks_and_types_into_a_real_window_and_leaves_nothing_pressed() {
     click(&mut input, &window, Button::Left, 1);
     click(&mut input, &window, Button::Right, 3);
 
+    // One notch down scrolls down; positive notches are up.
+    input.scroll(-1).unwrap();
+    window.expect("a scroll down", |line| {
+        let steps: i64 = line.strip_prefix("scroll ")?.parse().ok()?;
+        (steps > 0).then_some(())
+    });
+
     for code in [KEY_A, KEY_C, KEY_1, KEY_ENTER] {
         tap(&mut input, code);
     }

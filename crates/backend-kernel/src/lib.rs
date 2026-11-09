@@ -54,8 +54,12 @@ impl KernelBackend {
     }
 }
 
-/// Writes one frame; `emit` ends it with `SYN_REPORT`.
+/// Writes one frame; `emit` ends it with `SYN_REPORT`. Writes nothing for
+/// no events (a zero move or scroll): an empty frame means nothing.
 fn emit(device: &mut VirtualDevice, events: &[InputEvent]) -> Result<(), InputError> {
+    if events.is_empty() {
+        return Ok(());
+    }
     device.emit(events).map_err(InputError::Write)
 }
 
@@ -75,13 +79,22 @@ fn abs_event(axis: AbsoluteAxisCode, value: u16) -> InputEvent {
     InputEvent::new(EventType::ABSOLUTE.0, axis.0, i32::from(value))
 }
 
-/// The relative motion events for one frame, leaving out a zero axis.
+/// The pointer motion events for one frame, leaving out a zero axis.
 fn relative_events(dx: i32, dy: i32) -> Vec<InputEvent> {
-    [(RelativeAxisCode::REL_X, dx), (RelativeAxisCode::REL_Y, dy)]
-        .into_iter()
+    relative_axis_events(&[(RelativeAxisCode::REL_X, dx), (RelativeAxisCode::REL_Y, dy)])
+}
+
+fn relative_axis_events(axes: &[(RelativeAxisCode, i32)]) -> Vec<InputEvent> {
+    axes.iter()
+        .copied()
         .filter(|&(_, value)| value != 0)
         .map(|(axis, value)| rel_event(axis, value))
         .collect()
+}
+
+/// The wheel event for one frame, or none for zero notches.
+fn wheel_events(notches: i32) -> Vec<InputEvent> {
+    relative_axis_events(&[(RelativeAxisCode::REL_WHEEL, notches)])
 }
 
 /// The events of one absolute move.
@@ -111,28 +124,16 @@ impl InputBackend for KernelBackend {
         emit(&mut self.keyboard, &[key_event(key.code(), state)])
     }
 
-    /// Writes nothing for a zero move: an empty frame means nothing.
     fn move_relative(&mut self, dx: i32, dy: i32) -> Result<(), InputError> {
-        let events = relative_events(dx, dy);
-        if events.is_empty() {
-            return Ok(());
-        }
-        emit(&mut self.mouse, &events)
+        emit(&mut self.mouse, &relative_events(dx, dy))
     }
 
     fn move_absolute(&mut self, position: AbsolutePosition) -> Result<(), InputError> {
         emit(&mut self.mouse, &absolute_events(position))
     }
 
-    /// Writes nothing for zero notches.
     fn scroll(&mut self, notches: i32) -> Result<(), InputError> {
-        if notches == 0 {
-            return Ok(());
-        }
-        emit(
-            &mut self.mouse,
-            &[rel_event(RelativeAxisCode::REL_WHEEL, notches)],
-        )
+        emit(&mut self.mouse, &wheel_events(notches))
     }
 }
 
@@ -168,13 +169,21 @@ mod tests {
     }
 
     #[test]
+    fn wheel_events_leave_out_zero_notches() {
+        let rel = EventType::RELATIVE.0;
+        let wheel = RelativeAxisCode::REL_WHEEL.0;
+        assert_eq!(summary(&wheel_events(-2)), [(rel, wheel, -2)]);
+        assert!(wheel_events(0).is_empty());
+    }
+
+    #[test]
     fn absolute_moves_pass_a_neighbour_then_end_on_the_target() {
         let abs = EventType::ABSOLUTE.0;
         let (x, y) = (AbsoluteAxisCode::ABS_X.0, AbsoluteAxisCode::ABS_Y.0);
-        let corner = AbsolutePosition { x: u16::MAX, y: 0 };
+        let edge = AbsolutePosition { x: u16::MAX, y: 1 };
         assert_eq!(
-            summary(&absolute_events(corner)),
-            [(abs, x, 65534), (abs, y, 1), (abs, x, 65535), (abs, y, 0)]
+            summary(&absolute_events(edge)),
+            [(abs, x, 65534), (abs, y, 0), (abs, x, 65535), (abs, y, 1)]
         );
     }
 }
