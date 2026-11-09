@@ -149,15 +149,23 @@ def mouse_node(line):
 
 
 def stop(proc):
-    """Ends a process: SIGTERM, then SIGKILL if it does not exit in time."""
+    """Ends a process: SIGTERM, then SIGKILL if it does not exit in time.
+    Never raises, so closing a session goes on to its other processes."""
     if proc.poll() is not None:
         return
     proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
+    if not exited_within(proc, 5):
         proc.kill()
-        proc.wait(timeout=5)
+        if not exited_within(proc, 5):
+            print(f"warning: process {proc.pid} did not exit after SIGKILL", file=sys.stderr)
+
+
+def exited_within(proc, seconds):
+    try:
+        proc.wait(timeout=seconds)
+        return True
+    except subprocess.TimeoutExpired:
+        return False
 
 
 def rate(interval_ms):
