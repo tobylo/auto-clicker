@@ -59,7 +59,7 @@ What the product is and what has been decided: [docs/planning/map.md](docs/plann
     - "What changes" covers the behaviour a reviewer can check, in a few bullets. Name a file or type only where it helps someone read the diff.
     - Leave the process out: no session history and no log of each review round. "Local review" takes a few lines: what ran, the mutation result, and any declined finding a reviewer may raise again, with the reason.
     - Plain sentences: no filler, hype or hedging, no bold lead-in on every bullet, and nothing said twice.
-    - The same voice holds for issues, commit messages and anything else others read. None of them carries attribution or co-author lines or mentions the AI agent.
+    - The same voice holds for issues, commit messages, the README and anything else others read. None of them carries attribution or co-author lines, or mentions the AI agent or the tools that generated or host the work ("Created in …", "Generated with …"). Remove any such text a tool adds, including bot summaries appended to a PR description.
   - Comment `@codex review` on the PR's first head, and again only after a push that changes its code. Answer every bot finding (Codex and CodeRabbit): "fixed in <sha>", or the reasoning.
   - **Wait by watching, not polling.** Right after opening the PR, start the harness's PR watch where it has one (T3: `watch_pull_request`). Whenever you are waiting on bots or CI, end your turn; handle what wakes you, then end the turn again. A run that stays queued or in progress with no wake is a stall.
   - At most 5 bot rounds; then report to the owner with a recommendation.
