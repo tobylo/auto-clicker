@@ -41,8 +41,11 @@ impl Window {
             .stdout(Stdio::piped())
             .spawn()
             .expect("start the probe window (python3 with GTK 4)");
-        let stdout = child.stdout.take().expect("piped stdout");
+        let stdout = child.stdout.take();
         let (tx, lines) = mpsc::channel();
+        // Owns the child from here on, so a failure below still kills it.
+        let window = Window { child, lines };
+        let stdout = stdout.expect("piped stdout");
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 if tx.send(line).is_err() {
@@ -50,7 +53,7 @@ impl Window {
                 }
             }
         });
-        Window { child, lines }
+        window
     }
 
     /// The next line, or `None` once `deadline` has passed. Every wait on the
@@ -92,9 +95,10 @@ impl Window {
 }
 
 impl Drop for Window {
+    /// Kills the probe without waiting for it: a wait could block cleanup,
+    /// and the test process reaps it when it exits.
     fn drop(&mut self) {
         let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 
@@ -206,10 +210,12 @@ fn keys_down(syspath: &Path) -> Vec<u16> {
 #[test]
 #[ignore = "needs /dev/uinput, a Wayland session and Python with GTK 4; run by hand"]
 fn clicks_and_types_into_a_real_window_and_leaves_nothing_pressed() {
+    // Declared first so it drops last: on a panic, `input` releases what it
+    // holds and closes the devices before any window cleanup runs.
+    let window = Window::open();
     let mut input = KernelBackend::open().expect("create the virtual devices");
     let mouse = syspath(&input, DeviceRole::Mouse);
     let keyboard = syspath(&input, DeviceRole::Keyboard);
-    let window = Window::open();
     window.expect_line("ready");
 
     // Absolute motion lands in the fullscreen window, relative motion moves
