@@ -65,7 +65,8 @@ What the product is and what has been decided: [docs/planning/map.md](docs/plann
   - At most 5 bot rounds; then report to the owner with a recommendation.
 - **Ready means green.**
   - Never call a PR ready until `gh pr checks` is green on the head commit and every bot finding is answered.
-  - Merge by hand once that holds, never with `gh pr merge --auto`.
+  - Merge by hand once that holds, never with `gh pr merge --auto`. The owner has authorized every session to merge its own PR once it is green and to move on to the next unblocked issue without asking (2026-11-09). Ask only when a decision is genuinely the owner's, or something needs their hands (their machine, a GitHub app, a credential).
+  - A review bot that has not responded within 30 minutes of the PR's first head is treated as not installed: say so in the PR and in your final message, and go on with the local Codex and CodeRabbit review alone.
   - `main` requires a branch to be up to date: when main moves, update the branch and let CI run again before merging.
   - A test that fails once in CI is reproduced locally (`cargo test` repeated, under load) before it is called a flake, and fixed at its cause.
 - **After merging,** check the branch is gone, fast-forward the main checkout (`git -C <main checkout> pull --ff-only`), remove your worktree and local branch once nothing in them is needed, and check the issue is closed and its card Done. Then hand over as [docs/agents/slice-workflow.md](docs/agents/slice-workflow.md) says under "Handing over".

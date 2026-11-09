@@ -37,8 +37,10 @@ Implement the slice, commit it with the gates passing, and review it yourself on
 ## Handing over to the next session
 Use the variant that fits the work.
 
-**A slice with a successor:** after the PR merges, start the next unblocked slice's session with the `start-slice-session` skill. Then tell the owner in two lines what merged and which thread now carries the next slice, with its link. Then stop. Do not implement the next slice yourself, and do not wait for it.
+**Any merged PR with unblocked work left on the board:** after the PR merges, start the next unblocked issue's session with the `start-slice-session` skill: the highest priority first (P0, then P1, then P2), then the lowest issue number. Skip an issue a running T3 thread already carries. Start one session per merge, so the chain stays single-file. Then tell the owner in two lines what merged and which thread now carries the next slice, with its link. Then stop. Do not implement the next slice yourself, and do not wait for it.
 
-**The last slice of a milestone:** after the PR merges, check the branch is gone and the issue closed with its card Done, and fast-forward the main checkout. Tick the milestone scope gate's remaining criteria once their tests pass on the merge commit, and close it if every box is ticked and every child closed. Start no session. Tell the owner in two lines what merged and what is next. Then stop.
+**The last slice of a milestone:** after the PR merges, check the branch is gone and the issue closed with its card Done, and fast-forward the main checkout. Tick the milestone scope gate's remaining criteria once their tests pass on the merge commit, and close it if every box is ticked and every child closed. Then start the next unblocked issue as above.
 
-**A standalone task or an investigation:** after the PR merges, or once the evidence is recorded, check the branch is gone and the issue closed. Start no session, and tell the owner in two lines what was delivered.
+**A standalone task or an investigation:** after the PR merges, or once the evidence is recorded, check the branch is gone and the issue closed, then start the next unblocked issue as above.
+
+**Nothing unblocked left:** start no session. Tell the owner in two lines what merged and what is waiting on them, if anything.
