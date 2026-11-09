@@ -1,0 +1,257 @@
+//! The reader against a temporary directory in place of `/dev/input`: the
+//! watch, the status it reports and how it ends. Real keyboards are in the
+//! hand-run device test.
+
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use auto_clicker_core::hotkeys::{Bindings, HotkeyEvent, HotkeyStatus, Unavailable};
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::timeout;
+
+use super::node::Paths;
+use super::{Reader, run};
+
+/// Far beyond what any step here takes, and far below the wait it bounds,
+/// which never ends by itself.
+const BOUND: Duration = Duration::from_secs(5);
+
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new() -> TempDir {
+        let dir = std::env::temp_dir().join(format!(
+            "auto-clicker-hotkeys-{}-{:016x}",
+            std::process::id(),
+            fastrand::u64(..)
+        ));
+        fs::create_dir(&dir).unwrap();
+        TempDir(dir)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700));
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A stand-in for `/dev/input`, udev's database and `/sys/dev/char`.
+struct Fixture {
+    _root: TempDir,
+    paths: Paths,
+}
+
+impl Fixture {
+    fn new() -> Fixture {
+        let root = TempDir::new();
+        let paths = Paths {
+            dev: root.0.join("input"),
+            udev_data: root.0.join("udev"),
+            sys_char: root.0.join("char"),
+        };
+        for dir in [&paths.dev, &paths.udev_data, &paths.sys_char] {
+            fs::create_dir(dir).unwrap();
+        }
+        Fixture { _root: root, paths }
+    }
+
+    fn node(&self, name: &str) -> PathBuf {
+        self.paths.dev.join(name)
+    }
+
+    /// Makes udev's record for every node here: they are all regular files,
+    /// device number 0.
+    fn udev_done(&self) {
+        fs::write(self.paths.udev_data.join("c0:0"), b"").unwrap();
+    }
+}
+
+/// A node nobody may open. Made beside `path` and moved in, so it never
+/// appears there readable.
+fn unreadable(path: &Path) {
+    let made = path.with_extension("new");
+    fs::write(&made, b"").unwrap();
+    fs::set_permissions(&made, fs::Permissions::from_mode(0o000)).unwrap();
+    fs::rename(&made, path).unwrap();
+}
+
+/// Whether file permissions bind this process; not for root.
+fn permissions_apply() -> bool {
+    let dir = TempDir::new();
+    let probe = dir.0.join("probe");
+    unreadable(&probe);
+    fs::File::open(&probe).is_err()
+}
+
+fn unavailable(why: Unavailable) -> HotkeyEvent {
+    HotkeyEvent::Status(HotkeyStatus::Unavailable(why))
+}
+
+/// Runs the reader on `fixture` beside `drive`, which gets what the reader
+/// sends and a trigger for shutdown. Both must finish within [`BOUND`].
+async fn with_reader<F, Fut>(fixture: &Fixture, drive: F)
+where
+    F: FnOnce(mpsc::UnboundedReceiver<HotkeyEvent>, oneshot::Sender<()>) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let (events, received) = mpsc::unbounded_channel();
+    let (stop, stopped) = oneshot::channel::<()>();
+    let send = move |event| {
+        let _ = events.send(event);
+    };
+    let reader = Reader::new(fixture.paths.clone(), Bindings::default(), Vec::new(), send);
+    let reader = run(reader, async move {
+        let _ = stopped.await;
+    });
+    let both = async { tokio::join!(reader, drive(received, stop)) };
+    timeout(BOUND, both)
+        .await
+        .expect("the reader did not end in time");
+}
+
+async fn next(received: &mut mpsc::UnboundedReceiver<HotkeyEvent>) -> Option<HotkeyEvent> {
+    timeout(BOUND, received.recv()).await.ok().flatten()
+}
+
+#[tokio::test]
+async fn no_keyboard_is_reported_and_shutdown_ends_the_wait() {
+    let fixture = Fixture::new();
+    let fx = &fixture;
+    with_reader(fx, |mut received, stop| async move {
+        assert_eq!(
+            next(&mut received).await,
+            Some(unavailable(Unavailable::NoKeyboard))
+        );
+        stop.send(()).unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn shutdown_before_anything_happens_ends_at_once() {
+    let fixture = Fixture::new();
+    let fx = &fixture;
+    with_reader(fx, |_, stop| async move {
+        stop.send(()).unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_node_that_is_no_input_device_is_left_alone() {
+    let fixture = Fixture::new();
+    fs::write(fixture.node("event0"), b"").unwrap();
+    fs::write(fixture.node("mice"), b"").unwrap();
+    let fx = &fixture;
+    with_reader(fx, |mut received, stop| async move {
+        assert_eq!(
+            next(&mut received).await,
+            Some(unavailable(Unavailable::NoKeyboard))
+        );
+        fs::write(fx.node("event1"), b"").unwrap();
+        stop.send(()).unwrap();
+        assert_eq!(received.recv().await, None, "nothing else is sent");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_node_udev_has_finished_that_cannot_be_opened_means_no_permission() {
+    if !permissions_apply() {
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.udev_done();
+    let fx = &fixture;
+    with_reader(fx, |mut received, stop| async move {
+        assert_eq!(
+            next(&mut received).await,
+            Some(unavailable(Unavailable::NoKeyboard))
+        );
+        unreadable(&fx.node("event3"));
+        assert_eq!(
+            next(&mut received).await,
+            Some(unavailable(Unavailable::NoPermission))
+        );
+        fs::remove_file(fx.node("event3")).unwrap();
+        assert_eq!(
+            next(&mut received).await,
+            Some(unavailable(Unavailable::NoKeyboard))
+        );
+        stop.send(()).unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_denied_node_is_final_only_after_udev_changes_it() {
+    if !permissions_apply() {
+        return;
+    }
+    let fixture = Fixture::new();
+    unreadable(&fixture.node("event4"));
+    let fx = &fixture;
+    with_reader(fx, |mut received, stop| async move {
+        // udev has not looked at the node yet: no verdict.
+        assert_eq!(
+            next(&mut received).await,
+            Some(unavailable(Unavailable::NoKeyboard))
+        );
+        // udev sets the mode, which is still not enough.
+        let mode = fs::Permissions::from_mode(0o000);
+        fs::set_permissions(fx.node("event4"), mode).unwrap();
+        assert_eq!(
+            next(&mut received).await,
+            Some(unavailable(Unavailable::NoPermission))
+        );
+        stop.send(()).unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn losing_the_directory_ends_the_reader_and_says_why() {
+    let fixture = Fixture::new();
+    let fx = &fixture;
+    with_reader(fx, |mut received, stop| async move {
+        // Held, not sent: the reader must end by itself.
+        let _stop = stop;
+        assert_eq!(
+            next(&mut received).await,
+            Some(unavailable(Unavailable::NoKeyboard))
+        );
+        fs::remove_dir(&fx.paths.dev).unwrap();
+        let Some(HotkeyEvent::Status(HotkeyStatus::Unavailable(Unavailable::WatchFailed(why)))) =
+            next(&mut received).await
+        else {
+            panic!("no watch failure reported");
+        };
+        assert!(why.contains("went away"), "{why}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_missing_directory_is_reported() {
+    let fixture = Fixture::new();
+    fs::remove_dir(&fixture.paths.dev).unwrap();
+    let fx = &fixture;
+    with_reader(fx, |mut received, stop| async move {
+        let _stop = stop;
+        let event = next(&mut received).await;
+        assert!(
+            matches!(
+                event,
+                Some(HotkeyEvent::Status(HotkeyStatus::Unavailable(
+                    Unavailable::WatchFailed(_)
+                )))
+            ),
+            "{event:?}"
+        );
+    })
+    .await;
+}

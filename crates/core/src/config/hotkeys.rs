@@ -1,0 +1,92 @@
+//! Checks on `[hotkeys]`: each binding parses, no two actions share one, and
+//! none can be fired by the clicker's own key.
+
+use toml::Spanned;
+
+use super::raw::RawHotkeys;
+use super::validate::{Invalid, at};
+use crate::clicker::{ClickerSettings, Mode};
+use crate::hotkeys::{Binding, Bindings};
+use crate::input::Key;
+
+/// One action's binding, and where the file sets it (`None` for a default).
+struct Placed<'a> {
+    binding: Binding,
+    written: Option<&'a Spanned<String>>,
+}
+
+impl Placed<'_> {
+    fn invalid(&self, reason: String) -> Invalid {
+        match self.written {
+            Some(value) => at(value, reason),
+            None => Invalid { span: None, reason },
+        }
+    }
+}
+
+pub(super) fn hotkeys(raw: &RawHotkeys, clicker: &ClickerSettings) -> Result<Bindings, Invalid> {
+    let defaults = Bindings::default();
+    let bindings = Bindings {
+        toggle_clicking: binding(raw.toggle_clicking.as_ref(), defaults.toggle_clicking)?,
+        toggle_recording: binding(raw.toggle_recording.as_ref(), defaults.toggle_recording)?,
+        toggle_playback: binding(raw.toggle_playback.as_ref(), defaults.toggle_playback)?,
+    };
+    let placed = [
+        (&raw.toggle_clicking, bindings.toggle_clicking),
+        (&raw.toggle_recording, bindings.toggle_recording),
+        (&raw.toggle_playback, bindings.toggle_playback),
+    ]
+    .map(|(written, binding)| Placed {
+        binding,
+        written: written.as_ref(),
+    });
+    no_duplicates(&placed)?;
+    for one in &placed {
+        not_the_clicker_key(one, clicker)?;
+    }
+    Ok(bindings)
+}
+
+fn binding(written: Option<&Spanned<String>>, default: Binding) -> Result<Binding, Invalid> {
+    match written {
+        Some(value) => Binding::parse(value.get_ref()).map_err(|reason| at(value, reason)),
+        None => Ok(default),
+    }
+}
+
+/// Two actions on one binding would both fire. The error points at a binding
+/// the file wrote; at least one of the two is, since the defaults differ.
+fn no_duplicates(placed: &[Placed<'_>]) -> Result<(), Invalid> {
+    for (index, later) in placed.iter().enumerate() {
+        let Some(earlier) = placed[..index]
+            .iter()
+            .find(|earlier| earlier.binding == later.binding)
+        else {
+            continue;
+        };
+        let reason = format!("hotkey {} is bound to two actions", later.binding);
+        return Err(match later.written {
+            Some(_) => later.invalid(reason),
+            None => earlier.invalid(reason),
+        });
+    }
+    Ok(())
+}
+
+/// A key the clicker repeats or holds could fire a binding of that key alone:
+/// a remapper such as keyd re-sends the clicker's keys from its own device.
+fn not_the_clicker_key(placed: &Placed<'_>, clicker: &ClickerSettings) -> Result<(), Invalid> {
+    let binding = placed.binding;
+    let alone = binding.modifiers().is_empty().then_some(binding.key());
+    if alone.is_some() && alone == pressed_key(clicker) {
+        return Err(placed.invalid(format!(
+            "hotkey {binding} is the key the clicker presses; add a modifier, as in \"Ctrl+{binding}\""
+        )));
+    }
+    Ok(())
+}
+
+/// The key the clicker presses, in the modes that press one.
+fn pressed_key(clicker: &ClickerSettings) -> Option<Key> {
+    matches!(clicker.mode, Mode::KeyRepeat | Mode::HoldKey).then_some(clicker.key)
+}
