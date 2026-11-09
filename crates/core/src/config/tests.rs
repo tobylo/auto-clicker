@@ -200,6 +200,17 @@ fn an_interval_below_the_floor_names_its_field() {
 }
 
 #[test]
+fn the_top_rate_is_allowed() {
+    let rates = [
+        clicker("clicks_per_second = 100").interval.get(),
+        clicker("mode = \"double_click\"\nclicks_per_second = 50")
+            .interval
+            .get(),
+    ];
+    assert_eq!(rates, [INTERVAL_FLOOR, INTERVAL_FLOOR * 2]);
+}
+
+#[test]
 fn the_longest_interval_is_a_day() {
     assert_eq!(
         clicker("interval_ms = 86400000").interval.get(),
@@ -338,7 +349,12 @@ fn the_tray_start_delay_is_from_zero_to_an_hour() {
         parse("version = 1\ntray_start_delay = 3600\n").tray_start_delay,
         Duration::from_secs(3600)
     );
-    for value in ["-1", "3601", "1.5", "\"5\""] {
+    for value in ["-1", "3601"] {
+        let text = format!("version = 1\ntray_start_delay = {value}\n");
+        let expected = "tray_start_delay must be from 0 to 3600 seconds".to_owned();
+        assert_eq!(invalid(&text), (Some(2), expected));
+    }
+    for value in ["1.5", "\"5\""] {
         let (line, reason) = invalid(&format!("version = 1\ntray_start_delay = {value}\n"));
         assert_eq!(line, Some(2), "{value}: {reason}");
     }

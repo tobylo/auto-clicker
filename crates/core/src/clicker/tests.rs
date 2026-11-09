@@ -128,6 +128,9 @@ fn open() -> (Input<Timed>, CallLog, FakeLog) {
     (Input::new(backend), calls, log)
 }
 
+/// Far longer than any run in these tests, in virtual time.
+const RUNAWAY: Duration = Duration::from_secs(60 * 60);
+
 type AnySignals = Signals<
     std::pin::Pin<Box<dyn Future<Output = ()>>>,
     std::pin::Pin<Box<dyn Future<Output = ()>>>,
@@ -171,7 +174,11 @@ async fn run_on(
 ) -> Outcome {
     let start = Instant::now();
     let rng = fastrand::Rng::with_seed(1);
-    let result = run(&mut input, &settings, rng, signals).await;
+    // Every test run ends long before this; a run that never ends (a broken
+    // stop or count) fails here at once, since the paused clock jumps ahead.
+    let result = timeout(RUNAWAY, run(&mut input, &settings, rng, signals))
+        .await
+        .expect("the run never ended");
     Outcome {
         result,
         returned: start.elapsed(),
@@ -533,9 +540,17 @@ async fn a_signal_that_already_fired_prevents_the_first_action() {
 
 #[tokio::test(start_paused = true)]
 async fn shutdown_wins_over_a_stop_at_the_same_moment() {
-    let at_once = signals(sleep(ms(50)), sleep(ms(50)));
-    let outcome = run_with(settings(Mode::HoldButton, 100), at_once).await;
-    assert_eq!(outcome.ended(), Ended::ShutDown);
+    // While holding, during a click's hold, and between clicks.
+    let cases = [
+        (Mode::HoldButton, 50),
+        (Mode::Click, 105),
+        (Mode::Click, 150),
+    ];
+    for (mode, after) in cases {
+        let at_once = signals(sleep(ms(after)), sleep(ms(after)));
+        let outcome = run_with(settings(mode, 100), at_once).await;
+        assert_eq!(outcome.ended(), Ended::ShutDown, "{mode:?} at {after} ms");
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -586,6 +601,18 @@ async fn a_failed_release_is_reported_and_retried_on_the_way_out() {
     let expected = vec![(ms(0), press), (ms(10), release), (ms(10), release)];
     let actual = (write_error(&outcome), outcome.calls, outcome.held);
     assert_eq!(actual, (true, expected, Vec::new()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_run_reports_its_own_error_before_a_failed_release() {
+    let (input, calls, log) = open();
+    log.fail_once(down(Button::Left));
+    log.fail_once(up(Button::Left));
+
+    let outcome = run_on(input, &calls, counted(Mode::Click, 100, 3), never()).await;
+
+    let message = outcome.result.map_err(|err| err.to_string()).unwrap_err();
+    assert!(message.contains("Down"), "{message}");
 }
 
 #[tokio::test(start_paused = true)]

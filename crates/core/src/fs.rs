@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 /// it over `path` and flushes the directory, so after a crash `path` holds
 /// either its old contents or the new ones, never a mix. If a step before the
 /// rename fails, the temporary file is removed and `path` is untouched. If
-/// flushing the directory fails, the new contents are in place but may not
-/// survive a power loss, and the error says so.
+/// only flushing the directory fails, the error is returned although the new
+/// contents are in place: they may not survive a power loss.
 pub fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
     let dir = parent_dir(path)?;
     let (temp, mut file) = create_temp(dir, path)?;
@@ -129,7 +129,15 @@ mod tests {
 
     #[test]
     fn a_path_without_a_file_name_is_an_error() {
-        let err = atomic_write(Path::new("/"), b"x").unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        let dir = TempDir::new();
+        for path in [Path::new("/").to_owned(), dir.path().join("..")] {
+            let err = atomic_write(&path, b"x").unwrap_err();
+            assert_eq!(
+                err.kind(),
+                io::ErrorKind::InvalidInput,
+                "{}",
+                path.display()
+            );
+        }
     }
 }

@@ -3,6 +3,7 @@
 
 use std::future::{Future, pending};
 use std::pin::{Pin, pin};
+use std::time::Duration;
 
 use tokio::time::{Instant, sleep_until};
 
@@ -84,6 +85,13 @@ impl<B: InputBackend, S, D> Drop for Session<'_, B, S, D> {
     }
 }
 
+/// The deadline after `due`: an interval later, or `now` if that has already
+/// passed, so a run that fell behind continues from the present instead of
+/// catching up with a burst. `None` when it is too far away to represent.
+fn next_deadline(due: Instant, interval: Duration, now: Instant) -> Option<Instant> {
+    due.checked_add(interval).map(|next| next.max(now))
+}
+
 /// `Some(reason)` when a signal ended a wait, `None` when the wait ran out.
 type Interrupted = Option<Ended>;
 
@@ -132,11 +140,7 @@ where
             {
                 return Ok(Ended::Finished);
             }
-            // A deadline already past fires now, and the next one counts from
-            // there: a run that fell behind does not catch up with a burst.
-            deadline = deadline
-                .and_then(|due| due.checked_add(interval))
-                .map(|next| next.max(Instant::now()));
+            deadline = deadline.and_then(|due| next_deadline(due, interval, Instant::now()));
         }
     }
 
@@ -217,5 +221,22 @@ where
             () = &mut self.shutdown => Ended::ShutDown,
             () = &mut self.stop => Ended::Stopped,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_next_deadline_is_an_interval_later_or_now_when_behind() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let interval = Duration::from_millis(100);
+        let deadlines = [
+            next_deadline(at(0), interval, at(5)),
+            next_deadline(at(0), interval, at(250)),
+        ];
+        assert_eq!(deadlines, [Some(at(100)), Some(at(250))]);
     }
 }
