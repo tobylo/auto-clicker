@@ -14,6 +14,7 @@ event times are whole milliseconds. Needs read access to /dev/input (the
 alone while it runs.
 """
 
+import contextlib
 import errno
 import os
 import queue
@@ -119,10 +120,11 @@ def write_config(directory, clicker):
 
 
 class Session:
-    """The probe window and one clicker run in it."""
+    """The probe window and one clicker run in it. Every process it starts is
+    stopped on close, even when stopping another one fails."""
 
     def __init__(self, config):
-        self.procs = []
+        self.cleanup = contextlib.ExitStack()
         try:
             self.start(config)
         except BaseException:
@@ -132,16 +134,18 @@ class Session:
             raise
 
     def start(self, config):
-        self.window, self.window_lines = spawn(["python3", str(PROBE)])
-        self.procs.append(self.window)
+        self.window, self.window_lines = self.spawn(["python3", str(PROBE)])
         expect(self.window_lines, lambda l: l == "ready" or None, "the window ready")
-        self.clicker, self.clicker_lines = spawn([str(CLICKER), str(config), "1500"])
-        self.procs.append(self.clicker)
+        self.clicker, self.clicker_lines = self.spawn([str(CLICKER), str(config), "1500"])
         self.node = expect(self.clicker_lines, mouse_node, "the mouse node")
 
+    def spawn(self, args):
+        proc, lines = spawn(args)
+        self.cleanup.callback(stop, proc)
+        return proc, lines
+
     def close(self):
-        for proc in reversed(self.procs):
-            stop(proc)
+        self.cleanup.close()
 
 
 def mouse_node(line):
@@ -149,23 +153,15 @@ def mouse_node(line):
 
 
 def stop(proc):
-    """Ends a process: SIGTERM, then SIGKILL if it does not exit in time.
-    Never raises, so closing a session goes on to its other processes."""
+    """Ends a process: SIGTERM, then SIGKILL if it does not exit in time."""
     if proc.poll() is not None:
         return
     proc.terminate()
-    if not exited_within(proc, 5):
-        proc.kill()
-        if not exited_within(proc, 5):
-            print(f"warning: process {proc.pid} did not exit after SIGKILL", file=sys.stderr)
-
-
-def exited_within(proc, seconds):
     try:
-        proc.wait(timeout=seconds)
-        return True
+        proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        return False
+        proc.kill()
+        proc.wait(timeout=5)
 
 
 def rate(interval_ms):
