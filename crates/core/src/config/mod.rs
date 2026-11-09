@@ -21,10 +21,10 @@
 
 mod error;
 mod raw;
+mod read;
 mod validate;
 
 use std::ffi::OsString;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -73,35 +73,26 @@ impl Config {
 
     /// Loads the file at `path`. Never writes to it.
     pub fn load(path: &Path) -> Loaded {
-        let problem = match std::fs::read(path) {
-            Ok(bytes) => match String::from_utf8(bytes) {
-                Ok(text) => match Config::parse(&text) {
-                    Ok(config) => {
-                        return Loaded {
-                            config,
-                            error: None,
-                        };
-                    }
-                    Err(problem) => problem,
-                },
-                Err(_) => Problem::Invalid {
-                    line: None,
-                    reason: "the file is not UTF-8 text".to_owned(),
-                },
+        let parsed = read::read_config(path).and_then(|bytes| bytes.map(parse_bytes).transpose());
+        match parsed {
+            Ok(config) => Loaded {
+                config: config.unwrap_or_default(),
+                error: None,
             },
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                return Loaded {
-                    config: Config::default(),
-                    error: None,
-                };
-            }
-            Err(err) => Problem::Read(err),
-        };
-        Loaded {
-            config: Config::default(),
-            error: Some(ConfigError::new(path, problem)),
+            Err(problem) => Loaded {
+                config: Config::default(),
+                error: Some(ConfigError::new(path, problem)),
+            },
         }
     }
+}
+
+fn parse_bytes(bytes: Vec<u8>) -> Result<Config, Problem> {
+    let text = String::from_utf8(bytes).map_err(|_| Problem::Invalid {
+        line: None,
+        reason: "the file is not UTF-8 text".to_owned(),
+    })?;
+    Config::parse(&text)
 }
 
 /// Where the config file is: `$XDG_CONFIG_HOME/auto-clicker/config.toml`, or

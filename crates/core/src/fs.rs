@@ -2,6 +2,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 /// Replaces the file at `path` with `contents`, atomically.
@@ -10,8 +11,11 @@ use std::path::{Path, PathBuf};
 /// it over `path` and flushes the directory, so after a crash `path` holds
 /// either its old contents or the new ones, never a mix. If a step before the
 /// rename fails, the temporary file is removed and `path` is untouched. If
-/// only flushing the directory fails, the error is returned although the new
-/// contents are in place: they may not survive a power loss.
+/// only flushing the directory fails, the error says that the new contents
+/// are in place but may not survive a power loss.
+///
+/// The new file is readable and writable by its owner only (mode 0600):
+/// recordings hold keystrokes.
 pub fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
     let dir = parent_dir(path)?;
     let (temp, mut file) = create_temp(dir, path)?;
@@ -26,7 +30,18 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(&temp);
         return Err(err);
     }
-    File::open(dir).and_then(|dir| dir.sync_all())
+    File::open(dir)
+        .and_then(|dir| dir.sync_all())
+        .map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!(
+                    "{} was replaced, but syncing its directory failed, so the change may not \
+                 survive a power loss: {err}",
+                    path.display()
+                ),
+            )
+        })
 }
 
 /// The directory `path` is in; a bare file name is in the current directory.
@@ -61,12 +76,15 @@ fn create_temp(dir: &Path, path: &Path) -> io::Result<(PathBuf, File)> {
     let file = OpenOptions::new()
         .write(true)
         .create_new(true)
+        .mode(0o600)
         .open(&temp)?;
     Ok((temp, file))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
     use crate::test_support::TempDir;
 
@@ -79,6 +97,19 @@ mod tests {
 
         assert_eq!(fs::read(&path).unwrap(), b"version = 1\n");
         assert_eq!(dir.entries(), ["config.toml"]);
+    }
+
+    #[test]
+    fn the_new_file_is_private_to_its_owner() {
+        let dir = TempDir::new();
+        let path = dir.path().join("recording.json");
+        fs::write(&path, b"old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        atomic_write(&path, b"new").unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]
@@ -105,6 +136,29 @@ mod tests {
 
         assert_eq!(dir.entries(), ["taken"]);
         assert_eq!(fs::read(path.join("inside")).unwrap(), b"kept");
+    }
+
+    #[test]
+    fn a_failed_directory_sync_says_the_file_was_replaced() {
+        let dir = TempDir::new();
+        // Writable and searchable but not readable: the rename works, and
+        // opening the directory to sync it fails.
+        let locked = dir.path().join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o300)).unwrap();
+        let path = locked.join("config.toml");
+
+        let err = atomic_write(&path, b"new").unwrap_err();
+
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+        let replaced = err
+            .to_string()
+            .contains("was replaced, but syncing its directory");
+        assert_eq!(
+            (replaced, fs::read(&path).unwrap()),
+            (true, b"new".to_vec()),
+            "{err}"
+        );
     }
 
     #[test]

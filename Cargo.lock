@@ -24,6 +24,7 @@ name = "auto-clicker-core"
 version = "0.1.0"
 dependencies = [
  "fastrand",
+ "libc",
  "serde",
  "tokio",
  "toml",

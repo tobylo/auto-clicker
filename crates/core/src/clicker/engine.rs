@@ -31,6 +31,17 @@ pub struct Signals<S, D> {
     pub shutdown: D,
 }
 
+/// How a run ended, and the input back when it is safe to reuse.
+#[derive(Debug)]
+pub struct RunEnd<B: InputBackend> {
+    /// Why the run ended, or the first write error.
+    pub result: Result<Ended, InputError>,
+    /// The input, with nothing held. `None` when a release failed: the run
+    /// then dropped the input, which closes its devices, and the kernel
+    /// releases what they held. The caller opens the backend again.
+    pub input: Option<Input<B>>,
+}
+
 /// Runs the clicker with `settings` until it finishes, a signal fires, or a
 /// write fails.
 ///
@@ -41,34 +52,41 @@ pub struct Signals<S, D> {
 /// when a signal fires, and a signal that has already fired prevents the
 /// first action. Shutdown wins over a stop at the same moment.
 ///
-/// On every exit, including this future being dropped part way, the run
-/// releases everything held on `input`. A write error ends the run and is
-/// returned; so is a failed release when the run had ended without error.
+/// Nothing stays pressed on any exit. The run releases everything held on
+/// `input` and hands it back; if a release fails, it drops `input` instead,
+/// closing the devices. Dropping this future part way drops `input` too, so
+/// stop a run with its signal rather than by dropping it. A write error ends
+/// the run and is returned; so is a failed release when the run had ended
+/// without error.
 pub async fn run<B, S, D>(
-    input: &mut Input<B>,
+    mut input: Input<B>,
     settings: &ClickerSettings,
     rng: fastrand::Rng,
     signals: Signals<S, D>,
-) -> Result<Ended, InputError>
+) -> RunEnd<B>
 where
     B: InputBackend,
     S: Future<Output = ()>,
     D: Future<Output = ()>,
 {
     let mut session = Session {
-        input,
+        input: &mut input,
         settings,
         rng,
         stop: pin!(signals.stop),
         shutdown: pin!(signals.shutdown),
     };
     let outcome = session.drive().await;
-    let released = session.input.release_all();
-    outcome.and_then(|ended| released.map(|()| ended))
+    let released = input.release_all();
+    let clean = released.is_ok();
+    RunEnd {
+        result: outcome.and_then(|ended| released.map(|()| ended)),
+        input: clean.then_some(input),
+    }
 }
 
-/// One run's state. Dropping it releases everything held, which covers a run
-/// whose future is dropped before it returns.
+/// One run's state. It borrows the input that `run` owns, so whatever ends
+/// the run, `run` or the input's own drop releases what is held.
 struct Session<'a, B: InputBackend, S, D> {
     input: &'a mut Input<B>,
     settings: &'a ClickerSettings,
@@ -77,19 +95,24 @@ struct Session<'a, B: InputBackend, S, D> {
     shutdown: Pin<&'a mut D>,
 }
 
-impl<B: InputBackend, S, D> Drop for Session<'_, B, S, D> {
-    /// Errors cannot be reported from here; [`run`] reports them on its own
-    /// exits, and the backend's devices release the rest when they close.
-    fn drop(&mut self) {
-        let _ = self.input.release_all();
+/// The deadline after the action that was due at `due` and started at
+/// `started`: an interval after `due`, which keeps delays from adding up. If
+/// that has already passed by `now`, the run fell behind; it continues an
+/// interval after the late action started, or at `now` if even that has
+/// passed, never with a burst of catch-up actions. `None` when the deadline is
+/// too far away to represent.
+fn next_deadline(
+    (due, started): (Instant, Instant),
+    interval: Duration,
+    now: Instant,
+) -> Option<Instant> {
+    let on_schedule = due.checked_add(interval)?;
+    if on_schedule >= now {
+        return Some(on_schedule);
     }
-}
-
-/// The deadline after `due`: an interval later, or `now` if that has already
-/// passed, so a run that fell behind continues from the present instead of
-/// catching up with a burst. `None` when it is too far away to represent.
-fn next_deadline(due: Instant, interval: Duration, now: Instant) -> Option<Instant> {
-    due.checked_add(interval).map(|next| next.max(now))
+    started
+        .checked_add(interval)
+        .map(|rebased| rebased.max(now))
 }
 
 /// `Some(reason)` when a signal ended a wait, `None` when the wait ran out.
@@ -129,6 +152,7 @@ where
             if let Some(ended) = self.wait_until(deadline).await {
                 return Ok(ended);
             }
+            let started = Instant::now();
             let interval = timing::next_interval(self.settings, &mut self.rng);
             let shape = timing::shape(self.settings.mode, interval);
             if let Some(ended) = self.action(item, shape).await? {
@@ -140,7 +164,8 @@ where
             {
                 return Ok(Ended::Finished);
             }
-            deadline = deadline.and_then(|due| next_deadline(due, interval, Instant::now()));
+            deadline =
+                deadline.and_then(|due| next_deadline((due, started), interval, Instant::now()));
         }
     }
 
@@ -234,9 +259,13 @@ mod tests {
         let at = |ms| start + Duration::from_millis(ms);
         let interval = Duration::from_millis(100);
         let deadlines = [
-            next_deadline(at(0), interval, at(5)),
-            next_deadline(at(0), interval, at(250)),
+            // On time: an interval after the deadline, however late it woke.
+            next_deadline((at(0), at(1)), interval, at(11)),
+            // Due at 100, started at 350: the next is at 450, not at once.
+            next_deadline((at(100), at(350)), interval, at(360)),
+            // Even the rebased deadline has passed: now.
+            next_deadline((at(100), at(350)), interval, at(500)),
         ];
-        assert_eq!(deadlines, [Some(at(100)), Some(at(250))]);
+        assert_eq!(deadlines, [Some(at(100)), Some(at(450)), Some(at(500))]);
     }
 }

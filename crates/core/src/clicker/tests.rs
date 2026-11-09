@@ -73,7 +73,9 @@ struct Outcome {
     /// When `run` returned, relative to its start.
     returned: Duration,
     calls: Vec<Stamped>,
-    /// What `Input` still held after the run returned.
+    /// Whether the run handed the input back.
+    input_back: bool,
+    /// What the returned input still held.
     held: Vec<Held>,
 }
 
@@ -167,7 +169,7 @@ async fn run_with(settings: ClickerSettings, signals: AnySignals) -> Outcome {
 }
 
 async fn run_on(
-    mut input: Input<Timed>,
+    input: Input<Timed>,
     calls: &CallLog,
     settings: ClickerSettings,
     signals: AnySignals,
@@ -176,14 +178,15 @@ async fn run_on(
     let rng = fastrand::Rng::with_seed(1);
     // Every test run ends long before this; a run that never ends (a broken
     // stop or count) fails here at once, since the paused clock jumps ahead.
-    let result = timeout(RUNAWAY, run(&mut input, &settings, rng, signals))
+    let end = timeout(RUNAWAY, run(input, &settings, rng, signals))
         .await
         .expect("the run never ended");
     Outcome {
-        result,
+        result: end.result,
         returned: start.elapsed(),
         calls: calls.lock().unwrap().clone(),
-        held: input.held().collect(),
+        input_back: end.input.is_some(),
+        held: end.input.iter().flat_map(Input::held).collect(),
     }
 }
 
@@ -555,19 +558,15 @@ async fn shutdown_wins_over_a_stop_at_the_same_moment() {
 
 #[tokio::test(start_paused = true)]
 async fn dropping_the_run_mid_press_releases() {
-    let (mut input, calls, _) = open();
+    let (input, calls, _) = open();
     let settings = settings(Mode::HoldButton, 100);
     let rng = fastrand::Rng::with_seed(1);
 
-    let dropped = timeout(ms(50), run(&mut input, &settings, rng, never())).await;
+    let dropped = timeout(ms(50), run(input, &settings, rng, never())).await;
 
     let expected = vec![(ms(0), down(Button::Left)), (ms(50), up(Button::Left))];
-    let actual = (
-        dropped.is_err(),
-        calls.lock().unwrap().clone(),
-        input.held().count(),
-    );
-    assert_eq!(actual, (true, expected, 0));
+    let actual = (dropped.is_err(), calls.lock().unwrap().clone());
+    assert_eq!(actual, (true, expected));
 }
 
 // Errors
@@ -620,8 +619,17 @@ async fn a_failed_release_after_a_stop_is_reported() {
     let hold = settings(Mode::HoldButton, 100);
     let outcome = run_failing(up(Button::Left), hold, stop_after(ms(50))).await;
 
-    // The session's drop guard tries again.
+    // The run drops the input it could not clean, and the drop tries again.
     let releases = outcome.times_of(up(Button::Left));
-    let actual = (write_error(&outcome), releases, outcome.held);
-    assert_eq!(actual, (true, vec![ms(50), ms(50)], Vec::new()));
+    let actual = (write_error(&outcome), releases, outcome.input_back);
+    assert_eq!(actual, (true, vec![ms(50), ms(50)], false));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_clean_run_hands_the_input_back_with_nothing_held() {
+    let finished = run_with(counted(Mode::Click, 100, 1), never()).await;
+    let stopped = run_with(settings(Mode::HoldButton, 100), stop_after(ms(50))).await;
+    for outcome in [finished, stopped] {
+        assert_eq!((outcome.input_back, outcome.held), (true, Vec::new()));
+    }
 }

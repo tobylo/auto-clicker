@@ -8,7 +8,7 @@ mod engine;
 mod settings;
 mod timing;
 
-pub use engine::{Ended, Signals, run};
+pub use engine::{Ended, RunEnd, Signals, run};
 pub use settings::{
     ClickerSettings, INTERVAL_FLOOR, INTERVAL_MAX, Interval, JITTER_MAX_PERCENT, Jitter, Mode,
     Position, Repeat,

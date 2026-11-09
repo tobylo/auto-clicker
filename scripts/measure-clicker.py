@@ -14,6 +14,7 @@ event times are whole milliseconds. Needs read access to /dev/input (the
 alone while it runs.
 """
 
+import errno
 import os
 import queue
 import struct
@@ -91,15 +92,22 @@ def left_presses(data):
             yield sec * 1_000_000 + usec
 
 
-def read_presses(node, presses):
+def read_presses(node, presses, failures):
     """Appends the kernel timestamp (µs) of each left press on `node`, until
-    the device goes away. Blocking reads keep up with every event."""
-    fd = open_when_permitted(node)
+    the device goes away (ENODEV, when the clicker exits). Any other error is
+    appended to `failures`, so it is not mistaken for missing clicks. Blocking
+    reads keep up with every event."""
+    try:
+        fd = open_when_permitted(node)
+    except OSError as err:
+        failures.append(err)
+        return
     try:
         while data := os.read(fd, EVENT.size * 64):
             presses.extend(left_presses(data))
-    except OSError:
-        pass  # ENODEV: the clicker exited and its device is gone
+    except OSError as err:
+        if err.errno != errno.ENODEV:
+            failures.append(err)
     finally:
         os.close(fd)
 
@@ -114,16 +122,30 @@ class Session:
     """The probe window and one clicker run in it."""
 
     def __init__(self, config):
+        self.procs = []
+        try:
+            self.start(config)
+        except BaseException:
+            # A failed start (the clicker rejected the config, say) must not
+            # leave the fullscreen window behind.
+            self.close()
+            raise
+
+    def start(self, config):
         self.window, self.window_lines = spawn(["python3", str(PROBE)])
+        self.procs.append(self.window)
         expect(self.window_lines, lambda l: l == "ready" or None, "the window ready")
         self.clicker, self.clicker_lines = spawn([str(CLICKER), str(config), "1500"])
-        self.node = expect(
-            self.clicker_lines, lambda l: l.removeprefix("mouse ") if l.startswith("mouse ") else None, "the mouse node"
-        )
+        self.procs.append(self.clicker)
+        self.node = expect(self.clicker_lines, mouse_node, "the mouse node")
 
     def close(self):
-        for proc in (self.clicker, self.window):
+        for proc in reversed(self.procs):
             stop(proc)
+
+
+def mouse_node(line):
+    return line.removeprefix("mouse ") if line.startswith("mouse ") else None
 
 
 def stop(proc):
@@ -144,8 +166,8 @@ def rate(interval_ms):
             f'interval_ms = {interval_ms}\nrepeat = {CLICKS}\nposition = {{ x = 32768, y = 32768 }}\n',
         )
         session = Session(config)
-        presses = []
-        reader = threading.Thread(target=read_presses, args=(session.node, presses), daemon=True)
+        presses, failures = [], []
+        reader = threading.Thread(target=read_presses, args=(session.node, presses, failures), daemon=True)
         reader.start()
         try:
             timeout = 5 + CLICKS * interval_ms / 1000 * 2
@@ -155,6 +177,8 @@ def rate(interval_ms):
             reader.join(timeout=5)
             seen = sum(1 for l in drain(session.window_lines) if l == "press 1")
             session.close()
+    if failures:
+        sys.exit(f"reading the kernel's timestamps failed: {failures[0]}")
     periods = [b - a for a, b in zip(presses, presses[1:])]
     target = interval_ms * 1000
     mean = sum(periods) / len(periods) if periods else float("nan")

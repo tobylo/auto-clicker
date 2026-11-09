@@ -413,17 +413,74 @@ fn an_invalid_file_gives_the_defaults_reports_it_and_is_left_alone() {
 
 #[test]
 fn an_unreadable_file_is_a_read_error_not_a_missing_one() {
+    use std::os::unix::fs::PermissionsExt;
     let dir = TempDir::new();
     let path = dir.path().join("config.toml");
-    fs::create_dir(&path).unwrap();
+    fs::write(&path, "version = 1\n").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
 
     let loaded = Config::load(&path);
 
-    assert_eq!(loaded.config, Config::default());
-    assert!(matches!(
+    let read_error = matches!(
         loaded.error.as_ref().map(ConfigError::problem),
-        Some(Problem::Read(_))
-    ));
+        Some(Problem::Read(err)) if err.kind() == std::io::ErrorKind::PermissionDenied
+    );
+    assert_eq!((loaded.config, read_error), (Config::default(), true));
+}
+
+/// Loads `path` on another thread, failing if that takes longer than a few
+/// seconds: a load that blocks must fail the test, not hang it.
+fn load_within_bound(path: PathBuf) -> Loaded {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(Config::load(&path)));
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("loading the config blocked")
+}
+
+/// The reason a load failed without a line.
+fn reason_of(loaded: &Loaded) -> Option<&str> {
+    match loaded.error.as_ref().map(ConfigError::problem) {
+        Some(Problem::Invalid { line: None, reason }) => Some(reason),
+        _ => None,
+    }
+}
+
+#[test]
+fn only_a_regular_file_is_read() {
+    let dir = TempDir::new();
+    let fifo = dir.path().join("fifo.toml");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success());
+
+    for path in [fifo, dir.path().to_owned(), PathBuf::from("/dev/zero")] {
+        let loaded = load_within_bound(path.clone());
+        let reason = reason_of(&loaded);
+        assert_eq!(
+            reason,
+            Some("the path is not a regular file"),
+            "{}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn a_file_over_64_kib_is_rejected_unread() {
+    let dir = TempDir::new();
+    let path = dir.path().join("config.toml");
+    let at_limit = format!("version = 1\n{}", "#".repeat(64 * 1024 - 12));
+    fs::write(&path, &at_limit).unwrap();
+    assert!(
+        Config::load(&path).error.is_none(),
+        "exactly 64 KiB is read"
+    );
+
+    fs::write(&path, format!("{at_limit}#")).unwrap();
+    let loaded = Config::load(&path);
+    assert_eq!(reason_of(&loaded), Some("the file is larger than 64 KiB"));
 }
 
 #[test]

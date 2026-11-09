@@ -12,6 +12,7 @@
 //! ended. Leave the mouse and keyboard alone while it runs.
 
 use std::path::{Path, PathBuf};
+use std::pin::pin;
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -56,31 +57,33 @@ fn try_main() -> Result<(), String> {
 }
 
 async fn click(config: Config, start_delay: Duration) -> Result<(), String> {
-    let mut input = KernelBackend::open().map_err(|err| err.to_string())?;
+    let input = KernelBackend::open().map_err(|err| err.to_string())?;
     if let Some(node) = mouse_event_node(input.backend().devices()) {
         println!("mouse {}", node.display());
     }
     let mut terminate =
         signal(SignalKind::terminate()).map_err(|err| format!("could not watch SIGTERM: {err}"))?;
-    let shutdown = async {
+    let mut shutdown = pin!(async {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
             _ = terminate.recv() => {}
         }
-    };
-    tokio::time::sleep(start_delay).await;
+    });
+    // A shutdown during the start delay ends the program at once too.
+    tokio::select! {
+        () = &mut shutdown => {
+            println!("ended ShutDown");
+            return Ok(());
+        }
+        () = tokio::time::sleep(start_delay) => {}
+    }
     println!("start");
-    let ended = clicker::run(
-        &mut input,
-        &config.clicker,
-        fastrand::Rng::new(),
-        clicker::Signals {
-            stop: std::future::pending(),
-            shutdown,
-        },
-    )
-    .await
-    .map_err(|err| err.to_string())?;
+    let signals = clicker::Signals {
+        stop: std::future::pending(),
+        shutdown,
+    };
+    let end = clicker::run(input, &config.clicker, fastrand::Rng::new(), signals).await;
+    let ended = end.result.map_err(|err| err.to_string())?;
     println!("ended {ended:?}");
     Ok(())
 }
