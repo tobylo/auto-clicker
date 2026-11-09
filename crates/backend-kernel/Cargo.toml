@@ -1,0 +1,15 @@
+[package]
+name = "auto-clicker-backend-kernel"
+description = "Kernel input backend of auto-clicker: uinput virtual devices through evdev"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+auto-clicker-core = { path = "../core" }
+# The only crate that touches /dev/uinput and evdev. Default features: no tokio.
+evdev = "0.13.2"
+
+[lints]
+workspace = true
