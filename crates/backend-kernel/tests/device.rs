@@ -4,7 +4,9 @@
 //! (the `input` group), a Wayland session (Plasma 6.8 is the target) and
 //! Python with GTK 4 (`python-gobject`, `gtk4`). It opens a fullscreen window
 //! and drives the pointer and keyboard for a few seconds: leave both alone
-//! while it runs. From the repository root, inside the session:
+//! while it runs. Absolute moves span the whole output layout, so the window
+//! must cover the layout's middle: run it with a single output enabled. From
+//! the repository root, inside the session:
 //!
 //! ```text
 //! cargo test --locked -p auto-clicker-backend-kernel --test device -- --ignored
@@ -51,19 +53,27 @@ impl Window {
         Window { child, lines }
     }
 
-    /// Waits for the first line that `accept` takes, skipping others.
-    fn expect<T>(&self, what: &str, accept: impl Fn(&str) -> Option<T>) -> T {
-        let deadline = Instant::now() + LINE_TIMEOUT;
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            let line = self
-                .lines
-                .recv_timeout(left)
-                .unwrap_or_else(|_| panic!("window never reported {what}"));
+    /// The next line, or `None` once `deadline` has passed. Every wait on the
+    /// window goes through here, so a window that keeps talking cannot keep a
+    /// wait going past its deadline.
+    fn line_before(&self, deadline: Instant) -> Option<String> {
+        let left = deadline.checked_duration_since(Instant::now())?;
+        self.lines.recv_timeout(left).ok()
+    }
+
+    /// The first line before `deadline` that `accept` takes, skipping others.
+    fn find<T>(&self, deadline: Instant, accept: impl Fn(&str) -> Option<T>) -> Option<T> {
+        while let Some(line) = self.line_before(deadline) {
             if let Some(found) = accept(&line) {
-                return found;
+                return Some(found);
             }
         }
+        None
+    }
+
+    fn expect<T>(&self, what: &str, accept: impl Fn(&str) -> Option<T>) -> T {
+        self.find(Instant::now() + LINE_TIMEOUT, accept)
+            .unwrap_or_else(|| panic!("window never reported {what}"))
     }
 
     fn expect_line(&self, wanted: &str) {
@@ -71,18 +81,13 @@ impl Window {
     }
 
     fn try_motion(&self, wait: Duration) -> Option<(i64, i64)> {
-        let deadline = Instant::now() + wait;
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if let Some(found) = parse_motion(&self.lines.recv_timeout(left).ok()?) {
-                return Some(found);
-            }
-        }
+        self.find(Instant::now() + wait, parse_motion)
     }
 
     /// Drops lines that arrived so far.
     fn drain(&self) {
-        while self.lines.try_recv().is_ok() {}
+        let deadline = Instant::now() + Duration::from_millis(50);
+        while self.line_before(deadline).is_some() {}
     }
 }
 
@@ -112,7 +117,7 @@ fn wait_for_pointer(input: &mut Input<KernelBackend>, window: &Window) {
     for point in points.iter().cycle() {
         assert!(
             Instant::now() < deadline,
-            "the compositor never moved the pointer for the virtual mouse"
+            "the compositor never moved the pointer in the window: is more than one output enabled?"
         );
         input.move_absolute(*point).unwrap();
         if window.try_motion(Duration::from_millis(250)).is_some() {
@@ -130,6 +135,24 @@ fn nudge_right(input: &mut Input<KernelBackend>, window: &Window, from_x: i64) -
             parse_motion(line).filter(|&(x, _)| x > from_x)
         })
         .0
+}
+
+/// The keyboard can appear to the compositor later than the mouse. Tap Enter
+/// until the window reports its (emptied) entry, so that no asserted key is
+/// lost to a keyboard the compositor has not opened yet.
+fn wait_for_keyboard(input: &mut Input<KernelBackend>, window: &Window) {
+    let deadline = Instant::now() + LINE_TIMEOUT;
+    while Instant::now() < deadline {
+        tap(input, KEY_ENTER);
+        let retry = Instant::now() + Duration::from_millis(250);
+        if window
+            .find(retry, |line| line.starts_with("text").then_some(()))
+            .is_some()
+        {
+            return;
+        }
+    }
+    panic!("the compositor never delivered a key from the virtual keyboard");
 }
 
 fn key(code: u16) -> Key {
@@ -215,6 +238,8 @@ fn clicks_and_types_into_a_real_window_and_leaves_nothing_pressed() {
         (steps > 0).then_some(())
     });
 
+    wait_for_keyboard(&mut input, &window);
+    window.drain();
     for code in [KEY_A, KEY_C, KEY_1, KEY_ENTER] {
         tap(&mut input, code);
     }
