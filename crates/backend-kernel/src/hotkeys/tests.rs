@@ -216,28 +216,6 @@ async fn nodes_there_before_the_start_are_looked_at() {
 }
 
 #[tokio::test]
-async fn a_fifo_in_place_of_a_node_does_not_block_the_reader() {
-    let fixture = Fixture::new();
-    let fifo = fixture.node("event6");
-    let made = std::process::Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .unwrap();
-    assert!(made.success());
-    let fx = &fixture;
-    with_reader(fx, |mut received, stop| async move {
-        // An ordinary open of a FIFO waits for a writer, and the reader
-        // would never send its first status.
-        assert_eq!(
-            next(&mut received).await,
-            Some(unavailable(Unavailable::NoKeyboard))
-        );
-        stop.send(()).unwrap();
-    })
-    .await;
-}
-
-#[tokio::test]
 async fn a_denied_node_is_final_only_after_udev_changes_it() {
     if !permissions_apply() {
         return;

@@ -195,6 +195,31 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_fifo_in_place_of_a_node_does_not_block() {
+        let dir = std::env::temp_dir().join(format!(
+            "auto-clicker-fifo-{}-{:016x}",
+            std::process::id(),
+            fastrand::u64(..)
+        ));
+        fs::create_dir(&dir).unwrap();
+        let fifo = dir.join("event6");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        // On a thread of its own: a blocking open never returns, and the
+        // test must fail at its deadline rather than hang.
+        let (done, opened) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(open_file(&fifo).is_ok());
+        });
+        let result = opened.recv_timeout(std::time::Duration::from_secs(5));
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(result, Ok(true), "the open blocked or failed");
+    }
+
+    #[test]
     fn the_clock_request_is_the_kernels() {
         // From the kernel's uapi headers, include/uapi/linux/input.h.
         assert_eq!(EVIOCSCLOCKID, 0x4004_45a0);
