@@ -7,7 +7,7 @@ use std::time::Duration;
 use super::*;
 use crate::clicker::{INTERVAL_FLOOR, INTERVAL_MAX, Interval, Jitter, Mode, Position, Repeat};
 use crate::input::{AbsolutePosition, Button, Key};
-use crate::test_support::TempDir;
+use crate::test_support::{TempDir, permissions_apply};
 
 fn parse(text: &str) -> Config {
     Config::parse(text).unwrap_or_else(|err| panic!("{text:?}: {err:?}"))
@@ -414,6 +414,9 @@ fn an_invalid_file_gives_the_defaults_reports_it_and_is_left_alone() {
 #[test]
 fn an_unreadable_file_is_a_read_error_not_a_missing_one() {
     use std::os::unix::fs::PermissionsExt;
+    if !permissions_apply() {
+        return;
+    }
     let dir = TempDir::new();
     let path = dir.path().join("config.toml");
     fs::write(&path, "version = 1\n").unwrap();

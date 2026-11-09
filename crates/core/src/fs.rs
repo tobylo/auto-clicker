@@ -86,7 +86,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
-    use crate::test_support::TempDir;
+    use crate::test_support::{TempDir, permissions_apply};
 
     #[test]
     fn writes_a_new_file_and_leaves_nothing_else() {
@@ -140,6 +140,9 @@ mod tests {
 
     #[test]
     fn a_failed_directory_sync_says_the_file_was_replaced() {
+        if !permissions_apply() {
+            return;
+        }
         let dir = TempDir::new();
         // Writable and searchable but not readable: the rename works, and
         // opening the directory to sync it fails.
@@ -148,17 +151,14 @@ mod tests {
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o300)).unwrap();
         let path = locked.join("config.toml");
 
-        let err = atomic_write(&path, b"new").unwrap_err();
+        let result = atomic_write(&path, b"new");
 
+        // Restored before any assertion, so the directory can be removed.
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
-        let replaced = err
-            .to_string()
-            .contains("was replaced, but syncing its directory");
-        assert_eq!(
-            (replaced, fs::read(&path).unwrap()),
-            (true, b"new".to_vec()),
-            "{err}"
-        );
+        let message = result.err().map(|err| err.to_string()).unwrap_or_default();
+        let replaced = message.contains("was replaced, but syncing its directory");
+        let contents = fs::read(&path).unwrap();
+        assert_eq!((replaced, contents), (true, b"new".to_vec()), "{message}");
     }
 
     #[test]
