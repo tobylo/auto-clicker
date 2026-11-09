@@ -1,0 +1,188 @@
+"""The playback check: does an absolute move to a recorded position land on it?
+
+For each anchor point: move there, nudge the pointer with relative motion so
+it rests at a fractional position like a real mouse, read the original
+position (QueryPointer, sub-pixel) and the recorded one (the script, whole
+logical px), move away, replay the recorded one through the formula, and read
+where it landed. Fullscreen probe windows make QueryPointer's window-relative
+position global: each probe's origin is its output's origin.
+"""
+
+import os
+import subprocess
+
+from bus import HERE, Receiver, loaded_script, pump_for, pump_until, query_pointer, session_bus
+from inject import Injector, Session, to_absolute, wait_for_pointer
+from stats import summary
+
+PROBE = os.path.join(HERE, "harness", "probe.py")
+
+
+def run(monitors, jiggle):
+    bus = session_bus()
+    receiver = Receiver(bus)
+    probes = [start_probe(i) for i in range(monitors)]
+    try:
+        with loaded_script(bus), Injector() as injector:
+            layout = receiver_layout(receiver)
+            wait_for_pointer(injector, receiver, layout)
+            check = Check(bus, Session(injector, receiver, layout), {p.pid for p in probes})
+            rows = [check.anchor(point, jiggle) for point in anchors(layout)]
+            uncovered = [(point, check.landing(point)) for point in dead_zone(layout)]
+    finally:
+        for probe in probes:
+            stop_probe(probe)
+    report(layout, rows)
+    for point, landed in uncovered:
+        print(f"  outside every output: target {point} landed {landed}")
+
+
+def start_probe(index):
+    probe = subprocess.Popen(["python3", PROBE, str(index)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    if probe.stdout.readline().strip() != "ready":
+        raise RuntimeError(f"probe {index} did not start")
+    return probe
+
+
+def stop_probe(probe):
+    probe.stdin.close()
+    try:
+        probe.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        probe.kill()
+
+
+def receiver_layout(receiver):
+    if not pump_until(lambda: receiver.layouts, 5):
+        raise RuntimeError("no layout from the script")
+    return receiver.layouts[-1]
+
+
+def anchors(layout):
+    """A grid on every output, its four corner pixels, and the dead zone."""
+    points = []
+    for out in layout.outputs:
+        points += grid(out)
+        right, bottom = out["x"] + out["w"] - 1, out["y"] + out["h"] - 1
+        points += [(out["x"], out["y"]), (right, out["y"]), (out["x"], bottom), (right, bottom)]
+    return points
+
+
+def grid(out):
+    xs = [out["x"] + out["w"] * i // 6 for i in range(1, 6)]
+    ys = [out["y"] + out["h"] * j // 4 for j in range(1, 4)]
+    return [(x, y) for x in xs for y in ys]
+
+
+def dead_zone(layout):
+    """Points inside the bounding box that no output covers."""
+    w, h = layout.width, layout.height
+    candidates = [(x, y) for x in (w // 8, w // 2, w - w // 8) for y in (h // 8, h - h // 16)]
+    return [p for p in candidates if output_at(layout, *p) is None]
+
+
+def output_at(layout, x, y):
+    for out in layout.outputs:
+        if out["x"] <= x < out["x"] + out["w"] and out["y"] <= y < out["y"] + out["h"]:
+            return out
+    return None
+
+
+class Check:
+    def __init__(self, bus, session, probe_pids):
+        self.bus, self.receiver, self.injector = bus, session.receiver, session.injector
+        self.layout, self.probe_pids = session.layout, probe_pids
+
+    def move(self, command):
+        before = self.receiver.last()
+        self.injector.run(command)
+        pump_until(lambda: self.receiver.last() is not before, 1.0)
+        pump_for(0.03)
+
+    def move_to(self, x, y):
+        self.move(f"abs {to_absolute(x, self.layout.width)} {to_absolute(y, self.layout.height)}")
+
+    def landing(self, point):
+        self.move_to(self.layout.width // 2 + 37, self.layout.height // 3)
+        self.move_to(*point)
+        last = self.receiver.last()
+        return (last.x, last.y)
+
+    def global_position(self):
+        """QueryPointer made global; None when no probe is under the pointer."""
+        pid, rel_x, rel_y = query_pointer(self.bus)
+        last = self.receiver.last()
+        out = output_at(self.layout, last.x, last.y)
+        if pid not in self.probe_pids or out is None:
+            return None
+        return (out["x"] + rel_x, out["y"] + rel_y, out["scale"])
+
+    def anchor(self, point, jiggle):
+        self.move_to(*point)
+        direct = self.global_position()
+        out = output_at(self.layout, *point) or self.layout.outputs[0]
+        self.move(f"rel {inward(point[0], out, 'x') * jiggle} {inward(point[1], out, 'y') * jiggle}")
+        original = self.global_position()
+        recorded = (self.receiver.last().x, self.receiver.last().y)
+        self.move_to(self.layout.width // 2 + 37, self.layout.height // 3)
+        self.move_to(*recorded)
+        landed = self.global_position()
+        script = (self.receiver.last().x, self.receiver.last().y)
+        return {"anchor": point, "direct": direct, "original": original, "recorded": recorded, "landed": landed, "script": script}
+
+
+def inward(value, out, axis):
+    start, size = (out["x"], out["w"]) if axis == "x" else (out["y"], out["h"])
+    return 1 if value < start + size / 2 else -1
+
+
+def errors(rows, a, b):
+    """Max-axis distance between two positions, logical and physical px."""
+    logical, physical = [], []
+    for row in rows:
+        first, second = row[a], row[b]
+        if first is None or second is None:
+            continue
+        pa, pb = first[:2], second[:2]
+        scale = second[2] if len(second) > 2 else first[2]
+        d = max(abs(pa[0] - pb[0]), abs(pa[1] - pb[1]))
+        logical.append(d)
+        physical.append(d * scale)
+    return logical, physical
+
+
+COMPARISONS = [
+    ("move to anchor pixel -> landed", "anchor_pos", "direct"),
+    ("replay recorded -> landed", "recorded_pos", "landed"),
+    ("original (sub-pixel) -> replayed", "original", "landed"),
+]
+
+
+def report(layout, rows):
+    print(f"layout {layout.width}x{layout.height}: {layout.outputs}")
+    for row in rows:
+        row["anchor_pos"] = (*row["anchor"], 1.0)
+        row["recorded_pos"] = (*row["recorded"], 1.0)
+        row["script_pos"] = (*row["script"], 1.0)
+    for title, a, b in COMPARISONS:
+        logical, physical = errors(rows, a, b)
+        print(f"  {title}: logical {summary(logical, 'px')}")
+        print(f"  {' ' * len(title)}  physical {summary(physical, 'px')}")
+    report_outliers(rows)
+
+
+def distance(row, a, b):
+    found = errors([row], a, b)[0]
+    return found[0] if found else 0.0
+
+
+def report_outliers(rows):
+    for row in rows:
+        if distance(row, "anchor_pos", "direct") > 0.5:
+            print(f"  direct move off: anchor {row['anchor']} landed {row['direct']}")
+    unseen = [row["anchor"] for row in rows if row["landed"] is None or row["direct"] is None]
+    print(f"  no probe under the pointer at: {unseen}")
+    disagree = [row for row in rows if row["landed"] and distance(row, "script_pos", "landed") > 0.5001]
+    print(f"  QueryPointer vs script disagree (>0.5 px): {len(disagree)}")
+    for row in sorted(rows, key=lambda r: -distance(r, "recorded_pos", "landed"))[:3]:
+        print(f"  worst: anchor {row['anchor']} recorded {row['recorded']} landed {row['landed']} original {row['original']}")
