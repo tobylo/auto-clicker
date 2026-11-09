@@ -1,0 +1,5 @@
+# PR descriptions are written by the PR's author only (AGENTS.md, "The PR").
+reviews:
+  high_level_summary: false
+  high_level_summary_in_walkthrough: true
+  poem: false
