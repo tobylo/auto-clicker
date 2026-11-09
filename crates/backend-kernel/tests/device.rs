@@ -9,13 +9,16 @@
 //! the repository root, inside the session:
 //!
 //! ```text
-//! cargo test --locked -p auto-clicker-backend-kernel --test device -- --ignored
+//! cargo test --locked -p auto-clicker-backend-kernel --test device -- --ignored --test-threads=1
 //! ```
+//!
+//! One window at a time: the tests share the screen, so run them one by one.
 
 // clippy.toml exempts `#[test]` functions only; this whole file is test code.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -28,23 +31,31 @@ use auto_clicker_core::input::{AbsolutePosition, Button, Input, Key};
 /// Generous: a window or a device can take a moment to appear.
 const LINE_TIMEOUT: Duration = Duration::from_secs(10);
 
-struct Window {
+/// A child process and the lines it prints: the probe window, or a helper
+/// run of this test binary.
+struct Process {
     child: Child,
     lines: Receiver<String>,
 }
 
-impl Window {
-    fn open() -> Window {
-        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/probe_window.py");
-        let mut child = Command::new("python3")
-            .arg(script)
+/// The probe window: a fullscreen GTK window that prints the input it gets.
+fn open_window() -> Process {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/probe_window.py");
+    let mut command = Command::new("python3");
+    command.arg(script);
+    Process::spawn(command, "start the probe window (python3 with GTK 4)")
+}
+
+impl Process {
+    fn spawn(mut command: Command, what: &str) -> Process {
+        let mut child = command
             .stdout(Stdio::piped())
             .spawn()
-            .expect("start the probe window (python3 with GTK 4)");
+            .unwrap_or_else(|err| panic!("{what}: {err}"));
         let stdout = child.stdout.take();
         let (tx, lines) = mpsc::channel();
         // Owns the child from here on, so a failure below still kills it.
-        let window = Window { child, lines };
+        let process = Process { child, lines };
         let stdout = stdout.expect("piped stdout");
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -53,7 +64,7 @@ impl Window {
                 }
             }
         });
-        window
+        process
     }
 
     /// The next line, or `None` once `deadline` has passed. Every wait on the
@@ -76,7 +87,7 @@ impl Window {
 
     fn expect<T>(&self, what: &str, accept: impl Fn(&str) -> Option<T>) -> T {
         self.find(Instant::now() + LINE_TIMEOUT, accept)
-            .unwrap_or_else(|| panic!("window never reported {what}"))
+            .unwrap_or_else(|| panic!("never reported {what}"))
     }
 
     fn expect_line(&self, wanted: &str) {
@@ -94,8 +105,8 @@ impl Window {
     }
 }
 
-impl Drop for Window {
-    /// Kills the probe without waiting for it: a wait could block cleanup,
+impl Drop for Process {
+    /// Kills the process without waiting for it: a wait could block cleanup,
     /// and the test process reaps it when it exits.
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -115,7 +126,7 @@ const CENTER: AbsolutePosition = AbsolutePosition { x: 32768, y: 32768 };
 /// The compositor adds a new device a moment after it appears and says
 /// nothing when it has, so move until the window sees motion. Alternating
 /// between two points makes every attempt a real move.
-fn wait_for_pointer(input: &mut Input<KernelBackend>, window: &Window) {
+fn wait_for_pointer(input: &mut Input<KernelBackend>, window: &Process) {
     let points = [CENTER, AbsolutePosition { x: 16384, y: 32768 }];
     let deadline = Instant::now() + LINE_TIMEOUT;
     for point in points.iter().cycle() {
@@ -131,7 +142,7 @@ fn wait_for_pointer(input: &mut Input<KernelBackend>, window: &Window) {
 }
 
 /// Moves right by a relative amount and waits until the window sees it.
-fn nudge_right(input: &mut Input<KernelBackend>, window: &Window, from_x: i64) -> i64 {
+fn nudge_right(input: &mut Input<KernelBackend>, window: &Process, from_x: i64) -> i64 {
     window.drain();
     input.move_relative(80, 0).unwrap();
     window
@@ -144,7 +155,7 @@ fn nudge_right(input: &mut Input<KernelBackend>, window: &Window, from_x: i64) -
 /// The keyboard can appear to the compositor later than the mouse. Tap a key
 /// until the window reports it, so that no asserted key is lost to a keyboard
 /// the compositor has not opened yet.
-fn wait_for_keyboard(input: &mut Input<KernelBackend>, window: &Window) {
+fn wait_for_keyboard(input: &mut Input<KernelBackend>, window: &Process) {
     let deadline = Instant::now() + LINE_TIMEOUT;
     let wanted = format!("key {KEY_A}");
     while Instant::now() < deadline {
@@ -173,7 +184,7 @@ fn tap(input: &mut Input<KernelBackend>, code: u16) {
     input.release_key(key(code)).unwrap();
 }
 
-fn click(input: &mut Input<KernelBackend>, window: &Window, button: Button, number: u8) {
+fn click(input: &mut Input<KernelBackend>, window: &Process, button: Button, number: u8) {
     input.press_button(button).unwrap();
     window.expect_line(&format!("press {number}"));
     input.release_button(button).unwrap();
@@ -212,7 +223,7 @@ fn keys_down(syspath: &Path) -> Vec<u16> {
 fn clicks_and_types_into_a_real_window_and_leaves_nothing_pressed() {
     // Declared first so it drops last: on a panic, `input` releases what it
     // holds and closes the devices before any window cleanup runs.
-    let window = Window::open();
+    let window = open_window();
     let mut input = KernelBackend::open().expect("create the virtual devices");
     let mouse = syspath(&input, DeviceRole::Mouse);
     let keyboard = syspath(&input, DeviceRole::Keyboard);
@@ -272,4 +283,110 @@ fn clicks_and_types_into_a_real_window_and_leaves_nothing_pressed() {
     drop(input);
     window.expect_line("release 1");
     assert!(!mouse.exists() && !keyboard.exists());
+}
+
+/// The signal number of SIGKILL on Linux.
+const SIGKILL: i32 = 9;
+
+/// Set for the helper run of this test binary that
+/// `sigkill_while_a_button_is_held_releases_it` starts.
+const HOLD_HELPER: &str = "AUTO_CLICKER_HOLD_HELPER";
+
+#[test]
+#[ignore = "helper of sigkill_while_a_button_is_held_releases_it; does nothing on its own"]
+fn hold_helper() {
+    if std::env::var_os(HOLD_HELPER).is_none() {
+        return;
+    }
+    let mut input = KernelBackend::open().expect("create the virtual devices");
+    for identity in input.backend().devices() {
+        println!("device {}", identity.syspath.display());
+    }
+    // Move between two points until the parent, having seen the pointer in
+    // its window, says go.
+    let (go, went) = mpsc::channel();
+    thread::spawn(move || {
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+        let _ = go.send(());
+    });
+    let points = [CENTER, AbsolutePosition { x: 16384, y: 32768 }];
+    let deadline = Instant::now() + LINE_TIMEOUT;
+    for point in points.iter().cycle() {
+        assert!(Instant::now() < deadline, "the parent never said go");
+        input.move_absolute(*point).unwrap();
+        if went.recv_timeout(Duration::from_millis(250)).is_ok() {
+            break;
+        }
+    }
+    input.press_button(Button::Left).unwrap();
+    println!("pressed");
+    // The parent kills this process now; the sleep only bounds a run whose
+    // parent died or stalled. Aborting, not returning, skips `Input`'s drop,
+    // so a release can only come from the kernel, and the parent's check of
+    // the exit signal rejects this ending.
+    thread::sleep(LINE_TIMEOUT);
+    std::process::abort();
+}
+
+/// The child's exit status, failing the test if it has not exited within
+/// `limit`: a process stuck in the kernel must not hang the test.
+fn exit_status_within(child: &mut Child, limit: Duration) -> std::process::ExitStatus {
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        assert!(Instant::now() < deadline, "the helper outlived SIGKILL");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+#[ignore = "needs /dev/uinput, a Wayland session and Python with GTK 4; run by hand"]
+fn sigkill_while_a_button_is_held_releases_it() {
+    let window = open_window();
+    window.expect_line("ready");
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--ignored", "--exact", "hold_helper", "--nocapture"])
+        .env(HOLD_HELPER, "1")
+        .stdin(Stdio::piped());
+    let mut helper = Process::spawn(command, "start the helper");
+    let devices: Vec<PathBuf> = (0..2)
+        .map(|_| {
+            // Found anywhere in a line: the child's test harness may print
+            // its own words in front of the helper's.
+            helper.expect("a device", |line| {
+                line.split_once("device ")
+                    .map(|(_, path)| PathBuf::from(path))
+            })
+        })
+        .collect();
+
+    window.expect("the helper's pointer", parse_motion);
+    let mut stdin = helper.child.stdin.take().unwrap();
+    writeln!(stdin, "go").unwrap();
+    helper.expect("the helper's press", |line| {
+        line.contains("pressed").then_some(())
+    });
+    window.expect_line("press 1");
+
+    // SIGKILL: no destructor runs, so only the kernel can release.
+    helper.child.kill().unwrap();
+    let status = exit_status_within(&mut helper.child, LINE_TIMEOUT);
+    assert_eq!(
+        status.signal(),
+        Some(SIGKILL),
+        "the helper ended by itself: {status}"
+    );
+    window.expect_line("release 1");
+    let deadline = Instant::now() + LINE_TIMEOUT;
+    while devices.iter().any(|device| device.exists()) {
+        assert!(
+            Instant::now() < deadline,
+            "the helper's devices outlived it"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
 }

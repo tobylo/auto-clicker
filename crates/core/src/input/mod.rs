@@ -11,6 +11,7 @@ mod error;
 #[cfg(any(test, feature = "fake"))]
 pub mod fake;
 mod guard;
+mod key_names;
 mod pressed;
 mod types;
 
