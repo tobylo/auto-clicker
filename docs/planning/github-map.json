@@ -1,0 +1,123 @@
+{
+  "repository": "tobylo/auto-clicker",
+  "project": "https://github.com/users/tobylo/projects/4",
+  "milestones": {
+    "M0 \u2014 Foundation": 1,
+    "M1 \u2014 Auto clicker": 2,
+    "M2 \u2014 Record and playback": 3,
+    "M3 \u2014 Settings window": 4,
+    "M4 \u2014 Portal backend": 5
+  },
+  "tasks": [
+    {
+      "code": "G0",
+      "issue_number": 1,
+      "url": "https://github.com/tobylo/auto-clicker/issues/1"
+    },
+    {
+      "code": "G1",
+      "issue_number": 2,
+      "url": "https://github.com/tobylo/auto-clicker/issues/2"
+    },
+    {
+      "code": "G2",
+      "issue_number": 3,
+      "url": "https://github.com/tobylo/auto-clicker/issues/3"
+    },
+    {
+      "code": "G3",
+      "issue_number": 4,
+      "url": "https://github.com/tobylo/auto-clicker/issues/4"
+    },
+    {
+      "code": "G4",
+      "issue_number": 5,
+      "url": "https://github.com/tobylo/auto-clicker/issues/5"
+    },
+    {
+      "code": "S01",
+      "issue_number": 6,
+      "url": "https://github.com/tobylo/auto-clicker/issues/6"
+    },
+    {
+      "code": "X01",
+      "issue_number": 7,
+      "url": "https://github.com/tobylo/auto-clicker/issues/7"
+    },
+    {
+      "code": "X02",
+      "issue_number": 8,
+      "url": "https://github.com/tobylo/auto-clicker/issues/8"
+    },
+    {
+      "code": "C01",
+      "issue_number": 9,
+      "url": "https://github.com/tobylo/auto-clicker/issues/9"
+    },
+    {
+      "code": "C02",
+      "issue_number": 10,
+      "url": "https://github.com/tobylo/auto-clicker/issues/10"
+    },
+    {
+      "code": "C03",
+      "issue_number": 11,
+      "url": "https://github.com/tobylo/auto-clicker/issues/11"
+    },
+    {
+      "code": "C04",
+      "issue_number": 12,
+      "url": "https://github.com/tobylo/auto-clicker/issues/12"
+    },
+    {
+      "code": "C05",
+      "issue_number": 13,
+      "url": "https://github.com/tobylo/auto-clicker/issues/13"
+    },
+    {
+      "code": "R01",
+      "issue_number": 14,
+      "url": "https://github.com/tobylo/auto-clicker/issues/14"
+    },
+    {
+      "code": "R02",
+      "issue_number": 15,
+      "url": "https://github.com/tobylo/auto-clicker/issues/15"
+    },
+    {
+      "code": "R03",
+      "issue_number": 16,
+      "url": "https://github.com/tobylo/auto-clicker/issues/16"
+    },
+    {
+      "code": "U01",
+      "issue_number": 17,
+      "url": "https://github.com/tobylo/auto-clicker/issues/17"
+    },
+    {
+      "code": "U02",
+      "issue_number": 18,
+      "url": "https://github.com/tobylo/auto-clicker/issues/18"
+    },
+    {
+      "code": "P01",
+      "issue_number": 19,
+      "url": "https://github.com/tobylo/auto-clicker/issues/19"
+    },
+    {
+      "code": "P02",
+      "issue_number": 20,
+      "url": "https://github.com/tobylo/auto-clicker/issues/20"
+    },
+    {
+      "code": "P03",
+      "issue_number": 21,
+      "url": "https://github.com/tobylo/auto-clicker/issues/21"
+    },
+    {
+      "code": "P04",
+      "issue_number": 22,
+      "url": "https://github.com/tobylo/auto-clicker/issues/22"
+    }
+  ]
+}
