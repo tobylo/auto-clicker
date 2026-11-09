@@ -36,12 +36,13 @@ impl KeyEvent {
     }
 }
 
-/// What one input changed: a fired binding, the release that follows it, or
-/// both.
+/// What one input changed: a fired binding, and the release that follows
+/// it or the news that it can no longer be seen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Reaction {
     pub fired: Option<Action>,
     pub released: bool,
+    pub release_lost: bool,
 }
 
 impl Reaction {
@@ -49,7 +50,8 @@ impl Reaction {
     pub fn events(self) -> impl Iterator<Item = HotkeyEvent> {
         let fired = self.fired.map(HotkeyEvent::Fired);
         let released = self.released.then_some(HotkeyEvent::ModifiersReleased);
-        fired.into_iter().chain(released)
+        let lost = self.release_lost.then_some(HotkeyEvent::ReleaseLost);
+        fired.into_iter().chain(released).chain(lost)
     }
 }
 
@@ -62,6 +64,9 @@ pub struct Matcher {
     held: Vec<(DeviceId, u8)>,
     /// A binding fired and not every modifier was released since.
     awaiting_release: bool,
+    /// Keys were read after lost events, and nothing fires until every
+    /// modifier is up: events queued before the read are older than it.
+    suspended: bool,
 }
 
 /// Every modifier key code, left and right, as [`Modifier::codes`] gives
@@ -81,6 +86,7 @@ impl Matcher {
             bindings,
             held: Vec::new(),
             awaiting_release: false,
+            suspended: false,
         }
     }
 
@@ -108,28 +114,46 @@ impl Matcher {
     }
 
     /// Forgets the keys a device held after reading it failed. Nothing says
-    /// they came up, so this sends no release: the controller hears that
-    /// hotkeys failed instead, or the release comes with the next one
-    /// observed.
-    pub fn device_failed(&mut self, device: DeviceId) {
+    /// they came up: when it held a modifier while a release is awaited,
+    /// the release is lost instead, so no other keyboard can complete it.
+    pub fn device_failed(&mut self, device: DeviceId) -> Reaction {
+        let held_any = self.held.iter().any(|(held_by, _)| *held_by == device);
         self.forget(device);
+        let release_lost = self.awaiting_release && held_any;
+        if release_lost {
+            self.awaiting_release = false;
+        }
+        Reaction {
+            release_lost,
+            ..Reaction::default()
+        }
     }
 
     /// Replaces what a device holds with what it reports holding now, after
-    /// its events were lost. No binding fires from this: keys found held
-    /// were not seen going down in order.
+    /// its events were lost. Nothing fires until every modifier is up again:
+    /// the read state is newer than events still queued on this device or
+    /// others, so an F6 pressed before Ctrl could otherwise match it.
     pub fn resync(&mut self, device: DeviceId, held: impl Fn(u16) -> bool) -> Reaction {
         let keys = MODIFIER_CODES
             .iter()
             .enumerate()
             .filter(|&(_, &code)| held(code))
             .fold(0, |keys, (index, _)| keys | 1 << index);
+        self.suspended = true;
         self.update(device, |_| keys);
         self.release_reaction()
     }
 
     fn forget(&mut self, device: DeviceId) {
-        self.held.retain(|(held_by, _)| *held_by != device);
+        self.take(device);
+        self.settle();
+    }
+
+    /// Ends a suspension once no modifier is held.
+    fn settle(&mut self) {
+        if self.held.is_empty() {
+            self.suspended = false;
+        }
     }
 
     /// The modifiers held on any device.
@@ -144,21 +168,18 @@ impl Matcher {
     }
 
     fn update(&mut self, device: DeviceId, change: impl Fn(u8) -> u8) {
+        let keys = change(self.take(device));
+        if keys != 0 {
+            self.held.push((device, keys));
+        }
+        self.settle();
+    }
+
+    /// Removes a device's entry; returns the keys it held.
+    fn take(&mut self, device: DeviceId) -> u8 {
         match self.held.iter().position(|(held_by, _)| *held_by == device) {
-            Some(index) => {
-                let keys = change(self.held[index].1);
-                if keys == 0 {
-                    self.held.swap_remove(index);
-                } else {
-                    self.held[index].1 = keys;
-                }
-            }
-            None => {
-                let keys = change(0);
-                if keys != 0 {
-                    self.held.push((device, keys));
-                }
-            }
+            Some(index) => self.held.swap_remove(index).1,
+            None => 0,
         }
     }
 
@@ -168,13 +189,13 @@ impl Matcher {
             self.bindings.actions().into_iter().find(|(_, binding)| {
                 binding.key().code() == code && binding.modifiers() == modifiers
             });
-        let Some((action, _)) = fired else {
+        let Some((action, _)) = fired.filter(|_| !self.suspended) else {
             return Reaction::default();
         };
         self.awaiting_release = true;
         Reaction {
             fired: Some(action),
-            released: self.release_reaction().released,
+            ..self.release_reaction()
         }
     }
 
@@ -185,8 +206,8 @@ impl Matcher {
             self.awaiting_release = false;
         }
         Reaction {
-            fired: None,
             released,
+            ..Reaction::default()
         }
     }
 }

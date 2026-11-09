@@ -169,7 +169,7 @@ fn run(steps: &[Step]) -> Vec<HotkeyEvent> {
     run_with(Bindings::default(), steps)
 }
 
-use HotkeyEvent::{Fired, ModifiersReleased};
+use HotkeyEvent::{Fired, ModifiersReleased, ReleaseLost};
 
 #[test]
 fn ctrl_on_one_device_and_f6_on_another_fires() {
@@ -359,15 +359,46 @@ fn a_release_never_seen_pressed_leaves_nothing_held() {
 }
 
 #[test]
-fn keys_found_held_after_lost_events_count_but_fire_nothing() {
+fn nothing_fires_after_lost_events_until_every_modifier_is_up() {
     let mut matcher = Matcher::new(Bindings::default());
     let held = |codes: &'static [u16]| move |code| codes.contains(&code);
-    let resync = matcher.resync(A, held(&[LEFTCTRL, F6]));
-    let sent = feed(&mut matcher, &[down(A, F7)]);
-    assert_eq!(
-        (resync, sent),
-        (Reaction::default(), vec![Fired(Action::ToggleRecording)])
+    let resync = matcher.resync(A, held(&[RIGHTCTRL, F6]));
+    // F7 queued before the read, though the read already saw Ctrl.
+    let queued = feed(&mut matcher, &[down(B, F7), down(B, LEFTCTRL), down(B, F7)]);
+    let after = feed(
+        &mut matcher,
+        &[
+            up(A, RIGHTCTRL),
+            up(B, LEFTCTRL),
+            down(B, LEFTCTRL),
+            down(B, F7),
+        ],
     );
+    assert_eq!(
+        (resync, queued, after),
+        (
+            Reaction::default(),
+            vec![],
+            vec![Fired(Action::ToggleRecording)]
+        )
+    );
+}
+
+#[test]
+fn a_resync_holding_nothing_suspends_nothing() {
+    let mut matcher = Matcher::new(Bindings::default());
+    matcher.resync(A, |_| false);
+    let sent = feed(&mut matcher, &[down(A, LEFTCTRL), down(A, F6)]);
+    assert_eq!(sent, [Fired(Action::ToggleClicking)]);
+}
+
+#[test]
+fn a_device_failing_with_nothing_held_ends_no_suspension() {
+    let mut matcher = Matcher::new(Bindings::default());
+    matcher.resync(A, |code| code == LEFTCTRL);
+    matcher.device_failed(B);
+    let sent = feed(&mut matcher, &[down(B, LEFTCTRL), down(B, F6)]);
+    assert_eq!(sent, []);
 }
 
 #[test]
@@ -395,22 +426,44 @@ fn a_resync_replaces_what_the_device_held() {
 }
 
 #[test]
-fn a_failed_device_forgets_its_keys_without_a_release() {
+fn a_failed_device_holding_a_modifier_loses_the_release() {
     let mut matcher = Matcher::new(Bindings::default());
     let fired = feed(&mut matcher, &[down(A, LEFTCTRL), down(A, F6)]);
-    matcher.device_failed(A);
-    let after = feed(
-        &mut matcher,
-        &[down(B, F6), down(B, LEFTSHIFT), up(B, LEFTSHIFT)],
-    );
+    let failed = matcher.device_failed(A).events().collect::<Vec<_>>();
+    // Another keyboard's modifiers cannot complete it any more.
+    let after = feed(&mut matcher, &[down(B, LEFTSHIFT), up(B, LEFTSHIFT)]);
     assert_eq!(
-        (fired, matcher.modifiers(), after),
+        (fired, failed, matcher.modifiers(), after),
         (
             vec![Fired(Action::ToggleClicking)],
+            vec![ReleaseLost],
             Modifiers::NONE,
+            vec![]
+        )
+    );
+}
+
+#[test]
+fn a_failed_device_holding_nothing_keeps_the_wait() {
+    let mut matcher = Matcher::new(Bindings::default());
+    let fired = feed(&mut matcher, &[down(A, LEFTCTRL), down(A, F6)]);
+    let failed = matcher.device_failed(B);
+    let released = feed(&mut matcher, &[up(A, LEFTCTRL)]);
+    assert_eq!(
+        (fired, failed, released),
+        (
+            vec![Fired(Action::ToggleClicking)],
+            Reaction::default(),
             vec![ModifiersReleased]
         )
     );
+}
+
+#[test]
+fn a_failure_without_a_wait_loses_nothing() {
+    let mut matcher = Matcher::new(Bindings::default());
+    feed(&mut matcher, &[down(A, LEFTCTRL)]);
+    assert_eq!(matcher.device_failed(A), Reaction::default());
 }
 
 #[test]

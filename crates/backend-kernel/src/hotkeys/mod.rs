@@ -257,7 +257,8 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
             self.registry.read_failed(&name, None);
             self.try_open(&name, Cause::Scan);
         } else {
-            self.matcher.device_failed(id);
+            let reaction = self.matcher.device_failed(id);
+            self.send_reaction(reaction);
             self.registry.read_failed(&name, Some(err.to_string()));
         }
     }

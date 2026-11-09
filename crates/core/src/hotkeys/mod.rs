@@ -73,9 +73,13 @@ pub enum HotkeyEvent {
     /// after every fire, right after it for a binding without modifiers;
     /// fires while modifiers stay held share one. A run started by a hotkey
     /// can wait for it, so its first clicks are not Ctrl+click. It does not
-    /// come when reading fails: a [`HotkeyStatus::Unavailable`] ends such a
-    /// wait instead.
+    /// come when reading fails: [`HotkeyEvent::ReleaseLost`] or a
+    /// [`HotkeyStatus::Unavailable`] ends such a wait instead.
     ModifiersReleased,
+    /// A keyboard holding a modifier failed while a release was awaited:
+    /// whether it came up can no longer be seen, and no release follows. A
+    /// run waiting for the release should not start.
+    ReleaseLost,
     /// Whether hotkeys work now. Sent once the devices were first looked at,
     /// and again whenever it changes.
     Status(HotkeyStatus),
