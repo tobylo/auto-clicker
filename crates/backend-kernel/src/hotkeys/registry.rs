@@ -19,7 +19,7 @@ pub(crate) enum Cause {
 }
 
 /// What opening a node found.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Opened {
     /// A keyboard, now read under this id.
     Keyboard(DeviceId),
@@ -32,11 +32,11 @@ pub(crate) enum Opened {
     /// Permission denied. `udev_done` when udev has finished setting the
     /// node up, so its permissions are final.
     Denied { udev_done: bool },
-    /// Anything else; retried when the node's attributes change.
-    Failed,
+    /// Anything else, and why; retried when the node's attributes change.
+    Failed(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum State {
     Reading(DeviceId),
     Ours,
@@ -46,7 +46,7 @@ enum State {
     Denied {
         permanent: bool,
     },
-    Failed,
+    Failed(String),
 }
 
 #[derive(Debug, Default)]
@@ -68,7 +68,7 @@ impl Registry {
     pub(crate) fn wants_open(&self, name: &OsStr) -> bool {
         is_event_node(name)
             && match self.nodes.get(name) {
-                None | Some(State::Denied { .. } | State::Failed) => true,
+                None | Some(State::Denied { .. } | State::Failed(_)) => true,
                 Some(State::Reading(_) | State::Ours | State::NotKeyboard) => false,
             }
     }
@@ -85,7 +85,7 @@ impl Registry {
             Opened::Denied { udev_done } => State::Denied {
                 permanent: udev_done || cause == Cause::Attrib,
             },
-            Opened::Failed => State::Failed,
+            Opened::Failed(why) => State::Failed(why),
         };
         self.nodes.insert(name.to_owned(), state);
     }
@@ -98,25 +98,50 @@ impl Registry {
         }
     }
 
-    /// Reading from the node failed. A gone device's node is forgotten; any
-    /// other failure is retried when the node's attributes change.
-    pub(crate) fn read_failed(&mut self, name: &OsStr, gone: bool) {
-        if gone {
-            self.nodes.remove(name);
-        } else {
-            self.nodes.insert(name.to_owned(), State::Failed);
-        }
+    /// Reading from the node failed: its device is gone (`None`), and the
+    /// node is forgotten, or it failed for this reason, and is retried when
+    /// its attributes change.
+    pub(crate) fn read_failed(&mut self, name: &OsStr, failure: Option<String>) {
+        match failure {
+            None => self.nodes.remove(name),
+            Some(why) => self.nodes.insert(name.to_owned(), State::Failed(why)),
+        };
+    }
+
+    /// Forgets every node not being read, before a rescan after lost
+    /// events: any of them may have been replaced unseen. A node being read
+    /// that went away ends its stream, which forgets it too.
+    pub(crate) fn forget_unread(&mut self) {
+        self.nodes
+            .retain(|_, state| matches!(state, State::Reading(_)));
     }
 
     pub(crate) fn status(&self) -> HotkeyStatus {
         let states = || self.nodes.values();
         if states().any(|state| matches!(state, State::Reading(_))) {
-            HotkeyStatus::Available
-        } else if states().any(|state| *state == State::Denied { permanent: true }) {
-            HotkeyStatus::Unavailable(Unavailable::NoPermission)
-        } else {
-            HotkeyStatus::Unavailable(Unavailable::NoKeyboard)
+            return HotkeyStatus::Available;
         }
+        let why = if states().any(|state| *state == State::Denied { permanent: true }) {
+            Unavailable::NoPermission
+        } else if let Some(failure) = self.first_failure() {
+            Unavailable::ReadFailed(failure.to_owned())
+        } else {
+            Unavailable::NoKeyboard
+        };
+        HotkeyStatus::Unavailable(why)
+    }
+
+    /// The failure of the first failed node by name, so the status does not
+    /// change with the map's order.
+    fn first_failure(&self) -> Option<&str> {
+        self.nodes
+            .iter()
+            .filter_map(|(name, state)| match state {
+                State::Failed(why) => Some((name, why.as_str())),
+                _ => None,
+            })
+            .min()
+            .map(|(_, why)| why)
     }
 }
 
@@ -183,7 +208,7 @@ mod tests {
             Opened::Denied { udev_done: true },
             Cause::Scan,
         );
-        registry.record(name("event2"), Opened::Failed, Cause::Scan);
+        registry.record(name("event2"), Opened::Failed("EIO".into()), Cause::Scan);
         assert!(registry.wants_open(name("event1")));
         assert!(registry.wants_open(name("event2")));
     }
@@ -191,7 +216,7 @@ mod tests {
     #[test]
     fn a_gone_node_is_forgotten() {
         let mut registry = Registry::default();
-        registry.record(name("event1"), Opened::Failed, Cause::Scan);
+        registry.record(name("event1"), Opened::Failed("EIO".into()), Cause::Scan);
         registry.record(name("event1"), Opened::Gone, Cause::Attrib);
         assert_eq!(registry.status(), unavailable(Unavailable::NoKeyboard));
         assert!(registry.wants_open(name("event1")));
@@ -237,16 +262,61 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_read_keeps_the_node_only_if_it_is_still_there() {
+    fn a_failed_read_keeps_the_node_and_why_only_if_it_is_still_there() {
         let mut registry = Registry::default();
         registry.record(name("event1"), Opened::Keyboard(ID), Cause::Scan);
         registry.record(name("event2"), Opened::Keyboard(DeviceId(8)), Cause::Scan);
-        registry.read_failed(name("event1"), true);
-        registry.read_failed(name("event2"), false);
-        assert_eq!(registry.status(), unavailable(Unavailable::NoKeyboard));
-        // event1 is forgotten; event2 is kept, retried and not read.
+        registry.read_failed(name("event1"), None);
+        registry.read_failed(name("event2"), Some("I/O error".into()));
+        let failed = unavailable(Unavailable::ReadFailed("I/O error".into()));
+        assert_eq!(registry.status(), failed);
+        // event2 is kept and retried; event1 is forgotten.
         let retried = registry.wants_open(name("event2"));
-        let read = [name("event1"), name("event2")].map(|node| registry.deleted(node));
-        assert_eq!((retried, read), (true, [None, None]));
+        registry.read_failed(name("event2"), None);
+        assert_eq!(
+            (retried, registry.status()),
+            (true, unavailable(Unavailable::NoKeyboard))
+        );
+    }
+
+    #[test]
+    fn the_first_failure_by_name_is_reported() {
+        let mut registry = Registry::default();
+        for (node, why) in [("event9", "nine"), ("event1", "one"), ("event5", "five")] {
+            registry.record(name(node), Opened::Failed(why.into()), Cause::Scan);
+        }
+        let first = unavailable(Unavailable::ReadFailed("one".into()));
+        assert_eq!(registry.status(), first);
+    }
+
+    #[test]
+    fn permission_is_reported_before_a_failure() {
+        let mut registry = Registry::default();
+        registry.record(name("event1"), Opened::Failed("EIO".into()), Cause::Scan);
+        registry.record(
+            name("event2"),
+            Opened::Denied { udev_done: true },
+            Cause::Scan,
+        );
+        assert_eq!(registry.status(), unavailable(Unavailable::NoPermission));
+    }
+
+    #[test]
+    fn a_rescan_forgets_every_node_not_read() {
+        let mut registry = Registry::default();
+        let unread = [
+            Opened::Ours,
+            Opened::NotKeyboard,
+            Opened::Denied { udev_done: true },
+            Opened::Failed("EIO".into()),
+        ];
+        for (index, opened) in unread.into_iter().enumerate() {
+            registry.record(name(&format!("event{index}")), opened, Cause::Scan);
+        }
+        registry.record(name("event9"), Opened::Keyboard(ID), Cause::Scan);
+        registry.forget_unread();
+        let reopened = ["event0", "event1", "event2", "event3", "event9"]
+            .map(|node| registry.wants_open(name(node)));
+        assert_eq!(reopened, [true, true, true, true, false]);
     }
 }

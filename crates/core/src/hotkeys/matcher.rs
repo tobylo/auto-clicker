@@ -100,10 +100,36 @@ impl Matcher {
         }
     }
 
-    /// Forgets the keys a device held, once it is gone.
+    /// Forgets the keys a device held, once it is gone: unplugged keys are
+    /// up.
     pub fn device_gone(&mut self, device: DeviceId) -> Reaction {
-        self.held.retain(|(held_by, _)| *held_by != device);
+        self.forget(device);
         self.release_reaction()
+    }
+
+    /// Forgets the keys a device held after reading it failed. Nothing says
+    /// they came up, so this sends no release: the controller hears that
+    /// hotkeys failed instead, or the release comes with the next one
+    /// observed.
+    pub fn device_failed(&mut self, device: DeviceId) {
+        self.forget(device);
+    }
+
+    /// Replaces what a device holds with what it reports holding now, after
+    /// its events were lost. No binding fires from this: keys found held
+    /// were not seen going down in order.
+    pub fn resync(&mut self, device: DeviceId, held: impl Fn(u16) -> bool) -> Reaction {
+        let keys = MODIFIER_CODES
+            .iter()
+            .enumerate()
+            .filter(|&(_, &code)| held(code))
+            .fold(0, |keys, (index, _)| keys | 1 << index);
+        self.update(device, |_| keys);
+        self.release_reaction()
+    }
+
+    fn forget(&mut self, device: DeviceId) {
+        self.held.retain(|(held_by, _)| *held_by != device);
     }
 
     /// The modifiers held on any device.

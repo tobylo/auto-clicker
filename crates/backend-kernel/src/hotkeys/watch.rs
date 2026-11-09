@@ -107,3 +107,49 @@ fn change(mask: EventMask, name: Option<&OsStr>) -> io::Result<Option<Change>> {
         },
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn of(mask: EventMask) -> Option<Change> {
+        change(mask, Some(OsStr::new("event3"))).unwrap()
+    }
+
+    #[test]
+    fn each_event_becomes_its_change() {
+        let name = || OsString::from("event3");
+        assert_eq!(
+            [
+                of(EventMask::CREATE),
+                of(EventMask::MOVED_TO),
+                of(EventMask::ATTRIB),
+                of(EventMask::DELETE),
+                of(EventMask::MOVED_FROM),
+                of(EventMask::Q_OVERFLOW),
+                of(EventMask::OPEN),
+            ],
+            [
+                Some(Change::Created(name())),
+                Some(Change::Created(name())),
+                Some(Change::Attrib(name())),
+                Some(Change::Deleted(name())),
+                Some(Change::Deleted(name())),
+                Some(Change::Overflow),
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn an_event_about_the_directory_itself_changes_nothing() {
+        let change = change(EventMask::ATTRIB | EventMask::ISDIR, None).unwrap();
+        assert_eq!(change, None);
+    }
+
+    #[test]
+    fn the_end_of_the_watch_is_an_error() {
+        let ended = change(EventMask::IGNORED, None).unwrap_err();
+        assert_eq!(ended.kind(), io::ErrorKind::NotFound);
+    }
+}

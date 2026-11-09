@@ -11,10 +11,8 @@ use auto_clicker_core::hotkeys::{Bindings, HotkeyEvent, HotkeyStatus, Unavailabl
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
-use evdev::{EventType, InputEvent};
-
 use super::node::Paths;
-use super::{Reader, key_event, run};
+use super::{Reader, run};
 
 /// Far beyond what any step here takes, and far below the wait it bounds,
 /// which never ends by itself.
@@ -119,22 +117,6 @@ async fn next(received: &mut mpsc::UnboundedReceiver<HotkeyEvent>) -> Option<Hot
     timeout(BOUND, received.recv()).await.ok().flatten()
 }
 
-#[test]
-fn only_key_events_are_matched() {
-    let event = |kind: EventType, value| InputEvent::new(kind.0, 64, value);
-    let is_key = [
-        event(EventType::KEY, 1),
-        event(EventType::KEY, 0),
-        event(EventType::KEY, 2),
-        event(EventType::KEY, 7),
-        event(EventType::RELATIVE, 1),
-        event(EventType::MISC, 1),
-        event(EventType::SYNCHRONIZATION, 0),
-    ]
-    .map(|event| key_event(&event).is_some());
-    assert_eq!(is_key, [true, true, true, false, false, false, false]);
-}
-
 #[tokio::test]
 async fn no_keyboard_is_reported_and_shutdown_ends_the_wait() {
     let fixture = Fixture::new();
@@ -160,19 +142,28 @@ async fn shutdown_before_anything_happens_ends_at_once() {
 }
 
 #[tokio::test]
-async fn a_node_that_is_no_input_device_is_left_alone() {
+async fn nodes_that_are_no_keyboards_change_nothing() {
+    if !permissions_apply() {
+        return;
+    }
     let fixture = Fixture::new();
-    fs::write(fixture.node("event0"), b"").unwrap();
-    fs::write(fixture.node("mice"), b"").unwrap();
+    fixture.udev_done();
     let fx = &fixture;
     with_reader(fx, |mut received, stop| async move {
         assert_eq!(
             next(&mut received).await,
             Some(unavailable(Unavailable::NoKeyboard))
         );
+        // Neither an unreadable name that is no event node, nor a file that
+        // is no device, changes the status; the denied node after them does.
+        unreadable(&fx.node("mice"));
         fs::write(fx.node("event1"), b"").unwrap();
+        unreadable(&fx.node("event2"));
+        assert_eq!(
+            next(&mut received).await,
+            Some(unavailable(Unavailable::NoPermission))
+        );
         stop.send(()).unwrap();
-        assert_eq!(received.recv().await, None, "nothing else is sent");
     })
     .await;
 }

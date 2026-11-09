@@ -347,6 +347,73 @@ fn a_binding_without_modifiers_is_released_at_once() {
 }
 
 #[test]
+fn a_release_never_seen_pressed_leaves_nothing_held() {
+    let bindings = Bindings {
+        toggle_clicking: binding("F9"),
+        ..Bindings::default()
+    };
+    assert_eq!(
+        run_with(bindings, &[up(A, LEFTCTRL), down(A, F9)]),
+        [Fired(Action::ToggleClicking), ModifiersReleased]
+    );
+}
+
+#[test]
+fn keys_found_held_after_lost_events_count_but_fire_nothing() {
+    let mut matcher = Matcher::new(Bindings::default());
+    let held = |codes: &'static [u16]| move |code| codes.contains(&code);
+    let resync = matcher.resync(A, held(&[LEFTCTRL, F6]));
+    let sent = feed(&mut matcher, &[down(A, F7)]);
+    assert_eq!(
+        (resync, sent),
+        (Reaction::default(), vec![Fired(Action::ToggleRecording)])
+    );
+}
+
+#[test]
+fn a_resync_replaces_what_the_device_held() {
+    let mut matcher = Matcher::new(Bindings::default());
+    let fired = feed(
+        &mut matcher,
+        &[
+            down(A, LEFTCTRL),
+            down(B, LEFTSHIFT),
+            up(B, LEFTSHIFT),
+            down(A, F6),
+        ],
+    );
+    let released = matcher.resync(A, |_| false);
+    let sent = feed(&mut matcher, &[down(B, F6)]);
+    assert_eq!(
+        (fired, released.events().collect::<Vec<_>>(), sent),
+        (
+            vec![Fired(Action::ToggleClicking)],
+            vec![ModifiersReleased],
+            vec![]
+        )
+    );
+}
+
+#[test]
+fn a_failed_device_forgets_its_keys_without_a_release() {
+    let mut matcher = Matcher::new(Bindings::default());
+    let fired = feed(&mut matcher, &[down(A, LEFTCTRL), down(A, F6)]);
+    matcher.device_failed(A);
+    let after = feed(
+        &mut matcher,
+        &[down(B, F6), down(B, LEFTSHIFT), up(B, LEFTSHIFT)],
+    );
+    assert_eq!(
+        (fired, matcher.modifiers(), after),
+        (
+            vec![Fired(Action::ToggleClicking)],
+            Modifiers::NONE,
+            vec![ModifiersReleased]
+        )
+    );
+}
+
+#[test]
 fn no_release_without_a_fire() {
     assert_eq!(run(&[down(A, LEFTCTRL), up(A, LEFTCTRL)]), []);
 }

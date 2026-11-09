@@ -7,6 +7,7 @@
 //! keyboards; what it says goes to the controller. Keys reach the game too:
 //! nothing is grabbed.
 
+mod events;
 mod node;
 mod registry;
 mod watch;
@@ -19,11 +20,13 @@ use std::pin::pin;
 use std::task::Poll;
 
 use auto_clicker_core::hotkeys::{
-    Bindings, DeviceId, HotkeyEvent, HotkeyStatus, KeyEvent, Matcher, Reaction, Unavailable,
+    Bindings, DeviceId, HotkeyEvent, HotkeyStatus, Matcher, Reaction, Unavailable,
 };
-use evdev::{EventStream, EventType, InputEvent};
+use evdev::raw_stream::EventStream;
+use evdev::{InputEvent, KeyCode};
 
 use crate::DeviceIdentity;
+use events::Step;
 use node::{Node, Paths};
 use registry::{Cause, Opened, Registry};
 use watch::{Change, Watch};
@@ -119,19 +122,14 @@ fn next_event(
     })
 }
 
-/// The key event an input event is, if it is one.
-fn key_event(event: &InputEvent) -> Option<KeyEvent> {
-    (event.event_type() == EventType::KEY)
-        .then(|| KeyEvent::new(event.code(), event.value()))
-        .flatten()
-}
-
 /// A keyboard being read, and the event read from it but not handled yet.
 struct Reading {
     id: DeviceId,
     name: OsString,
     stream: Box<EventStream>,
     ahead: Option<InputEvent>,
+    /// Events were lost and the current frame is not over.
+    dropped: bool,
 }
 
 struct Reader<S> {
@@ -176,10 +174,13 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
                 Change::Attrib(name) => self.try_open(&name, Cause::Attrib),
                 Change::Deleted(name) => {
                     if let Some(id) = self.registry.deleted(&name) {
-                        self.drop_device(id);
+                        self.unplugged(id);
                     }
                 }
-                Change::Overflow => self.scan()?,
+                Change::Overflow => {
+                    self.registry.forget_unread();
+                    self.scan()?;
+                }
             }
         }
         Ok(())
@@ -196,7 +197,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
             Node::NotKeyboard => Opened::NotKeyboard,
             Node::Gone => Opened::Gone,
             Node::Denied { udev_done } => Opened::Denied { udev_done },
-            Node::Failed => Opened::Failed,
+            Node::Failed(why) => Opened::Failed(why),
         };
         self.registry.record(name, opened, cause);
     }
@@ -204,7 +205,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
     fn add(&mut self, name: &OsStr, stream: Box<EventStream>) -> Opened {
         let id = DeviceId(self.next_id);
         let Some(next) = self.next_id.checked_add(1) else {
-            return Opened::Failed;
+            return Opened::Failed("too many keyboards".to_owned());
         };
         self.next_id = next;
         self.devices.push(Reading {
@@ -212,40 +213,66 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
             name: name.to_owned(),
             stream,
             ahead: None,
+            dropped: false,
         });
         Opened::Keyboard(id)
     }
 
     fn event(&mut self, index: usize, event: io::Result<InputEvent>) {
-        let Some(device) = self.devices.get(index) else {
+        let Some(device) = self.devices.get_mut(index) else {
             return;
         };
         let id = device.id;
-        match event {
-            Ok(event) => {
-                if let Some(key) = key_event(&event) {
-                    let reaction = self.matcher.key(id, key);
+        let event = match event {
+            Ok(event) => event,
+            Err(err) => return self.read_failed(id, &err),
+        };
+        match events::step(&mut device.dropped, &event) {
+            Step::Key(key) => {
+                let reaction = self.matcher.key(id, key);
+                self.send_reaction(reaction);
+            }
+            Step::Resync => match device.stream.device().get_key_state() {
+                Ok(keys) => {
+                    let reaction = self.matcher.resync(id, |code| keys.contains(KeyCode(code)));
                     self.send_reaction(reaction);
                 }
-            }
-            Err(err) => {
-                let gone = node::is_gone(&err);
-                let name = device.name.clone();
-                self.drop_device(id);
-                self.registry.read_failed(&name, gone);
-                // The node may already belong to a new device.
-                if gone {
-                    self.try_open(&name, Cause::Scan);
-                }
-            }
+                Err(err) => self.read_failed(id, &err),
+            },
+            Step::Nothing => {}
         }
     }
 
-    /// Stops reading a device and lets go of the keys it held.
-    fn drop_device(&mut self, id: DeviceId) {
-        self.devices.retain(|device| device.id != id);
+    /// Reading a device failed. An unplugged device lets go of its keys and
+    /// its node is looked at again, since it may already be a new device's.
+    /// Any other failure forgets its keys without a release, and the node
+    /// waits for its attributes to change.
+    fn read_failed(&mut self, id: DeviceId, err: &io::Error) {
+        let Some(name) = self.remove(id) else {
+            return;
+        };
+        if node::is_gone(err) {
+            let reaction = self.matcher.device_gone(id);
+            self.send_reaction(reaction);
+            self.registry.read_failed(&name, None);
+            self.try_open(&name, Cause::Scan);
+        } else {
+            self.matcher.device_failed(id);
+            self.registry.read_failed(&name, Some(err.to_string()));
+        }
+    }
+
+    /// Stops reading an unplugged device and lets go of the keys it held.
+    fn unplugged(&mut self, id: DeviceId) {
+        self.remove(id);
         let reaction = self.matcher.device_gone(id);
         self.send_reaction(reaction);
+    }
+
+    /// Stops reading a device; returns its node's name.
+    fn remove(&mut self, id: DeviceId) -> Option<OsString> {
+        let index = self.devices.iter().position(|device| device.id == id)?;
+        Some(self.devices.swap_remove(index).name)
     }
 
     fn send_reaction(&mut self, reaction: Reaction) {
@@ -261,13 +288,10 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
         }
     }
 
-    /// Ends after watching failed: every device is let go, and the status
-    /// says why hotkeys stopped.
+    /// Ends after watching failed: the status says why hotkeys stopped. No
+    /// release is sent for keys still held; the status ends any wait for
+    /// one.
     fn stop(mut self, err: &io::Error) {
-        let ids: Vec<DeviceId> = self.devices.iter().map(|device| device.id).collect();
-        for id in ids {
-            self.drop_device(id);
-        }
         let why = Unavailable::WatchFailed(err.to_string());
         (self.send)(HotkeyEvent::Status(HotkeyStatus::Unavailable(why)));
     }

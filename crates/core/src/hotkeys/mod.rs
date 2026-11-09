@@ -68,10 +68,13 @@ impl Bindings {
 pub enum HotkeyEvent {
     /// A binding was pressed.
     Fired(Action),
-    /// No modifier is held any more, after a [`HotkeyEvent::Fired`]. Comes
-    /// once after every fire, right after it for a binding without
-    /// modifiers; fires while modifiers stay held share one. A run started
-    /// by a hotkey can wait for it, so its first clicks are not Ctrl+click.
+    /// No modifier is held any more, after a [`HotkeyEvent::Fired`]: every
+    /// modifier was seen coming up, or its keyboard was unplugged. Comes once
+    /// after every fire, right after it for a binding without modifiers;
+    /// fires while modifiers stay held share one. A run started by a hotkey
+    /// can wait for it, so its first clicks are not Ctrl+click. It does not
+    /// come when reading fails: a [`HotkeyStatus::Unavailable`] ends such a
+    /// wait instead.
     ModifiersReleased,
     /// Whether hotkeys work now. Sent once the devices were first looked at,
     /// and again whenever it changes.
@@ -93,6 +96,9 @@ pub enum Unavailable {
     /// Some input devices cannot be opened: the user is not in the `input`
     /// group.
     NoPermission,
+    /// Keyboards were found but could not be read; the error of the last
+    /// one tried. Retried when a keyboard's node changes.
+    ReadFailed(String),
     /// Watching for devices failed; hotkeys stop until the daemon restarts.
     WatchFailed(String),
 }
@@ -104,6 +110,9 @@ impl fmt::Display for Unavailable {
             Unavailable::NoPermission => f.write_str(
                 "hotkeys are unavailable: keyboards cannot be read; add your user to the input group and log in again",
             ),
+            Unavailable::ReadFailed(error) => {
+                write!(f, "hotkeys are unavailable: a keyboard cannot be read: {error}")
+            }
             Unavailable::WatchFailed(error) => {
                 write!(f, "hotkeys stopped: watching for keyboards failed: {error}")
             }

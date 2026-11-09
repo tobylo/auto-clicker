@@ -168,8 +168,10 @@ async fn another_keyboard_fires_and_ours_never_does() {
 #[ignore = "needs /dev/uinput and the input group; run by hand"]
 async fn ctrl_on_one_keyboard_and_f24_on_another_fires() {
     with_reader(|mut reader, _input| async move {
-        let mut modifiers = Keyboard::new("auto-clicker test modifiers", &[LEFTCTRL]);
+        // The keys first: the reader then polls them before the modifiers,
+        // and only the events' timestamps keep Ctrl ahead of F24.
         let mut keys = Keyboard::new("auto-clicker test keys", &[F24]);
+        let mut modifiers = Keyboard::new("auto-clicker test modifiers", &[LEFTCTRL]);
         let deadline = Instant::now() + DEVICE_TIMEOUT;
         loop {
             assert!(Instant::now() < deadline, "Ctrl+F24 never fired");
@@ -202,6 +204,45 @@ async fn a_keyboard_that_comes_back_fires_again() {
         assert_eq!(released, Some(HotkeyEvent::ModifiersReleased));
         let mut again = Keyboard::full("auto-clicker test keyboard");
         reader.fires_from(&mut again).await;
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs /dev/uinput and the input group; run by hand"]
+async fn unplugging_one_keyboard_leaves_the_other_working() {
+    with_reader(|mut reader, _input| async move {
+        let mut first = Keyboard::full("auto-clicker test keyboard 1");
+        let mut second = Keyboard::full("auto-clicker test keyboard 2");
+        reader.fires_from(&mut first).await;
+        reader.fires_from(&mut second).await;
+        drop(first);
+        second.ctrl_f24();
+        let fired = reader.next_hotkey(DEVICE_TIMEOUT).await;
+        assert_eq!(fired, Some(HotkeyEvent::Fired(Action::ToggleClicking)));
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs /dev/uinput and the input group; run by hand"]
+async fn keys_held_across_lost_events_never_fire() {
+    const F21: u16 = 191;
+    with_reader(|mut reader, _input| async move {
+        let mut keyboard = Keyboard::new("auto-clicker test keyboard", &[LEFTCTRL, F24, F21]);
+        reader.fires_from(&mut keyboard).await;
+        // F24 before Ctrl, then far more events than the kernel queues
+        // while the reader, on this same thread, cannot run: they are lost.
+        keyboard.key(F24, 1);
+        for _ in 0..2000 {
+            keyboard.key(F21, 1);
+            keyboard.key(F21, 0);
+        }
+        keyboard.key(LEFTCTRL, 1);
+        reader.stays_quiet().await;
+        keyboard.key(F24, 0);
+        keyboard.key(LEFTCTRL, 0);
+        reader.fires_from(&mut keyboard).await;
     })
     .await;
 }
