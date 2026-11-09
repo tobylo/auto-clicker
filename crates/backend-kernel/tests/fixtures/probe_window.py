@@ -20,12 +20,6 @@ def out(*words):
 
 def build(app):
     win = Gtk.ApplicationWindow(application=app, title="auto-clicker device test")
-    entry = Gtk.Entry()
-    def on_enter(e):
-        out("text", e.get_text())
-        e.set_text("")
-
-    entry.connect("activate", on_enter)
     label = Gtk.Label(label="auto-clicker device test: leave the mouse and keyboard alone")
     label.set_vexpand(True)
     win.set_child(label)
