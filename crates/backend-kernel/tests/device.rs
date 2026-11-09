@@ -18,6 +18,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -284,6 +285,9 @@ fn clicks_and_types_into_a_real_window_and_leaves_nothing_pressed() {
     assert!(!mouse.exists() && !keyboard.exists());
 }
 
+/// The signal number of SIGKILL on Linux.
+const SIGKILL: i32 = 9;
+
 /// Set for the helper run of this test binary that
 /// `sigkill_while_a_button_is_held_releases_it` starts.
 const HOLD_HELPER: &str = "AUTO_CLICKER_HOLD_HELPER";
@@ -336,8 +340,11 @@ fn sigkill_while_a_button_is_held_releases_it() {
     let mut helper = Process::spawn(command, "start the helper");
     let devices: Vec<PathBuf> = (0..2)
         .map(|_| {
+            // Found anywhere in a line: the child's test harness may print
+            // its own words in front of the helper's.
             helper.expect("a device", |line| {
-                line.strip_prefix("device ").map(PathBuf::from)
+                line.split_once("device ")
+                    .map(|(_, path)| PathBuf::from(path))
             })
         })
         .collect();
@@ -345,12 +352,19 @@ fn sigkill_while_a_button_is_held_releases_it() {
     window.expect("the helper's pointer", parse_motion);
     let mut stdin = helper.child.stdin.take().unwrap();
     writeln!(stdin, "go").unwrap();
-    helper.expect_line("pressed");
+    helper.expect("the helper's press", |line| {
+        line.contains("pressed").then_some(())
+    });
     window.expect_line("press 1");
 
     // SIGKILL: no destructor runs, so only the kernel can release.
     helper.child.kill().unwrap();
-    helper.child.wait().unwrap();
+    let status = helper.child.wait().unwrap();
+    assert_eq!(
+        status.signal(),
+        Some(SIGKILL),
+        "the helper ended by itself: {status}"
+    );
     window.expect_line("release 1");
     let deadline = Instant::now() + LINE_TIMEOUT;
     while devices.iter().any(|device| device.exists()) {
