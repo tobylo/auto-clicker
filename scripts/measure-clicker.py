@@ -18,6 +18,7 @@ import contextlib
 import errno
 import os
 import queue
+import signal
 import struct
 import subprocess
 import sys
@@ -226,7 +227,15 @@ def idle(name, clicker, seconds=60):
     )
 
 
+def exit_on_signal(signum, _frame):
+    sys.exit(128 + signum)
+
+
 def main(argv):
+    # SIGTERM or a closed terminal ends the script through the same `with`
+    # blocks as Ctrl+C, so no clicker outlives it holding a button.
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, exit_on_signal)
     if len(argv) >= 2 and argv[0] == "rate":
         for ms in argv[1:]:
             rate(int(ms))
