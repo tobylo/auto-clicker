@@ -8,10 +8,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a PR supersedes its older run. Each run on main gets a group
+# of its own, so none is cancelled or replaced while pending.
 concurrency:
-  group: ci-${{ github.ref }}
-  # A newer push to a PR supersedes its older run; every run on main finishes.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
