@@ -1,11 +1,11 @@
 """A fullscreen GTK 4 window that reports the input it receives, one line each.
 
 Used by the hand-run device test in tests/device.rs. It prints:
-  ready              once the window is active and its text entry has focus
+  ready              once the window is active
   motion X Y         pointer position in window coordinates
   press N / release N  mouse button N (1 left, 2 middle, 3 right)
   scroll DY          vertical wheel steps, positive down
-  text T             the entry's text when Enter is pressed; the entry is then emptied
+  key C              a key press, as its Linux key code (layout independent)
 """
 
 import gi
@@ -28,10 +28,7 @@ def build(app):
     entry.connect("activate", on_enter)
     label = Gtk.Label(label="auto-clicker device test: leave the mouse and keyboard alone")
     label.set_vexpand(True)
-    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-    box.append(entry)
-    box.append(label)
-    win.set_child(box)
+    win.set_child(label)
 
     click = Gtk.GestureClick(button=0)
     click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
@@ -49,12 +46,17 @@ def build(app):
     scroll.connect("scroll", lambda c, dx, dy: out("scroll", round(dy)) or True)
     win.add_controller(scroll)
 
+    # XKB key codes are the Linux key codes plus 8.
+    keys = Gtk.EventControllerKey()
+    keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+    keys.connect("key-pressed", lambda c, val, code, state: out("key", code - 8) or True)
+    win.add_controller(keys)
+
     ready = []
 
     def on_active(window, _param):
         if window.is_active() and not ready:
             ready.append(True)
-            entry.grab_focus()
             out("ready")
 
     win.connect("notify::is-active", on_active)

@@ -141,16 +141,17 @@ fn nudge_right(input: &mut Input<KernelBackend>, window: &Window, from_x: i64) -
         .0
 }
 
-/// The keyboard can appear to the compositor later than the mouse. Tap Enter
-/// until the window reports its (emptied) entry, so that no asserted key is
-/// lost to a keyboard the compositor has not opened yet.
+/// The keyboard can appear to the compositor later than the mouse. Tap a key
+/// until the window reports it, so that no asserted key is lost to a keyboard
+/// the compositor has not opened yet.
 fn wait_for_keyboard(input: &mut Input<KernelBackend>, window: &Window) {
     let deadline = Instant::now() + LINE_TIMEOUT;
+    let wanted = format!("key {KEY_A}");
     while Instant::now() < deadline {
-        tap(input, KEY_ENTER);
+        tap(input, KEY_A);
         let retry = Instant::now() + Duration::from_millis(250);
         if window
-            .find(retry, |line| line.starts_with("text").then_some(()))
+            .find(retry, |line| (line == wanted).then_some(()))
             .is_some()
         {
             return;
@@ -164,7 +165,6 @@ fn key(code: u16) -> Key {
 }
 
 const KEY_1: u16 = 2;
-const KEY_ENTER: u16 = 28;
 const KEY_A: u16 = 30;
 const KEY_C: u16 = 46;
 
@@ -244,12 +244,13 @@ fn clicks_and_types_into_a_real_window_and_leaves_nothing_pressed() {
         (steps > 0).then_some(())
     });
 
+    // Key codes, not text, so the keyboard layout and Caps Lock do not matter.
     wait_for_keyboard(&mut input, &window);
     window.drain();
-    for code in [KEY_A, KEY_C, KEY_1, KEY_ENTER] {
+    for code in [KEY_C, KEY_1, KEY_A] {
         tap(&mut input, code);
+        window.expect_line(&format!("key {code}"));
     }
-    window.expect_line("text ac1");
 
     // Held input shows in the kernel's key state, and release_all clears it.
     input.press_button(Button::Left).unwrap();
