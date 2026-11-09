@@ -235,8 +235,17 @@ def idle(name, clicker, seconds=60):
     )
 
 
+def is_interval(arg):
+    """Whether `arg` is a positive whole number of milliseconds."""
+    return arg.isdigit() and int(arg) > 0
+
+
 def main(argv):
     if len(argv) >= 2 and argv[0] == "rate":
+        # Not checked against the config's floor: a local build with a lower
+        # floor measures below it. The clicker reports a rejected interval.
+        if not all(map(is_interval, argv[1:])):
+            sys.exit(f"intervals are whole numbers of milliseconds: {' '.join(argv[1:])}")
         for ms in argv[1:]:
             rate(int(ms))
     elif argv == ["idle"]:
