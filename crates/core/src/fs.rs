@@ -25,10 +25,14 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
         .and_then(|()| fs::rename(&temp, path));
     drop(file);
     if let Err(err) = written {
-        // The temp file is ours and nothing else names it; if removing it
-        // fails too, the write's error is the one worth reporting.
-        let _ = fs::remove_file(&temp);
-        return Err(err);
+        return Err(match fs::remove_file(&temp) {
+            Ok(()) => err,
+            // The write's error stays the one reported, with the file it left.
+            Err(cleanup) => io::Error::new(
+                err.kind(),
+                format!("{err}; removing {} failed too: {cleanup}", temp.display()),
+            ),
+        });
     }
     File::open(dir)
         .and_then(|dir| dir.sync_all())

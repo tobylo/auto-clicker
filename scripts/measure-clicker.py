@@ -157,6 +157,7 @@ def stop(proc):
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
+        proc.wait(timeout=5)
 
 
 def rate(interval_ms):
@@ -179,6 +180,8 @@ def rate(interval_ms):
             session.close()
     if failures:
         sys.exit(f"reading the kernel's timestamps failed: {failures[0]}")
+    if session.clicker.returncode != 0:
+        sys.exit(f"interval {interval_ms} ms: the clicker failed (exit status {session.clicker.returncode})")
     periods = [b - a for a, b in zip(presses, presses[1:])]
     target = interval_ms * 1000
     mean = sum(periods) / len(periods) if periods else float("nan")

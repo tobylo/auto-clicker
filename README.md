@@ -21,7 +21,7 @@ jitter_percent = 0            # vary each interval randomly by up to this much, 
 button = "left"               # left, right, middle, back or forward
 key = "space"                 # for key_repeat and hold_key
 position = "cursor"           # or a fixed point, { x = 32768, y = 32768 }
-repeat = "until_stopped"      # or a number of clicks
+repeat = "until_stopped"      # or a number of actions (a double click is one); hold modes run until stopped
 ```
 
 - Keys are named by position on a US keyboard, not by the label on the key: on a German keyboard, "z" is the key labelled Y. The names, lowercase: "a" to "z", "0" to "9", "f1" to "f24", "space", "enter", "esc", "tab", "backspace", "capslock", "minus", "equal", "leftbrace", "rightbrace", "semicolon", "apostrophe", "grave", "backslash", "comma", "dot", "slash", left and right "shift", "ctrl", "alt" and "meta" (such as "leftshift"), "up", "down", "left", "right", "home", "end", "pageup", "pagedown", "insert", "delete", the keypad keys ("kp0" to "kp9", "kpplus", "kpminus", "kpasterisk", "kpslash", "kpdot", "kpenter"), "numlock", "scrolllock", "sysrq", "pause" and "compose". Any other key is given by its Linux key code, such as `key = 86`.
