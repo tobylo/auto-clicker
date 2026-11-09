@@ -1,0 +1,10 @@
+[package]
+name = "auto-clicker-core"
+description = "Core logic of auto-clicker: engine, recording format and config, without device access"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
