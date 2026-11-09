@@ -1,0 +1,13 @@
+[package]
+name = "auto-clicker"
+description = "Auto clicker with macro record and playback for KDE Plasma on Wayland"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+auto-clicker-core = { path = "../core" }
+
+[lints]
+workspace = true
