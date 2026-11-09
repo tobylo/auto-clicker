@@ -31,11 +31,13 @@ An auto clicker with macro record and playback for a CachyOS machine running KDE
 | D8 | Install through a PKGBUILD with a udev rule and a systemd user service | CachyOS is Arch-based |
 | D10 | Code reaches the machine only from this repository: v1 installs by the owner building a reviewed commit and has no network access; a later updater may fetch only signed releases of `tobylo/auto-clicker`, verified against the owner's pinned key. Dependencies from crates.io only, locked, and checked for advisories in CI | The program runs on a child's machine with access to input devices; nobody but the owner may be able to push code to it |
 | D9 | Review services: Codex and CodeRabbit GitHub bots, CodeScene Code Health. No Entire | Owner's choice |
+| D11 | The daemon runs on tokio's single-thread (`current_thread`) runtime. Timers sleep until absolute deadlines (`sleep_until`), and every wait selects on its deadline, the stop signal and shutdown. Tests use tokio's paused clock | One thread is enough for a tray program and costs nothing while idle; absolute deadlines keep delays from adding up; the paused clock checks schedules and "stops at once" exactly, without real waiting (#10) |
 
-## Defaults (not yet measured)
+## Clicker options and measurements
 
-- Clicker options: interval in ms or clicks per second, random jitter, left/right/middle, single or double click, hold-down mode, key-repeat mode, at cursor or at a fixed point, repeat count or until stopped.
-- The fastest reliable interval is measured in C02, not assumed; one tool's README claims 25 ms, which is unverified.
+- Clicker options: interval in ms or clicks per second, random jitter (up to ±50%), left/right/middle/back/forward, single or double click, hold a button or a key down, key-repeat mode, at cursor or at a fixed point, repeat count or until stopped.
+- **Fastest stable interval: 10 ms** (C02, 2026-11-09, niri 26.04 on the dev box, uinput, release build; `scripts/measure-clicker.py`). A test window received 1000 of 1000 clicks at every interval tried, down to 2 ms. The limit is timing: tokio's timer has 1 ms resolution, so each period is off by up to about 0.9 ms, which stays under 10% of the interval from 10 ms up (10 ms: 9.3%, 12 ms: 7.7%, 15 ms: 6.0%) and exceeds it below (8 ms: 11.2%, 5 ms: 18.5%; measured on a local build with `INTERVAL_FLOOR` set to 1 ms, since the config rejects intervals under the floor). The mean period is exact. On the busy dev box, some runs at any interval also had one late period of 2 to 10 ms from scheduling; their 99th percentile stayed under 1 ms. The interval floor is therefore 10 ms (20 ms for a double click, which fits two clicks in each interval).
+- **Idle cost of the engine** (same setup, 60 s each): clicking once a second used 0 CPU ticks (under 10 ms of CPU) and 209 context switches, about two wakeups per click (press, then release after the hold) plus a few more; holding a button used 0 ticks and 0 context switches.
 
 ## Milestones
 
@@ -56,4 +58,4 @@ The issues, their codes and blockers are on [the Project](https://github.com/use
 ## Open questions
 
 - Does the son's machine also run Plasma 6.8? Assumed yes (CachyOS is rolling).
-- Do the target games accept uinput clicks? Expected yes; C02 checks Minecraft Java under XWayland and native Wayland.
+- Do the target games accept uinput clicks? Minecraft Java does as a native Wayland window: on the target laptop (Plasma 6.8.2), 10 of 10 slow right clicks and 1000 of 1000 at the 10 ms floor registered (Statistics, snowballs "Times Used"; C02, 2026-11-09). The XWayland run is #32: the launcher does not start without Wayland, so the game could not be forced onto XWayland.

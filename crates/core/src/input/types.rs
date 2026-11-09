@@ -59,8 +59,12 @@ impl Key {
 
     /// The key with this code, or `None` when the code is outside
     /// [`Key::CODES`].
-    pub fn new(code: u16) -> Option<Key> {
-        Key::CODES.contains(&code).then_some(Key(code))
+    pub const fn new(code: u16) -> Option<Key> {
+        if code >= *Key::CODES.start() && code <= *Key::CODES.end() {
+            Some(Key(code))
+        } else {
+            None
+        }
     }
 
     /// The Linux input event code.
