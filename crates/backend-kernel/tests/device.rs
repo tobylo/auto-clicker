@@ -322,9 +322,11 @@ fn hold_helper() {
     input.press_button(Button::Left).unwrap();
     println!("pressed");
     // The parent kills this process now; the sleep only bounds a run whose
-    // parent died first. `Input`'s drop would release on the way out, so the
-    // test relies on SIGKILL skipping it.
+    // parent died or stalled. Aborting, not returning, skips `Input`'s drop,
+    // so a release can only come from the kernel, and the parent's check of
+    // the exit signal rejects this ending.
     thread::sleep(LINE_TIMEOUT);
+    std::process::abort();
 }
 
 #[test]
