@@ -58,4 +58,4 @@ The issues, their codes and blockers are on [the Project](https://github.com/use
 ## Open questions
 
 - Does the son's machine also run Plasma 6.8? Assumed yes (CachyOS is rolling).
-- Do the target games accept uinput clicks? Expected yes; C02 checks Minecraft Java under XWayland and native Wayland.
+- Do the target games accept uinput clicks? Minecraft Java does as a native Wayland window: on the target laptop (Plasma 6.8.2), 10 of 10 slow right clicks and 1000 of 1000 at the 10 ms floor registered (Statistics, snowballs "Times Used"; C02, 2026-11-09). The XWayland run is #32: the launcher does not start without Wayland, so the game could not be forced onto XWayland.
