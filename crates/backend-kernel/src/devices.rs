@@ -174,6 +174,13 @@ mod tests {
     }
 
     #[test]
+    fn roles_carry_their_constant_names() {
+        assert_eq!(DeviceRole::Mouse.name(), MOUSE_NAME);
+        assert_eq!(DeviceRole::Keyboard.name(), KEYBOARD_NAME);
+        assert_ne!(MOUSE_NAME, KEYBOARD_NAME);
+    }
+
+    #[test]
     fn devices_have_distinct_products() {
         assert_ne!(DeviceRole::Mouse.product(), DeviceRole::Keyboard.product());
     }

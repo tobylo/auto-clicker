@@ -4,6 +4,7 @@ Used by the hand-run device test in tests/device.rs. It prints:
   ready              once the window is active and its text entry has focus
   motion X Y         pointer position in window coordinates
   press N / release N  mouse button N (1 left, 2 middle, 3 right)
+  scroll DY          vertical wheel steps, positive down
   text T             the entry's text when Enter is pressed
 """
 
@@ -38,6 +39,11 @@ def build(app):
     motion.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
     motion.connect("motion", lambda c, x, y: out("motion", round(x), round(y)))
     win.add_controller(motion)
+
+    scroll = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL)
+    scroll.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+    scroll.connect("scroll", lambda c, dx, dy: out("scroll", round(dy)) or True)
+    win.add_controller(scroll)
 
     ready = []
 

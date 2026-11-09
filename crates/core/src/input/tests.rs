@@ -184,9 +184,25 @@ fn a_boxed_backend_chosen_at_run_time_keeps_the_guarantee() {
     let (backend, log) = FakeBackend::new();
     let boxed: Box<dyn InputBackend + Send> = Box::new(backend);
     let mut input = Input::new(boxed);
+    let position = super::AbsolutePosition { x: 1, y: 2 };
     input.press_button(Button::Right).unwrap();
+    input.press_key(key_a()).unwrap();
+    input.move_relative(1, 1).unwrap();
+    input.move_absolute(position).unwrap();
+    input.scroll(1).unwrap();
 
     drop(input);
 
-    assert_eq!(log.calls(), [down(Button::Right), up(Button::Right)]);
+    assert_eq!(
+        log.calls(),
+        [
+            down(Button::Right),
+            Call::Key(key_a(), PressState::Down),
+            Call::MoveRelative(1, 1),
+            Call::MoveAbsolute(position),
+            Call::Scroll(1),
+            up(Button::Right),
+            Call::Key(key_a(), PressState::Up),
+        ]
+    );
 }
