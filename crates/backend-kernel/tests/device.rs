@@ -257,6 +257,9 @@ fn clicks_and_types_into_a_real_window_and_leaves_nothing_pressed() {
     assert_eq!(keys_down(&keyboard), Vec::<u16>::new());
 
     // Dropping while a button is held releases it, and the devices go away.
+    // The kernel also releases what a destroyed device held, so this cannot
+    // tell `Input`'s own release on drop from the kernel's; the fake-backend
+    // tests in auto-clicker-core prove the former.
     input.press_button(Button::Left).unwrap();
     window.expect_line("press 1");
     drop(input);
