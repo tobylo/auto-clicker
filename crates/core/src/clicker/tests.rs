@@ -570,7 +570,8 @@ fn write_error(outcome: &Outcome) -> bool {
 
 #[tokio::test(start_paused = true)]
 async fn a_failed_press_ends_the_run_and_still_releases() {
-    let outcome = run_failing(down(Button::Left), settings(Mode::Click, 100), never()).await;
+    // A count, so a run that ignores the error ends instead of clicking on.
+    let outcome = run_failing(down(Button::Left), counted(Mode::Click, 100, 3), never()).await;
 
     let expected = vec![(ms(0), down(Button::Left)), (ms(0), up(Button::Left))];
     let actual = (write_error(&outcome), outcome.calls, outcome.held);
@@ -579,7 +580,7 @@ async fn a_failed_press_ends_the_run_and_still_releases() {
 
 #[tokio::test(start_paused = true)]
 async fn a_failed_release_is_reported_and_retried_on_the_way_out() {
-    let outcome = run_failing(up(Button::Left), settings(Mode::Click, 100), never()).await;
+    let outcome = run_failing(up(Button::Left), counted(Mode::Click, 100, 3), never()).await;
 
     let (press, release) = left();
     let expected = vec![(ms(0), press), (ms(10), release), (ms(10), release)];

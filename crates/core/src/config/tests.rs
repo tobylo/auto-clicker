@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use super::*;
-use crate::clicker::{INTERVAL_FLOOR, Interval, Jitter, Mode, Position, Repeat};
+use crate::clicker::{INTERVAL_FLOOR, INTERVAL_MAX, Interval, Jitter, Mode, Position, Repeat};
 use crate::input::{AbsolutePosition, Button, Key};
 use crate::test_support::TempDir;
 
@@ -187,27 +187,45 @@ fn unknown_keys_are_rejected_in_every_table() {
 
 #[test]
 fn an_interval_below_the_floor_names_its_field() {
-    let reason = invalid_clicker("interval_ms = 5");
-    assert!(
-        reason.starts_with("interval_ms must be from 10 "),
-        "{reason}"
+    let cases = [
+        ("interval_ms = 5", "interval_ms must be from 10 to 86400000"),
+        (
+            "clicks_per_second = 200",
+            "clicks_per_second must be from 0.000012 to 100",
+        ),
+    ];
+    for (section, reason) in cases {
+        assert_eq!(invalid_clicker(section), reason);
+    }
+}
+
+#[test]
+fn the_longest_interval_is_a_day() {
+    assert_eq!(
+        clicker("interval_ms = 86400000").interval.get(),
+        INTERVAL_MAX
     );
-    let reason = invalid_clicker("clicks_per_second = 200");
-    assert!(reason.starts_with("clicks_per_second must be "), "{reason}");
-    assert!(reason.contains("to 100"), "{reason}");
+    assert_eq!(INTERVAL_MAX, Duration::from_secs(86_400));
 }
 
 #[test]
 fn a_double_click_needs_twice_the_floor() {
-    // The mode is on line 3; the error points at the interval, on line 4.
-    let (line, reason) =
-        invalid("version = 1\n[clicker]\nmode = \"double_click\"\ninterval_ms = 15\n");
-    assert_eq!(line, Some(4));
-    assert!(
-        reason.starts_with("interval_ms must be from 20 "),
-        "{reason}"
-    );
-    assert!(reason.contains("double click"), "{reason}");
+    // The mode is on line 3; the error points at the rate or interval, on line 4.
+    let suffix = " for a double click, which fits two clicks in each interval";
+    let cases = [
+        (
+            "interval_ms = 15",
+            "interval_ms must be from 20 to 86400000",
+        ),
+        (
+            "clicks_per_second = 60",
+            "clicks_per_second must be from 0.000012 to 50",
+        ),
+    ];
+    for (setting, reason) in cases {
+        let text = format!("version = 1\n[clicker]\nmode = \"double_click\"\n{setting}\n");
+        assert_eq!(invalid(&text), (Some(4), format!("{reason}{suffix}")));
+    }
 }
 
 #[test]

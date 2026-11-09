@@ -119,6 +119,15 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_file_name_is_in_the_current_directory() {
+        let dirs = (
+            parent_dir(Path::new("config.toml")).unwrap(),
+            parent_dir(Path::new("/etc/config.toml")).unwrap(),
+        );
+        assert_eq!(dirs, (Path::new("."), Path::new("/etc")));
+    }
+
+    #[test]
     fn a_path_without_a_file_name_is_an_error() {
         let err = atomic_write(Path::new("/"), b"x").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);

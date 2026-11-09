@@ -119,4 +119,23 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn only_a_read_error_has_a_source() {
+        use std::error::Error;
+        let path = Path::new("config.toml");
+        let unreadable = ConfigError::new(path, Problem::Read(io::Error::other("disk")));
+        let invalid = ConfigError::new(
+            path,
+            Problem::Invalid {
+                line: None,
+                reason: "bad".to_owned(),
+            },
+        );
+        let sources = (
+            unreadable.source().map(ToString::to_string),
+            invalid.source().is_none(),
+        );
+        assert_eq!(sources, (Some("disk".to_owned()), true));
+    }
 }

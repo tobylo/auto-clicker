@@ -95,9 +95,7 @@ fn interval_ms(value: &Spanned<i64>, mode: Mode) -> Result<Interval, Invalid> {
     let (floor, max) = bounds_ms(mode);
     let interval = u64::try_from(ms)
         .ok()
-        .map(Duration::from_millis)
-        .filter(|interval| *interval >= mode.interval_floor())
-        .and_then(Interval::new);
+        .and_then(|ms| for_mode_interval(Duration::from_millis(ms), mode));
     interval.ok_or_else(|| {
         at(
             value,
@@ -112,11 +110,12 @@ fn interval_ms(value: &Spanned<i64>, mode: Mode) -> Result<Interval, Invalid> {
 fn clicks_per_second(value: &Spanned<f64>, mode: Mode) -> Result<Interval, Invalid> {
     let rate = *value.get_ref();
     let (floor, max) = bounds_ms(mode);
-    let interval = (rate.is_finite() && rate > 0.0)
-        .then(|| Duration::try_from_secs_f64(1.0 / rate).ok())
-        .flatten()
-        .filter(|interval| *interval >= mode.interval_floor())
-        .and_then(Interval::new);
+    // A zero, negative or NaN rate gives an interval that is infinite,
+    // negative or NaN, which `try_from_secs_f64` rejects; an infinite rate
+    // gives zero, which is below the floor.
+    let interval = Duration::try_from_secs_f64(1.0 / rate)
+        .ok()
+        .and_then(|interval| for_mode_interval(interval, mode));
     interval.ok_or_else(|| {
         // Shown rounded: the exact limits are 1000/floor and 1000/max.
         let most = 1000.0 / floor as f64;
@@ -129,6 +128,14 @@ fn clicks_per_second(value: &Spanned<f64>, mode: Mode) -> Result<Interval, Inval
             ),
         )
     })
+}
+
+/// `interval` when `mode` may run at it: not below the mode's floor, nor
+/// outside the range every interval has.
+fn for_mode_interval(interval: Duration, mode: Mode) -> Option<Interval> {
+    Some(interval)
+        .filter(|interval| *interval >= mode.interval_floor())
+        .and_then(Interval::new)
 }
 
 /// The shortest and longest interval for `mode`, in whole milliseconds.
