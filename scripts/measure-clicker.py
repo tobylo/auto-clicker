@@ -131,15 +131,18 @@ class Session:
     Every process it starts is stopped when the block ends, however it ends,
     even when stopping another one fails."""
 
-    def __init__(self, config):
+    def __init__(self, config, run_for):
         self.config = config
+        # The clicker stops itself after this many seconds, so even one that
+        # outlives this script, by whatever race, stops clicking soon after.
+        self.run_for_ms = str(round(run_for * 1000))
         self.cleanup = contextlib.ExitStack()
 
     def __enter__(self):
         with self.cleanup as cleanup:
             self.window, self.window_lines = spawn(["python3", str(PROBE)], cleanup)
             expect(self.window_lines, lambda l: l == "ready" or None, "the window ready")
-            self.clicker, self.clicker_lines = spawn([str(CLICKER), str(self.config), "1500"], cleanup)
+            self.clicker, self.clicker_lines = spawn([str(CLICKER), str(self.config), "1500", self.run_for_ms], cleanup)
             self.node = expect(self.clicker_lines, mouse_node, "the mouse node")
             # Started: the processes now belong to the block, not to setup.
             self.cleanup = cleanup.pop_all()
@@ -171,12 +174,13 @@ def rate(interval_ms):
             directory,
             f'interval_ms = {interval_ms}\nrepeat = {CLICKS}\nposition = {{ x = 32768, y = 32768 }}\n',
         )
-        with Session(config) as session:
+        run_for = 5 + CLICKS * interval_ms / 1000 * 2
+        with Session(config, run_for) as session:
             presses, failures = [], []
             reader = threading.Thread(target=read_presses, args=(session.node, presses, failures), daemon=True)
             reader.start()
             try:
-                session.clicker.wait(timeout=5 + CLICKS * interval_ms / 1000 * 2)
+                session.clicker.wait(timeout=run_for)
                 time.sleep(1.0)  # let the last events reach the window
             finally:
                 reader.join(timeout=5)
@@ -214,7 +218,7 @@ def cpu_and_switches(pid):
 
 def idle(name, clicker, seconds=60):
     with tempfile.TemporaryDirectory() as directory:
-        with Session(write_config(directory, clicker)) as session:
+        with Session(write_config(directory, clicker), run_for=seconds + 10) as session:
             expect(session.clicker_lines, lambda l: l == "start" or None, "the run start")
             time.sleep(2)
             ticks0, switches0 = cpu_and_switches(session.clicker.pid)
