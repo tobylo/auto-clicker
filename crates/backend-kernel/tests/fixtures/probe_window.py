@@ -5,7 +5,7 @@ Used by the hand-run device test in tests/device.rs. It prints:
   motion X Y         pointer position in window coordinates
   press N / release N  mouse button N (1 left, 2 middle, 3 right)
   scroll DY          vertical wheel steps, positive down
-  text T             the entry's text when Enter is pressed
+  text T             the entry's text when Enter is pressed; the entry is then emptied
 """
 
 import gi
@@ -21,7 +21,11 @@ def out(*words):
 def build(app):
     win = Gtk.ApplicationWindow(application=app, title="auto-clicker device test")
     entry = Gtk.Entry()
-    entry.connect("activate", lambda e: out("text", e.get_text()))
+    def on_enter(e):
+        out("text", e.get_text())
+        e.set_text("")
+
+    entry.connect("activate", on_enter)
     label = Gtk.Label(label="auto-clicker device test: leave the mouse and keyboard alone")
     label.set_vexpand(True)
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
