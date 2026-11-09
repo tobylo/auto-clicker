@@ -28,6 +28,8 @@ What the product is and what has been decided: [docs/planning/map.md](docs/plann
 - Check arithmetic on counts, intervals and durations for overflow (`checked_*`, `saturating_*`, or a typed duration).
 - Plasma on Wayland (6.8 and later) is the primary target. X11 sessions are not a target; X11 apps under XWayland are, since games run there.
 - Never log or persist keystrokes outside an active recording the user started.
+- Code reaches the machine only from this repository. The program has no network access except an updater, if one is added, and that updater fetches releases only from `tobylo/auto-clicker` and installs nothing whose signature does not verify against the owner's release key (pinned in the program). No third-party update channel, mirror or plugin source, ever. Until an updater exists, the program opens no network sockets.
+- Dependencies come from crates.io only, pinned by the committed `Cargo.lock`, and every build uses `--locked`. A new dependency, or a major version bump, is named in the PR with its reason. Automated dependency PRs are never merged without the owner.
 
 ## How we work
 - **Failures get fixed or taken up with the owner.** Anything you see fail that ought to be looked at is yours once you see it: a tool, script, CI job, test or review step, whether or not it touches your task. A warning, a fallback or a round that carries on does not close it.

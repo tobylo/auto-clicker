@@ -29,6 +29,7 @@ An auto clicker with macro record and playback for a CachyOS machine running KDE
 | D6 | Hotkeys default to Ctrl+F6 (clicking on/off), Ctrl+F7 (record on/off), Ctrl+F8 (play/stop), rebindable | Ctrl combinations avoid clashing with game bindings |
 | D7 | Recordings and config are TOML/JSON files under XDG paths (`~/.config/auto-clicker/`, `~/.local/share/auto-clicker/`) written atomically | Simple, inspectable, survives crashes |
 | D8 | Install through a PKGBUILD with a udev rule and a systemd user service | CachyOS is Arch-based |
+| D10 | Code reaches the machine only from this repository: v1 installs by the owner building a reviewed commit and has no network access; a later updater may fetch only signed releases of `tobylo/auto-clicker`, verified against the owner's pinned key. Dependencies from crates.io only, locked, and checked for advisories in CI | The program runs on a child's machine with access to input devices; nobody but the owner may be able to push code to it |
 | D9 | Review services: Codex and CodeRabbit GitHub bots, CodeScene Code Health. No Entire | Owner's choice |
 
 ## Defaults (not yet measured)
@@ -47,6 +48,10 @@ An auto clicker with macro record and playback for a CachyOS machine running KDE
 | M4 Portal backend | libei output, GlobalShortcuts hotkeys, backend auto-selection; recording on this backend only if X02 finds a way |
 
 The issues, their codes and blockers are on [the Project](https://github.com/users/tobylo/projects/4); [github-map.json](github-map.json) maps codes to issue numbers.
+
+## Deferred ideas
+
+- A self-updater for signed releases of this repository (D10); not in v1.
 
 ## Open questions
 
