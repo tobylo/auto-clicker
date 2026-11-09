@@ -13,8 +13,8 @@ An auto clicker with macro record and playback for a CachyOS machine running KDE
 
 - Plasma 6.8 (October 2026) removed the X11 session; the dev box runs Plasma 6.8.2, KWin 6.8.2, xdg-desktop-portal-kde 6.8.2 and libei 1.6.0. **Wayland is the primary target from day one.** X11 games keep running under XWayland and must work.
 - Wayland lets no client inject input into another or read the global pointer position. Two ways in:
-  - **Kernel backend:** read real devices with evdev and inject through a uinput virtual device. Works on any compositor with no prompt; needs the user in the `input` group (or a uaccess ACL on `/dev/uinput`), and can technically read every keystroke.
-  - **Portal backend:** libei through the RemoteDesktop portal for output, GlobalShortcuts portal for hotkeys, InputCapture portal for recording. KDE shows a permission prompt; InputCapture is still unreliable on KDE as of 2026.
+  - **Kernel backend:** read real devices with evdev and inject through a uinput virtual device. Works on any compositor with no prompt. Injecting needs write access to `/dev/uinput` (a uaccess udev rule is enough); reading devices for hotkeys and recording needs read access to `/dev/input/event*`, in practice the `input` group, which means the program can technically read every keystroke.
+  - **Portal backend:** libei through the RemoteDesktop portal for output, GlobalShortcuts portal for hotkeys, InputCapture portal for recording. KDE shows a permission prompt. InputCapture cannot record gameplay: it starts when the pointer crosses a barrier at a screen edge, not on a hotkey, and while it captures, input goes to the capturing app instead of the game. It is also unreliable on KDE as of 2026. Recording therefore stays on the kernel backend unless X02 finds another way.
 - No existing Linux tool combines record and playback with a Plasma tray icon. theclicker-gui (Rust, uinput, SNI tray) and clickr (Rust, uinput) are references for the clicker part.
 
 ## Decisions
@@ -22,7 +22,7 @@ An auto clicker with macro record and playback for a CachyOS machine running KDE
 | # | Decision | Why |
 | --- | --- | --- |
 | D1 | Rust, one small daemon; tray via `ksni` (StatusNotifierItem) | Low idle cost; SNI is Plasma's native tray protocol |
-| D2 | Both input backends in v1, behind one backend trait: kernel first (M1–M2), portal in M4, chosen automatically with a manual override | Kernel works today with no prompts; the portal avoids the `input` group |
+| D2 | Both input backends in v1, behind one backend trait: kernel first (M1–M2), portal in M4, chosen automatically with a manual override. On the portal backend, recording is unavailable unless X02 finds a mechanism that leaves input with the game | Kernel works today with no prompts; the portal avoids the `input` group; InputCapture takes input away from the focused app by design |
 | D3 | Recording captures clicks, keys, timing and mouse movement, including absolute cursor positions; a spike (X01) proves how to read the cursor on KWin first. If it fails, recordings keep relative motion and clicks play at the cursor | Under Wayland only the compositor knows the cursor position |
 | D4 | Movement is recorded both as relative motion and, when available, absolute positions; playback uses relative motion while a game has locked the pointer | Minecraft-style games lock the pointer |
 | D5 | Settings window in Slint, opened from the tray and loaded only while open; everyday use is tray plus hotkeys | Kid-friendly settings without raising idle cost |
@@ -44,7 +44,7 @@ An auto clicker with macro record and playback for a CachyOS machine running KDE
 | M1 Auto clicker | Tray auto clicker with hotkeys on the kernel backend, installable |
 | M2 Record and playback | Record and replay routines, with absolute positions if X01 succeeds |
 | M3 Settings window | Clicker options, hotkey rebinding and a recordings list |
-| M4 Portal backend | libei output, GlobalShortcuts hotkeys, InputCapture recording, backend auto-selection |
+| M4 Portal backend | libei output, GlobalShortcuts hotkeys, backend auto-selection; recording on this backend only if X02 finds a way |
 
 The issues, their codes and blockers are on [the Project](https://github.com/users/tobylo/projects/4); [github-map.json](github-map.json) maps codes to issue numbers.
 

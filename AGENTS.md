@@ -18,9 +18,9 @@ What the product is and what has been decided: [docs/planning/map.md](docs/plann
   - *Untrusted input is accepted in one form.* Config files, recordings and D-Bus replies are parsed once into a validated type; reject what does not parse rather than filtering bad spellings.
   - *Every exit leaves nothing behind.* For each step of a multi-step operation, say what remains if it fails, including when the cleanup fails: virtual devices, grabbed devices, portal sessions, pressed keys, temp files.
   - *Every transition reaches every member.* Stop, pause, backend loss and shutdown apply to every task, timer and device a change adds: bind them to their owner's cancellation.
-  - *Recorded state tells the truth after a crash.* Write a recording or config atomically (write, fsync, rename), never a half file.
+  - *Recorded state tells the truth after a crash.* Write a recording or config atomically (write a temp file in the same directory, fsync it, rename, fsync the directory), never a half file.
   - *Errors keep their meaning.* Tell transient from permanent (a device unplugged versus permission denied), and never read a failed or empty read as "nothing there".
-  - *Every wait is bounded.* Each wait has its own deadline, cleanup calls included.
+  - *Every wait is bounded.* Each wait has its own deadline, cleanup calls included. The one exception is the daemon's idle wait for events, which may block indefinitely but must end at once on shutdown.
 
 ## Hard rules
 - No `unsafe` outside a backend module, and every `unsafe` block carries a `// SAFETY:` comment.
@@ -39,7 +39,7 @@ What the product is and what has been decided: [docs/planning/map.md](docs/plann
 - **Gates.** Commit only after `scripts/gates.sh` reports that all gates passed (`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`). Do not edit the tree while the gates run, and commit exactly the tree that passed. After rewriting a test table, compare its case names with the previous commit: a rewrite can drop rows.
 - **Tests that need devices.** Unit tests never need `/dev/uinput`, an input device or a running compositor: they run against a fake backend. Tests that drive real devices are `#[ignore]`d with a reason, run by hand (`cargo test -- --ignored`) on a Plasma session, and the PR says when they last passed and on which Plasma version.
 - **Timing in tests.** Assert outcomes and orders rather than elapsed times; use time bounds only as generous upper limits. CI runners are slow and noisy.
-- **Code Health.** Every file a commit adds or changes scores 10 (CodeScene). Before pushing, also run `analyze_change_set` against origin/main. If a file can't reach 10, ask before committing.
+- **Code Health.** Every source file a commit adds or changes that CodeScene scores (Rust, scripts) scores 10; documentation and data files are exempt. Before pushing, also run `analyze_change_set` against origin/main. If a file can't reach 10, ask before committing.
 - **Reproducible state.** Keep review clones, calibration lists and mutation scripts under the worktree's .claude/local/, which is git-excluded.
 - **Scope.** Do not widen an issue's scope on your own: propose a separate issue for work outside it. Build the lasting solution from the start; write no interim code you already know will be replaced.
 - **Dependencies.** Prefer few, well-maintained crates. Assess what a crate or release adds against this program's needs (binary size, idle cost, build time), alongside compatibility, and verify its claims by running them.
