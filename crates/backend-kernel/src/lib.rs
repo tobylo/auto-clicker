@@ -54,12 +54,9 @@ impl KernelBackend {
     }
 }
 
-/// Writes one frame; `emit` ends it with `SYN_REPORT`. Writes nothing for
-/// no events (a zero move or scroll): an empty frame means nothing.
+/// Writes one frame; `emit` ends it with `SYN_REPORT`. A zero move or scroll
+/// has no events and writes a bare `SYN_REPORT`, which changes nothing.
 fn emit(device: &mut VirtualDevice, events: &[InputEvent]) -> Result<(), InputError> {
-    if events.is_empty() {
-        return Ok(());
-    }
     device.emit(events).map_err(InputError::Write)
 }
 
