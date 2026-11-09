@@ -42,9 +42,11 @@ def lines_of(stream, sink):
         sink.put(line.rstrip("\n"))
 
 
-def spawn(args):
-    """Starts a process and a queue of its stdout lines."""
+def spawn(args, cleanup):
+    """Starts a process, registered with `cleanup` before anything else can
+    fail, and a queue of its stdout lines."""
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, text=True, bufsize=1)
+    cleanup.callback(stop, proc)
     lines = queue.Queue()
     threading.Thread(target=lines_of, args=(proc.stdout, lines), daemon=True).start()
     return proc, lines
@@ -120,31 +122,25 @@ def write_config(directory, clicker):
 
 
 class Session:
-    """The probe window and one clicker run in it. Every process it starts is
-    stopped on close, even when stopping another one fails."""
+    """The probe window and one clicker run in it, used as a `with` block.
+    Every process it starts is stopped when the block ends, however it ends,
+    even when stopping another one fails."""
 
     def __init__(self, config):
+        self.config = config
         self.cleanup = contextlib.ExitStack()
-        try:
-            self.start(config)
-        except BaseException:
-            # A failed start (the clicker rejected the config, say) must not
-            # leave the fullscreen window behind.
-            self.close()
-            raise
 
-    def start(self, config):
-        self.window, self.window_lines = self.spawn(["python3", str(PROBE)])
-        expect(self.window_lines, lambda l: l == "ready" or None, "the window ready")
-        self.clicker, self.clicker_lines = self.spawn([str(CLICKER), str(config), "1500"])
-        self.node = expect(self.clicker_lines, mouse_node, "the mouse node")
+    def __enter__(self):
+        with self.cleanup as cleanup:
+            self.window, self.window_lines = spawn(["python3", str(PROBE)], cleanup)
+            expect(self.window_lines, lambda l: l == "ready" or None, "the window ready")
+            self.clicker, self.clicker_lines = spawn([str(CLICKER), str(self.config), "1500"], cleanup)
+            self.node = expect(self.clicker_lines, mouse_node, "the mouse node")
+            # Started: the processes now belong to the block, not to setup.
+            self.cleanup = cleanup.pop_all()
+        return self
 
-    def spawn(self, args):
-        proc, lines = spawn(args)
-        self.cleanup.callback(stop, proc)
-        return proc, lines
-
-    def close(self):
+    def __exit__(self, *exc):
         self.cleanup.close()
 
 
@@ -170,18 +166,16 @@ def rate(interval_ms):
             directory,
             f'interval_ms = {interval_ms}\nrepeat = {CLICKS}\nposition = {{ x = 32768, y = 32768 }}\n',
         )
-        session = Session(config)
-        presses, failures = [], []
-        reader = threading.Thread(target=read_presses, args=(session.node, presses, failures), daemon=True)
-        reader.start()
-        try:
-            timeout = 5 + CLICKS * interval_ms / 1000 * 2
-            session.clicker.wait(timeout=timeout)
-            time.sleep(1.0)  # let the last events reach the window
-        finally:
-            reader.join(timeout=5)
+        with Session(config) as session:
+            presses, failures = [], []
+            reader = threading.Thread(target=read_presses, args=(session.node, presses, failures), daemon=True)
+            reader.start()
+            try:
+                session.clicker.wait(timeout=5 + CLICKS * interval_ms / 1000 * 2)
+                time.sleep(1.0)  # let the last events reach the window
+            finally:
+                reader.join(timeout=5)
             seen = sum(1 for l in drain(session.window_lines) if l == "press 1")
-            session.close()
     if failures:
         sys.exit(f"reading the kernel's timestamps failed: {failures[0]}")
     if session.clicker.returncode != 0:
@@ -215,15 +209,16 @@ def cpu_and_switches(pid):
 
 def idle(name, clicker, seconds=60):
     with tempfile.TemporaryDirectory() as directory:
-        session = Session(write_config(directory, clicker))
-        try:
+        with Session(write_config(directory, clicker)) as session:
             expect(session.clicker_lines, lambda l: l == "start" or None, "the run start")
             time.sleep(2)
             ticks0, switches0 = cpu_and_switches(session.clicker.pid)
             time.sleep(seconds)
             ticks1, switches1 = cpu_and_switches(session.clicker.pid)
-        finally:
-            session.close()
+            # A clicker that died while sampling keeps its counters until it
+            # is reaped, so they would show a cost of nothing.
+            if session.clicker.poll() is not None:
+                sys.exit(f"{name}: the clicker exited while sampling ({session.clicker.returncode})")
     hz = os.sysconf("SC_CLK_TCK")
     print(
         f"{name}: {ticks1 - ticks0} CPU ticks ({(ticks1 - ticks0) / hz * 1000:.0f} ms) "

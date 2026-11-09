@@ -329,6 +329,19 @@ fn hold_helper() {
     std::process::abort();
 }
 
+/// The child's exit status, failing the test if it has not exited within
+/// `limit`: a process stuck in the kernel must not hang the test.
+fn exit_status_within(child: &mut Child, limit: Duration) -> std::process::ExitStatus {
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        assert!(Instant::now() < deadline, "the helper outlived SIGKILL");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
 #[ignore = "needs /dev/uinput, a Wayland session and Python with GTK 4; run by hand"]
 fn sigkill_while_a_button_is_held_releases_it() {
@@ -361,7 +374,7 @@ fn sigkill_while_a_button_is_held_releases_it() {
 
     // SIGKILL: no destructor runs, so only the kernel can release.
     helper.child.kill().unwrap();
-    let status = helper.child.wait().unwrap();
+    let status = exit_status_within(&mut helper.child, LINE_TIMEOUT);
     assert_eq!(
         status.signal(),
         Some(SIGKILL),
