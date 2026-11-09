@@ -64,18 +64,9 @@ pub struct Matcher {
     awaiting_release: bool,
 }
 
-/// Every modifier key code, left and right.
-const MODIFIER_CODES: [u16; 8] = {
-    let mut codes = [0; 8];
-    let mut i = 0;
-    while i < 4 {
-        let pair = Modifier::ALL[i].codes();
-        codes[2 * i] = pair[0];
-        codes[2 * i + 1] = pair[1];
-        i += 1;
-    }
-    codes
-};
+/// Every modifier key code, left and right, as [`Modifier::codes`] gives
+/// them.
+pub(super) const MODIFIER_CODES: [u16; 8] = [29, 97, 42, 54, 56, 100, 125, 126];
 
 fn modifier_bit(code: u16) -> Option<u8> {
     MODIFIER_CODES

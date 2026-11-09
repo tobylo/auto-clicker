@@ -11,8 +11,10 @@ use auto_clicker_core::hotkeys::{Bindings, HotkeyEvent, HotkeyStatus, Unavailabl
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
+use evdev::{EventType, InputEvent};
+
 use super::node::Paths;
-use super::{Reader, run};
+use super::{Reader, key_event, run};
 
 /// Far beyond what any step here takes, and far below the wait it bounds,
 /// which never ends by itself.
@@ -117,6 +119,22 @@ async fn next(received: &mut mpsc::UnboundedReceiver<HotkeyEvent>) -> Option<Hot
     timeout(BOUND, received.recv()).await.ok().flatten()
 }
 
+#[test]
+fn only_key_events_are_matched() {
+    let event = |kind: EventType, value| InputEvent::new(kind.0, 64, value);
+    let is_key = [
+        event(EventType::KEY, 1),
+        event(EventType::KEY, 0),
+        event(EventType::KEY, 2),
+        event(EventType::KEY, 7),
+        event(EventType::RELATIVE, 1),
+        event(EventType::MISC, 1),
+        event(EventType::SYNCHRONIZATION, 0),
+    ]
+    .map(|event| key_event(&event).is_some());
+    assert_eq!(is_key, [true, true, true, false, false, false, false]);
+}
+
 #[tokio::test]
 async fn no_keyboard_is_reported_and_shutdown_ends_the_wait() {
     let fixture = Fixture::new();
@@ -181,6 +199,25 @@ async fn a_node_udev_has_finished_that_cannot_be_opened_means_no_permission() {
         assert_eq!(
             next(&mut received).await,
             Some(unavailable(Unavailable::NoKeyboard))
+        );
+        stop.send(()).unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn nodes_there_before_the_start_are_looked_at() {
+    if !permissions_apply() {
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.udev_done();
+    unreadable(&fixture.node("event2"));
+    let fx = &fixture;
+    with_reader(fx, |mut received, stop| async move {
+        assert_eq!(
+            next(&mut received).await,
+            Some(unavailable(Unavailable::NoPermission))
         );
         stop.send(()).unwrap();
     })

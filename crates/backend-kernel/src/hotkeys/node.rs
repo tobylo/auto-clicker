@@ -7,7 +7,7 @@
 
 use std::fs::{self, File};
 use std::io;
-use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use auto_clicker_core::hotkeys::Bindings;
@@ -60,11 +60,11 @@ pub(crate) fn open(path: &Path, paths: &Paths, own: &[PathBuf], bindings: &Bindi
         Err(err) => return open_failed(&err, path, paths),
     };
     let device_number = match file.metadata() {
-        Ok(meta) if meta.file_type().is_char_device() => meta.rdev(),
-        Ok(_) => return Node::NotKeyboard,
+        Ok(meta) => meta.rdev(),
         Err(err) => return failed(&err),
     };
-    // A failed lookup skips the device: it never counts as "not ours".
+    // A failed lookup skips the device: it never counts as "not ours". Only
+    // a device node has an entry, so anything else stops here too.
     let syspath = match input_device(paths, device_number) {
         Ok(syspath) => syspath,
         Err(err) => return failed(&err),

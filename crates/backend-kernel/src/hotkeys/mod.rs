@@ -119,6 +119,13 @@ fn next_event(
     })
 }
 
+/// The key event an input event is, if it is one.
+fn key_event(event: &InputEvent) -> Option<KeyEvent> {
+    (event.event_type() == EventType::KEY)
+        .then(|| KeyEvent::new(event.code(), event.value()))
+        .flatten()
+}
+
 /// A keyboard being read, and the event read from it but not handled yet.
 struct Reading {
     id: DeviceId,
@@ -215,13 +222,12 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
         };
         let id = device.id;
         match event {
-            Ok(event) if event.event_type() == EventType::KEY => {
-                if let Some(key) = KeyEvent::new(event.code(), event.value()) {
+            Ok(event) => {
+                if let Some(key) = key_event(&event) {
                     let reaction = self.matcher.key(id, key);
                     self.send_reaction(reaction);
                 }
             }
-            Ok(_) => {}
             Err(err) => {
                 let gone = node::is_gone(&err);
                 let name = device.name.clone();

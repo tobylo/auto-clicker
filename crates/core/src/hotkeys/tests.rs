@@ -260,6 +260,40 @@ fn ctrl_stays_held_while_either_side_or_device_holds_it() {
 }
 
 #[test]
+fn every_modifier_key_counts_as_its_modifier() {
+    assert_eq!(
+        matcher::MODIFIER_CODES.to_vec(),
+        Modifier::ALL
+            .into_iter()
+            .flat_map(Modifier::codes)
+            .collect::<Vec<_>>()
+    );
+    for modifier in Modifier::ALL {
+        let bindings = Bindings {
+            toggle_clicking: binding(&format!("{}+F9", modifier.name())),
+            ..Bindings::default()
+        };
+        for code in modifier.codes() {
+            let sent = run_with(bindings, &[down(A, code), down(A, F9)]);
+            assert_eq!(sent, [Fired(Action::ToggleClicking)], "{code}");
+        }
+    }
+}
+
+#[test]
+fn a_modifier_held_twice_is_held_once() {
+    let held_twice = [
+        [down(A, LEFTCTRL), down(A, RIGHTCTRL)],
+        [down(A, LEFTCTRL), down(B, LEFTCTRL)],
+        [down(A, LEFTCTRL), down(A, LEFTCTRL)],
+    ];
+    for steps in held_twice {
+        let sent = run(&[steps[0], steps[1], down(A, F6)]);
+        assert_eq!(sent, [Fired(Action::ToggleClicking)]);
+    }
+}
+
+#[test]
 fn a_release_without_a_press_changes_nothing() {
     assert_eq!(
         run(&[
@@ -347,6 +381,24 @@ fn another_device_going_away_keeps_the_wait() {
 fn only_evdev_key_values_make_events() {
     assert!(KeyEvent::new(F6, 3).is_none());
     assert!(KeyEvent::new(F6, -1).is_none());
+}
+
+#[test]
+fn unavailable_hotkeys_say_why() {
+    let messages = [
+        Unavailable::NoKeyboard,
+        Unavailable::NoPermission,
+        Unavailable::WatchFailed("no such directory".to_owned()),
+    ]
+    .map(|why| why.to_string());
+    assert_eq!(
+        messages,
+        [
+            "hotkeys are unavailable: no keyboard found",
+            "hotkeys are unavailable: keyboards cannot be read; add your user to the input group and log in again",
+            "hotkeys stopped: watching for keyboards failed: no such directory",
+        ]
+    );
 }
 
 // No key data can be shown

@@ -85,7 +85,8 @@ fn change(mask: EventMask, name: Option<&OsStr>) -> io::Result<Option<Change>> {
     if mask.contains(EventMask::Q_OVERFLOW) {
         return Ok(Some(Change::Overflow));
     }
-    if mask.intersects(EventMask::IGNORED | EventMask::DELETE_SELF | EventMask::UNMOUNT) {
+    // The kernel ends every watch with `IN_IGNORED`, whatever removed it.
+    if mask.contains(EventMask::IGNORED) {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "the watched directory went away",
