@@ -1,0 +1,126 @@
+//! The config file: `$XDG_CONFIG_HOME/auto-clicker/config.toml`.
+//!
+//! The file is parsed once into a validated [`Config`]. A missing file means
+//! the built-in defaults, and nothing is written. A file that cannot be read
+//! or does not validate is left as it is: the program runs on the defaults
+//! and reports the error, with the file, line and reason.
+//!
+//! ```toml
+//! version = 1
+//! tray_start_delay = 5          # seconds before a start from the tray clicks
+//!
+//! [clicker]
+//! mode = "click"                # click, double_click, hold_button, key_repeat, hold_key
+//! interval_ms = 100             # or clicks_per_second = 10, not both
+//! jitter_percent = 0            # 0 to 50
+//! button = "left"               # left, right, middle, back, forward
+//! key = "space"                 # a key name, or a Linux key code
+//! position = "cursor"           # or { x = 32768, y = 32768 } on 0..65535
+//! repeat = "until_stopped"      # or a number of actions
+//! ```
+
+mod error;
+mod raw;
+mod validate;
+
+use std::ffi::OsString;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+pub use error::{ConfigError, Problem};
+
+use crate::clicker::ClickerSettings;
+
+/// The longest countdown before a start from the tray: an hour.
+pub const MAX_TRAY_START_DELAY: Duration = Duration::from_secs(60 * 60);
+
+/// Everything the config file sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Config {
+    /// How long "Start clicking" in the tray menu counts down before it
+    /// clicks, so the user can switch to the game. The hotkey starts at once.
+    pub tray_start_delay: Duration,
+    pub clicker: ClickerSettings,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            tray_start_delay: Duration::from_secs(5),
+            clicker: ClickerSettings::default(),
+        }
+    }
+}
+
+/// The result of loading the config: always a config to run on, and the
+/// error, if the file could not be used.
+#[derive(Debug)]
+pub struct Loaded {
+    pub config: Config,
+    pub error: Option<ConfigError>,
+}
+
+impl Config {
+    /// Parses a config file's text.
+    pub fn parse(text: &str) -> Result<Config, Problem> {
+        toml::from_str::<raw::RawConfig>(text)
+            .map_err(|err| Problem::invalid(text, err.span(), err.message().to_owned()))
+            .and_then(|raw| {
+                validate::validate(raw).map_err(|bad| Problem::invalid(text, bad.span, bad.reason))
+            })
+    }
+
+    /// Loads the file at `path`. Never writes to it.
+    pub fn load(path: &Path) -> Loaded {
+        let problem = match std::fs::read(path) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => match Config::parse(&text) {
+                    Ok(config) => {
+                        return Loaded {
+                            config,
+                            error: None,
+                        };
+                    }
+                    Err(problem) => problem,
+                },
+                Err(_) => Problem::Invalid {
+                    line: None,
+                    reason: "the file is not UTF-8 text".to_owned(),
+                },
+            },
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return Loaded {
+                    config: Config::default(),
+                    error: None,
+                };
+            }
+            Err(err) => Problem::Read(err),
+        };
+        Loaded {
+            config: Config::default(),
+            error: Some(ConfigError::new(path, problem)),
+        }
+    }
+}
+
+/// Where the config file is: `$XDG_CONFIG_HOME/auto-clicker/config.toml`, or
+/// `~/.config/auto-clicker/config.toml` when `XDG_CONFIG_HOME` is unset or
+/// not absolute. `None` when neither gives an absolute directory.
+pub fn config_path() -> Option<PathBuf> {
+    config_path_from(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+    )
+}
+
+fn config_path_from(xdg_config_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    let absolute = |dir: OsString| Some(PathBuf::from(dir)).filter(|dir| dir.is_absolute());
+    xdg_config_home
+        .and_then(absolute)
+        .or_else(|| home.and_then(absolute).map(|home| home.join(".config")))
+        .map(|dir| dir.join("auto-clicker").join("config.toml"))
+}
+
+#[cfg(test)]
+mod tests;

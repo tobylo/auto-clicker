@@ -13,3 +13,7 @@ evdev = "0.13.2"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+fastrand = "2.5.0"
+tokio = { version = "1.54.1", features = ["rt", "time", "signal", "macros"] }
