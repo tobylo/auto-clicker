@@ -142,6 +142,8 @@ fn the_interval_floor_itself_is_allowed() {
 fn a_key_is_a_name_or_a_code() {
     assert_eq!(clicker("key = \"w\"").key, Key::from_name("w").unwrap());
     assert_eq!(clicker("key = 84").key, Key::new(84).unwrap());
+    // The extra key beside the left Shift on ISO keyboards.
+    assert_eq!(clicker("key = \"102nd\"").key, Key::new(86).unwrap());
 }
 
 #[test]
