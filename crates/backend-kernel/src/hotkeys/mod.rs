@@ -17,13 +17,13 @@ use std::future::{Future, poll_fn};
 use std::io;
 use std::path::PathBuf;
 use std::pin::pin;
-use std::task::Poll;
+use std::task::{Context, Poll, Waker};
 
 use auto_clicker_core::hotkeys::{
     Bindings, DeviceId, HotkeyEvent, HotkeyStatus, Matcher, Reaction, Unavailable,
 };
 use evdev::raw_stream::EventStream;
-use evdev::{InputEvent, KeyCode};
+use evdev::{AttributeSet, InputEvent, KeyCode};
 
 use crate::DeviceIdentity;
 use events::Step;
@@ -127,6 +127,34 @@ fn next_event(
             None => Poll::Pending,
         }
     })
+}
+
+/// The most events a keyboard may still have queued when it is read again
+/// after lost events; far more than the kernel queues for one reader.
+const DRAIN_LIMIT: usize = 65_536;
+
+/// The keys a keyboard holds, read after lost events. Every event still
+/// queued for it, in the stream's buffer or the kernel's, is older than
+/// the read and already reflected in it, so it is dropped first: replayed
+/// on top of the read, an older release would undo a key still held.
+/// Reading the key state drops the kernel's queued key events itself, but
+/// not those the stream has already read.
+///
+/// The drain polls with a waker that does nothing; the reader's next wait
+/// polls this stream again with its own, before it sleeps.
+fn read_after_loss(stream: &mut EventStream) -> io::Result<AttributeSet<KeyCode>> {
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut drained = 0_usize;
+    while let Poll::Ready(event) = stream.poll_event(&mut cx) {
+        event?;
+        drained = drained.saturating_add(1);
+        if drained > DRAIN_LIMIT {
+            return Err(io::Error::other(
+                "a keyboard sends events faster than they can be read",
+            ));
+        }
+    }
+    stream.device().get_key_state()
 }
 
 /// A keyboard being read, and the event read from it but not handled yet.
@@ -242,7 +270,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
                 let reaction = self.matcher.events_lost(id);
                 self.send_reaction(reaction);
             }
-            Step::Resync => match device.stream.device().get_key_state() {
+            Step::Resync => match read_after_loss(&mut device.stream) {
                 Ok(keys) => {
                     let held = |code| keys.contains(KeyCode(code));
                     self.matcher.resync(id, held, events::now());
