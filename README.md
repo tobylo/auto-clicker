@@ -4,7 +4,7 @@
 
 An auto clicker with macro record and playback for KDE Plasma on Wayland, living in the system tray. It is for anyone who plays games on a Plasma desktop and wants fast clicking, a held button or key, or a recorded routine, switched on and off by a hotkey that works inside fullscreen games. Written in Rust to stay light while idle.
 
-Status: the auto clicker runs from the tray and the hotkey, records macros, and installs as a package on CachyOS and Arch (see [Install](#install)); playback is still to come. See [docs/planning/map.md](docs/planning/map.md) for what it will do and why, and [the Project](https://github.com/users/tobylo/projects/4) for the work.
+Status: the auto clicker runs from the tray and the hotkey, records macros and plays them back, and installs as a package on CachyOS and Arch (see [Install](#install)). See [docs/planning/map.md](docs/planning/map.md) for what it will do and why, and [the Project](https://github.com/users/tobylo/projects/4) for the work.
 
 ## Install
 
