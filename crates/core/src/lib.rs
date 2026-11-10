@@ -3,6 +3,7 @@
 
 pub mod clicker;
 pub mod config;
+pub mod controller;
 pub mod fs;
 pub mod hotkeys;
 pub mod input;

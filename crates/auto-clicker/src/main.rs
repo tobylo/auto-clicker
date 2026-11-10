@@ -1,3 +1,151 @@
-//! The auto-clicker daemon.
+//! The auto-clicker daemon: the tray icon, hotkeys and the clicker, run by one
+//! controller on a single thread.
 
-fn main() {}
+mod instance;
+mod platform;
+mod session;
+mod tray;
+
+use std::process::ExitCode;
+use std::time::Duration;
+
+use auto_clicker_backend_kernel::KernelBackend;
+use auto_clicker_core::config::{Config, config_path};
+use auto_clicker_core::controller::{Controller, Message};
+use auto_clicker_core::input::InputError;
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::mpsc;
+use tokio::time::timeout;
+
+use instance::ClaimError;
+use platform::Kernel;
+
+/// Another daemon is running in this session. The user service does not
+/// restart on it.
+const EXIT_ALREADY_RUNNING: u8 = 3;
+/// `/dev/uinput` cannot be used: no permission, or the module is missing.
+/// Restarting cannot fix either, so the user service does not restart on it
+/// (`EX_NOPERM`).
+const EXIT_NO_UINPUT: u8 = 77;
+/// How long the session bus may take to answer at start: claiming the name
+/// and registering the tray icon.
+const BUS_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn main() -> ExitCode {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build();
+    match runtime {
+        Ok(runtime) => runtime.block_on(daemon()),
+        Err(err) => fail(&format!("could not start the runtime: {err}")),
+    }
+}
+
+/// Runs the daemon until Quit, SIGTERM or SIGINT.
+async fn daemon() -> ExitCode {
+    match start().await {
+        // The bus connection holds the single-instance name until the end.
+        Ok((controller, _name)) => {
+            controller.run().await;
+            ExitCode::SUCCESS
+        }
+        Err(status) => status,
+    }
+}
+
+/// Everything before the controller runs; the exit status when it fails.
+async fn start() -> Result<(Controller<Kernel>, zbus::Connection), ExitCode> {
+    let (config, config_error) = load_config();
+    // Claimed first: a second daemon opens no device and reads no keyboard.
+    let name = claim_name().await?;
+    let input = KernelBackend::open().map_err(|err| {
+        eprintln!("auto-clicker: {err}");
+        ExitCode::from(open_failure(&err))
+    })?;
+    let platform = Kernel {
+        bindings: config.hotkeys,
+    };
+    let (controller, send, views) = Controller::new(platform, input, config, config_error);
+    forward_signals(send.clone())
+        .map_err(|err| fail(&format!("could not watch for signals: {err}")))?;
+    match timeout(BUS_TIMEOUT, tray::show(views, send.clone())).await {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => return Err(fail(&format!("tray icon: {err}"))),
+        Err(_) => return Err(fail("tray icon: the session bus did not answer")),
+    }
+    tokio::spawn(session::watch(send));
+    Ok((controller, name))
+}
+
+/// Claims the single-instance name on the session bus.
+async fn claim_name() -> Result<zbus::Connection, ExitCode> {
+    match timeout(BUS_TIMEOUT, instance::claim()).await {
+        Ok(Ok(bus)) => Ok(bus),
+        Ok(Err(ClaimError::Taken)) => {
+            eprintln!("auto-clicker is already running");
+            Err(ExitCode::from(EXIT_ALREADY_RUNNING))
+        }
+        Ok(Err(ClaimError::Bus(err))) => Err(fail(&format!("session bus: {err}"))),
+        Err(_) => Err(fail("the session bus did not answer")),
+    }
+}
+
+/// The config, and its error as the tray shows it.
+fn load_config() -> (Config, Option<String>) {
+    let Some(path) = config_path() else {
+        let error = "no config directory: neither XDG_CONFIG_HOME nor HOME is set";
+        eprintln!("auto-clicker: {error}; using the defaults");
+        return (Config::default(), Some(error.to_owned()));
+    };
+    let loaded = Config::load(&path);
+    let error = loaded.error.map(|err| err.to_string());
+    if let Some(error) = &error {
+        eprintln!("auto-clicker: {error}; using the defaults");
+    }
+    (loaded.config, error)
+}
+
+/// The exit status for devices that could not be opened at start.
+fn open_failure(err: &InputError) -> u8 {
+    match err {
+        InputError::NoPermission(_) | InputError::UinputMissing(_) => EXIT_NO_UINPUT,
+        InputError::CreateDevice(_) | InputError::Write(_) => 1,
+    }
+}
+
+/// SIGTERM and SIGINT ask the controller to quit, which releases everything.
+fn forward_signals(send: mpsc::UnboundedSender<Message>) -> std::io::Result<()> {
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = terminate.recv() => {}
+            _ = interrupt.recv() => {}
+        }
+        let _ = send.send(Message::Quit);
+    });
+    Ok(())
+}
+
+fn fail(message: &str) -> ExitCode {
+    eprintln!("auto-clicker: {message}");
+    ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::*;
+
+    #[test]
+    fn permanent_uinput_failures_get_their_own_status() {
+        let err = |kind: io::ErrorKind| io::Error::from(kind);
+        let denied = InputError::NoPermission(err(io::ErrorKind::PermissionDenied));
+        let missing = InputError::UinputMissing(err(io::ErrorKind::NotFound));
+        let create = InputError::CreateDevice(err(io::ErrorKind::Other));
+        assert_eq!(open_failure(&denied), EXIT_NO_UINPUT);
+        assert_eq!(open_failure(&missing), EXIT_NO_UINPUT);
+        assert_eq!(open_failure(&create), 1);
+    }
+}
