@@ -65,9 +65,19 @@ pub(crate) struct Started {
 impl Portal {
     /// Connects to the session bus and registers the app id.
     pub(crate) async fn connect() -> Result<Portal, InputError> {
-        let connection = call("session bus", zbus::Connection::session())
-            .await?
-            .map_err(|err| InputError::Portal(format!("session bus: {err}")))?;
+        // Every method call on it gets the call deadline, zbus's own cleanup
+        // included (the `RemoveMatch` calls a dropped stream sends), so
+        // nothing holds the connection, and with it the session, for long
+        // after it was dropped. The dialog's answer is a signal, not a
+        // method reply, so it is not cut short.
+        let connection = call("session bus", async {
+            zbus::connection::Builder::session()?
+                .method_timeout(CALL_TIMEOUT)
+                .build()
+                .await
+        })
+        .await?
+        .map_err(|err| InputError::Portal(format!("session bus: {err}")))?;
         let app_id = AppID::try_from(APP_ID)
             .map_err(|err| InputError::PortalUnavailable(format!("app id {APP_ID}: {err}")))?;
         call(
