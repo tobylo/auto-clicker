@@ -40,6 +40,8 @@ use tokio::time::{Instant, sleep, timeout};
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// Long enough for the reader to have read what was just sent.
 const SETTLE: Duration = Duration::from_millis(100);
+/// Between events on different devices.
+const GAP: Duration = Duration::from_millis(5);
 
 const LEFTCTRL: u16 = 29;
 const KEY_A: u16 = 30;
@@ -259,10 +261,14 @@ async fn play_routine(
     key(mouse, BTN_LEFT, 1);
     key(mouse, BTN_LEFT, 0);
     relative(mouse, RelativeAxisCode::REL_WHEEL, -1);
+    // Events on different devices a moment apart, so their order is not
+    // left to equal timestamps.
+    sleep(GAP).await;
     for value in [1, 2, 0] {
         key(keyboard, KEY_A, value);
     }
     key(keyboard, KEY_B, 0);
+    sleep(GAP).await;
     key(&mut unplugged, BTN_RIGHT, 1);
     sleep(SETTLE).await;
     drop(unplugged);
