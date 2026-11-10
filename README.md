@@ -86,7 +86,7 @@ Once installed and enabled, it starts at login and stays in the system tray (run
 - **Settings** comes in a later version.
 - **Quit** stops clicking and playback, lets go of everything it pressed, saves a recording in progress and exits.
 
-The hotkey (Ctrl+F6 by default) starts and stops clicking at once, without a countdown. A start waits until you let go of Ctrl, so the first click is a plain click and not Ctrl+click; if Ctrl is still held after 30 seconds, nothing starts and the tooltip says why.
+The hotkey (Ctrl+Shift+F6 by default) starts and stops clicking at once, without a countdown. A start waits until you let go of Ctrl and Shift, so the first click is a plain click and not Ctrl+Shift+click; if they are still held after 30 seconds, nothing starts and the tooltip says why.
 
 Clicking and playback stop when the screen locks, another user's session comes to the front, or the computer goes to sleep, and they cannot start again until the session is back. A recording stops and is saved at those moments too. Before sleep, the program holds the computer back (for 2 seconds at most) until it has let go of every button and key it pressed, so nothing stays pressed while asleep. The tooltip says what the clicker will do, and why it stopped or cannot start.
 
@@ -96,10 +96,10 @@ Exit statuses: 0 after Quit, SIGTERM or SIGINT; 3 when another copy is already r
 
 ## Recording
 
-A recording keeps the clicks, keys, wheel and mouse movement, with their timing, from the moment it starts until it stops. Start and stop it with Ctrl+F7, or from the tray. Keys record with any keyboard; clicks and movement need a mouse, since a laptop's touchpad is not recorded: its taps and gestures cannot be played back as mouse input. Keyboards and mice plugged in while recording are recorded too.
+A recording keeps the clicks, keys, wheel and mouse movement, with their timing, from the moment it starts until it stops. Start and stop it with Ctrl+Shift+F7, or from the tray. Keys record with any keyboard; clicks and movement need a mouse, since a laptop's touchpad is not recorded: its taps and gestures cannot be played back as mouse input. Keyboards and mice plugged in while recording are recorded too.
 
 - **What is left out.** The hotkey that starts or stops the recording is not in it, nor is any other hotkey pressed while recording (they do nothing then). Ctrl held for a while before the stop, to sprint say, is kept. From the tray, the trip to the tray at the end (the moves and clicks to open the menu and choose Stop recording) is cut off. Key repeat is not recorded: a held key is one press and one release.
-- **What is added.** Keys and buttons held when recording starts (W, to walk on) count as pressed at the start; those of the Ctrl+F7 that started it do not. Anything still held when the recording stops, or on a mouse or keyboard unplugged while recording, gets a release at that moment, so a recording always ends with nothing pressed.
+- **What is added.** Keys and buttons held when recording starts (W, to walk on) count as pressed at the start; those of the Ctrl+Shift+F7 that started it do not. Anything still held when the recording stops, or on a mouse or keyboard unplugged while recording, gets a release at that moment, so a recording always ends with nothing pressed.
 - **Limits.** A recording stops and saves by itself after 60 minutes; the tooltip says so. A recording with nothing in it is not saved. Recording cannot start while clicking runs, and clicking cannot start while recording.
 - **Where.** Each recording is a file in `~/.local/share/auto-clicker/recordings/` (or under `$XDG_DATA_HOME`), named after the time it was made, such as `2026-11-09_18-04-05.123.json`; it shows as "Recording 2026-11-09 18:04". The folder and files are readable by you only. A recording is written once, whole, when it stops: if the computer crashes while recording, that recording is lost, but no half file is left, and saving never replaces an older recording.
 - **Privacy.** Keys are read for recording only while you record, and are written only to the recording. Nothing about them goes to the log or the tooltip.
@@ -117,10 +117,10 @@ The files are JSON, one event per line: microseconds since the start, what happe
 
 ## Playing a recording
 
-Playback repeats what a recording holds, with its timing: each key, click, wheel turn and mouse movement happens as long after the start as it did when it was recorded. Start it with Ctrl+F8, or from the tray's Play menu.
+Playback repeats what a recording holds, with its timing: each key, click, wheel turn and mouse movement happens as long after the start as it did when it was recorded. Start it with Ctrl+Shift+F8, or from the tray's Play menu.
 
-- **Which recording.** Ctrl+F8 plays the recording you last made or last chose from the tray; right after the program starts, that is the newest one. The tray lists the ten newest by the time in their file names, such as "Recording 2026-11-09 18:04:05". The tooltip names what is playing.
-- **Starting.** From the tray, playback counts down `tray_start_delay` seconds first. From Ctrl+F8 it starts as soon as you let go of Ctrl, so Ctrl does not mix into what plays. If Ctrl is still held after 2 seconds it starts anyway, and the tooltip says so.
+- **Which recording.** Ctrl+Shift+F8 plays the recording you last made or last chose from the tray; right after the program starts, that is the newest one. The tray lists the ten newest by the time in their file names, such as "Recording 2026-11-09 18:04:05". The tooltip names what is playing.
+- **Starting.** From the tray, playback counts down `tray_start_delay` seconds first. From Ctrl+Shift+F8 it starts as soon as you let go of Ctrl and Shift, so they do not mix into what plays. If one is still held after 2 seconds it starts anyway, and the tooltip says so.
 - **Stopping.** Any of the three hotkeys stops playback, and so does Stop playing in the tray. Whenever it stops, and however (a hotkey, the tray, a locked screen, sleep, Quit, an error), every key and button it was holding is let go at once.
 - **Your own input.** The mouse and keyboard keep working while a recording plays and do not stop it: what you do mixes with what plays. A key you hold while the recording presses the same key stays down on Plasma until both have let go of it: the game sees one press and one release (measured on Plasma 6.8.2).
 - **Speed and repeats.** `[playback]` in the [configuration](#configuration) sets the speed, from a quarter to four times the recorded one, and how many times the recording plays: a number, or until stopped. Each repeat starts a whole recording after the one before, the idle time at the recording's end included, so rounds do not run together; the last round is over with its last event. A recording shorter than a tenth of a second plays once only: repeated, it would spin faster than you could stop it.
@@ -147,12 +147,13 @@ position = "cursor"           # or a fixed point, { x = 32768, y = 32768 }
 repeat = "until_stopped"      # or a number of actions (a double click is one); hold modes run until stopped
 
 [hotkeys]
-toggle_clicking = "Ctrl+F6"   # start or stop clicking
-toggle_recording = "Ctrl+F7"  # start recording a macro, or stop and save it
-toggle_playback = "Ctrl+F8"   # play the current recording, or stop playback
+toggle_clicking = "Ctrl+Shift+F6"   # start or stop clicking
+toggle_recording = "Ctrl+Shift+F7"  # start recording a macro, or stop and save it
+toggle_playback = "Ctrl+Shift+F8"   # play the current recording, or stop playback
 
 [input]
 output = "kernel"             # how clicks and keys reach the desktop: kernel or portal
+hotkeys = "kernel"            # where hotkeys come from: kernel or portal
 
 [playback]
 speed = 1.0                   # how fast a recording plays, 0.25 to 4 times the recorded speed
@@ -162,8 +163,9 @@ repeat = 1                    # how many times it plays, or "until_stopped"
 - Keys are named by where they sit on the keyboard, not by the label printed on them, so a setting stays on the same physical key whatever keyboard layout is in use. The letter and symbol names are the labels of a US keyboard: on a German keyboard, "z" is the key labelled Y. The names, lowercase: "a" to "z", "0" to "9", "f1" to "f24", "space", "enter", "esc", "tab", "backspace", "capslock", "minus", "equal", "leftbrace", "rightbrace", "semicolon", "apostrophe", "grave", "backslash", "comma", "dot", "slash", left and right "shift", "ctrl", "alt" and "meta" (such as "leftshift"), "up", "down", "left", "right", "home", "end", "pageup", "pagedown", "insert", "delete", the keypad keys ("kp0" to "kp9", "kpplus", "kpminus", "kpasterisk", "kpslash", "kpdot", "kpenter"), "numlock", "scrolllock", "sysrq", "pause", "compose" and "102nd", the extra key beside the left Shift on ISO keyboards (most European ones). Any other key is given by its Linux key code, such as `key = 113` for the mute key.
 - On a Swedish or Finnish keyboard, the letters, the digits, "comma" and "dot" match their labels. The other keys: "grave" is §, "minus" is +, "equal" is ´, "leftbrace" is Å, "rightbrace" is ¨, "semicolon" is Ö, "apostrophe" is Ä, "backslash" is ', "102nd" is < and "slash" is -.
 - A fixed point runs from 0 to 65535 across all screens together, left to right and top to bottom. Games that lock the pointer (Minecraft while playing) ignore it; use the cursor position there.
-- `output = "portal"` clicks and types without `/dev/uinput`, through the desktop's remote input portal (see [Clicking through the portal](#clicking-through-the-portal)). `kernel`, the default, uses `/dev/uinput`. Hotkeys and recording still read the keyboards and mice directly either way.
-- A hotkey is any of Ctrl, Shift, Alt and Meta, then a key name from the list above, joined by `+`, in any letter case: "Ctrl+F6", "ctrl+shift+f9", "F13". It fires when the key is pressed while exactly those modifiers are held, left or right alike, on any keyboard. Two actions cannot share a hotkey, and no hotkey can use the key the clicker presses.
+- `output = "portal"` clicks and types without `/dev/uinput`, through the desktop's remote input portal (see [Clicking through the portal](#clicking-through-the-portal)). `kernel`, the default, uses `/dev/uinput`.
+- `hotkeys = "portal"` gets the hotkeys from Plasma's own shortcuts instead of reading the keyboards, so it works without the `input` group (see [Hotkeys through the portal](#hotkeys-through-the-portal)). `kernel`, the default, reads the keyboards. The two settings are independent: `output = "kernel"` with `hotkeys = "portal"` suits a user who may write to `/dev/uinput` but is not in the `input` group. Recording reads the keyboards and mice, so it needs `hotkeys = "kernel"`.
+- A hotkey is any of Ctrl, Shift, Alt and Meta, then a key name from the list above, joined by `+`, in any letter case: "Ctrl+F6", "ctrl+shift+f9", "F13". It fires when the key is pressed while exactly those modifiers are held, left or right alike, on any keyboard. Two actions cannot share a hotkey, and with `hotkeys = "kernel"` no hotkey can use the key the clicker presses (with `hotkeys = "portal"`, Plasma's own hotkeys decide that).
 
 ## Clicking through the portal
 
@@ -175,9 +177,9 @@ The portal needs the package's `io.github.tobylo.AutoClicker.desktop`: Plasma ke
 
 ## Hotkeys
 
-Hotkeys work in every window, fullscreen games included, because the program reads the keyboards directly. Mice are read only while recording, so the program sleeps while you play. That needs read access to `/dev/input`: the user must be in the `input` group (see [Install](#install)). When no keyboard can be read, the program keeps running and the tray says why.
+With `hotkeys = "kernel"`, the default, hotkeys work in every window, fullscreen games included, because the program reads the keyboards directly. Mice are read only while recording, so the program sleeps while you play. That needs read access to `/dev/input`: the user must be in the `input` group (see [Install](#install)). When no keyboard can be read, the program keeps running and the tray says why.
 
-The keyboards are only read, never taken over, so the game also gets the hotkey. On Plasma, Ctrl+F7 is also KWin's "Toggle Present Windows (Window class)" shortcut, so recording with it opens that overview too; change the binding in either place if it gets in the way. In Minecraft, Ctrl is sprint: pressing Ctrl+F6 also starts sprinting for a moment. Pick a hotkey the game ignores if that gets in the way.
+The keyboards are only read, never taken over, so the game also gets the hotkey. The defaults are free in stock Plasma, and Minecraft does nothing on F6, F7 or F8; a hotkey Plasma also uses (Ctrl+F7 is its "Toggle Present Windows (Window class)") would do both things at once. In Minecraft, Ctrl is sprint and Shift is sneak: pressing Ctrl+Shift+F6 also does both for a moment. Pick a hotkey the game ignores if that gets in the way.
 
 If a key remapper (keyd, kanata) takes over a keyboard while Ctrl or another modifier is held on it, the program never sees that key come up, and hotkeys stay blocked until the keyboard is unplugged or the program restarts.
 
@@ -190,3 +192,19 @@ Bug reports and ideas are welcome as [issues](https://github.com/tobylo/auto-cli
 ## License
 
 Licensed under either of the [Apache License, Version 2.0](LICENSE-APACHE) or the [MIT license](LICENSE-MIT), at your option. Unless you state otherwise, any contribution you submit for inclusion is licensed the same way, with no additional terms.
+
+## Hotkeys through the portal
+
+With `hotkeys = "portal"`, the program reads no keyboard: it registers its three shortcuts with Plasma (the GlobalShortcuts portal), and Plasma tells it when one is pressed, in every window and in fullscreen games. The first time the program starts this way, Plasma shows a dialog listing the shortcuts; accept it. The program asks for the hotkeys in `[hotkeys]` then, for those on a function key (F1 to F24); any other starts without a key, for you to set in System Settings.
+
+From then on Plasma owns the hotkeys, and `[hotkeys]` in the config has no further effect on this route. Change them in System Settings, under Keyboard, Shortcuts, "Auto Clicker". A change takes effect at once, without a restart, and the tray's tooltip shows the hotkeys as Plasma reports them.
+
+- **A hotkey Plasma already uses never fires.** Plasma still lists it as set (Ctrl+F7 is its own "Toggle Present Windows (Window class)", for one). If a hotkey shown in the tooltip does nothing, pick another in System Settings.
+- **A start from the hotkey begins 1 second after you let go.** Plasma reports the release when the first key comes up, usually the function key while Ctrl and Shift are still down, and never says when those follow. The pause keeps the first clicks from being Ctrl+Shift+clicks. Playback still starts 2 seconds after the press at the latest, as on the other route, so let go of its hotkey within a second.
+- **The clicker's key cannot be a hotkey's key.** Plasma cannot tell the program's key presses from yours, so `key_repeat` and `hold_key` do not start when their key is the key of any hotkey, whatever its modifiers, and the tooltip says so. They do not start either when the key is Ctrl, Shift, Alt or Meta (held by the program, it would turn your Ctrl+Shift+F6 into something else), or when a hotkey is not on a function key (F1 to F24): Plasma names other keys by the keyboard layout's labels, which the program cannot match against its own. Click modes always start.
+- **A recording that presses a hotkey's key is not played,** for the same reason: played back, it would set the hotkey off, and any hotkey stops playback. Nor is a recording with keys played while a hotkey is not on a function key. Recordings that hold Ctrl, Shift, Alt or Meta play; while one of those is held by the playback, your hotkey may not match, so stop from the tray then.
+- **Recording is not available.** Nothing reads the keyboards and mice on this route; the tray says so when you try. Use `hotkeys = "kernel"` to record.
+- **If one of Plasma's portal services stops or restarts,** the program registers its shortcuts again at once, without a dialog. For one second after that, hotkeys do nothing: a key the program itself pressed meanwhile may have set one off. The same second follows when you move a hotkey onto a key a run is pressing, which stops the run. If that fails, the tooltip says hotkeys are unavailable, clicking goes on working from the tray, and the program tries again when a portal service next starts or stops. After five tries in a row that fail, it stops trying and the tooltip says to restart it. While hotkeys are unavailable, nothing can set one off, so the key modes start whatever their key is.
+- **If you decline the dialog,** hotkeys stay unavailable. Plasma does not ask a second time: restart the program and set the hotkeys in System Settings.
+
+Like remote input, this needs the package's `io.github.tobylo.AutoClicker.desktop`: Plasma keeps the shortcuts per app.

@@ -73,6 +73,8 @@ struct Record {
     recordings: Option<Arc<TempDir>>,
     /// The local time is unreadable.
     no_local_time: bool,
+    /// The reader gets its hotkeys from the desktop.
+    desktop_reader: bool,
 }
 
 #[derive(Clone, Default)]
@@ -268,6 +270,14 @@ impl Platform for FakePlatform {
     fn recordings_dir(&self) -> Option<PathBuf> {
         self.0
             .with(|r| r.recordings.as_ref().map(|dir| dir.path().to_path_buf()))
+    }
+
+    fn input_reader(&self) -> InputReader {
+        if self.0.with(|r| r.desktop_reader) {
+            InputReader::Desktop
+        } else {
+            InputReader::Devices
+        }
     }
 
     fn read_input(
@@ -626,7 +636,11 @@ async fn a_lost_release_says_to_press_again() {
         let d = daemon(Mode::HoldButton).await;
         d.press_hotkey().await;
         d.hotkey(HotkeyEvent::ReleaseLost).await;
-        assert!(d.notice().contains("press Ctrl+F6 again"), "{}", d.notice());
+        assert!(
+            d.notice().contains("press Ctrl+Shift+F6 again"),
+            "{}",
+            d.notice()
+        );
     })
     .await;
 }
@@ -1118,6 +1132,7 @@ fn the_countdown_wakes_on_each_whole_second_and_then_the_deadline() {
     assert_eq!(whole_seconds(Duration::ZERO), 0);
 }
 
+mod desktop;
 mod per_run;
 mod playback;
 mod recording;

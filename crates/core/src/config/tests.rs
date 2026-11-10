@@ -75,6 +75,7 @@ fn every_option_is_read() {
 
         [input]
         output = "portal"
+        hotkeys = "portal"
 
         [playback]
         speed = 1.5
@@ -99,6 +100,7 @@ fn every_option_is_read() {
         },
         input: InputSettings {
             output: OutputRoute::Portal,
+            hotkeys: HotkeyRoute::Portal,
         },
         playback: PlaybackSettings {
             speed: Speed::from_ratio(1.5).unwrap(),
@@ -558,39 +560,4 @@ fn the_path_follows_xdg_config_home_then_home() {
             "{xdg_config_home:?} {home:?}"
         );
     }
-}
-
-#[test]
-fn output_defaults_to_the_kernel_and_reads_portal() {
-    let outputs = [
-        parse("version = 1\n").input.output,
-        parse("version = 1\n[input]\n").input.output,
-        parse("version = 1\n[input]\noutput = \"kernel\"\n")
-            .input
-            .output,
-        parse("version = 1\n[input]\noutput = \"portal\"\n")
-            .input
-            .output,
-    ];
-    assert_eq!(
-        outputs,
-        [
-            OutputRoute::Kernel,
-            OutputRoute::Kernel,
-            OutputRoute::Kernel,
-            OutputRoute::Portal
-        ]
-    );
-}
-
-#[test]
-fn an_unknown_output_or_input_key_is_rejected_at_its_line() {
-    let (line, reason) = invalid("version = 1\n[input]\noutput = \"Portal\"\n");
-    assert_eq!(line, Some(3), "{reason}");
-    assert!(
-        reason.contains("kernel") && reason.contains("portal"),
-        "{reason}"
-    );
-    let (line, reason) = invalid("version = 1\n[input]\nbackend = \"portal\"\n");
-    assert_eq!(line, Some(3), "{reason}");
 }

@@ -107,12 +107,12 @@ pub struct Binding {
 }
 
 impl Binding {
-    /// Ctrl and the key with this code, for the defaults. Fails to compile
-    /// when the code is no key.
-    pub(crate) const fn ctrl(code: u16) -> Binding {
+    /// Ctrl, Shift and the key with this code, for the defaults. Fails to
+    /// compile when the code is no key.
+    pub(crate) const fn ctrl_shift(code: u16) -> Binding {
         match Key::new(code) {
             Some(key) => Binding {
-                modifiers: Modifiers(Modifier::Ctrl.bit()),
+                modifiers: Modifiers(Modifier::Ctrl.bit() | Modifier::Shift.bit()),
                 key,
             },
             None => panic!("not a key code"),
@@ -194,7 +194,7 @@ impl fmt::Display for Binding {
             write!(f, "{}+", modifier.name())?;
         }
         // Every binding's key came from a name (`parse`) or is F6 to F8
-        // (`ctrl`), so it has one.
+        // (`ctrl_shift`), so it has one.
         let name = self.key.name().unwrap_or_default();
         let mut chars = name.chars();
         if let Some(first) = chars.next() {

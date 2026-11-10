@@ -1,6 +1,6 @@
 [package]
 name = "auto-clicker-backend-portal"
-description = "Portal input backend of auto-clicker: the RemoteDesktop portal and libei"
+description = "Portal input backend of auto-clicker: the RemoteDesktop and GlobalShortcuts portals and libei"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -13,7 +13,7 @@ auto-clicker-core = { path = "../core" }
 # 0.14: the same RemoteDesktop and Registry calls on zbus 5, the version the
 # tray's ksni is built on, so the daemon carries one zbus. `screencast` only
 # because ashpd's `remote_desktop` does not build without it.
-ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "remote_desktop", "screencast"] }
+ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "remote_desktop", "screencast", "global_shortcuts"] }
 # libei's client side, pure Rust with no unsafe code.
 reis = { version = "0.7.1", features = ["tokio"] }
 # The device event stream; already in the tree through ksni and reis.

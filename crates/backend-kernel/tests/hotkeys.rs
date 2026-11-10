@@ -256,16 +256,16 @@ async fn keys_held_across_lost_events_never_fire() {
 /// Long enough for a person to read the prompt and act.
 const PERSON_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Waits for a person to press Ctrl+F6 on a real keyboard.
+/// Waits for a person to press Ctrl+Shift+F6 on a real keyboard.
 async fn person_presses_ctrl_f6(received: &mut mpsc::UnboundedReceiver<HotkeyEvent>, when: &str) {
-    eprintln!("\n>>> Press Ctrl+F6 on the keyboard {when}.");
+    eprintln!("\n>>> Press Ctrl+Shift+F6 on the keyboard {when}.");
     let deadline = Instant::now() + PERSON_TIMEOUT;
     loop {
         let event = timeout_at(deadline, received.recv()).await;
-        match event.expect("no Ctrl+F6 within two minutes").unwrap() {
+        match event.expect("no Ctrl+Shift+F6 within two minutes").unwrap() {
             HotkeyEvent::Fired(action) => {
                 assert_eq!(action, Action::ToggleClicking);
-                eprintln!(">>> Ctrl+F6 seen.");
+                eprintln!(">>> Ctrl+Shift+F6 seen.");
                 return;
             }
             other => eprintln!("    ({other:?})"),

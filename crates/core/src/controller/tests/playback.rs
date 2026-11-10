@@ -247,7 +247,7 @@ async fn everything_that_cancels_a_start_cancels_playback_at_once() {
             assert_eq!(d.shared.calls(), [], "{cancel:?}");
             let notice = match cancel {
                 ReleaseLost => {
-                    "Not playing: could not tell when the hotkey was let go; press Ctrl+F8 again"
+                    "Not playing: could not tell when the hotkey was let go; press Ctrl+Shift+F8 again"
                 }
                 Unavailable => "Not playing: hotkeys stopped working",
                 Locked | LockRequested => "Stopped: the screen is locked",

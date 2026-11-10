@@ -1,13 +1,15 @@
 //! Checks on `[hotkeys]`: each binding parses, no two actions share one, and
-//! none uses the key the clicker presses.
+//! none uses the key the clicker presses. The last holds for bindings the
+//! program matches itself; where the desktop delivers the hotkeys, its own
+//! triggers decide, and the controller checks those.
 
 use toml::Spanned;
 
+use super::HotkeyRoute;
 use super::raw::RawHotkeys;
 use super::validate::{Invalid, at};
-use crate::clicker::{ClickerSettings, Mode};
+use crate::clicker::ClickerSettings;
 use crate::hotkeys::{Binding, Bindings};
-use crate::input::Key;
 
 /// One action's binding, and where the file sets it (`None` for a default).
 struct Placed<'a> {
@@ -24,7 +26,11 @@ impl Placed<'_> {
     }
 }
 
-pub(super) fn hotkeys(raw: &RawHotkeys, clicker: &ClickerSettings) -> Result<Bindings, Invalid> {
+pub(super) fn hotkeys(
+    raw: &RawHotkeys,
+    clicker: &ClickerSettings,
+    route: HotkeyRoute,
+) -> Result<Bindings, Invalid> {
     let defaults = Bindings::default();
     let bindings = Bindings {
         toggle_clicking: binding(raw.toggle_clicking.as_ref(), defaults.toggle_clicking)?,
@@ -41,8 +47,10 @@ pub(super) fn hotkeys(raw: &RawHotkeys, clicker: &ClickerSettings) -> Result<Bin
         written: written.as_ref(),
     });
     no_duplicates(&placed)?;
-    for one in &placed {
-        not_the_clicker_key(one, clicker)?;
+    if route == HotkeyRoute::Kernel {
+        for one in &placed {
+            not_the_clicker_key(one, clicker)?;
+        }
     }
     Ok(bindings)
 }
@@ -79,15 +87,10 @@ fn no_duplicates(placed: &[Placed<'_>]) -> Result<(), Invalid> {
 /// a binding with modifiers too.
 fn not_the_clicker_key(placed: &Placed<'_>, clicker: &ClickerSettings) -> Result<(), Invalid> {
     let binding = placed.binding;
-    if Some(binding.key()) == pressed_key(clicker) {
+    if Some(binding.key()) == clicker.pressed_key() {
         return Err(placed.invalid(format!(
             "hotkey {binding} uses the key the clicker presses; choose another key"
         )));
     }
     Ok(())
-}
-
-/// The key the clicker presses, in the modes that press one.
-fn pressed_key(clicker: &ClickerSettings) -> Option<Key> {
-    matches!(clicker.mode, Mode::KeyRepeat | Mode::HoldKey).then_some(clicker.key)
 }
