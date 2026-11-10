@@ -140,19 +140,23 @@ async fn open_with_token() -> Input<PortalBackend> {
 
 /// Moves to the middle of each output in turn. The fullscreen window covers
 /// one of them and must see the pointer at exactly its middle; returns that
-/// output's index in `layout`.
+/// output's index in `layout`. Each output gets a point beside its middle
+/// first: a pointer that jumps into a window from another output enters it
+/// and moves only on the next step, and the window reports motion only.
 async fn find_window_output(
     input: &mut Input<PortalBackend>,
     window: &mut Window,
     layout: &Layout,
 ) -> usize {
-    for _ in 0..20 {
+    for _ in 0..10 {
         for (index, region) in layout.regions().iter().enumerate() {
             let (w, h) = (f64::from(region.width), f64::from(region.height));
-            let center =
-                layout.position_of(f64::from(region.x) + w / 2.0, f64::from(region.y) + h / 2.0);
+            let (x, y) = (f64::from(region.x) + w / 2.0, f64::from(region.y) + h / 2.0);
+            input
+                .move_absolute(layout.position_of(x - 50.0, y - 50.0))
+                .unwrap();
             window.drain().await;
-            input.move_absolute(center).unwrap();
+            input.move_absolute(layout.position_of(x, y)).unwrap();
             let seen = window.find(Duration::from_millis(300), parse_motion).await;
             if let Some((x, y)) = seen {
                 assert!(
