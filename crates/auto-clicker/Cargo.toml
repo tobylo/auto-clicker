@@ -8,6 +8,20 @@ publish.workspace = true
 
 [dependencies]
 auto-clicker-core = { path = "../core" }
+auto-clicker-backend-kernel = { path = "../backend-kernel" }
+fastrand = "2.5.0"
+# The tray icon (StatusNotifierItem), on tokio.
+ksni = { version = "0.3.7", default-features = false, features = ["tokio"] }
+# `StreamExt` for logind's signal and property streams; already in the tree through ksni.
+futures-util = { version = "0.3.34", default-features = false }
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "macros", "signal", "sync", "time", "net"] }
+# The single-instance bus name and logind's session state. Version 5 on
+# purpose: ksni is built on it, so the tree carries one zbus.
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+auto-clicker-core = { path = "../core", features = ["fake"] }
+tokio = { version = "1.54.1", features = ["rt", "macros", "sync", "time", "test-util"] }
