@@ -40,7 +40,7 @@ Absolute moves went to distinct positions, paced on absolute deadlines. The time
 | 1000 Hz | 2700 | 2701 | 2701 | 0.26 ms | 0.38 ms | 0.54 ms | 1.19 ms |
 | 2000 Hz | 2700 | 2700 | 2700 | 0.20 ms | 0.28 ms | 0.38 ms | 1.04 ms |
 
-- **Nothing coalesces or drops.** KWin calls the script once per pointer move, and every call arrives. The extra callback at 1000 Hz is the move onto the sweep's start row.
+- **Nothing coalesces or drops.** Every injected move was matched to exactly one delivered call (received equals moves at every rate). The extra callback at 1000 Hz is the move onto the sweep's start row.
 - **The script's own time is too coarse to use.** It has only `Date.now()`, wall-clock time in whole milliseconds. Script-to-receipt read between −0.33 and +0.54 ms at p50 across runs, an error of up to a millisecond either way. The end-to-end figure above is measured on one µs clock and bounds it.
 - **The 1000 and 2000 Hz rows are synthetic.** "Real mouse" below checks the rate a physical mouse produces.
 
@@ -57,7 +57,7 @@ Each run is 10 s of relative moves at the given rate. Figures are % of one core,
 
 - **Idle.** A loaded script costs nothing while the pointer is still. The daemon still loads it only while recording, so a daemon that is not recording has no script in KWin.
 - **While moving.** The script adds about 7% of a core to KWin at 1000 Hz and 10–15% at 2000 Hz.
-- **Delivery.** Every call the script made arrived. The script was called slightly less often than moves were injected at the higher rates (9999 of 10000 at 1000 Hz, 19992 and 19972 of 20000 at 2000 Hz): a move that leaves the pointer where it was does not fire `Cursor::posChanged` (`src/cursor.cpp:191`). The loss is upstream of the script, not on the bus.
+- **Delivery.** In the CPU runs, 9999 of 10000 moves at 1000 Hz and 19992 and 19972 of 20000 at 2000 Hz produced a delivered call. Within each run the script's callback counter had no gaps, so no call was lost in between; the harness cannot tell a call lost at the very start or end of a run from a move that left the pointer where it was, which fires no `Cursor::posChanged` (`src/cursor.cpp:191`). The latency runs, which match each move to its call, delivered every one.
 - **A dead receiver costs as much as a live one.** With the script loaded and nobody owning the name, every call still leaves KWin and fails at the bus.
 - **The receiver will be cheaper in production.** Its figures are a Python receiver; a Rust one in the daemon will cost less.
 

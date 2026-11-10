@@ -49,7 +49,8 @@ class Probe:
 
     def __init__(self, index):
         self.proc = subprocess.Popen(["python3", PROBE, str(index)], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        wait_ready(self.proc)
+        _, x, y = wait_ready(self.proc).split()
+        self.origin = (int(x), int(y))
         self.pid = self.proc.pid
         self.motion = None
         self._buffer = b""
@@ -135,12 +136,12 @@ class Check:
     def global_position(self):
         """QueryPointer made global; None when no probe is under the pointer."""
         pid, rel_x, rel_y = query_pointer(self.bus)
-        last = self.receiver.last()
-        out = output_at(self.layout, last.x, last.y)
-        if pid not in self.probe_pids or out is None:
+        probe = self.probe_pids.get(pid)
+        if probe is None:
             return None
-        self.surface_offsets.append(surface_offset(self.probe_pids[pid].motion, rel_x, rel_y))
-        return (out["x"] + rel_x, out["y"] + rel_y, out["scale"])
+        out = output_at(self.layout, *probe.origin)
+        self.surface_offsets.append(surface_offset(probe.motion, rel_x, rel_y))
+        return (probe.origin[0] + rel_x, probe.origin[1] + rel_y, out["scale"])
 
     def anchor(self, point, jiggle):
         self.move_to(*point)

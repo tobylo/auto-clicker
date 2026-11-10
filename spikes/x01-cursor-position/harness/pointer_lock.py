@@ -12,6 +12,7 @@ import threading
 from children import stop, wait_ready
 from bus import HERE, Receiver, loaded_script, pump_for, session_bus
 from inject import Injector, to_absolute, wait_for_pointer
+from timing import current_layout
 
 LOCKWIN = os.path.join(HERE, "harness", "lockwin.py")
 
@@ -20,8 +21,7 @@ def run():
     bus = session_bus()
     receiver = Receiver(bus)
     with loaded_script(bus), Injector() as injector:
-        pump_for(0.5)
-        layout = receiver.layouts[-1]
+        layout = current_layout(receiver)
         wait_for_pointer(injector, receiver, layout)
         centre = f"abs {to_absolute(1024, layout.width)} {to_absolute(640, layout.height)}"
         injector.run(centre)
@@ -65,6 +65,10 @@ class Window:
 
 def start_window():
     window = Window()
-    print("lock window:", window.ready)
-    pump_for(1.0)
+    try:
+        print("lock window:", window.ready)
+        pump_for(1.0)
+    except BaseException:
+        stop(window.proc)
+        raise
     return window

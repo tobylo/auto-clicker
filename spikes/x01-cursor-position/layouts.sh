@@ -1,7 +1,8 @@
 #!/bin/bash
 # X01 mapping check across display layouts. Holds the shared spike lock for
 # the whole run and restores the owner's layout on every exit:
-# eDP-1 at 0,0 scale 1.25; DP-1 at 2048,0 scale 1, mode 1.
+# eDP-1 at 0,0 scale 1.25; DP-1 at 2048,0 scale 1, mode 1. A failed layout
+# change or measurement ends the run with its status.
 set -u
 cd "$(dirname "$0")"
 restore() {
@@ -13,11 +14,15 @@ check() {
     local title=$1 monitors=$2
     shift 2
     echo "=== $title"
-    restore
-    [ $# -gt 0 ] && kscreen-doctor "$@" >/dev/null
+    restore || exit 1
+    if [ $# -gt 0 ]; then kscreen-doctor "$@" >/dev/null || exit 1; fi
     sleep 3
     kscreen-doctor -o | sed 's/\x1b\[[0-9;]*m//g' | grep -E "^Output|Geometry|Scale"
-    python3 harness/x01.py mapping --monitors "$monitors" 2>&1 | grep -v -E "Gtk-WARNING|^$"
+    local out status
+    out=$(python3 harness/x01.py mapping --monitors "$monitors" 2>&1)
+    status=$?
+    grep -v -E "Gtk-WARNING|^$" <<<"$out"
+    [ "$status" -eq 0 ] || { echo "mapping failed with status $status"; exit "$status"; }
 }
 check "dual, DP-1 right at scale 1" 2
 check "panel alone" 1 output.DP-1.disable

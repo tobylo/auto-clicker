@@ -61,6 +61,9 @@ def main():
     if not sdl.SDL_Init(SDL_INIT_VIDEO):
         return 1
     window = sdl.SDL_CreateWindow(b"x01 pointer lock", 800, 600, SDL_WINDOW_FULLSCREEN)
+    if not window:
+        sdl.SDL_Quit()
+        return 1
     event = ctypes.create_string_buffer(128)
     totals = [0, 0.0, 0.0]
     for _ in range(50):

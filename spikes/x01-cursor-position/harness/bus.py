@@ -100,37 +100,47 @@ def session_bus():
     return dbus.SessionBus()
 
 
-def scripting(bus):
-    return dbus.Interface(bus.get_object("org.kde.KWin", "/Scripting"), "org.kde.kwin.Scripting")
+def kwin_owner(bus):
+    """KWin's unique connection name, so that every call of one load, run
+    and unload goes to the same KWin even if the name changes hands."""
+    return str(bus.get_name_owner("org.kde.KWin"))
 
 
-def unload_stale(bus):
+def scripting(bus, kwin):
+    return dbus.Interface(bus.get_object(kwin, "/Scripting"), "org.kde.kwin.Scripting")
+
+
+def unload_stale(bus, kwin=None):
     """Unloads a script a crashed run left loaded; returns whether there was one."""
-    if bool(scripting(bus).isScriptLoaded(PLUGIN)):
-        scripting(bus).unloadScript(PLUGIN)
+    kwin = kwin or kwin_owner(bus)
+    if bool(scripting(bus, kwin).isScriptLoaded(PLUGIN)):
+        scripting(bus, kwin).unloadScript(PLUGIN)
         return True
     return False
 
 
-def load_script(bus):
-    script_id = int(scripting(bus).loadScript(SCRIPT, PLUGIN, signature="ss"))
+def load_script(bus, kwin):
+    script_id = int(scripting(bus, kwin).loadScript(SCRIPT, PLUGIN, signature="ss"))
     if script_id < 0:
         raise RuntimeError(f"KWin refused the script: {script_id}")
-    script = bus.get_object("org.kde.KWin", f"/Scripting/Script{script_id}")
+    script = bus.get_object(kwin, f"/Scripting/Script{script_id}")
     dbus.Interface(script, "org.kde.kwin.Script").run()
     return script_id
 
 
 @contextmanager
 def loaded_script(bus):
-    """Loads the script for the block and always unloads it afterwards."""
-    if unload_stale(bus):
+    """Loads the script for the block and always unloads it afterwards, all
+    on the KWin that was there at the start. If that KWin has gone, so has
+    the script, and the unload fails harmlessly."""
+    kwin = kwin_owner(bus)
+    if unload_stale(bus, kwin):
         print("unloaded a stale script left by an earlier run")
     try:
-        load_script(bus)
+        load_script(bus, kwin)
         yield
     finally:
-        scripting(bus).unloadScript(PLUGIN)
+        scripting(bus, kwin).unloadScript(PLUGIN)
 
 
 def exit_on_sigterm():

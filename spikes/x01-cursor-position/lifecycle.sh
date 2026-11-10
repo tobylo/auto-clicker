@@ -15,7 +15,8 @@ receiver=$!
 sleep 2
 kill -9 "$receiver"; wait "$receiver" 2>/dev/null
 echo "after SIGKILL, script loaded: $(loaded)"
-python3 harness/x01.py layout | head -1
+next_start=$(python3 harness/x01.py layout)
+head -1 <<<"$next_start"
 echo "after the next start, script loaded: $(loaded)"
 md5sum ~/.config/kwinrc
 
@@ -30,10 +31,12 @@ dbus-run-session -- bash -c '
     }
     owner() { qdbus6 org.freedesktop.DBus / org.freedesktop.DBus.GetNameOwner org.kde.KWin 2>/dev/null; }
     stop() {
+        [ -n "${kwin:-}" ] || return 0
         kill $kwin 2>/dev/null
         for _ in $(seq 50); do kill -0 $kwin 2>/dev/null || break; sleep 0.1; done
         kill -9 $kwin 2>/dev/null
         wait $kwin 2>/dev/null
+        kwin=
     }
     trap stop EXIT
     start

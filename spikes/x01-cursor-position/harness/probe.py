@@ -2,7 +2,8 @@
 """A fullscreen GTK 4 window on one monitor, so that QueryPointer has a known
 window under the pointer whose origin is the output's origin.
 
-Usage: probe.py MONITOR_INDEX. Prints "ready" once shown, then "motion X Y"
+Usage: probe.py MONITOR_INDEX. Prints "ready X Y" (the monitor's logical
+origin) once shown, then "motion X Y"
 in surface-local logical px for each pointer move; closes on stdin EOF.
 """
 
@@ -24,7 +25,8 @@ def build(app, index):
     monitor = Gdk.Display.get_default().get_monitors().get_item(index)
     win.fullscreen_on_monitor(monitor)
     win.present()
-    GLib.timeout_add(1500, lambda: print("ready", flush=True) and False)
+    origin = monitor.get_geometry()
+    GLib.timeout_add(1500, lambda: print(f"ready {origin.x} {origin.y}", flush=True) and False)
     GLib.io_add_watch(sys.stdin.fileno(), GLib.IO_IN | GLib.IO_HUP, lambda *_: app.quit())
 
 

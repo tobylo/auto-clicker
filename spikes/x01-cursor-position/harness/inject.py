@@ -19,7 +19,7 @@ class Injector:
         os.set_blocking(self.proc.stdout.fileno(), False)
         self._buffer = b""
         self._stamps = []
-        self._done = False
+        self._done = True
         GLib.io_add_watch(self.proc.stdout.fileno(), GLib.IO_IN | GLib.IO_HUP, self._readable)
 
     def _readable(self, fd, _condition):
@@ -51,7 +51,10 @@ class Injector:
         return self._stamps
 
     def close(self):
-        """Ends the process, which destroys the virtual devices."""
+        """Ends the process, which destroys the virtual devices. One still
+        running a command is killed at once, so the pointer stops moving."""
+        if self.proc.poll() is None and not self._done:
+            self.proc.kill()
         if self.proc.poll() is None:
             try:
                 self.proc.stdin.write(b"quit\n")
