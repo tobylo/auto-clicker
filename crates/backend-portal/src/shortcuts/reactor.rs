@@ -72,10 +72,6 @@ fn apply(triggers: &mut Triggers, listed: &[Listed]) {
 /// The state of one bound session.
 struct Session {
     triggers: Triggers,
-    /// The shortcut that is down. The desktop may repeat its activation
-    /// while it is held; only the first counts. Any release clears it, so a
-    /// lost one cannot block the hotkey for longer than one press.
-    held: Option<Action>,
     /// A hotkey fired and its release was not reported yet.
     awaiting_release: bool,
     /// When to report the release: a pause after the desktop's own, which
@@ -84,12 +80,11 @@ struct Session {
 }
 
 impl Session {
+    /// A press. The desktop sends one activation per press, however long
+    /// the keys are held, and releases one shortcut before it activates
+    /// another (measured on Plasma 6.8.2), so every activation fires.
     fn activated(&mut self, id: &str) -> Option<HotkeyEvent> {
         let action = action_of(id)?;
-        if self.held == Some(action) {
-            return None;
-        }
-        self.held = Some(action);
         self.awaiting_release = true;
         // Fires before the release share one, counted from the last.
         self.release_at = None;
@@ -97,7 +92,6 @@ impl Session {
     }
 
     fn deactivated(&mut self, now: Instant) {
-        self.held = None;
         if self.awaiting_release {
             self.release_at = now.checked_add(DESKTOP_RELEASE_PAUSE);
         }
@@ -110,8 +104,6 @@ impl Session {
     }
 
     fn changed(&mut self, listed: &[Listed]) -> HotkeyEvent {
-        // A trigger that changed while its keys were down is not held.
-        self.held = None;
         apply(&mut self.triggers, listed);
         HotkeyEvent::Triggers(self.triggers.clone())
     }
@@ -135,7 +127,6 @@ pub(super) async fn serve(
     send(HotkeyEvent::Status(HotkeyStatus::Available));
     let mut session = Session {
         triggers,
-        held: None,
         awaiting_release: false,
         release_at: None,
     };

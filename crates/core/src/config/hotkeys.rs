@@ -1,8 +1,11 @@
 //! Checks on `[hotkeys]`: each binding parses, no two actions share one, and
-//! none uses the key the clicker presses.
+//! none uses the key the clicker presses. The last holds for bindings the
+//! program matches itself; where the desktop delivers the hotkeys, its own
+//! triggers decide, and the controller checks those.
 
 use toml::Spanned;
 
+use super::HotkeyRoute;
 use super::raw::RawHotkeys;
 use super::validate::{Invalid, at};
 use crate::clicker::ClickerSettings;
@@ -23,7 +26,11 @@ impl Placed<'_> {
     }
 }
 
-pub(super) fn hotkeys(raw: &RawHotkeys, clicker: &ClickerSettings) -> Result<Bindings, Invalid> {
+pub(super) fn hotkeys(
+    raw: &RawHotkeys,
+    clicker: &ClickerSettings,
+    route: HotkeyRoute,
+) -> Result<Bindings, Invalid> {
     let defaults = Bindings::default();
     let bindings = Bindings {
         toggle_clicking: binding(raw.toggle_clicking.as_ref(), defaults.toggle_clicking)?,
@@ -40,8 +47,10 @@ pub(super) fn hotkeys(raw: &RawHotkeys, clicker: &ClickerSettings) -> Result<Bin
         written: written.as_ref(),
     });
     no_duplicates(&placed)?;
-    for one in &placed {
-        not_the_clicker_key(one, clicker)?;
+    if route == HotkeyRoute::Kernel {
+        for one in &placed {
+            not_the_clicker_key(one, clicker)?;
+        }
     }
     Ok(bindings)
 }

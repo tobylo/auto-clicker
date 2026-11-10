@@ -18,8 +18,10 @@ use tokio::task::yield_now;
 use tokio::time::{Instant, advance};
 use zbus::zvariant::{ObjectPath, Value};
 
-use super::portal::{connect_failure, failed, parse, preferred_trigger};
-use super::reactor::{Listed, Signal, bound_triggers, serve};
+use super::portal::{
+    connect_failure, failed, has_owner, parse, preferred_trigger, session_namespace, within,
+};
+use super::reactor::{Listed, Signal, bound_triggers, id_of, serve};
 use super::*;
 
 const CLICKING: &str = "toggle_clicking";
@@ -180,35 +182,69 @@ async fn every_action_fires_by_its_id_and_unknown_ids_do_nothing() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_repeated_activation_while_held_fires_once() {
+async fn every_activation_fires() {
     local(async {
+        // The desktop sends one per press and releases a shortcut before
+        // it activates another; nothing is held back on a guess.
         let s = Served::start().await;
-        for _ in 0..5 {
-            s.press(CLICKING).await;
-        }
-        assert_eq!(s.take(), [fired(Action::ToggleClicking)]);
-        // Let go and pressed again: that is a new press.
-        s.let_go(CLICKING).await;
         s.press(CLICKING).await;
-        assert_eq!(s.take(), [fired(Action::ToggleClicking)]);
+        s.let_go(CLICKING).await;
+        s.press(RECORDING).await;
+        s.let_go(RECORDING).await;
+        s.press(CLICKING).await;
+        assert_eq!(
+            s.take(),
+            [
+                fired(Action::ToggleClicking),
+                fired(Action::ToggleRecording),
+                fired(Action::ToggleClicking)
+            ]
+        );
     })
     .await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_lost_release_blocks_at_most_the_next_press() {
+async fn a_stray_release_after_the_reported_one_reports_nothing_more() {
     local(async {
         let s = Served::start().await;
         s.press(CLICKING).await;
-        // Its Deactivated never arrives. Another shortcut's release, or a
-        // change of triggers, clears it.
-        s.let_go(RECORDING).await;
+        s.let_go(CLICKING).await;
+        advance(DESKTOP_RELEASE_PAUSE).await;
+        settle().await;
+        assert_eq!(
+            s.take(),
+            [
+                fired(Action::ToggleClicking),
+                HotkeyEvent::ModifiersReleased
+            ]
+        );
+        s.let_go(CLICKING).await;
+        advance(DESKTOP_RELEASE_PAUSE * 2).await;
+        settle().await;
+        assert_eq!(s.take(), []);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_press_that_arrives_with_a_due_release_comes_first() {
+    local(async {
+        let s = Served::start().await;
         s.press(CLICKING).await;
-        assert_eq!(s.take().len(), 2);
-        s.hear(Signal::Changed(Vec::new())).await;
-        s.press(CLICKING).await;
-        let events = s.take();
-        assert_eq!(events.last(), Some(&fired(Action::ToggleClicking)));
+        s.let_go(CLICKING).await;
+        // The second press is queued when the pause runs out: it is handled
+        // before the release, which then belongs to it and waits for its
+        // own letting go.
+        s.signals
+            .send(Signal::Activated(CLICKING.to_owned()))
+            .unwrap();
+        advance(DESKTOP_RELEASE_PAUSE).await;
+        settle().await;
+        assert_eq!(
+            s.take(),
+            [fired(Action::ToggleClicking), fired(Action::ToggleClicking)]
+        );
     })
     .await;
 }
@@ -376,53 +412,49 @@ impl Reader {
 const AVAILABLE: HotkeyEvent = HotkeyEvent::Status(HotkeyStatus::Available);
 
 #[tokio::test(start_paused = true)]
-async fn a_portal_that_stops_is_reported_and_bound_again_when_it_returns() {
+async fn a_portal_service_that_stops_or_restarts_is_reported_and_bound_again_at_once() {
     local(async {
-        let r = Reader::start(Vec::new()).await;
-        assert_eq!(r.take(), [AVAILABLE]);
-        r.owner(false).await;
-        assert_eq!(r.take(), [lost("the desktop's portal service stopped")]);
-        // No retry while it is away, however long.
-        advance(Duration::from_secs(3600)).await;
-        settle().await;
-        assert_eq!((r.sessions(), r.take()), (1, Vec::new()));
-        r.owner(true).await;
-        assert_eq!((r.sessions(), r.take()), (2, vec![AVAILABLE]));
-        assert!(!r.task.is_finished());
+        for (present, why) in [
+            (false, "a portal service of the desktop stopped"),
+            (true, "a portal service of the desktop restarted"),
+        ] {
+            let r = Reader::start(Vec::new()).await;
+            assert_eq!(r.take(), [AVAILABLE]);
+            let start = Instant::now();
+            r.owner(present).await;
+            // The new session starts the service if it is gone.
+            assert_eq!((r.sessions(), r.take()), (2, vec![lost(why), AVAILABLE]));
+            assert_eq!(start.elapsed(), Duration::ZERO);
+            assert!(!r.task.is_finished());
+        }
     })
     .await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_portal_replaced_in_one_step_is_bound_again_at_once() {
+async fn a_session_that_fails_is_tried_again_only_when_a_portal_service_changes() {
     local(async {
-        let r = Reader::start(Vec::new()).await;
-        r.take();
+        let r = Reader::start(vec![Some("declined"), Some("still declined")]).await;
+        assert_eq!(r.take(), [AVAILABLE, lost("declined")]);
+        // No retry by itself, however long.
+        advance(Duration::from_secs(24 * 3600)).await;
+        settle().await;
+        assert_eq!((r.sessions(), r.take()), (1, Vec::new()));
         r.owner(true).await;
         assert_eq!(r.sessions(), 2);
         assert_eq!(
             r.take(),
-            [lost("the desktop's portal service restarted"), AVAILABLE]
+            [
+                lost("a portal service of the desktop restarted"),
+                AVAILABLE,
+                lost("still declined")
+            ]
         );
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_session_that_fails_is_not_retried_until_the_portal_returns() {
-    local(async {
-        let r = Reader::start(vec![Some("not allowed"), Some("still not")]).await;
-        assert_eq!(r.take(), [AVAILABLE, lost("not allowed")]);
-        advance(Duration::from_secs(3600)).await;
+        advance(Duration::from_secs(24 * 3600)).await;
         settle().await;
-        // The portal leaving changes nothing; its return is a new try.
-        r.owner(false).await;
-        assert_eq!((r.sessions(), r.take()), (1, Vec::new()));
-        r.owner(true).await;
         assert_eq!(r.sessions(), 2);
-        assert_eq!(r.take(), [AVAILABLE, lost("still not")]);
-        r.owner(true).await;
-        assert_eq!((r.sessions(), r.take()), (3, vec![AVAILABLE]));
+        r.owner(false).await;
+        assert_eq!(r.sessions(), 3);
     })
     .await;
 }
@@ -548,6 +580,64 @@ fn a_connection_that_cannot_be_made_says_why_in_its_own_words() {
         connect_failure(&InputError::NotAllowed),
         InputError::NotAllowed.to_string()
     );
+}
+
+#[test]
+fn the_ids_the_desktop_stores_never_change() {
+    // The desktop keeps the user's triggers under these ids.
+    for (action, id) in [
+        (Action::ToggleClicking, "toggle_clicking"),
+        (Action::ToggleRecording, "toggle_recording"),
+        (Action::TogglePlayback, "toggle_playback"),
+    ] {
+        assert_eq!(id_of(action), id);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_portal_call_that_does_not_answer_times_out_and_names_the_call() {
+    let unanswered = within("CreateSession", pending::<()>()).await.unwrap_err();
+    assert_eq!(unanswered, "CreateSession: no answer within 10 s");
+    assert_eq!(within("CreateSession", async { 7 }).await, Ok(7));
+}
+
+#[test]
+fn an_owner_change_says_whether_the_name_has_an_owner_now() {
+    let change = |old: &str, new: &str| {
+        zbus::Message::signal(
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameOwnerChanged",
+        )
+        .unwrap()
+        .build(&("org.freedesktop.impl.portal.desktop.kde", old, new))
+        .unwrap()
+    };
+    assert_eq!(has_owner(&change(":1.5", "")), Some(false));
+    assert_eq!(has_owner(&change("", ":1.9")), Some(true));
+    assert_eq!(has_owner(&change(":1.5", ":1.9")), Some(true));
+    // Not an owner change at all: unreadable, never "no owner".
+    assert_eq!(has_owner(&signal("NameOwnerChanged", &(7u32,))), None);
+}
+
+#[test]
+fn a_sessions_closed_signals_are_matched_under_the_callers_own_path() {
+    assert_eq!(
+        session_namespace(":1.42"),
+        "/org/freedesktop/portal/desktop/session/1_42"
+    );
+}
+
+#[test]
+fn an_unavailable_reason_is_shown_plain_and_bounded() {
+    let quoted = format!("CreateSession: \u{1b}[31m{}\n", "x".repeat(1000));
+    let HotkeyEvent::Status(HotkeyStatus::Unavailable(Unavailable::Desktop(why))) =
+        unavailable(quoted)
+    else {
+        panic!("not an unavailable status");
+    };
+    assert_eq!(why.chars().count(), 240);
+    assert!(why.starts_with("CreateSession: [31mxxx"), "{why}");
 }
 
 #[test]

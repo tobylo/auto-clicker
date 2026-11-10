@@ -8,10 +8,10 @@
 //! it binds, so [`read_shortcuts`] binds every time it starts.
 //!
 //! One session serves until the portal goes away. Every way of losing it
-//! (the portal service leaving the bus, the session closed, a call that
-//! fails) is reported as hotkeys being unavailable, and the reader then
-//! waits for the portal service to appear on the bus again and binds anew:
-//! that is an event, so waiting costs nothing.
+//! (a portal service leaving the bus, the session closed, a call that
+//! fails) is reported as hotkeys being unavailable. The reader binds anew
+//! when a portal service's bus name changes hands, never on a timer, so
+//! waiting costs nothing.
 //!
 //! An activation says which shortcut fired and nothing else: no device and
 //! no time. So this reader cannot leave out the program's own key output;
@@ -54,13 +54,20 @@ pub(crate) trait Desktop {
 enum End {
     /// The session itself, with the reason.
     Session(String),
-    /// The portal service's bus name changed hands: to an owner, or to
-    /// none. `None` when the bus can no longer be watched.
+    /// A portal service's bus name changed hands: to an owner, or to none.
+    /// `None` when the bus can no longer be watched.
     Owner(Option<bool>),
 }
 
-/// Serves one session after another. `owners` yields whether the portal
-/// service has an owner, each time that changes.
+/// Serves one session after another. `owners` yields whether a portal
+/// service has an owner, each time that changes for one of them.
+///
+/// A session a portal service took down is opened again at once, whether
+/// the service is back or gone: the portal's services start when called and
+/// not by themselves (KDE's is not restarted after a crash), so waiting for
+/// one to return could wait for ever. A session that ended otherwise (a
+/// declined dialog, a failed call) is opened again only after the next such
+/// change, so nothing is retried in a loop.
 pub(crate) async fn run(
     desktop: &mut impl Desktop,
     owners: impl Stream<Item = bool>,
@@ -74,36 +81,44 @@ pub(crate) async fn run(
             change = owners.next() => End::Owner(change),
             why = desktop.session(&mut send) => End::Session(why),
         };
-        let (why, back) = match end {
-            End::Session(why) => (why, false),
-            End::Owner(Some(true)) => ("the desktop's portal service restarted".to_owned(), true),
-            End::Owner(Some(false)) => ("the desktop's portal service stopped".to_owned(), false),
-            End::Owner(None) => {
+        let why = match end {
+            End::Session(why) => {
+                send(unavailable(why));
+                End::Owner(owners.next().await)
+            }
+            changed @ End::Owner(_) => changed,
+        };
+        match why {
+            End::Owner(Some(true)) => {
+                send(unavailable(
+                    "a portal service of the desktop restarted".to_owned(),
+                ));
+            }
+            End::Owner(Some(false)) => {
+                send(unavailable(
+                    "a portal service of the desktop stopped".to_owned(),
+                ));
+            }
+            End::Owner(None) | End::Session(_) => {
                 return send(unavailable(
                     "the session bus can no longer be watched; restart auto-clicker".to_owned(),
                 ));
             }
-        };
-        send(unavailable(why));
-        if !back && !returned(&mut owners).await {
-            return;
         }
     }
 }
 
-/// Waits until the portal service has an owner again; `false` when the bus
-/// can no longer be watched.
-async fn returned(owners: &mut (impl Stream<Item = bool> + Unpin)) -> bool {
-    loop {
-        match owners.next().await {
-            Some(true) => return true,
-            Some(false) => {}
-            None => return false,
-        }
-    }
-}
+/// The longest reason shown, in characters.
+const MAX_REASON: usize = 240;
 
+/// Hotkeys are unavailable for this reason. It may quote the portal's own
+/// error text, so it is shown without control characters and bounded.
 fn unavailable(why: String) -> HotkeyEvent {
+    let why = why
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_REASON)
+        .collect();
     HotkeyEvent::Status(HotkeyStatus::Unavailable(Unavailable::Desktop(why)))
 }
 

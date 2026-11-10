@@ -26,6 +26,9 @@ use crate::session::{APP_ID, CALL_TIMEOUT, DIALOG_TIMEOUT, Portal};
 
 /// The bus name of the portal service.
 const PORTAL_NAME: &str = "org.freedesktop.portal.Desktop";
+/// The bus names of the desktops' own portal services, such as KDE's
+/// `org.freedesktop.impl.portal.desktop.kde`.
+const BACKEND_NAMESPACE: &str = "org.freedesktop.impl.portal";
 
 /// Shortcut sessions on the desktop's portal.
 pub(super) struct PortalShortcuts {
@@ -111,15 +114,29 @@ async fn bind(bindings: Bindings) -> Result<Bound<impl Stream<Item = Signal>>, S
     })
 }
 
-/// The `Closed` signals of the sessions on `connection`: the one session
-/// this connection carries.
+/// The `Closed` signals the portal sends for the sessions of `connection`:
+/// the one session this connection carries. Only the portal's, and only
+/// for this connection's sessions, so no other program on the bus can end
+/// the session by sending one.
 async fn session_closed(connection: &zbus::Connection) -> zbus::Result<zbus::MessageStream> {
+    let caller = connection.unique_name().ok_or(zbus::Error::Failure(
+        "the connection has no name".to_owned(),
+    ))?;
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
+        .sender(PORTAL_NAME)?
         .interface("org.freedesktop.portal.Session")?
         .member("Closed")?
+        .path_namespace(session_namespace(caller.as_str()))?
         .build();
     zbus::MessageStream::for_match_rule(rule, connection, None).await
+}
+
+/// Where the portal puts the sessions of the caller with this unique bus
+/// name (":1.42"): under its name without the colon, dots as underscores.
+pub(super) fn session_namespace(caller: &str) -> String {
+    let caller = caller.trim_start_matches(':').replace('.', "_");
+    format!("/org/freedesktop/portal/desktop/session/{caller}")
 }
 
 fn listed(shortcut: &Shortcut) -> Listed {
@@ -183,9 +200,13 @@ pub(super) fn preferred_trigger(binding: Binding) -> Option<String> {
     Some(trigger)
 }
 
-/// Whether the portal service has an owner on the bus, each time that
-/// changes, on a connection of its own that outlives every session. Ends
-/// when the bus goes away or sends a change that cannot be read.
+/// Whether a portal service has an owner on the bus, each time that
+/// changes, on a connection of its own that outlives every session: the
+/// portal itself, and the desktop's own services behind it, which hold the
+/// shortcuts. When one of those restarts, the portal keeps its bus name and
+/// says nothing, yet the session is dead (measured on Plasma 6.8.2), so
+/// their names are watched too. Ends when the bus goes away or sends a
+/// change that cannot be read.
 pub(super) async fn watch_owner() -> Result<impl Stream<Item = bool>, String> {
     let connection = within("session bus", async {
         zbus::connection::Builder::session()?
@@ -195,19 +216,56 @@ pub(super) async fn watch_owner() -> Result<impl Stream<Item = bool>, String> {
     })
     .await?
     .map_err(|err| format!("session bus: {err}"))?;
-    let bus = within("session bus", zbus::fdo::DBusProxy::new(&connection))
-        .await?
-        .map_err(|err| format!("session bus: {err}"))?;
-    let changes = within(
-        "watching the portal service",
-        bus.receive_name_owner_changed_with_args(&[(0, PORTAL_NAME)]),
+    let watching = |named: Named| {
+        let connection = &connection;
+        async move {
+            within(
+                "watching the portal service",
+                owner_changes(connection, named),
+            )
+            .await?
+            .map_err(|err| format!("watching the portal service: {err}"))
+        }
+    };
+    let portal = watching(Named::Exactly(PORTAL_NAME)).await?;
+    let behind = watching(Named::Under(BACKEND_NAMESPACE)).await?;
+    Ok(
+        stream::select(portal, behind).scan(connection, |_connection, change| {
+            // The stream keeps the connection it listens on.
+            ready(change.ok().as_ref().and_then(has_owner))
+        }),
     )
-    .await?
-    .map_err(|err| format!("watching the portal service: {err}"))?;
-    Ok(changes.scan(connection, |_connection, change| {
-        // The stream keeps the connection it listens on.
-        ready(change.args().ok().map(|args| args.new_owner().is_some()))
-    }))
+}
+
+/// Which bus names to watch.
+enum Named {
+    Exactly(&'static str),
+    /// Every name under this namespace.
+    Under(&'static str),
+}
+
+/// The bus's `NameOwnerChanged` signals for `named`.
+async fn owner_changes(
+    connection: &zbus::Connection,
+    named: Named,
+) -> zbus::Result<zbus::MessageStream> {
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender("org.freedesktop.DBus")?
+        .interface("org.freedesktop.DBus")?
+        .member("NameOwnerChanged")?;
+    let rule = match named {
+        Named::Exactly(name) => rule.arg(0, name)?,
+        Named::Under(namespace) => rule.arg0ns(namespace)?,
+    };
+    zbus::MessageStream::for_match_rule(rule.build(), connection, None).await
+}
+
+/// Whether the name a `NameOwnerChanged` signal is about has an owner now;
+/// `None` when the signal cannot be read.
+pub(super) fn has_owner(change: &zbus::Message) -> Option<bool> {
+    let (_name, _old, new): (String, String, String) = change.body().deserialize().ok()?;
+    Some(!new.is_empty())
 }
 
 /// Why the registered connection could not be made, without the wording of
@@ -220,7 +278,7 @@ pub(super) fn connect_failure(err: &InputError) -> String {
 }
 
 /// Runs a portal call with [`CALL_TIMEOUT`].
-async fn within<T>(what: &str, call: impl Future<Output = T>) -> Result<T, String> {
+pub(super) async fn within<T>(what: &str, call: impl Future<Output = T>) -> Result<T, String> {
     timeout(CALL_TIMEOUT, call)
         .await
         .map_err(|_| unanswered(what, CALL_TIMEOUT))

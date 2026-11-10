@@ -239,6 +239,27 @@ async fn a_trigger_moved_onto_the_runs_key_cancels_a_pending_start() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_trigger_moved_onto_the_runs_key_cancels_a_tray_countdown() {
+    local(async {
+        let shared = Shared::default();
+        shared.with(|r| r.desktop_reader = true);
+        let config = Config {
+            clicker: pressing(Mode::KeyRepeat, "f9"),
+            ..Config::default()
+        };
+        let d = daemon_with(config, shared, true).await;
+        d.hotkey(defaults()).await;
+        d.send(Message::Start).await;
+        assert!(matches!(d.activity(), Activity::StartingIn(_)));
+        d.hotkey(reported("Ctrl+F9", "", "")).await;
+        assert_eq!(d.activity(), Activity::Idle);
+        sleep(secs(60)).await;
+        assert_eq!(d.shared.calls(), []);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_trigger_change_leaves_other_runs_and_idle_alone() {
     local(async {
         let d = desktop_daemon(pressing(Mode::HoldKey, "f9")).await;

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::hotkeys::{Binding, Bindings};
+use crate::input::Key;
 
 fn parse(text: &str) -> Config {
     Config::parse(text).unwrap_or_else(|err| panic!("{text:?}: {err:?}"))
@@ -83,6 +84,28 @@ fn a_hotkey_on_the_key_the_clicker_presses_is_rejected() {
         assert_eq!(line, Some(6), "{mode}: {reason}");
         assert!(reason.contains("the key the clicker presses"), "{reason}");
     }
+}
+
+#[test]
+fn a_config_binding_on_the_clicker_key_is_fine_where_the_desktop_owns_the_hotkeys() {
+    // The desktop's triggers may differ from the config's bindings, the
+    // defaults included; the controller checks the real ones.
+    for hotkeys in ["", "[hotkeys]\ntoggle_recording = \"Ctrl+F9\"\n"] {
+        for key in ["f6", "f9"] {
+            let text = format!(
+                "version = 1\n[clicker]\nmode = \"hold_key\"\nkey = \"{key}\"\n{hotkeys}[input]\nhotkeys = \"portal\"\n"
+            );
+            let config = parse(&text);
+            assert_eq!(config.input.hotkeys, HotkeyRoute::Portal, "{text}");
+            assert_eq!(config.clicker.key, Key::from_name(key).unwrap());
+        }
+    }
+    // On the kernel route the same file is rejected: a default binding.
+    let (line, reason) = invalid(
+        "version = 1\n[clicker]\nmode = \"hold_key\"\nkey = \"f6\"\n[input]\nhotkeys = \"kernel\"\n",
+    );
+    assert_eq!(line, None, "{reason}");
+    assert!(reason.contains("the key the clicker presses"), "{reason}");
 }
 
 #[test]

@@ -41,14 +41,15 @@ pub(super) fn validate(raw: RawConfig) -> Result<Config, Invalid> {
         None => defaults.tray_start_delay,
     };
     let clicker = clicker(raw.clicker, defaults.clicker)?;
+    let input = InputSettings {
+        output: raw.input.output.map_or(defaults.input.output, Into::into),
+        hotkeys: raw.input.hotkeys.map_or(defaults.input.hotkeys, Into::into),
+    };
     Ok(Config {
         tray_start_delay,
-        hotkeys: super::hotkeys::hotkeys(&raw.hotkeys, &clicker)?,
+        hotkeys: super::hotkeys::hotkeys(&raw.hotkeys, &clicker, input.hotkeys)?,
         clicker,
-        input: InputSettings {
-            output: raw.input.output.map_or(defaults.input.output, Into::into),
-            hotkeys: raw.input.hotkeys.map_or(defaults.input.hotkeys, Into::into),
-        },
+        input,
     })
 }
 
