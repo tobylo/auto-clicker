@@ -469,6 +469,19 @@ async fn a_hotkey_right_after_a_trigger_moved_onto_the_runs_key_does_nothing() {
             assert_eq!(d.activity(), Activity::Idle, "{action:?}");
         }
         assert_eq!(d.notice(), stopped);
+        // A second change that stops a run late in this window starts the
+        // second anew: the run's last press is as fresh as the first's.
+        sleep(Duration::from_millis(900)).await;
+        d.hotkey(defaults()).await;
+        d.send(Message::Start).await;
+        assert_eq!(d.activity(), Activity::Clicking);
+        d.hotkey(reported("Ctrl+Shift+F6", "Ctrl+Shift+F7", "F9"))
+            .await;
+        assert_eq!(d.activity(), Activity::Idle);
+        // Past the end of the first window, within the second.
+        sleep(Duration::from_millis(600)).await;
+        d.hotkey(HotkeyEvent::Fired(Action::ToggleRecording)).await;
+        assert!(d.notice().starts_with("Stopped"), "{}", d.notice());
         // A change that stops nothing opens no window.
         sleep(secs(2)).await;
         d.hotkey(reported("Ctrl+Shift+F6", "Meta+F7", "F9")).await;
