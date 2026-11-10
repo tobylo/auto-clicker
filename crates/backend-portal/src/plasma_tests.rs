@@ -256,7 +256,9 @@ async fn drive(input: &mut Input<PortalBackend>, window: &mut Window) {
         window.expect_line(&format!("key {code}")).await;
     }
 
-    // Relative motion moves by exactly the step, with no acceleration.
+    // An absolute point lands exactly, checked apart from the search for the
+    // window's output; then relative motion moves by exactly the step, with
+    // no acceleration.
     window.drain().await;
     input
         .move_absolute(layout.position_of(
@@ -268,6 +270,10 @@ async fn drive(input: &mut Input<PortalBackend>, window: &mut Window) {
         .find(LINE_TIMEOUT, parse_motion)
         .await
         .expect("motion");
+    assert!(
+        (from.0 - 100.0).abs() <= 1.0 && (from.1 - 100.0).abs() <= 1.0,
+        "a move to 100,100 on the window's output arrived at {from:?}"
+    );
     input.move_relative(40, 30).unwrap();
     let to = window
         .find(LINE_TIMEOUT, parse_motion)
