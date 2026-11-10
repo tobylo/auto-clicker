@@ -354,6 +354,9 @@ async fn a_hotkey_pressed_by_a_person_arrives_through_the_portal() {
             !trigger.is_empty(),
             "no trigger for clicking: set one in System Settings"
         );
+        // A trigger the program cannot read would rule out every key mode.
+        let w = auto_clicker_core::input::Key::from_name("w").unwrap();
+        assert_eq!(triggers.refusal(w), None, "{trigger:?} is not readable");
         assert_eq!(next().await, HotkeyEvent::Status(HotkeyStatus::Available));
         eprintln!(">>> Press {trigger} and let go.");
         assert_eq!(next().await, HotkeyEvent::Fired(Action::ToggleClicking));
@@ -364,6 +367,29 @@ async fn a_hotkey_pressed_by_a_person_arrives_through_the_portal() {
     tokio::select! {
         () = reader => panic!("the reader ended"),
         () = person => {}
+    }
+}
+
+/// Prints every hotkey event with its time for `PROBE_SECS` seconds (60 by
+/// default): for measuring what the desktop sends when a hotkey is held,
+/// let go key by key, changed in System Settings, or the portal restarts.
+#[tokio::test]
+#[ignore = "needs Plasma 6.8 and the installed desktop file; prints what the portal sends; run by hand"]
+async fn hotkey_events_as_they_arrive() {
+    use auto_clicker_core::hotkeys::Bindings;
+    use tokio::time::sleep;
+
+    let secs = std::env::var("PROBE_SECS")
+        .ok()
+        .and_then(|secs| secs.parse().ok())
+        .unwrap_or(60);
+    let start = Instant::now();
+    let reader = crate::read_shortcuts(Bindings::default(), move |event| {
+        eprintln!("{:>8.3} s  {event:?}", start.elapsed().as_secs_f64());
+    });
+    tokio::select! {
+        () = reader => eprintln!("the reader ended"),
+        () = sleep(Duration::from_secs(secs)) => {}
     }
 }
 

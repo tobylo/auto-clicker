@@ -9,14 +9,27 @@
 
 use super::view::Hotkey;
 use super::{Controller, InputLifetime, InputReader, Platform};
-use crate::hotkeys::{Action, Bindings, Triggers};
+use crate::hotkeys::{Action, Bindings, HotkeyStatus, Triggers, Unavailable};
+
+/// The hotkeys of a desktop that delivers them.
+pub(super) struct DesktopHotkeys {
+    /// The triggers it last reported.
+    triggers: Triggers,
+    /// Whether it may be delivering them. Not while the reader says the
+    /// desktop's shortcuts are unavailable: nothing can fire then, whatever
+    /// the program presses, until the reader reports triggers again.
+    live: bool,
+}
 
 impl<P: Platform> Controller<P> {
     /// The triggers a new controller starts with: unknown ones when the
     /// desktop delivers the hotkeys, so nothing presses a key before the
     /// desktop has said which keys are taken.
-    pub(super) fn first_triggers(platform: &P) -> Option<Triggers> {
-        (platform.input_reader() == InputReader::Desktop).then(Triggers::unknown)
+    pub(super) fn first_triggers(platform: &P) -> Option<DesktopHotkeys> {
+        (platform.input_reader() == InputReader::Desktop).then(|| DesktopHotkeys {
+            triggers: Triggers::unknown(),
+            live: true,
+        })
     }
 
     /// Whether the reader stops while devices open and starts again after:
@@ -29,7 +42,10 @@ impl<P: Platform> Controller<P> {
     /// The desktop reported its triggers. A run or a start that presses a
     /// key one of them now uses ends at once.
     pub(super) fn triggers_changed(&mut self, triggers: Triggers) {
-        self.triggers = Some(triggers);
+        self.desktop = Some(DesktopHotkeys {
+            triggers,
+            live: true,
+        });
         if !self.activity().clicking() {
             return;
         }
@@ -50,13 +66,23 @@ impl<P: Platform> Controller<P> {
         }
     }
 
+    /// The desktop's shortcuts became unavailable: until the reader reports
+    /// triggers again, the desktop delivers no hotkey.
+    pub(super) fn desktop_status_changed(&mut self, status: &HotkeyStatus) {
+        if let (Some(desktop), HotkeyStatus::Unavailable(Unavailable::Desktop(_))) =
+            (&mut self.desktop, status)
+        {
+            desktop.live = false;
+        }
+    }
+
     /// Why the configured run would set off a hotkey, if it would. Only a
     /// run that presses a key can, and only while the desktop delivers the
     /// hotkeys.
     fn own_key_refusal(&self) -> Option<String> {
         let key = self.config.clicker.pressed_key()?;
-        let refusal = self.triggers.as_ref()?.refusal(key)?;
-        Some(refusal.to_string())
+        let desktop = self.desktop.as_ref().filter(|desktop| desktop.live)?;
+        Some(desktop.triggers.refusal(key)?.to_string())
     }
 
     /// Why a recording cannot start on this platform, if it cannot.
@@ -68,7 +94,7 @@ impl<P: Platform> Controller<P> {
     }
 
     pub(super) fn shown_hotkey(&self, action: Action) -> Hotkey {
-        shown_hotkey(self.config.hotkeys, self.triggers.as_ref(), action)
+        shown_hotkey(self.config.hotkeys, self.desktop.as_ref(), action)
     }
 }
 
@@ -76,11 +102,11 @@ impl<P: Platform> Controller<P> {
 /// when it delivers the hotkeys, else the config's binding.
 pub(super) fn shown_hotkey(
     bindings: Bindings,
-    triggers: Option<&Triggers>,
+    desktop: Option<&DesktopHotkeys>,
     action: Action,
 ) -> Hotkey {
-    match triggers {
-        Some(triggers) => Hotkey::Desktop(triggers.of(action).text().map(str::to_owned)),
+    match desktop {
+        Some(desktop) => Hotkey::Desktop(desktop.triggers.of(action).text().map(str::to_owned)),
         None => Hotkey::Bound(match action {
             Action::ToggleClicking => bindings.toggle_clicking,
             Action::ToggleRecording => bindings.toggle_recording,

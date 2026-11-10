@@ -558,7 +558,8 @@ fn failed_calls_say_what_the_user_can_do() {
         &ashpd::Error::Response(ResponseError::Cancelled),
     );
     assert!(
-        cancelled.contains("not allowed in the desktop's dialog"),
+        cancelled.contains("declined in the desktop's dialog")
+            && cancelled.contains("System Settings"),
         "{cancelled}"
     );
     let no_app_id = failed(

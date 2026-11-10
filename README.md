@@ -176,7 +176,7 @@ Licensed under either of the [Apache License, Version 2.0](LICENSE-APACHE) or th
 
 ## Hotkeys through the portal
 
-With `hotkeys = "portal"`, the program reads no keyboard: it registers its three shortcuts with Plasma (the GlobalShortcuts portal), and Plasma tells it when one is pressed, in every window and in fullscreen games. The first time the program starts this way, Plasma shows a dialog listing the shortcuts; accept it. The program asks for the hotkeys in `[hotkeys]` then, if they are on function keys.
+With `hotkeys = "portal"`, the program reads no keyboard: it registers its three shortcuts with Plasma (the GlobalShortcuts portal), and Plasma tells it when one is pressed, in every window and in fullscreen games. The first time the program starts this way, Plasma shows a dialog listing the shortcuts; accept it. The program asks for the hotkeys in `[hotkeys]` then, for those on a function key (F1 to F24); any other starts without a key, for you to set in System Settings.
 
 From then on Plasma owns the hotkeys, and `[hotkeys]` in the config has no further effect on this route. Change them in System Settings, under Keyboard, Shortcuts, "Auto Clicker". A change takes effect at once, without a restart, and the tray's tooltip shows the hotkeys as Plasma reports them.
 
@@ -184,6 +184,7 @@ From then on Plasma owns the hotkeys, and `[hotkeys]` in the config has no furth
 - **A start from the hotkey begins 1 second after you let go.** Plasma reports the release when the first key comes up, usually the function key while Ctrl and Shift are still down, and never says when those follow. The pause keeps the first clicks from being Ctrl+Shift+clicks.
 - **The clicker's key cannot be a hotkey's key.** Plasma cannot tell the program's key presses from yours, so `key_repeat` and `hold_key` do not start when their key is the key of any hotkey, whatever its modifiers, and the tooltip says so. They do not start either when the key is Ctrl, Shift, Alt or Meta (held by the program, it would turn your Ctrl+Shift+F6 into something else), or when a hotkey is not on a function key (F1 to F24): Plasma names other keys by the keyboard layout's labels, which the program cannot match against its own. Click modes always start.
 - **Recording is not available.** Nothing reads the keyboards and mice on this route; the tray says so when you try. Use `hotkeys = "kernel"` to record.
-- **If Plasma's portal service stops,** the tooltip says hotkeys are unavailable, and clicking goes on working from the tray. When the service is back, the program registers its shortcuts again by itself. If you declined the dialog, restart the program to be asked again.
+- **If Plasma's portal service stops,** the tooltip says hotkeys are unavailable, and clicking goes on working from the tray. When the service is back, the program registers its shortcuts again by itself. While hotkeys are unavailable, nothing can set one off, so the key modes start whatever their key is.
+- **If you decline the dialog,** hotkeys stay unavailable. Plasma does not ask a second time: restart the program and set the hotkeys in System Settings.
 
 Like remote input, this needs the package's `io.github.tobylo.AutoClicker.desktop`: Plasma keeps the shortcuts per app.

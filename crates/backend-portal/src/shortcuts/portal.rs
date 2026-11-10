@@ -234,8 +234,8 @@ fn unanswered(what: &str, after: Duration) -> String {
 pub(super) fn failed(call: &str, err: &ashpd::Error) -> String {
     match err {
         ashpd::Error::Response(ResponseError::Cancelled) => {
-            "the shortcuts were not allowed in the desktop's dialog; restart auto-clicker to be \
-             asked again"
+            "the shortcuts were declined in the desktop's dialog; restart auto-clicker and set \
+             them in System Settings, under Shortcuts"
                 .to_owned()
         }
         ashpd::Error::Portal(PortalError::NotAllowed(why)) => format!(
