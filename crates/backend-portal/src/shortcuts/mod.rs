@@ -86,43 +86,28 @@ pub(crate) async fn run(
     let mut owners = pin!(owners);
     let mut failed_in_a_row = 0u32;
     loop {
-        let bound = Cell::new(false);
-        let mut pass = |event: HotkeyEvent| {
-            // A session reports that hotkeys work once it has bound them.
-            if event == HotkeyEvent::Status(HotkeyStatus::Available) {
-                bound.set(true);
-            }
-            send(event);
-        };
-        // An owner change comes first: the session it ends is already dead.
-        let end = tokio::select! {
-            biased;
-            change = owners.next() => End::Owner(change),
-            why = desktop.session(&mut pass) => End::Session(why),
-        };
-        failed_in_a_row = if bound.get() {
+        let (end, bound) = one_session(desktop, &mut owners, &mut send).await;
+        failed_in_a_row = if bound {
             0
         } else {
             failed_in_a_row.saturating_add(1)
         };
+        let gave_up = failed_in_a_row >= MAX_FAILED_IN_A_ROW;
         let why = match end {
-            End::Session(why) if failed_in_a_row < MAX_FAILED_IN_A_ROW => {
+            End::Session(why) if gave_up => Some(why),
+            // Nothing is tried again before a portal service changes.
+            End::Session(why) => {
                 send(unavailable(why));
-                End::Owner(owners.next().await)
+                owner_change(owners.next().await)
             }
-            other => other,
+            End::Owner(change) => owner_change(change),
         };
-        let why = match why {
-            End::Owner(Some(true)) => "a portal service of the desktop restarted".to_owned(),
-            End::Owner(Some(false)) => "a portal service of the desktop stopped".to_owned(),
-            End::Owner(None) => {
-                return send(unavailable(
-                    "the session bus can no longer be watched; restart auto-clicker".to_owned(),
-                ));
-            }
-            End::Session(why) => why,
+        let Some(why) = why else {
+            return send(unavailable(
+                "the session bus can no longer be watched; restart auto-clicker".to_owned(),
+            ));
         };
-        if failed_in_a_row >= MAX_FAILED_IN_A_ROW {
+        if gave_up {
             return send(unavailable(format!(
                 "the desktop's shortcuts could not be bound in {MAX_FAILED_IN_A_ROW} tries \
                  (the last: {why}); restart auto-clicker to try again"
@@ -130,6 +115,37 @@ pub(crate) async fn run(
         }
         send(unavailable(why));
     }
+}
+
+/// Runs one session until it ends or a portal service changes hands;
+/// whether it got as far as binding the shortcuts.
+async fn one_session(
+    desktop: &mut impl Desktop,
+    owners: &mut (impl Stream<Item = bool> + Unpin),
+    send: &mut impl FnMut(HotkeyEvent),
+) -> (End, bool) {
+    let bound = Cell::new(false);
+    let mut pass = |event: HotkeyEvent| {
+        // A session reports that hotkeys work once it has bound them.
+        if event == HotkeyEvent::Status(HotkeyStatus::Available) {
+            bound.set(true);
+        }
+        send(event);
+    };
+    // An owner change comes first: the session it ends is already dead.
+    let end = tokio::select! {
+        biased;
+        change = owners.next() => End::Owner(change),
+        why = desktop.session(&mut pass) => End::Session(why),
+    };
+    (end, bound.get())
+}
+
+/// What a change of a portal service's owner means for the session it
+/// ended; `None` when the bus can no longer be watched.
+fn owner_change(change: Option<bool>) -> Option<String> {
+    let what = if change? { "restarted" } else { "stopped" };
+    Some(format!("a portal service of the desktop {what}"))
 }
 
 /// The longest reason shown, in characters.
