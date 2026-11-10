@@ -879,3 +879,26 @@ async fn losing_the_devices_stops_playback_mid_press_at_once() {
     })
     .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn quitting_mid_press_releases_and_closes_the_devices_at_once() {
+    local(async {
+        let (d, gates) = per_run_daemon(Mode::Click).await;
+        d.shared
+            .with(|r| r.recordings = Some(Arc::new(TempDir::new())));
+        let file = d.shared.store_hold();
+        d.send(Message::Play(file)).await;
+        gates.finish_open(Ok(()));
+        sleep(ms(20)).await;
+        d.settle().await;
+        assert_eq!(d.shared.calls(), [w(PressState::Down)]);
+
+        let before = Instant::now();
+        d.send(Message::Quit).await;
+        assert_eq!(Instant::now(), before, "no time passed");
+        assert!(d.task.is_finished());
+        assert_eq!(d.shared.calls(), [w(PressState::Down), w(PressState::Up)]);
+        assert_eq!(gates.gates(|g| g.closed), 1);
+    })
+    .await;
+}
