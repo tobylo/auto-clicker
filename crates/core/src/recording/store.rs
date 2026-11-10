@@ -34,6 +34,14 @@ fn recordings_dir_from(xdg_data_home: Option<OsString>, home: Option<OsString>) 
         .map(|dir| dir.join("auto-clicker").join("recordings"))
 }
 
+/// Opens the recordings folder for reading, refusing a symlink in its place.
+pub(super) fn open_folder(dir: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(dir)
+}
+
 /// Saves `recording` in `dir`, creating the directory (mode 0700) if
 /// needed, as a new file (mode 0600) named after its creation time. Never
 /// replaces a file. Returns the file's path, as `dir` named it.
@@ -64,7 +72,7 @@ fn named(checked: &File, dir: &Path, err: &io::Error) -> io::Error {
 
 /// A path the kernel resolves through the open directory `checked`, not
 /// through its name.
-fn held_path(checked: &File) -> PathBuf {
+pub(super) fn held_path(checked: &File) -> PathBuf {
     PathBuf::from(format!("/proc/self/fd/{}", checked.as_raw_fd()))
 }
 
@@ -102,10 +110,7 @@ fn private_dir(dir: &Path) -> io::Result<File> {
         ));
     }
     DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-    let handle = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(dir)?;
+    let handle = open_folder(dir)?;
     if handle.metadata()?.permissions().mode() & 0o077 != 0 {
         handle.set_permissions(Permissions::from_mode(0o700))?;
     }

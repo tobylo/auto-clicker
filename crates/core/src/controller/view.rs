@@ -3,12 +3,14 @@
 //! The controller publishes a [`View`] after every change; the tray only
 //! reads it. The text is plain: a tray that renders markup escapes it.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::clicker::{ClickerSettings, Mode, Position, Repeat};
 use crate::hotkeys::Binding;
 use crate::input::{Button, Key};
-use crate::recording::MAX_DURATION;
+use crate::playback::{PlaybackSettings, Speed};
+use crate::recording::{FileName, MAX_DURATION};
 
 /// What the controller is doing, as the tray shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +28,13 @@ pub enum Activity {
     /// up.
     RecordingIn(u64),
     Recording,
+    /// Playback from the tray counts down; whole seconds left, rounded up.
+    PlayingIn(u64),
+    /// Playback from the hotkey waits for its modifiers to come up.
+    PlayWaitingForRelease,
+    /// Playback waits for the input devices to open.
+    PlayOpening,
+    Playing,
 }
 
 impl Activity {
@@ -44,6 +53,26 @@ impl Activity {
     pub fn recording(self) -> bool {
         matches!(self, Activity::RecordingIn(_) | Activity::Recording)
     }
+
+    /// Playing a recording, or about to.
+    pub fn playing(self) -> bool {
+        matches!(
+            self,
+            Activity::PlayingIn(_)
+                | Activity::PlayWaitingForRelease
+                | Activity::PlayOpening
+                | Activity::Playing
+        )
+    }
+}
+
+/// One recording in the tray's list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listed {
+    /// Its file, which [`Message::Play`](super::Message::Play) takes.
+    pub file: FileName,
+    /// What the tray calls it.
+    pub label: String,
 }
 
 /// Everything the tray shows.
@@ -55,6 +84,13 @@ pub struct View {
     pub hotkey: Binding,
     /// The hotkey that starts and stops recording.
     pub record_hotkey: Binding,
+    /// The hotkey that starts and stops playback.
+    pub play_hotkey: Binding,
+    pub playback: PlaybackSettings,
+    /// The newest recordings, newest first: what the tray offers to play.
+    pub recordings: Arc<[Listed]>,
+    /// The recording that plays or is about to, as the tray names it.
+    pub playing: Option<String>,
     /// What last happened that the user should know: why a start was
     /// refused or cancelled, or why a run stopped.
     pub notice: Option<String>,
@@ -81,11 +117,23 @@ impl View {
             Activity::Clicking => "Auto clicker: clicking".to_owned(),
             Activity::RecordingIn(seconds) => format!("Auto clicker: records in {seconds} s"),
             Activity::Recording => "Auto clicker: recording".to_owned(),
+            Activity::PlayingIn(seconds) => format!("Auto clicker: plays in {seconds} s"),
+            Activity::PlayWaitingForRelease => {
+                format!(
+                    "Auto clicker: plays when you let go of {}",
+                    modifiers_of(self.play_hotkey)
+                )
+            }
+            Activity::PlayOpening => {
+                "Auto clicker: starting playback; allow input if the desktop asks".to_owned()
+            }
+            Activity::Playing => "Auto clicker: playing".to_owned(),
         }
     }
 
-    /// The tooltip's lines: what a run does, the hotkeys, the recording's
-    /// time limit while one runs, the last notice and every problem.
+    /// The tooltip's lines: what a run does, the hotkeys, how a recording
+    /// plays, the recording's time limit while one runs, what plays, the
+    /// last notice and every problem.
     pub fn details(&self) -> Vec<String> {
         let mut lines = vec![
             describe(&self.settings),
@@ -94,12 +142,20 @@ impl View {
                 "{} starts recording, and stops and saves it",
                 self.record_hotkey
             ),
+            format!(
+                "{} plays the last recording {}, and stops it",
+                self.play_hotkey,
+                describe_playback(&self.playback)
+            ),
         ];
         if self.activity.recording() {
             let minutes = MAX_DURATION.as_secs() / 60;
             lines.push(format!(
                 "A recording stops by itself after {minutes} minutes"
             ));
+        }
+        if let Some(recording) = &self.playing {
+            lines.push(format!("Playing {recording}"));
         }
         lines.extend(self.notice.iter().cloned());
         lines.extend(self.problems.iter().cloned());
@@ -142,6 +198,19 @@ pub fn describe(settings: &ClickerSettings) -> String {
     let uses_button = !matches!(settings.mode, Mode::KeyRepeat | Mode::HoldKey);
     if uses_button && matches!(settings.position, Position::Fixed(_)) {
         text.push_str(" at a fixed point");
+    }
+    text
+}
+
+/// How often and how fast a recording plays: "once", "3 times at 1.5× speed".
+pub fn describe_playback(settings: &PlaybackSettings) -> String {
+    let mut text = match settings.repeat {
+        Repeat::UntilStopped => "until stopped".to_owned(),
+        Repeat::Times(count) if count.get() == 1 => "once".to_owned(),
+        Repeat::Times(count) => format!("{count} times"),
+    };
+    if settings.speed != Speed::RECORDED {
+        text.push_str(&format!(" at {}× speed", settings.speed));
     }
     text
 }
@@ -246,6 +315,10 @@ mod tests {
             settings: ClickerSettings::default(),
             hotkey: Binding::parse(hotkey).unwrap(),
             record_hotkey: Binding::parse("Ctrl+F7").unwrap(),
+            play_hotkey: Binding::parse("Ctrl+Alt+F8").unwrap(),
+            playback: PlaybackSettings::default(),
+            recordings: Arc::from([]),
+            playing: None,
             notice: None,
             problems: Vec::new(),
         }
@@ -282,6 +355,22 @@ mod tests {
                 "Auto clicker: records in 2 s",
             ),
             (Activity::Recording, "Ctrl+F6", "Auto clicker: recording"),
+            (
+                Activity::PlayingIn(4),
+                "Ctrl+F6",
+                "Auto clicker: plays in 4 s",
+            ),
+            (
+                Activity::PlayWaitingForRelease,
+                "Ctrl+F6",
+                "Auto clicker: plays when you let go of Ctrl and Alt",
+            ),
+            (
+                Activity::PlayOpening,
+                "Ctrl+F6",
+                "Auto clicker: starting playback; allow input if the desktop asks",
+            ),
+            (Activity::Playing, "Ctrl+F6", "Auto clicker: playing"),
         ];
         for (activity, hotkey, title) in cases {
             assert_eq!(view(activity, hotkey).title(), title);
@@ -300,6 +389,7 @@ mod tests {
                 "Clicks the left button every 100 ms",
                 "Ctrl+F6 starts and stops clicking",
                 "Ctrl+F7 starts recording, and stops and saves it",
+                "Ctrl+Alt+F8 plays the last recording once, and stops it",
                 "notice",
                 "one",
                 "two",
@@ -322,7 +412,38 @@ mod tests {
     }
 
     #[test]
-    fn activities_are_clicking_or_recording_or_neither() {
+    fn what_plays_is_named_before_the_notice() {
+        let mut shown = view(Activity::Playing, "Ctrl+F6");
+        shown.playing = Some("Recording 2026-11-09 18:04:05".to_owned());
+        shown.notice = Some("notice".to_owned());
+        let lines = shown.details();
+        assert_eq!(
+            lines[lines.len() - 2..],
+            ["Playing Recording 2026-11-09 18:04:05", "notice"]
+        );
+    }
+
+    #[test]
+    fn describes_how_a_recording_plays() {
+        let described = |speed, repeat| {
+            describe_playback(&PlaybackSettings {
+                speed: Speed::from_ratio(speed).unwrap(),
+                repeat,
+            })
+        };
+        let times = |count| Repeat::Times(NonZeroU32::new(count).unwrap());
+        assert_eq!(described(1.0, times(1)), "once");
+        assert_eq!(described(1.0, times(3)), "3 times");
+        assert_eq!(described(1.0, Repeat::UntilStopped), "until stopped");
+        assert_eq!(described(1.5, times(1)), "once at 1.5× speed");
+        assert_eq!(
+            described(0.25, Repeat::UntilStopped),
+            "until stopped at 0.25× speed"
+        );
+    }
+
+    #[test]
+    fn activities_are_clicking_or_recording_or_playing_or_none() {
         use Activity::*;
         let kinds = [
             Idle,
@@ -332,9 +453,26 @@ mod tests {
             Clicking,
             RecordingIn(1),
             Recording,
+            PlayingIn(1),
+            PlayWaitingForRelease,
+            PlayOpening,
+            Playing,
         ]
-        .map(|activity| (activity.clicking(), activity.recording()));
-        let (no, click, record) = ((false, false), (true, false), (false, true));
-        assert_eq!(kinds, [no, click, click, click, click, record, record]);
+        .map(|activity| {
+            (
+                activity.clicking(),
+                activity.recording(),
+                activity.playing(),
+            )
+        });
+        let no = (false, false, false);
+        let (click, record) = ((true, false, false), (false, true, false));
+        let play = (false, false, true);
+        assert_eq!(
+            kinds,
+            [
+                no, click, click, click, click, record, record, play, play, play, play
+            ]
+        );
     }
 }

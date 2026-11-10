@@ -1,8 +1,8 @@
 //! The tray icon: shows the controller's view and sends it what the menu
 //! asks for. It never changes the mode itself.
 
-use auto_clicker_core::controller::{Activity, Message, View};
-use ksni::menu::StandardItem;
+use auto_clicker_core::controller::{Activity, LISTED_RECORDINGS, Message, View};
+use ksni::menu::{StandardItem, SubMenu};
 use ksni::{MenuItem, ToolTip, TrayMethods};
 use tokio::sync::{mpsc, watch};
 
@@ -10,6 +10,9 @@ use tokio::sync::{mpsc, watch};
 pub struct Tray {
     view: View,
     send: mpsc::UnboundedSender<Message>,
+    /// Flips whenever the list of recordings changes, which changes the
+    /// menu's shape (see [`Tray::menu`](ksni::Tray::menu)).
+    relisted: bool,
 }
 
 /// Shows the tray icon and keeps it in step with the controller's view.
@@ -22,7 +25,7 @@ pub async fn show(
     send: mpsc::UnboundedSender<Message>,
 ) -> Result<(), ksni::Error> {
     let view = views.borrow_and_update().clone();
-    let handle = Tray { view, send }
+    let handle = Tray::new(view, send)
         .assume_sni_available(true)
         .spawn()
         .await?;
@@ -30,7 +33,7 @@ pub async fn show(
         // Ends when the controller is gone, or the tray service stopped.
         while views.changed().await.is_ok() {
             let view = views.borrow_and_update().clone();
-            if handle.update(|tray| tray.view = view).await.is_none() {
+            if handle.update(|tray| tray.show(view)).await.is_none() {
                 break;
             }
         }
@@ -39,6 +42,20 @@ pub async fn show(
 }
 
 impl Tray {
+    fn new(view: View, send: mpsc::UnboundedSender<Message>) -> Tray {
+        Tray {
+            view,
+            send,
+            relisted: false,
+        }
+    }
+
+    /// Takes the controller's latest view.
+    fn show(&mut self, view: View) {
+        self.relisted ^= self.view.recordings != view.recordings;
+        self.view = view;
+    }
+
     fn send(&self, message: Message) {
         // The controller is gone only while the daemon exits.
         let _ = self.send.send(message);
@@ -46,53 +63,97 @@ impl Tray {
 }
 
 /// One menu item: its label, the message it sends (`None`: never enabled),
-/// and whether it is enabled and shows.
+/// whether it is enabled and shows, and the items of its submenu, if it is
+/// one.
 #[derive(Debug, PartialEq, Eq)]
 struct Entry {
-    label: &'static str,
+    label: String,
     sends: Option<Message>,
     enabled: bool,
     visible: bool,
+    children: Vec<Entry>,
 }
 
-/// The menu for `view`. The items are always the same, in the same places,
-/// each with one fixed message; only which shows and which is enabled
-/// changes. The host clicks an item by its place, so a click on a menu
+impl Entry {
+    /// An item that sends `sends` when enabled.
+    fn item(label: &str, sends: Option<Message>, enabled: bool, visible: bool) -> Entry {
+        Entry {
+            label: label.to_owned(),
+            enabled: enabled && sends.is_some(),
+            sends,
+            visible,
+            children: Vec::new(),
+        }
+    }
+}
+
+/// The menu for `view`. The items are always the same, in the same places;
+/// only which shows, which is enabled and what the Play submenu's places
+/// hold changes. The host clicks an item by its place, so a click on a menu
 /// opened before the state changed still sends what that item said.
-fn entries(view: &View) -> [Entry; 7] {
+///
+/// The Play submenu's places are the exception, since what a place holds
+/// changes with the list: `relisted` adds one hidden item to it, so the
+/// menu's shape differs from before whenever the list does. The host is then
+/// told to lay the menu out again, and a click it sends for the old layout
+/// is refused rather than playing the recording that took the place.
+fn entries(view: &View, relisted: bool) -> [Entry; 8] {
     let activity = view.activity;
     let idle = activity == Activity::Idle;
-    let item = |label, sends: Option<Message>, enabled: bool, visible| Entry {
-        label,
-        enabled: enabled && sends.is_some(),
-        sends,
-        visible,
-    };
     [
-        item(
+        Entry::item(
             "Start clicking",
             Some(Message::Start),
             idle,
             !activity.clicking(),
         ),
-        item(
+        Entry::item(
             "Stop clicking",
             Some(Message::Stop),
             true,
             activity.clicking(),
         ),
-        item("Record", Some(Message::Record), idle, !activity.recording()),
-        item(
+        Entry::item("Record", Some(Message::Record), idle, !activity.recording()),
+        Entry::item(
             "Stop recording",
             Some(Message::StopRecording),
             true,
             activity.recording(),
         ),
-        // Playback comes with R02, settings with M3.
-        item("Play", None, false, true),
-        item("Settings", None, false, true),
-        item("Quit", Some(Message::Quit), true, true),
+        Entry {
+            children: recordings(view, relisted),
+            ..Entry::item("Play", None, false, !activity.playing())
+        },
+        Entry::item(
+            "Stop playing",
+            Some(Message::Stop),
+            true,
+            activity.playing(),
+        ),
+        // Settings come with M3.
+        Entry::item("Settings", None, false, true),
+        Entry::item("Quit", Some(Message::Quit), true, true),
     ]
+}
+
+/// The Play submenu: one place for each recording the controller may list,
+/// newest first, the unused ones hidden, and a line that shows when there
+/// are none. A recording can be chosen only while idle. `relisted` adds a
+/// hidden item at the end.
+fn recordings(view: &View, relisted: bool) -> Vec<Entry> {
+    let idle = view.activity == Activity::Idle;
+    let listed = (0..LISTED_RECORDINGS).map(|place| match view.recordings.get(place) {
+        Some(listed) => Entry::item(
+            &listed.label,
+            Some(Message::Play(listed.file.clone())),
+            idle,
+            true,
+        ),
+        None => Entry::item("", None, false, false),
+    });
+    let none = Entry::item("No recordings yet", None, false, view.recordings.is_empty());
+    let marker = relisted.then(|| Entry::item("", None, false, false));
+    listed.chain([none]).chain(marker).collect()
 }
 
 /// The icon for `activity`, by name from the icon theme.
@@ -100,11 +161,15 @@ fn icon_name(activity: Activity) -> &'static str {
     match activity {
         Activity::Clicking => "auto-clicker-clicking",
         Activity::Recording => "auto-clicker-recording",
+        Activity::Playing => "auto-clicker-clicking",
         Activity::Idle
         | Activity::StartingIn(_)
         | Activity::WaitingForRelease
         | Activity::Opening
-        | Activity::RecordingIn(_) => "auto-clicker-idle",
+        | Activity::RecordingIn(_)
+        | Activity::PlayingIn(_)
+        | Activity::PlayWaitingForRelease
+        | Activity::PlayOpening => "auto-clicker-idle",
     }
 }
 
@@ -122,6 +187,31 @@ fn tooltip_body(view: &View) -> String {
         .map(|line| escape(line))
         .collect::<Vec<_>>()
         .join("<br/>")
+}
+
+/// The menu item for `entry`: a submenu when it has children.
+fn item(entry: Entry) -> MenuItem<Tray> {
+    if entry.children.is_empty() {
+        return StandardItem {
+            label: entry.label,
+            enabled: entry.enabled,
+            visible: entry.visible,
+            activate: Box::new(move |tray: &mut Tray| {
+                if let Some(message) = entry.sends.clone() {
+                    tray.send(message);
+                }
+            }),
+            ..StandardItem::default()
+        }
+        .into();
+    }
+    SubMenu {
+        label: entry.label,
+        visible: entry.visible,
+        submenu: entry.children.into_iter().map(item).collect(),
+        ..SubMenu::default()
+    }
+    .into()
 }
 
 impl ksni::Tray for Tray {
@@ -164,23 +254,8 @@ impl ksni::Tray for Tray {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let mut items: Vec<MenuItem<Self>> = entries(&self.view)
-            .into_iter()
-            .map(|entry| {
-                StandardItem {
-                    label: entry.label.to_owned(),
-                    enabled: entry.enabled,
-                    visible: entry.visible,
-                    activate: Box::new(move |tray: &mut Self| {
-                        if let Some(message) = entry.sends.clone() {
-                            tray.send(message);
-                        }
-                    }),
-                    ..StandardItem::default()
-                }
-                .into()
-            })
-            .collect();
+        let entries = entries(&self.view, self.relisted);
+        let mut items: Vec<MenuItem<Self>> = entries.into_iter().map(item).collect();
         // Quit sits apart from the rest.
         items.insert(items.len().saturating_sub(1), MenuItem::Separator);
         items
@@ -201,73 +276,205 @@ impl ksni::Tray for Tray {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use auto_clicker_core::config::Config;
+    use auto_clicker_core::controller::Listed;
+    use auto_clicker_core::recording::FileName;
 
     use super::*;
 
-    fn view(activity: Activity) -> View {
+    fn file(minute: usize) -> FileName {
+        FileName::parse(&format!("2026-11-09_18-{minute:02}-00.000.json")).unwrap()
+    }
+
+    /// A view with this many recordings listed.
+    fn view_listing(activity: Activity, recordings: usize) -> View {
         let config = Config::default();
+        let recordings: Vec<Listed> = (0..recordings)
+            .map(|minute| Listed {
+                label: file(minute).label(),
+                file: file(minute),
+            })
+            .collect();
         View {
             activity,
             settings: config.clicker,
             hotkey: config.hotkeys.toggle_clicking,
             record_hotkey: config.hotkeys.toggle_recording,
+            play_hotkey: config.hotkeys.toggle_playback,
+            playback: config.playback,
+            recordings: Arc::from(recordings),
+            playing: None,
             notice: Some("a <b> & c".to_owned()),
             problems: Vec::new(),
         }
     }
 
+    fn view(activity: Activity) -> View {
+        view_listing(activity, 2)
+    }
+
     /// The visible items: label, and whether enabled.
-    fn shown(activity: Activity) -> Vec<(&'static str, bool)> {
-        entries(&view(activity))
+    fn shown(activity: Activity) -> Vec<(String, bool)> {
+        entries(&view(activity), false)
             .into_iter()
             .filter(|entry| entry.visible)
             .map(|entry| (entry.label, entry.enabled))
             .collect()
     }
 
+    fn labelled<const N: usize>(items: [(&str, bool); N]) -> Vec<(String, bool)> {
+        items
+            .into_iter()
+            .map(|(label, enabled)| (label.to_owned(), enabled))
+            .collect()
+    }
+
     #[test]
     fn the_menu_offers_what_each_state_allows() {
         use Activity::*;
+        // Play is a submenu, enabled through its items.
         let rest = [("Play", false), ("Settings", false), ("Quit", true)];
         let idle = [("Start clicking", true), ("Record", true)];
-        assert_eq!(shown(Idle), [&idle[..], &rest[..]].concat());
+        assert_eq!(
+            shown(Idle),
+            labelled(idle)
+                .into_iter()
+                .chain(labelled(rest))
+                .collect::<Vec<_>>()
+        );
         let clicking = [("Stop clicking", true), ("Record", false)];
         for busy in [StartingIn(3), WaitingForRelease, Opening, Clicking] {
-            assert_eq!(shown(busy), [&clicking[..], &rest[..]].concat(), "{busy:?}");
+            let expected: Vec<_> = labelled(clicking)
+                .into_iter()
+                .chain(labelled(rest))
+                .collect();
+            assert_eq!(shown(busy), expected, "{busy:?}");
         }
         let recording = [("Start clicking", false), ("Stop recording", true)];
         for busy in [RecordingIn(2), Recording] {
-            assert_eq!(
-                shown(busy),
-                [&recording[..], &rest[..]].concat(),
-                "{busy:?}"
-            );
+            let expected: Vec<_> = labelled(recording)
+                .into_iter()
+                .chain(labelled(rest))
+                .collect();
+            assert_eq!(shown(busy), expected, "{busy:?}");
+        }
+        let playing = [
+            ("Start clicking", false),
+            ("Record", false),
+            ("Stop playing", true),
+            ("Settings", false),
+            ("Quit", true),
+        ];
+        for busy in [PlayingIn(2), PlayWaitingForRelease, PlayOpening, Playing] {
+            assert_eq!(shown(busy), labelled(playing), "{busy:?}");
         }
     }
 
     #[test]
     fn every_item_keeps_its_place_and_message() {
         use Activity::*;
-        let messages = |activity| entries(&view(activity)).map(|entry| entry.sends);
+        let messages = |activity| entries(&view(activity), false).map(|entry| entry.sends);
         let expected = [
             Some(Message::Start),
             Some(Message::Stop),
             Some(Message::Record),
             Some(Message::StopRecording),
             None,
+            Some(Message::Stop),
             None,
             Some(Message::Quit),
         ];
-        for activity in [Idle, Clicking, Recording, RecordingIn(1)] {
+        for activity in [Idle, Clicking, Recording, RecordingIn(1), Playing] {
             assert_eq!(messages(activity), expected, "{activity:?}");
+            let places = entries(&view(activity), false)[4].children.len();
+            assert_eq!(places, LISTED_RECORDINGS + 1, "{activity:?}");
         }
     }
 
+    /// The Play submenu's visible items: label, whether enabled, and what
+    /// each sends.
+    fn play_menu(view: &View) -> Vec<(String, bool, Option<Message>)> {
+        let [_, _, _, _, play, ..] = entries(view, false);
+        play.children
+            .into_iter()
+            .filter(|entry| entry.visible)
+            .map(|entry| (entry.label, entry.enabled, entry.sends))
+            .collect()
+    }
+
     #[test]
-    fn the_icon_shows_clicking_and_recording() {
+    fn the_play_menu_lists_the_recordings_newest_first_or_says_there_are_none() {
+        let listed = |enabled| {
+            (0..2)
+                .map(|minute| {
+                    let label = format!("Recording 2026-11-09 18:{minute:02}:00");
+                    (label, enabled, Some(Message::Play(file(minute))))
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(play_menu(&view(Activity::Idle)), listed(true));
+        // A recording can be chosen only while idle.
+        for busy in [
+            Activity::Clicking,
+            Activity::Recording,
+            Activity::StartingIn(1),
+        ] {
+            assert_eq!(play_menu(&view(busy)), listed(false), "{busy:?}");
+        }
+        assert_eq!(
+            play_menu(&view_listing(Activity::Idle, 0)),
+            [("No recordings yet".to_owned(), false, None)]
+        );
+        assert_eq!(play_menu(&view_listing(Activity::Idle, 10)).len(), 10);
+    }
+
+    #[test]
+    fn the_play_menu_gives_way_to_stop_playing() {
+        use ksni::Tray as _;
+        let (send, _received) = mpsc::unbounded_channel();
+        let tray = Tray::new(view(Activity::Playing), send);
+        let shown: Vec<(String, bool)> = tray
+            .menu()
+            .iter()
+            .map(shown_item)
+            .filter(|(label, ..)| label.starts_with("Play") || label.starts_with("Stop playing"))
+            .map(|(label, _, visible, _)| (label, visible))
+            .collect();
+        assert_eq!(shown, labelled([("Play", false), ("Stop playing", true)]));
+    }
+
+    #[test]
+    fn a_changed_list_changes_the_shape_of_the_play_menu_and_nothing_else_does() {
+        use ksni::Tray as _;
+        let (send, _received) = mpsc::unbounded_channel();
+        let mut tray = Tray::new(view_listing(Activity::Idle, 10), send);
+        let places = |tray: &Tray| match &tray.menu()[4] {
+            MenuItem::SubMenu(play) => play.submenu.len(),
+            _ => 0,
+        };
+        let full = places(&tray);
+        // The state and the notice change: the same shape.
+        tray.show(view_listing(Activity::Clicking, 10));
+        assert_eq!(places(&tray), full);
+        // Another recording in every place, as after a save with ten
+        // listed: a different shape, each time.
+        let mut shifted = view_listing(Activity::Idle, 11);
+        shifted.recordings = Arc::from(&shifted.recordings[1..]);
+        tray.show(shifted.clone());
+        assert_eq!(places(&tray), full + 1);
+        tray.show(shifted);
+        assert_eq!(places(&tray), full + 1);
+        tray.show(view_listing(Activity::Idle, 10));
+        assert_eq!(places(&tray), full);
+    }
+
+    #[test]
+    fn the_icon_shows_clicking_playing_and_recording() {
         use Activity::*;
         assert_eq!(icon_name(Clicking), "auto-clicker-clicking");
+        assert_eq!(icon_name(Playing), "auto-clicker-clicking");
         assert_eq!(icon_name(Recording), "auto-clicker-recording");
         for waiting in [
             Idle,
@@ -275,8 +482,48 @@ mod tests {
             WaitingForRelease,
             Opening,
             RecordingIn(1),
+            PlayingIn(1),
+            PlayWaitingForRelease,
+            PlayOpening,
         ] {
             assert_eq!(icon_name(waiting), "auto-clicker-idle", "{waiting:?}");
+        }
+    }
+
+    /// A menu item's label, whether it is enabled and shows, and its
+    /// submenu's items.
+    type Shown = (String, bool, bool, Vec<(String, bool, bool)>);
+
+    fn standard(item: &MenuItem<Tray>) -> (String, bool, bool) {
+        match item {
+            MenuItem::Standard(item) => (item.label.clone(), item.enabled, item.visible),
+            _ => ("-".to_owned(), false, true),
+        }
+    }
+
+    fn shown_item(item: &MenuItem<Tray>) -> Shown {
+        match item {
+            MenuItem::SubMenu(menu) => (
+                menu.label.clone(),
+                menu.enabled,
+                menu.visible,
+                menu.submenu.iter().map(standard).collect(),
+            ),
+            item => {
+                let (label, enabled, visible) = standard(item);
+                (label, enabled, visible, Vec::new())
+            }
+        }
+    }
+
+    /// Clicks every item, in menu order, submenus included.
+    fn activate(items: &[MenuItem<Tray>], tray: &mut Tray) {
+        for item in items {
+            match item {
+                MenuItem::Standard(item) => (item.activate)(tray),
+                MenuItem::SubMenu(menu) => activate(&menu.submenu, tray),
+                _ => {}
+            }
         }
     }
 
@@ -284,13 +531,10 @@ mod tests {
     fn the_tray_shows_the_view_and_its_menu_sends_messages() {
         use ksni::Tray as _;
         let (send, mut received) = mpsc::unbounded_channel();
-        let mut tray = Tray {
-            view: view(Activity::Clicking),
-            send,
-        };
+        let mut tray = Tray::new(view_listing(Activity::Idle, 1), send);
         assert_eq!(tray.id(), "auto-clicker");
-        assert_eq!(tray.title(), "Auto clicker: clicking");
-        assert_eq!(tray.icon_name(), "auto-clicker-clicking");
+        assert_eq!(tray.title(), "Auto clicker: idle");
+        assert_eq!(tray.icon_name(), "auto-clicker-idle");
         // The source tree's icons in a development build, the theme's
         // otherwise.
         let path = tray.icon_theme_path();
@@ -299,33 +543,27 @@ mod tests {
         } else {
             assert_eq!(path, "");
         }
-        assert_eq!(tray.tool_tip().title, "Auto clicker: clicking");
+        assert_eq!(tray.tool_tip().title, "Auto clicker: idle");
         assert!(tray.watcher_offline(ksni::OfflineReason::No));
         let items = tray.menu();
-        let shown: Vec<(String, bool, bool)> = items
-            .iter()
-            .map(|item| match item {
-                MenuItem::Standard(item) => (item.label.clone(), item.enabled, item.visible),
-                _ => ("-".to_owned(), false, true),
-            })
-            .collect();
+        let shown: Vec<Shown> = items.iter().map(shown_item).collect();
+        let mut play_items = vec![("Recording 2026-11-09 18:00:00".to_owned(), true, true)];
+        play_items.extend((1..LISTED_RECORDINGS).map(|_| (String::new(), false, false)));
+        play_items.push(("No recordings yet".to_owned(), false, false));
+        let item = |label: &str, on, shows| (label.to_owned(), on, shows, Vec::new());
         let expected = [
-            ("Start clicking", false, false),
-            ("Stop clicking", true, true),
-            ("Record", false, true),
-            ("Stop recording", true, false),
-            ("Play", false, true),
-            ("Settings", false, true),
-            ("-", false, true),
-            ("Quit", true, true),
+            item("Start clicking", true, true),
+            item("Stop clicking", true, false),
+            item("Record", true, true),
+            item("Stop recording", true, false),
+            ("Play".to_owned(), true, true, play_items),
+            item("Stop playing", true, false),
+            item("Settings", false, true),
+            item("-", false, true),
+            item("Quit", true, true),
         ];
-        let expected = expected.map(|(label, on, shows)| (label.to_owned(), on, shows));
         assert_eq!(shown, expected);
-        for index in [0, 1, 2, 3, 7] {
-            if let MenuItem::Standard(item) = &items[index] {
-                (item.activate)(&mut tray);
-            }
-        }
+        activate(&items, &mut tray);
         tray.menu_about_to_show();
         let sent: Vec<Message> = std::iter::from_fn(|| received.try_recv().ok()).collect();
         assert_eq!(
@@ -335,6 +573,10 @@ mod tests {
                 Message::Stop,
                 Message::Record,
                 Message::StopRecording,
+                // The Play menu's unused places and its line for none send
+                // nothing, nor does Settings.
+                Message::Play(file(0)),
+                Message::Stop,
                 Message::Quit,
                 Message::MenuOpened
             ]

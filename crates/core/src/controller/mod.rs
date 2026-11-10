@@ -5,15 +5,21 @@
 //! a recording, opens the input devices or changes the mode. After every
 //! change the controller publishes a [`View`] for the tray to show.
 //!
-//! The controller runs as one future on the daemon's single thread. The
-//! clicking run, the hotkey reader and an open of the input devices are
-//! futures it polls in its own loop, so whatever happens to the controller
-//! happens to them. Every wait it has (the tray countdown, the wait for the
-//! hotkey's modifiers to come up, an open that waits on the desktop's
-//! permission dialog) is a branch of that loop's one `select!`, beside every
-//! message, so a stop or a shutdown ends it at once.
+//! The controller runs as one future on the daemon's single thread. The run
+//! (clicking, or playing a recording), the hotkey reader and an open of the
+//! input devices are futures it polls in its own loop, so whatever happens to
+//! the controller happens to them. Every wait it has (the tray countdown, the
+//! wait for the hotkey's modifiers to come up, an open that waits on the
+//! desktop's permission dialog) is a branch of that loop's one `select!`,
+//! beside every message, so a stop or a shutdown ends it at once.
+//!
+//! Clicking and playback are the two kinds of run. A start of either goes
+//! through the same states and the same open of the devices, carrying what
+//! it will run ([`Job`]), and a run of either kind is one [`Running`]: what
+//! stops one stops the other.
 
 mod hotkeys;
+mod playback;
 mod recording;
 mod session;
 mod view;
@@ -22,6 +28,7 @@ use std::future::{Future, pending, poll_fn};
 use std::mem;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
@@ -30,27 +37,38 @@ use tokio::time::{Instant, sleep_until};
 
 pub use hotkeys::{HotkeyReader, HotkeySender};
 pub use session::{Blocked, SessionFacts};
-pub use view::{Activity, View, describe};
+pub use view::{Activity, Listed, View, describe};
 
-use crate::clicker::{Ended, RunEnd, Signals, run};
+use crate::clicker::run;
 use crate::config::Config;
-use crate::hotkeys::{Action, HotkeyEvent, HotkeyStatus, Unavailable};
+use crate::hotkeys::{Action, Binding, HotkeyEvent, HotkeyStatus, Unavailable};
 use crate::input::{Input, InputBackend, InputError};
-use crate::recording::{LocalTime, RecordingFeed, RecordingSlot};
+use crate::recording::{FileName, LocalTime, RecordingFeed, RecordingSlot};
+use crate::run::{Ended, RunEnd, Signals};
 use hotkeys::HotkeySource;
+use playback::Playing;
 
 /// How long a start from the hotkey waits for the hotkey's modifiers to come
 /// up before it is cancelled.
 pub const RELEASE_WAIT: Duration = Duration::from_secs(30);
+
+/// How long playback started from the hotkey waits for the hotkey's
+/// modifiers to come up before it starts anyway.
+pub const PLAY_RELEASE_WAIT: Duration = Duration::from_secs(2);
+
+/// How many recordings the tray lists, newest first.
+pub const LISTED_RECORDINGS: usize = 10;
 
 /// What the tray, the session watcher and signal handlers ask for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Message {
     /// Start clicking after the tray countdown. Ignored unless idle.
     Start,
-    /// Stop clicking, or cancel a start that has not begun. Ignored unless
-    /// clicking or about to.
+    /// Stop clicking or playback, or cancel a start of either that has not
+    /// begun. Ignored unless one runs or is about to.
     Stop,
+    /// Play this recording after the tray countdown. Ignored unless idle.
+    Play(FileName),
     /// Start recording after the tray countdown. Ignored unless idle.
     Record,
     /// Stop and save the recording, trimming the trip to the tray, or cancel
@@ -62,8 +80,8 @@ pub enum Message {
     /// SIGINT.
     Quit,
     /// The session's state changed: why clicking and recording may not run,
-    /// or `None` when they may. Anything but `None` stops clicking, and
-    /// stops and saves a recording.
+    /// or `None` when they may. Anything but `None` stops clicking and
+    /// playback, and stops and saves a recording.
     Session(Option<Blocked>),
     /// logind asked the session to lock: stop now. The lock itself arrives
     /// as [`Message::Session`].
@@ -157,26 +175,65 @@ pub trait Platform {
     fn recordings_dir(&self) -> Option<PathBuf>;
 }
 
+/// What a start will run once it begins.
+enum Job {
+    /// The clicker, with the settings of the moment it begins.
+    Click,
+    /// A recording, already read and checked.
+    Play(Playing),
+}
+
+impl Job {
+    /// What a notice says when this start does not happen.
+    fn refused(&self) -> &'static str {
+        match self {
+            Job::Click => "Not started",
+            Job::Play(_) => "Not playing",
+        }
+    }
+
+    /// The hotkey that starts it.
+    fn hotkey(&self, config: &Config) -> Binding {
+        match self {
+            Job::Click => config.hotkeys.toggle_clicking,
+            Job::Play(_) => config.hotkeys.toggle_playback,
+        }
+    }
+
+    /// The recording it plays, as the tray names it.
+    fn playing(&self) -> Option<&str> {
+        match self {
+            Job::Click => None,
+            Job::Play(playing) => Some(playing.label()),
+        }
+    }
+}
+
 /// The controller's mode. Only the controller changes it.
 enum State<B: InputBackend> {
     Idle,
-    /// A start from the tray, clicking at this deadline.
-    Countdown(Instant),
+    /// A start from the tray, beginning at this deadline.
+    Countdown(Instant, Job),
     /// A start from the hotkey, waiting for its modifiers to come up until
     /// this deadline.
-    Release(Instant),
+    Release(Instant, Job),
     /// A start waiting for the devices to open.
-    Opening,
-    Clicking(Running<B>),
+    Opening(Job),
+    Running(Running<B>),
     /// A recording from the tray starts at this deadline.
     RecordCountdown(Instant),
     /// Recording; it stops at its time limit, this deadline.
     Recording(Instant),
 }
 
-/// A clicking run and the signals that end it.
+/// A run as the controller polls it.
+type RunFuture<B> = Pin<Box<dyn Future<Output = RunEnd<B>>>>;
+
+/// A run, clicking or playing, and the signals that end it.
 struct Running<B: InputBackend> {
-    run: Pin<Box<dyn Future<Output = RunEnd<B>>>>,
+    /// The recording it plays, as the tray names it; `None` when clicking.
+    playing: Option<String>,
+    run: RunFuture<B>,
     stop: Option<oneshot::Sender<()>>,
     shutdown: Option<oneshot::Sender<()>>,
     /// Fires when the devices are lost without a write noticing.
@@ -257,6 +314,13 @@ pub struct Controller<P: Platform> {
     /// When the tray menu last opened during the recording, on the event
     /// clock.
     menu_opened: Option<Duration>,
+    /// The newest recordings, as last listed.
+    recordings: Arc<[Listed]>,
+    /// Why the recordings could not be listed.
+    recordings_error: Option<String>,
+    /// The recording the playback hotkey plays: the last one recorded or
+    /// played. `None` until then, which means the newest.
+    current: Option<FileName>,
 }
 
 impl<P: Platform> Controller<P> {
@@ -275,6 +339,10 @@ impl<P: Platform> Controller<P> {
             settings: config.clicker,
             hotkey: config.hotkeys.toggle_clicking,
             record_hotkey: config.hotkeys.toggle_recording,
+            play_hotkey: config.hotkeys.toggle_playback,
+            playback: config.playback,
+            recordings: Arc::from([]),
+            playing: None,
             notice: None,
             problems: Vec::new(),
         });
@@ -297,6 +365,9 @@ impl<P: Platform> Controller<P> {
             rng: fastrand::Rng::new(),
             recording: RecordingSlot::new(),
             menu_opened: None,
+            recordings: Arc::from([]),
+            recordings_error: None,
+            current: None,
         };
         let links = Links {
             send,
@@ -317,6 +388,7 @@ impl<P: Platform> Controller<P> {
     /// waited for, so nothing stays pressed; a recording is stopped and
     /// saved.
     pub async fn run(mut self) {
+        self.list_recordings();
         self.start_reader();
         loop {
             self.publish();
@@ -328,7 +400,7 @@ impl<P: Platform> Controller<P> {
             self.report_sleep();
         }
         self.stop_recording(None);
-        if let State::Clicking(running) = mem::replace(&mut self.state, State::Idle) {
+        if let State::Running(running) = mem::replace(&mut self.state, State::Idle) {
             drop(running.shut_down().await);
         }
     }
@@ -375,7 +447,7 @@ impl<P: Platform> Controller<P> {
     /// and no other state sees a run that is still stopping.
     async fn finish_stopped_run(&mut self) {
         let (end, lost) = match &mut self.state {
-            State::Clicking(running) if running.stopping() => {
+            State::Running(running) if running.stopping() => {
                 ((&mut running.run).await, running.lost.take())
             }
             _ => return,
@@ -400,10 +472,14 @@ impl<P: Platform> Controller<P> {
     fn message(&mut self, message: Message) -> bool {
         match message {
             Message::Start => self.start_from_tray(),
-            Message::Stop => self.stop_clicking(),
+            Message::Stop => self.stop_run(),
+            Message::Play(file) => self.play_from_tray(&file),
             Message::Record => self.record_from_tray(),
             Message::StopRecording => self.stop_recording_from_tray(),
-            Message::MenuOpened => self.menu_opened(),
+            Message::MenuOpened => {
+                self.menu_opened();
+                self.list_recordings_while_idle();
+            }
             Message::Session(blocked) => self.session(blocked),
             Message::LockRequested => self.stop(Some(format!("Stopped: {}", Blocked::Locked))),
             Message::Sleep(notice) => {
@@ -417,16 +493,38 @@ impl<P: Platform> Controller<P> {
 
     fn hotkey(&mut self, event: HotkeyEvent) {
         match event {
+            // Any hotkey stops playback, or a start of it, and does nothing
+            // else.
+            HotkeyEvent::Fired(_) if self.playing().is_some() => self.stop(None),
             HotkeyEvent::Fired(Action::ToggleClicking) => self.toggle(),
             HotkeyEvent::Fired(Action::ToggleRecording) => self.toggle_recording(),
-            // Playback comes with R02.
-            HotkeyEvent::Fired(Action::TogglePlayback) => {}
+            HotkeyEvent::Fired(Action::TogglePlayback) => self.toggle_playback(),
             HotkeyEvent::ModifiersReleased => self.released(),
-            HotkeyEvent::ReleaseLost => self.cancel_release(format!(
-                "Not started: could not tell when the hotkey was let go; press {} again",
-                self.config.hotkeys.toggle_clicking
-            )),
+            HotkeyEvent::ReleaseLost => self.release_lost(),
             HotkeyEvent::Status(status) => self.hotkey_status_changed(status),
+        }
+    }
+
+    /// The recording that plays or is about to, as the tray names it.
+    fn playing(&self) -> Option<&str> {
+        match &self.state {
+            State::Countdown(_, job) | State::Release(_, job) | State::Opening(job) => {
+                job.playing()
+            }
+            State::Running(running) => running.playing.as_deref(),
+            State::Idle | State::RecordCountdown(_) | State::Recording(_) => None,
+        }
+    }
+
+    /// Takes what a pending start would run, leaving the controller idle;
+    /// `None`, and no change, when no start is pending.
+    fn take_start(&mut self) -> Option<Job> {
+        match mem::replace(&mut self.state, State::Idle) {
+            State::Countdown(_, job) | State::Release(_, job) | State::Opening(job) => Some(job),
+            other => {
+                self.state = other;
+                None
+            }
         }
     }
 
@@ -434,21 +532,44 @@ impl<P: Platform> Controller<P> {
     /// ran out first. A late controller can see the release and the deadline
     /// at once; the release is handled first, so it checks the time itself.
     fn released(&mut self) {
-        let State::Release(deadline) = self.state else {
+        let State::Release(deadline, _) = self.state else {
             return;
         };
-        if Instant::now() < deadline {
-            self.begin_run();
-        } else {
+        if Instant::now() >= deadline {
             self.release_expired();
+        } else if let Some(job) = self.take_start() {
+            self.begin_run(job);
         }
     }
 
+    /// The wait for the modifiers ran out: clicking does not start, since
+    /// its clicks would be Ctrl+clicks for as long as the key stays down;
+    /// playback starts anyway and says so.
     fn release_expired(&mut self) {
-        self.state = State::Idle;
-        self.notice = Some(format!(
-            "Not started: the hotkey was held for {} s; let go of it to start",
-            RELEASE_WAIT.as_secs()
+        let State::Release(..) = self.state else {
+            return;
+        };
+        match self.take_start() {
+            Some(Job::Play(playing)) => self.begin_run(Job::Play(playing.modifier_held())),
+            Some(Job::Click) => {
+                self.notice = Some(format!(
+                    "Not started: the hotkey was held for {} s; let go of it to start",
+                    RELEASE_WAIT.as_secs()
+                ));
+            }
+            None => {}
+        }
+    }
+
+    /// Whether the modifiers came up can no longer be known, so the start
+    /// waiting for them does not happen.
+    fn release_lost(&mut self) {
+        let State::Release(_, job) = &self.state else {
+            return;
+        };
+        let hotkey = job.hotkey(&self.config);
+        self.cancel_release(&format!(
+            "could not tell when the hotkey was let go; press {hotkey} again"
         ));
     }
 
@@ -459,23 +580,23 @@ impl<P: Platform> Controller<P> {
         }
         self.hotkey_status = Some(status);
         if unavailable {
-            self.cancel_release("Not started: hotkeys stopped working".to_owned());
+            self.cancel_release("hotkeys stopped working");
         }
     }
 
-    /// The hotkey: starts after its modifiers come up, cancels a start, or
-    /// stops a run.
+    /// The clicking hotkey: starts after its modifiers come up, cancels a
+    /// start, or stops a run.
     fn toggle(&mut self) {
         match &mut self.state {
             State::Idle => {
                 if self.may_start()
                     && let Some(deadline) = Instant::now().checked_add(RELEASE_WAIT)
                 {
-                    self.state = State::Release(deadline);
+                    self.state = State::Release(deadline, Job::Click);
                 }
             }
-            State::Countdown(_) | State::Release(_) | State::Opening => self.cancel_start(),
-            State::Clicking(running) => running.stop(),
+            State::Countdown(..) | State::Release(..) | State::Opening(_) => self.cancel_start(),
+            State::Running(running) => running.stop(),
             // Other hotkeys do nothing while recording.
             State::RecordCountdown(_) | State::Recording(_) => {}
         }
@@ -485,21 +606,27 @@ impl<P: Platform> Controller<P> {
         if !matches!(self.state, State::Idle) || !self.may_start() {
             return;
         }
+        self.start_after_the_tray_delay(Job::Click);
+    }
+
+    /// Begins `job` once the tray countdown is over, or at once when there
+    /// is none.
+    fn start_after_the_tray_delay(&mut self, job: Job) {
         let delay = self.config.tray_start_delay;
         if delay.is_zero() {
-            self.begin_run();
+            self.begin_run(job);
         } else if let Some(deadline) = Instant::now().checked_add(delay) {
             // The config caps the delay at an hour, so the deadline exists.
-            self.state = State::Countdown(deadline);
+            self.state = State::Countdown(deadline, job);
         }
     }
 
-    /// The tray's Stop clicking: stops a run or cancels its start; nothing
-    /// else.
-    fn stop_clicking(&mut self) {
+    /// The tray's Stop clicking and Stop playing: stops a run or cancels
+    /// its start; nothing else.
+    fn stop_run(&mut self) {
         if matches!(
             self.state,
-            State::Countdown(_) | State::Release(_) | State::Opening | State::Clicking(_)
+            State::Countdown(..) | State::Release(..) | State::Opening(_) | State::Running(_)
         ) {
             self.stop(None);
         }
@@ -510,9 +637,9 @@ impl<P: Platform> Controller<P> {
     fn stop(&mut self, notice: Option<String>) {
         match &mut self.state {
             State::Idle => return,
-            State::Countdown(_) | State::Release(_) | State::Opening => self.cancel_start(),
+            State::Countdown(..) | State::Release(..) | State::Opening(_) => self.cancel_start(),
             State::RecordCountdown(_) => self.state = State::Idle,
-            State::Clicking(running) => running.stop(),
+            State::Running(running) => running.stop(),
             State::Recording(_) => return self.stop_recording(notice),
         }
         if notice.is_some() {
@@ -530,10 +657,12 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    fn cancel_release(&mut self, notice: String) {
-        if matches!(self.state, State::Release(_)) {
+    /// Cancels a start waiting for the modifiers, saying `why` after what
+    /// did not start.
+    fn cancel_release(&mut self, why: &str) {
+        if let State::Release(_, job) = &self.state {
+            self.notice = Some(format!("{}: {why}", job.refused()));
             self.state = State::Idle;
-            self.notice = Some(notice);
         }
     }
 
@@ -564,9 +693,13 @@ impl<P: Platform> Controller<P> {
     fn deadline(&mut self) {
         let now = Instant::now();
         match self.state {
-            State::Countdown(deadline) if now >= deadline => self.begin_run(),
+            State::Countdown(deadline, _) if now >= deadline => {
+                if let Some(job) = self.take_start() {
+                    self.begin_run(job);
+                }
+            }
             // Its deadline is the only time a release wait wakes by itself.
-            State::Release(_) => self.release_expired(),
+            State::Release(..) => self.release_expired(),
             State::RecordCountdown(deadline) if now >= deadline => self.begin_recording(None),
             State::Recording(limit) if now >= limit => self.recording_limit_reached(),
             // A second of a countdown passed; the view shows it.
@@ -578,21 +711,21 @@ impl<P: Platform> Controller<P> {
     /// the next whole second of a countdown, or a recording's time limit.
     fn next_deadline(&self) -> Option<Instant> {
         match self.state {
-            State::Countdown(deadline) | State::RecordCountdown(deadline) => {
+            State::Countdown(deadline, _) | State::RecordCountdown(deadline) => {
                 Some(next_second(deadline, Instant::now()))
             }
-            State::Release(deadline) | State::Recording(deadline) => Some(deadline),
-            State::Idle | State::Opening | State::Clicking(_) => None,
+            State::Release(deadline, _) | State::Recording(deadline) => Some(deadline),
+            State::Idle | State::Opening(_) | State::Running(_) => None,
         }
     }
 
-    /// Starts clicking, or waits for the devices to open first when no
-    /// devices are open.
-    fn begin_run(&mut self) {
+    /// Starts `job`, or waits for the devices to open first when no devices
+    /// are open.
+    fn begin_run(&mut self, job: Job) {
         match self.input.take() {
-            Some(input) => self.run_with(input),
+            Some(input) => self.run_with(input, job),
             None => {
-                self.state = State::Opening;
+                self.state = State::Opening(job);
                 if self.opening.is_none() {
                     self.open();
                 }
@@ -600,19 +733,30 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    fn run_with(&mut self, input: Input<P::Backend>) {
-        self.notice = None;
+    fn run_with(&mut self, input: Input<P::Backend>, job: Job) {
         let loss = self.platform.input_lost(&input);
         let (stop, stop_signal) = oneshot::channel();
         let (shutdown, shutdown_signal) = oneshot::channel();
-        let settings = self.config.clicker;
-        let rng = self.rng.fork();
         let signals = Signals {
             stop: signal(stop_signal),
             shutdown: signal(shutdown_signal),
         };
-        self.state = State::Clicking(Running {
-            run: Box::pin(async move { run(input, &settings, rng, signals).await }),
+        self.notice = match &job {
+            Job::Click => None,
+            Job::Play(playing) => playing.start_notice(),
+        };
+        let playing = job.playing().map(str::to_owned);
+        let run: RunFuture<P::Backend> = match job {
+            Job::Click => {
+                let settings = self.config.clicker;
+                let rng = self.rng.fork();
+                Box::pin(async move { run(input, &settings, rng, signals).await })
+            }
+            Job::Play(playing) => playing.run(input, signals),
+        };
+        self.state = State::Running(Running {
+            playing,
+            run,
             stop: Some(stop),
             shutdown: Some(shutdown),
             loss,
@@ -623,7 +767,7 @@ impl<P: Platform> Controller<P> {
     /// The devices stopped working under a run: it stops at once, and its
     /// end reports why.
     fn devices_lost(&mut self, err: InputError) {
-        if let State::Clicking(running) = &mut self.state {
+        if let State::Running(running) = &mut self.state {
             running.lost = Some(err);
             running.stop();
         }
@@ -631,13 +775,22 @@ impl<P: Platform> Controller<P> {
 
     /// `lost` says why the devices were lost under the run, if they were.
     fn run_ended(&mut self, end: RunEnd<P::Backend>, lost: Option<InputError>) {
-        self.state = State::Idle;
+        let playing = match mem::replace(&mut self.state, State::Idle) {
+            State::Running(running) => running.playing,
+            _ => None,
+        };
         let devices_lost = lost.is_some();
         match (lost, end.result) {
             (Some(err), _) | (None, Err(err)) => {
-                self.notice = Some(format!("Clicking stopped: {err}"));
+                let what = playing.map_or("Clicking", |_| "Playback");
+                self.notice = Some(format!("{what} stopped: {err}"));
             }
-            (None, Ok(Ended::Finished)) => self.notice = Some("Finished every action".to_owned()),
+            (None, Ok(Ended::Finished)) => {
+                self.notice = Some(match playing {
+                    Some(recording) => format!("Finished playing {recording}"),
+                    None => "Finished every action".to_owned(),
+                });
+            }
             (None, Ok(Ended::Stopped | Ended::ShutDown)) => {}
         }
         // Lost devices are closed, and so are devices that live per run.
@@ -664,33 +817,40 @@ impl<P: Platform> Controller<P> {
     /// An open ended: a start waiting for it begins, or says why it cannot.
     fn opened(&mut self, opened: Result<Input<P::Backend>, InputError>) {
         self.opening = None;
-        let waiting = matches!(self.state, State::Opening);
-        if waiting {
-            self.state = State::Idle;
-        }
-        self.keep_opened(opened, waiting);
+        let waiting = match self.state {
+            State::Opening(_) => self.take_start(),
+            _ => None,
+        };
+        self.keep_opened(opened, waiting.as_ref());
         if P::LIFETIME == InputLifetime::Kept {
             self.start_reader();
         }
-        if waiting && let Some(input) = self.input.take() {
-            self.run_with(input);
+        if let Some(job) = waiting
+            && let Some(input) = self.input.take()
+        {
+            self.run_with(input, job);
         }
     }
 
-    /// Keeps what an open gave, or says why it failed. Per-run devices with
-    /// no start waiting for them close again at once.
-    fn keep_opened(&mut self, opened: Result<Input<P::Backend>, InputError>, waiting: bool) {
+    /// Keeps what an open gave, or says why it failed. `waiting` is the
+    /// start that waits for the devices; per-run devices with none waiting
+    /// close again at once.
+    fn keep_opened(
+        &mut self,
+        opened: Result<Input<P::Backend>, InputError>,
+        waiting: Option<&Job>,
+    ) {
         let kept = P::LIFETIME == InputLifetime::Kept;
         match opened {
             Ok(input) => {
                 self.input_error = None;
-                if waiting || kept {
+                if waiting.is_some() || kept {
                     self.input = Some(input);
                 }
             }
             Err(err) => {
-                if waiting {
-                    self.notice = Some(format!("Not started: {err}"));
+                if let Some(job) = waiting {
+                    self.notice = Some(format!("{}: {err}", job.refused()));
                 }
                 if kept {
                     self.input_error = Some(err.to_string());
@@ -717,6 +877,10 @@ impl<P: Platform> Controller<P> {
             settings: self.config.clicker,
             hotkey: self.config.hotkeys.toggle_clicking,
             record_hotkey: self.config.hotkeys.toggle_recording,
+            play_hotkey: self.config.hotkeys.toggle_playback,
+            playback: self.config.playback,
+            recordings: Arc::clone(&self.recordings),
+            playing: self.playing().map(str::to_owned),
             notice: self.notice.clone(),
             problems: self.problems(),
         };
@@ -730,14 +894,19 @@ impl<P: Platform> Controller<P> {
     }
 
     fn activity(&self) -> Activity {
+        let playing = self.playing().is_some();
+        let either = |clicking, playback| if playing { playback } else { clicking };
         match self.state {
             State::Idle => Activity::Idle,
-            State::Countdown(deadline) => Activity::StartingIn(whole_seconds(
-                deadline.saturating_duration_since(Instant::now()),
-            )),
-            State::Release(_) => Activity::WaitingForRelease,
-            State::Opening => Activity::Opening,
-            State::Clicking(_) => Activity::Clicking,
+            State::Countdown(deadline, _) => {
+                let seconds = whole_seconds(deadline.saturating_duration_since(Instant::now()));
+                either(Activity::StartingIn(seconds), Activity::PlayingIn(seconds))
+            }
+            State::Release(..) => {
+                either(Activity::WaitingForRelease, Activity::PlayWaitingForRelease)
+            }
+            State::Opening(_) => either(Activity::Opening, Activity::PlayOpening),
+            State::Running(_) => either(Activity::Clicking, Activity::Playing),
             State::RecordCountdown(deadline) => Activity::RecordingIn(whole_seconds(
                 deadline.saturating_duration_since(Instant::now()),
             )),
@@ -758,18 +927,28 @@ impl<P: Platform> Controller<P> {
             .input_error
             .as_ref()
             .map(|err| format!("Clicking cannot start: {err}"));
-        [self.config_error.clone(), hotkeys, blocked, input]
-            .into_iter()
-            .flatten()
-            .collect()
+        let recordings = self
+            .recordings_error
+            .as_ref()
+            .map(|err| format!("The recordings cannot be listed: {err}"));
+        [
+            self.config_error.clone(),
+            hotkeys,
+            blocked,
+            input,
+            recordings,
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 }
 
-/// The end of the clicking run, or else the loss of its devices once the
+/// The end of the run, or else the loss of its devices once the
 /// run's own writes have not reported it; never resolves while nothing runs.
 fn run_wake<B: InputBackend>(state: &mut State<B>) -> impl Future<Output = Wake<B>> + '_ {
     poll_fn(move |cx| {
-        let State::Clicking(running) = state else {
+        let State::Running(running) = state else {
             return Poll::Pending;
         };
         if let Poll::Ready(end) = running.run.as_mut().poll(cx) {
