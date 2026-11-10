@@ -7,7 +7,9 @@ Reads PREFIX.spike (the `capture` command's output) for each capture's start
 CLOCK_MONOTONIC, and PREFIX.wayland for the window's wl_pointer motion and
 button events, whose time argument is on the same clock. Prints how many of
 those events fell inside a capture (from activation up to, not including,
-the millisecond input was handed back) and how many outside.
+the millisecond input was handed back) and how many outside. Wayland's
+times are 32-bit milliseconds, which wrap after 49.7 days of uptime; the
+comparison assumes a machine up for less than that.
 """
 
 import re
@@ -15,7 +17,7 @@ import sys
 
 STAMP = r"^\[(\d+)\.\d+\] "
 ACTIVATED = re.compile(STAMP + "activated")
-RELEASED = re.compile(STAMP + "released capture")
+RELEASED = re.compile(STAMP + "released capture: Ok")
 POINTER = re.compile(r"wl_pointer[#@]\d+\.(?:motion|button)\((?:\d+, )?(\d+),")
 
 
@@ -24,11 +26,16 @@ def stamps(pattern, text):
 
 
 def captures(spike_log):
+    """Each capture's (start, end). Exits when a capture has no successful
+    hand-back, since its events could not be placed."""
     with open(spike_log, encoding="utf-8") as log:
         text = log.read()
     starts = stamps(re.compile(ACTIVATED.pattern, re.M), text)
     ends = stamps(re.compile(RELEASED.pattern, re.M), text)
-    return list(zip(starts, ends))
+    spans = list(zip(starts, ends))
+    if len(starts) != len(ends) or any(end < start for start, end in spans):
+        sys.exit(f"inconclusive: {len(starts)} activations, {len(ends)} successful hand-backs")
+    return spans
 
 
 def pointer_times(wayland_log):

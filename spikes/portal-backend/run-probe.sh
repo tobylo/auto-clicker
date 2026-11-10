@@ -5,11 +5,16 @@
 # COMMAND once the window is active, then closes the window. Writes
 # PREFIX.window (the window's own lines), PREFIX.wayland (the raw Wayland
 # events it received, the ground truth for presses and releases) and
-# PREFIX.spike (COMMAND's output). Run it under the spike lock.
+# PREFIX.spike (COMMAND's output). Key codes are removed from both window
+# logs before they reach the disk: whatever is typed while the window has
+# focus is never stored. Run it under the spike lock.
 set -u
 prefix=$1
 shift
-WAYLAND_DEBUG=1 python3 probe_window.py >"$prefix.window" 2>"$prefix.wayland" &
+# `key 30` -> `key`; wl_keyboard.key(serial, time, 30, 1) -> (serial, time, ?, 1)
+WAYLAND_DEBUG=1 python3 probe_window.py \
+	> >(sed -u -E 's/^key [0-9]+/key/' >"$prefix.window") \
+	2> >(sed -u -E 's/(wl_keyboard[#@][0-9]+\.key\([0-9]+, [0-9]+, )[0-9]+/\1?/' >"$prefix.wayland") &
 window=$!
 trap 'kill "$window" 2>/dev/null; wait "$window" 2>/dev/null' EXIT
 for _ in $(seq 100); do

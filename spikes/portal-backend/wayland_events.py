@@ -11,7 +11,7 @@ import re
 import sys
 
 BUTTON = re.compile(r"wl_pointer[#@]\d+\.button\(\d+, (\d+), (\d+), (\d+)\)")
-KEY = re.compile(r"wl_keyboard[#@]\d+\.key\(\d+, (\d+), \d+, (\d+)\)")
+KEY = re.compile(r"wl_keyboard[#@]\d+\.key\(\d+, (\d+), (?:\d+|\?), (\d+)\)")
 OTHER = re.compile(r"wl_pointer[#@]\d+\.(enter|leave|axis_value120|axis_discrete)\(")
 BTN_LEFT = 272
 STATES = {"0": "up", "1": "down", "2": "repeat"}

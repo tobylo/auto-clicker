@@ -27,7 +27,7 @@ commands:
   output TOKEN_FILE park              pointer to the centre of the first output
   output TOKEN_FILE grant             start a session only (the permission)
   shortcuts list|bind|rebind|configure SECS
-                                      list, register Ctrl+F6/F7/F8 (rebind: Ctrl+Shift+F6/F7/F8),
+                                      list, register Ctrl+F6/F7/F8 (rebind: Ctrl+Shift+F6, Ctrl+F10, Ctrl+F11),
                                       configure: open the settings UI,
                                       then print activations
   capture SECS                        InputCapture: barrier at the top edge";

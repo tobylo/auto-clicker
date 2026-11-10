@@ -63,10 +63,16 @@ struct Evdev {
     readable: usize,
     denied: usize,
     other: usize,
+    /// Why `/dev/input` could not be listed, so that a failed scan is never
+    /// read as "no devices".
+    unlisted: Option<String>,
 }
 
 impl std::fmt::Display for Evdev {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(err) = &self.unlisted {
+            return write!(f, "could not list /dev/input: {err}");
+        }
         let total = self.readable + self.denied + self.other;
         write!(
             f,
@@ -81,8 +87,20 @@ fn evdev() -> Evdev {
         readable: 0,
         denied: 0,
         other: 0,
+        unlisted: None,
     };
-    for path in event_nodes() {
+    let nodes = match event_nodes() {
+        Ok(nodes) => nodes,
+        Err(err) => {
+            counts.unlisted = Some(err.to_string());
+            return counts;
+        }
+    };
+    for node in nodes {
+        let Ok(path) = node else {
+            counts.other += 1;
+            continue;
+        };
         match access(File::open(&path)) {
             Access::Granted => counts.readable += 1,
             Access::Denied => counts.denied += 1,
@@ -92,15 +110,14 @@ fn evdev() -> Evdev {
     counts
 }
 
-fn event_nodes() -> Vec<std::path::PathBuf> {
-    let Ok(entries) = std::fs::read_dir("/dev/input") else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| is_event_node(path))
-        .collect()
+/// The event nodes in `/dev/input`; an entry that could not be read is an
+/// `Err` and counts as an error, not as a missing device.
+fn event_nodes() -> std::io::Result<Vec<std::io::Result<std::path::PathBuf>>> {
+    let entries = std::fs::read_dir("/dev/input")?;
+    Ok(entries
+        .map(|entry| entry.map(|e| e.path()))
+        .filter(|path| path.as_ref().map_or(true, |p| is_event_node(p)))
+        .collect())
 }
 
 fn is_event_node(path: &std::path::Path) -> bool {

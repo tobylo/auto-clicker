@@ -7,7 +7,7 @@ Status: accepted (X02, #8, 2026-11-10). Plans M4: P01 (#19), P02 (#20), P03 (#21
 | Area | Result | What M4 builds |
 | --- | --- | --- |
 | Output (RemoteDesktop + libei) | **Works** | `InputBackend` on `ashpd` + `reis`, with a restore token so the prompt shows once |
-| Hotkeys (GlobalShortcuts) | **Works, with limits** | Bind on every start; rebinding goes through KDE's shortcut settings, not the app; the program's own key output triggers its hotkeys |
+| Hotkeys (GlobalShortcuts) | **Works, with limits** | Bind on every start; rebinding goes through KDE's shortcut settings, not the app. The program's own key output triggers its hotkeys: P02 must stop that, with a test, before portal hotkeys run beside any key output |
 | Recording (InputCapture) | **Not usable for recording** | Record is disabled on the portal backend (P03's default) |
 | Detection | **Works** | One result per capability (output, hotkeys, recording), not one backend for everything |
 
@@ -96,7 +96,7 @@ Writes check the device table: a write after the session ended returned "no resu
 ./run-unit.sh shortcuts bind 200       # dialog; accept (owner)
 ./run-unit.sh shortcuts list 150       # new session, no bind
 ./run-unit.sh shortcuts bind 150       # new session, bind again
-./run-unit.sh shortcuts rebind 5       # ask for Ctrl+Shift+F6/F7/F8
+./run-unit.sh shortcuts rebind 5       # ask for Ctrl+Shift+F6, Ctrl+F10, Ctrl+F11
 ./run-unit.sh shortcuts configure 240  # ConfigureShortcuts
 ```
 
@@ -104,8 +104,8 @@ Writes check the device table: a write after the session ended returned "no resu
 - **Activations.** Ctrl+F6 and Ctrl+F8 arrived as `Activated` on key down and `Deactivated` on key up, on the desktop and **in fullscreen Minecraft**. Every signal carried timestamp 0. Whether a bound shortcut is also withheld from the focused window was not measured (the game binds nothing to these keys).
 - **Conflict.** Ctrl+F7 is KWin's own default for "Toggle Present Windows (Window class)". Pressing it opened Present Windows and never reached the program, although the portal kept reporting "Ctrl+F7" as the trigger. The program cannot tell from the portal that a binding is dead. **D6's default Ctrl+F7 collides with a stock Plasma shortcut**; Ctrl+F9 and Ctrl+F10 are taken too.
 - **Persistence.** A new session in a new process listed the three shortcuts without binding, but **received no activations** until it called `BindShortcuts` again. That second bind answered in under a second **with no dialog**. The daemon binds on every start; the prompt appears once.
-- **Rebinding.** `BindShortcuts` with other preferred triggers in a later session changed nothing: the answer and the config still held the first triggers. The app cannot change a binding. `ConfigureShortcuts` (version 2) opened System Settings on the program's shortcuts. The owner changed recording to Ctrl+Shift+F7 there, the session received `ShortcutsChanged` with the new trigger, and Ctrl+Shift+F7 then activated it.
-- **The program's own input.** Ctrl+F6 sent through libei activated the `clicking` shortcut. An activation carries no device, so the portal backend cannot tell its own key output from the user's by device identity (AGENTS.md: "The program never reacts to itself").
+- **Rebinding.** `BindShortcuts` with other preferred triggers (Ctrl+Shift+F6, which is free, Ctrl+F10 and Ctrl+F11) in a later session changed nothing: the answer and the config still held the first triggers. The app cannot change a binding. `ConfigureShortcuts` (version 2) opened System Settings on the program's shortcuts. The owner changed recording to Ctrl+Shift+F7 there, the session received `ShortcutsChanged` with the new trigger, and Ctrl+Shift+F7 then activated it.
+- **The program's own input.** Ctrl+F6 sent through libei activated the `clicking` shortcut. An activation carries no device, so the portal backend cannot tell its own key output from the user's by device identity (AGENTS.md: "The program never reacts to itself"). Playing a recording that contains a hotkey would trigger it, for example stopping its own playback. This blocks portal hotkeys alongside key output until P02 meets the invariant another way, with a test that the program's own output of a bound combination triggers nothing. How is P02's open question.
 
 ## Recording: InputCapture takes input from the game
 

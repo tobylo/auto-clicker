@@ -32,11 +32,11 @@ Wrap anything that injects input or opens a portal session in `flock /tmp/auto-c
 | `output TOKEN combo` | Ctrl+F6 through libei, to test whether GlobalShortcuts reacts to the program's own input. |
 | `output TOKEN locked` | Relative motion and clicks for a game that has locked the pointer. |
 | `output TOKEN grant` | Starts a session and closes it: the permission prompt alone. |
-| `shortcuts list\|bind\|rebind\|configure SECS` | Lists the session's shortcuts, binds Ctrl+F6/F7/F8 (`rebind`: asks for Ctrl+Shift+F6/F7/F8 instead; `configure`: binds, then calls ConfigureShortcuts), then prints activations and changes for SECS. |
+| `shortcuts list\|bind\|rebind\|configure SECS` | Lists the session's shortcuts, binds Ctrl+F6/F7/F8 (`rebind`: asks for Ctrl+Shift+F6, Ctrl+F10 and Ctrl+F11 instead; `configure`: binds, then calls ConfigureShortcuts), then prints activations and changes for SECS. |
 | `capture SECS` | InputCapture with a pointer barrier along the top edge. It prints event kinds and counts, never key codes, and hands input back 3 s after each activation. |
 
 `hold.sh WHAT HOW` runs one hold case and sends the SIGKILL itself for `kill`. `capture_window.py PREFIX` counts the probe window's pointer events inside and outside each capture of a `capture` run.
 
-`run-probe.sh PREFIX COMMAND…` opens the probe window with `WAYLAND_DEBUG=1` and runs the command while the window has focus. `wayland_events.py PREFIX.wayland` reads the raw `wl_pointer.button` and `wl_keyboard.key` events from that log: these show what the window received, including releases sent by the compositor.
+`run-probe.sh PREFIX COMMAND…` opens the probe window with `WAYLAND_DEBUG=1` and runs the command while the window has focus. It strips key codes from both logs before they are written, so nothing typed into the window is stored. The record's key-code check (`KEY_A` arriving as 30) was made before that filter existed, from runs where only the spike typed. `wayland_events.py PREFIX.wayland` reads the raw `wl_pointer.button` and `wl_keyboard.key` events from that log: these show what the window received, including releases sent by the compositor.
 
 Every run carries `--deadline` (60 s by default) and `run-unit.sh` sets `RuntimeMaxSec`, so a lost SSH session cannot leave the spike holding input.
