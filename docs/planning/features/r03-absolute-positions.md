@@ -28,7 +28,7 @@ These hold everywhere below and are stated once.
 
 **Recording.**
 - While a recording runs, a KWin script reports `workspace.cursorPos` (whole logical px) once at load and on every change that differs from the last one sent. The daemon stamps each report on the event clock when it arrives.
-- The recorder writes positions as events of their own, beside the relative moves it already writes. It keeps at most one position per millisecond, the latest; a press or release ends that millisecond, as it already ends the sum of relative motion, so the position before a click is never replaced by one after it.
+- The recorder writes positions as events of their own, beside the relative moves it already writes. It keeps at most one position per millisecond, the latest; a press, a release or a turn of the wheel ends that millisecond, so the position before a click or a scroll is never replaced by one after it.
 - Events are ordered by time, not by arrival. A report is never stamped earlier than the move that caused it, so an input event read late goes before the positions stamped after it, where today it would be moved forward.
 - A recording has one layout: the current one at its start. Positions are written only while the current layout is known and equal to it. So a recording started while the layout is unknown has no positions; a layout change ends them for good or until the layout is the recording's again; and after a KWin restart they resume only once the new layout script has reported the same layout.
 - An idle recording still saves nothing: positions alone do not make a recording. The trip to the tray is trimmed as today; positions inside the trip go with its motion.
@@ -38,7 +38,7 @@ These hold everywhere below and are stated once.
 - Otherwise the whole run uses relative motion, as R02 does. When the recording holds positions that cannot be used, the tray tooltip says why while it plays; a recording without positions plays with nothing new shown.
 - When positions are used, each is sent as an absolute move to `clamp(round(x * 65536 / W), 0, 65535)` (likewise y with H), W and H being the size of the current layout's bounding box (decision 0001's formula).
 - A relative move is covered when a position follows it within 5 ms in the recording. A covered move is not sent. Every other relative move is sent (a locked pointer, KWin restarting, the pointer pushed against an edge).
-- A press or release is never played between a covered move and the position covering it: that position is sent first, at the press's time. A click on a pointer that has rested longer than the delivery delay (about 1 ms) therefore lands on its recorded pixel; a click made while the pointer still moves lands within what the pointer travels in about a millisecond.
+- A press, a release or a turn of the wheel is never played between a covered move and the position covering it: that position is sent first, at that event's time. A scroll acts on the window under the pointer, as a click does. A click on a pointer that has rested longer than the delivery delay (about 1 ms) therefore lands on its recorded pixel; a click made while the pointer still moves lands within what the pointer travels in about a millisecond.
 - If the current layout changes or becomes unknown while a playback that uses positions runs, the controller stops it and says why. A relative-only playback carries on.
 
 **KWin scripts.**
@@ -60,7 +60,7 @@ Defaults (reviewed; go ahead without asking):
 5. **Trust:** a call is accepted only when its sender is the current owner of `org.kde.KWin` and it carries the token baked into the script at that load. This guards against stale scripts and stray callers. It is not a boundary against other processes of the same user, which can load KWin scripts of their own (decision 0001).
 6. **Stored data:** logical positions, and per output its rectangle and scale, without names. Scale is stored, not compared: logical positions do not depend on it. Decision 0001's "playback must compare every output's rectangle and scale" is replaced by owner decision 1.
 7. **Format:** version 2 is version 1 plus a `layout` field and an `"at"` event, under I1 and I2. A recording has either both a layout and at least one position (version 2) or neither (version 1, as written today, so older builds still read it). Versions 1 and 2 are read; a version 1 file with `layout` or `"at"` is refused. Version 2 is fixed when R03a merges: a later change takes a new version number.
-8. **Skip rule:** the 5 ms window, with presses and releases kept after their position, as under "Playback". The file keeps raw moves and positions, so the rule can change without re-recording. The two errors are not alike: a desktop move wrongly sent is corrected by the next position, while a game move wrongly skipped (within 5 ms before an unlock) is a small lasting view error.
+8. **Skip rule:** the 5 ms window, with presses, releases and wheel turns kept after their position, as under "Playback". The file keeps raw moves and positions, so the rule can change without re-recording. The two errors are not alike: a desktop move wrongly sent is corrected by the next position, while a game move wrongly skipped (within 5 ms before an unlock) is a small lasting view error.
 9. **Where it runs:** zbus handlers must be `Send` and run in order (no task per call), and the recording slot lives on the controller's thread. The handler stamps the call and passes it on; a watcher polled on the daemon's thread beside the controller feeds the recorder through the existing `RecordingFeed`, woken by its change counter and by calls, never by a timer. The controller remains the only one that starts or stops a recording.
 10. **Layout check at play start** is one comparison against the current layout (I4): no new wait before playback.
 
@@ -68,7 +68,7 @@ Defaults (reviewed; go ahead without asking):
 
 | Slice | Holds | Size |
 | --- | --- | --- |
-| R03a: positions in the core (#51) | Format version 2; the recorder takes the current layout and positions; tray trim; playback's plan (absolute moves, covered moves, presses after their position, the layout rule); `Platform` gives the current layout (unknown by default); the controller's tooltip and its stop on a layout change. Tested against fakes only | about 1,400 lines |
+| R03a: positions in the core (#51) | Format version 2; the recorder takes the current layout and positions; tray trim; playback's plan (absolute moves, covered moves, presses and wheel turns after their position, the layout rule); `Platform` gives the current layout (unknown by default); the controller's tooltip and its stop on a layout change. Tested against fakes only | about 1,400 lines |
 | R03b: positions from KWin (#52) | New crate `backend-kwin`: the two scripts, loading and unloading, the receiver, the watcher; daemon wiring, cleanup at start, unload at exit; Plasma checks; README, map (D3, D7) and decision record | about 1,400 lines |
 
 R03a comes first and changes nothing a user can see: no platform reports a layout yet, so no recording gets positions.
@@ -78,7 +78,7 @@ R03a comes first and changes nothing a user can see: no platform reports a layou
 R03a, each a test against the fake backend:
 1. A version 1 recording plays exactly as before, with nothing new in the tooltip.
 2. A recording with positions plays them as absolute moves at their times, does not send covered moves and sends the others.
-3. A press between a move and the position covering it is played after that position; a position before a press survives a later one in the same millisecond.
+3. A press, a release and a wheel turn between a move and the position covering it are each played after that position; a position before one of them survives a later one in the same millisecond.
 4. A layout that moved or lost an output the recording used falls back to relative motion and says so; an added output beside unchanged ones does not; an unknown layout falls back.
 5. The current layout changing or becoming unknown during a playback that uses positions stops it at once, with nothing pressed (time-bounded).
 6. Format: version 2 round-trips; a recording without positions is written as version 1; the refusals of decision 7, I1 and I2 each have a fixture.
