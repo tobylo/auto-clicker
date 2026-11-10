@@ -8,6 +8,7 @@
 //! fast it comes back. While logind is gone (restarting), starts are refused.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::time::Duration;
 
 use auto_clicker_core::controller::{Blocked, Message, SessionFacts};
@@ -109,18 +110,7 @@ enum End {
 /// refused with the reason until logind next changes owner, and then it is
 /// followed afresh. Nothing is retried on a timer.
 async fn watch_logind(send: &mpsc::UnboundedSender<Message>) -> zbus::Result<()> {
-    let connect = connection::Builder::address(SYSTEM_BUS)?
-        .method_timeout(CALL_TIMEOUT)
-        .build();
-    // The method timeout bounds calls, not connecting.
-    let bus = tokio::time::timeout(CALL_TIMEOUT, connect)
-        .await
-        .map_err(|_| zbus::Error::Failure("the system bus did not answer".to_owned()))??;
-    // Subscribed before anything is read, so no restart goes unseen.
-    let mut owners = DBusProxy::new(&bus)
-        .await?
-        .receive_name_owner_changed_with_args(&[(0, LOGIND)])
-        .await?;
+    let (bus, mut owners) = bounded("connecting", connect()).await?;
     loop {
         let (reason, back) = match follow_once(&bus, send, &mut owners).await {
             Ok(End::ControllerGone) => return Ok(()),
@@ -139,13 +129,38 @@ async fn watch_logind(send: &mpsc::UnboundedSender<Message>) -> zbus::Result<()>
     }
 }
 
+/// The system bus, and logind's name changes, subscribed to before anything
+/// is read so no restart goes unseen.
+async fn connect() -> zbus::Result<(Connection, NameOwnerChangedStream)> {
+    let bus = connection::Builder::address(SYSTEM_BUS)?
+        .method_timeout(CALL_TIMEOUT)
+        .build()
+        .await?;
+    let owners = DBusProxy::new(&bus)
+        .await?
+        .receive_name_owner_changed_with_args(&[(0, LOGIND)])
+        .await?;
+    Ok((bus, owners))
+}
+
+/// `step`, given `CALL_TIMEOUT`: zbus's method timeout bounds method calls,
+/// but not connecting or subscribing to signals.
+async fn bounded<T>(what: &str, step: impl Future<Output = zbus::Result<T>>) -> zbus::Result<T> {
+    tokio::time::timeout(CALL_TIMEOUT, step)
+        .await
+        .map_err(|_| zbus::Error::Failure(format!("no answer while {what}")))?
+}
+
 /// Subscribes to one logind instance and follows it.
 async fn follow_once(
     bus: &Connection,
     send: &mpsc::UnboundedSender<Message>,
     owners: &mut NameOwnerChangedStream,
 ) -> zbus::Result<End> {
-    Logind::subscribe(bus, send).await?.follow(owners).await
+    bounded("subscribing", Logind::subscribe(bus, send))
+        .await?
+        .follow(owners)
+        .await
 }
 
 /// Waits until logind is on the bus again.
@@ -262,7 +277,9 @@ impl<'a> Logind<'a> {
                 };
                 let told = match step(&mut self.facts, &path, change) {
                     Step::Tell(message) => self.tell(message),
-                    Step::Switch(path) => self.switch_to(path).await?,
+                    Step::Switch(path) => {
+                        bounded("switching sessions", self.switch_to(path)).await?
+                    }
                     Step::LogindGone { back } => return Ok(End::LogindGone { back }),
                     Step::Ignore => true,
                 };

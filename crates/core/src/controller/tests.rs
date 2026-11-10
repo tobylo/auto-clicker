@@ -53,6 +53,9 @@ struct Record {
     failing_opens: usize,
     /// Readers send this and return, instead of running until dropped.
     reader_ends_with: Option<HotkeyEvent>,
+    /// Readers are always ready, as under a flood of key events, and spend
+    /// the task's budget on every poll without sending anything.
+    busy_readers: bool,
 }
 
 #[derive(Clone, Default)]
@@ -195,16 +198,23 @@ impl Platform for FakePlatform {
 
     fn read_hotkeys(&mut self, own: Option<&Input<Devices>>, send: HotkeySender) -> HotkeyReader {
         let own = own.map(|input| input.backend().id);
-        let (n, ends_with) = self.0.with(|r| {
+        let (n, ends_with, busy) = self.0.with(|r| {
             r.steps.push(Step::ReaderStarted(own));
             r.senders.push(send.clone());
-            (r.senders.len() - 1, r.reader_ends_with.clone())
+            (
+                r.senders.len() - 1,
+                r.reader_ends_with.clone(),
+                r.busy_readers,
+            )
         });
         let note = DropNote(self.0.clone(), n);
         Box::pin(async move {
             let _note = note;
             match ends_with {
                 Some(event) => send.send(event),
+                None if busy => loop {
+                    tokio::task::consume_budget().await;
+                },
                 None => pending().await,
             }
         })
@@ -265,6 +275,17 @@ impl Daemon {
     /// the clock.
     async fn settle(&self) {
         for _ in 0..20 {
+            yield_now().await;
+        }
+    }
+
+    /// Yields until `done` holds, at most 1000 times: bounded by polls, since
+    /// a controller kept busy never lets the paused clock move.
+    async fn settle_until(&self, done: impl Fn(&Daemon) -> bool) {
+        for _ in 0..1000 {
+            if done(self) {
+                return;
+            }
             yield_now().await;
         }
     }
@@ -818,6 +839,47 @@ async fn a_counted_run_finishes_by_itself() {
         d.settle().await;
         d.assert_idle_after(&[LEFT_DOWN, LEFT_UP, LEFT_DOWN, LEFT_UP]);
         assert_eq!(d.notice(), "Finished every action");
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_busy_reader_starves_neither_deadlines_nor_stops() {
+    local(async {
+        let shared = Shared::default();
+        shared.with(|r| r.busy_readers = true);
+        let d = daemon_with(config(Mode::HoldButton), shared, true).await;
+        // The release wait still runs out.
+        d.press_hotkey().await;
+        tokio::time::advance(RELEASE_WAIT).await;
+        d.settle_until(|d| d.activity() == Activity::Idle).await;
+        assert_eq!(d.activity(), Activity::Idle);
+        // The countdown still ends, and a Stop still ends the run.
+        d.send(Message::Start).await;
+        tokio::time::advance(secs(5)).await;
+        d.settle_until(|d| d.shared.calls() == [LEFT_DOWN]).await;
+        assert_eq!(d.activity(), Activity::Clicking);
+        assert_eq!(d.shared.calls(), [LEFT_DOWN]);
+        d.inbox.send(Message::Stop).unwrap();
+        d.settle_until(|d| d.activity() == Activity::Idle).await;
+        d.assert_idle_after(&[LEFT_DOWN, LEFT_UP]);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_flood_of_tray_requests_cannot_keep_a_stopped_run_holding() {
+    local(async {
+        let d = daemon(Mode::HoldButton).await;
+        d.start_by_hotkey().await;
+        // More requests than `settle`'s polls can drain at one budget each,
+        // all queued at once.
+        d.inbox.send(Message::Stop).unwrap();
+        for _ in 0..10_000 {
+            d.inbox.send(Message::Start).unwrap();
+        }
+        d.settle().await;
+        assert!(d.shared.calls().contains(&LEFT_UP));
     })
     .await;
 }

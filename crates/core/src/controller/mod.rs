@@ -215,8 +215,12 @@ impl<P: Platform> Controller<P> {
             hotkeys,
             ..
         } = self;
+        // Unbiased: each wake starts at a random branch, so a source that is
+        // always ready (a flood of tray requests, a reader kept busy by key
+        // events) spends tokio's budget on some polls only, and every other
+        // branch still gets its turn. No branch needs to win a tie: a release
+        // checks the deadline itself, and the rest commute.
         tokio::select! {
-            biased;
             message = inbox.recv() => Wake::Message(message.unwrap_or(Message::Quit)),
             end = run_end(state) => Wake::RunEnded(end),
             event = hotkeys.next() => Wake::Hotkey(event),

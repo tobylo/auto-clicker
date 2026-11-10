@@ -11,7 +11,8 @@
 // clippy.toml exempts `#[test]` functions only; this whole file is test code.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::process::{Child, Command};
+use std::io::Read;
+use std::process::{Child, Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -129,6 +130,24 @@ impl Drop for Daemon {
     }
 }
 
+/// Runs a second daemon and returns its exit code and stderr. Killed if it
+/// does not exit in time: it would be a second running daemon.
+fn second_daemon() -> (Option<i32>, String) {
+    let mut child = Command::new(DAEMON).stderr(Stdio::piped()).spawn().unwrap();
+    let Some(code) = exit_within(&mut child, START_TIMEOUT) else {
+        kill(child);
+        panic!("the second daemon kept running");
+    };
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    (code, stderr)
+}
+
 #[test]
 #[ignore = "needs /dev/uinput, a session bus and no running auto-clicker"]
 fn a_second_daemon_exits_before_opening_any_device() {
@@ -136,14 +155,11 @@ fn a_second_daemon_exits_before_opening_any_device() {
     let mut first = Daemon::start();
     wait_for_start(first.child());
     let before = probe_numbers();
-    let second = Command::new(DAEMON).output().unwrap();
+    let second = second_daemon();
     let after = probe_numbers();
     let first_status = first.terminate();
-    assert_eq!(second.status.code(), Some(3));
-    assert_eq!(
-        String::from_utf8_lossy(&second.stderr).trim(),
-        "auto-clicker is already running"
-    );
+    assert_eq!(second.0, Some(3));
+    assert_eq!(second.1.trim(), "auto-clicker is already running");
     let next = before.iter().max().unwrap() + 1;
     assert_eq!(
         after.iter().min(),
