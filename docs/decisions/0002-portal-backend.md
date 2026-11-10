@@ -11,7 +11,7 @@ Status: accepted (X02, #8, 2026-11-10). Plans M4: P01 (#19), P02 (#20), P03 (#21
 | Recording (InputCapture) | **Not usable for recording** | Record is disabled on the portal backend (P03's default) |
 | Detection | **Works** | One result per capability (output, hotkeys, recording), not one backend for everything |
 
-GlobalShortcuts needs an **app id**, and RemoteDesktop scopes its stored grant by it. A host program gets one only when a `.desktop` file for that id is installed and the program either runs in a systemd unit named `app-<id>.service` or calls `org.freedesktop.host.portal.Registry.Register`. The package must install the `.desktop` file, and the user service must carry that name (or the daemon registers).
+GlobalShortcuts needs an **app id**, and RemoteDesktop scopes its stored grant by it. A host program gets one only when a `.desktop` file for that id is installed and the program either runs in a systemd unit named `app-<id>.service` or calls `org.freedesktop.host.portal.Registry.Register`. The package must install the `.desktop` file, and the user service must carry that name (or the daemon registers). The package installs `io.github.tobylo.AutoClicker.desktop` and names the unit `auto-clicker.service` (C05, #13), so the portal backend registers the id itself, before its first portal session (P01, #19, and P02, #20).
 
 ## Setup
 

@@ -1,0 +1,5 @@
+# Lets the user at the seat (logged in at the screen) use /dev/uinput, so
+# auto-clicker can create its virtual mouse and keyboard. static_node applies
+# the tag to the node made at boot, before the uinput module is loaded. Runs
+# before 73-seat-late.rules, which turns the uaccess tag into an ACL.
+KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"

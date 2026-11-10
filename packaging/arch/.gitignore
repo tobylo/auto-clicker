@@ -1,0 +1,5 @@
+# What makepkg leaves behind when run here.
+/src/
+/pkg/
+/*.pkg.tar.*
+/*.log
