@@ -364,6 +364,40 @@ fn a_modifier_pressed_long_before_the_hotkey_is_kept_even_with_only_motion_since
 }
 
 #[test]
+fn a_modifier_with_a_release_after_it_is_kept() {
+    let mut recorder = recorder();
+    recorder.key(KEYBOARD, KeyInput::press(W), t(0));
+    recorder.key(KEYBOARD, KeyInput::press(CTRL), t(100));
+    recorder.key(KEYBOARD, KeyInput::release(W), t(200));
+    recorder.key(
+        KEYBOARD,
+        KeyInput::press(F7).firing(Action::ToggleRecording),
+        t(300),
+    );
+    assert_eq!(
+        events_at(recorder, t(1_000)),
+        [
+            (0, press(key(W))),
+            (100, press(key(CTRL))),
+            (200, release(key(W))),
+            (300, release(key(CTRL)))
+        ]
+    );
+}
+
+#[test]
+fn a_stop_stamped_before_the_last_event_ends_after_it() {
+    let mut recorder = recorder();
+    recorder.key(KEYBOARD, KeyInput::press(W), t(500));
+    let recording = finish_at(recorder, t(400));
+    assert_eq!(recording.duration_us(), 500);
+    assert_eq!(
+        changes(&recording),
+        [(500, press(key(W))), (500, release(key(W)))]
+    );
+}
+
+#[test]
 fn other_hotkeys_during_a_recording_are_left_out_and_it_goes_on() {
     let mut recorder = recorder();
     tap(&mut recorder, KEYBOARD, W, [0, 100]);

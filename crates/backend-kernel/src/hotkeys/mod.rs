@@ -21,9 +21,10 @@ use std::io;
 use std::path::PathBuf;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 
 use auto_clicker_core::hotkeys::{
-    Bindings, DeviceId, HotkeyEvent, HotkeyStatus, Matcher, Reaction, Unavailable,
+    Bindings, DeviceId, HotkeyEvent, HotkeyStatus, KeyEvent, Matcher, Reaction, Unavailable,
 };
 use auto_clicker_core::recording::{KeyInput, Recorder, RecordingFeed};
 use evdev::raw_stream::EventStream;
@@ -103,14 +104,9 @@ async fn run<S: FnMut(HotkeyEvent)>(mut reader: Reader<S>, shutdown: impl Future
         Ok(watch) => watch,
         Err(err) => return reader.stop(&err),
     };
-    // A recording already running when the reader starts is caught up
-    // with at once.
-    let started = if reader.feed.recording() {
-        reader.recording_changed()
-    } else {
-        reader.scan()
-    };
-    if let Err(err) = started {
+    // A recording already running is caught up with by the scan: it opens
+    // what a recording reads, and reads what each device holds.
+    if let Err(err) = reader.scan() {
         return reader.stop(&err);
     }
     loop {
@@ -207,6 +203,14 @@ fn read_after_loss(stream: &mut EventStream) -> io::Result<AttributeSet<KeyCode>
         }
     }
     stream.device().get_key_state()
+}
+
+/// Where and when an event came from.
+#[derive(Clone, Copy)]
+struct Origin {
+    id: DeviceId,
+    role: Role,
+    time: Duration,
 }
 
 /// A device being read, and the event read from it but not handled yet.
@@ -335,41 +339,52 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
             Ok(event) => event,
             Err(err) => return self.read_failed(id, &err),
         };
-        let time = events::time(&event);
-        let feed = if role.record { Some(&self.feed) } else { None };
-        let record = |input: &mut dyn FnMut(&mut Recorder)| {
-            if let Some(feed) = feed {
-                feed.with(|recorder| input(recorder));
-            }
+        let from = Origin {
+            id,
+            role,
+            time: events::time(&event),
         };
         match events::step(&mut device.dropped, &event) {
-            Step::Key(key, change) => {
-                // A device read only for a recording has no say in hotkeys.
-                let reaction = if role.hotkeys {
-                    self.matcher.key(id, key)
-                } else {
-                    Reaction::default()
-                };
-                if let Some((code, pressed)) = change {
-                    record(&mut |recorder| {
-                        let input = KeyInput {
-                            fired: reaction.fired,
-                            ..KeyInput::new(code, pressed)
-                        };
-                        recorder.key(id, input, time);
-                    });
-                }
-                self.send_reaction(reaction);
-            }
-            Step::Motion { dx, dy } => record(&mut |recorder| recorder.motion(time, dx, dy)),
-            Step::Wheel(notches) => record(&mut |recorder| recorder.wheel(time, notches)),
+            Step::Key(key, change) => self.key(from, key, change),
+            Step::Motion { dx, dy } => self.record(from, |recorder, time| {
+                recorder.motion(time, dx, dy);
+            }),
+            Step::Wheel(notches) => self.record(from, |recorder, time| {
+                recorder.wheel(time, notches);
+            }),
             Step::Lost if role.hotkeys => {
                 let reaction = self.matcher.events_lost(id);
                 self.send_reaction(reaction);
             }
-            Step::Lost => {}
             Step::Resync => self.read_state(id),
-            Step::Nothing => {}
+            Step::Lost | Step::Nothing => {}
+        }
+    }
+
+    /// A key event: matched against the hotkeys if its device is read for
+    /// them (a device read only for a recording has no say in hotkeys), and
+    /// recorded with the hotkey it fired.
+    fn key(&mut self, from: Origin, key: KeyEvent, change: Option<(u16, bool)>) {
+        let reaction = if from.role.hotkeys {
+            self.matcher.key(from.id, key)
+        } else {
+            Reaction::default()
+        };
+        if let Some((code, pressed)) = change {
+            let input = KeyInput {
+                fired: reaction.fired,
+                ..KeyInput::new(code, pressed)
+            };
+            self.record(from, |recorder, time| recorder.key(from.id, input, time));
+        }
+        self.send_reaction(reaction);
+    }
+
+    /// Hands an event to the recorder, if its device is recorded and a
+    /// recording runs.
+    fn record(&self, from: Origin, input: impl FnOnce(&mut Recorder, Duration)) {
+        if from.role.record {
+            self.feed.with(|recorder| input(recorder, from.time));
         }
     }
 

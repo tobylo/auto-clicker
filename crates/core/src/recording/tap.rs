@@ -71,10 +71,6 @@ impl RecordingSlot {
         taken
     }
 
-    pub fn is_recording(&self) -> bool {
-        self.recorder.borrow().is_some()
-    }
-
     fn changed(&self) {
         self.changes
             .send_modify(|count| *count = count.wrapping_add(1));
@@ -131,11 +127,11 @@ mod tests {
             .await
             .unwrap();
         feed.with(|_| fed += 1);
-        assert!(feed.recording() && slot.is_recording());
+        assert!(feed.recording());
 
         assert!(slot.take().is_some());
         assert!(slot.take().is_none());
-        assert!(!slot.is_recording());
+        assert!(!feed.recording());
         timeout(Duration::from_secs(5), feed.changed())
             .await
             .unwrap();

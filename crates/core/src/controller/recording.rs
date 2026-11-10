@@ -64,11 +64,10 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    /// Notes when the tray menu opened, for trimming a stop from it.
+    /// Notes when the tray menu opened, for trimming a stop from it. A
+    /// recording starts with none noted.
     pub(super) fn menu_opened(&mut self) {
-        if matches!(self.state, State::Recording(_)) {
-            self.menu_opened = Some(self.platform.event_clock());
-        }
+        self.menu_opened = Some(self.platform.event_clock());
     }
 
     /// Stops and saves a recording, saying why when `why` is given;
