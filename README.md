@@ -91,7 +91,7 @@ Exit statuses: 0 after Quit, SIGTERM or SIGINT; 3 when another copy is already r
 
 ## Recording
 
-A recording keeps the clicks, keys, wheel and mouse movement, with their timing, from the moment it starts until it stops. Start and stop it with Ctrl+F7, or from the tray. It needs a mouse: a laptop's touchpad is not recorded, since its taps and gestures cannot be played back as mouse input. Keyboards and mice plugged in while recording are recorded too.
+A recording keeps the clicks, keys, wheel and mouse movement, with their timing, from the moment it starts until it stops. Start and stop it with Ctrl+F7, or from the tray. Keys record with any keyboard; clicks and movement need a mouse, since a laptop's touchpad is not recorded: its taps and gestures cannot be played back as mouse input. Keyboards and mice plugged in while recording are recorded too.
 
 - **What is left out.** The hotkey that starts or stops the recording is not in it, nor is any other hotkey pressed while recording (they do nothing then). Ctrl held for a while before the stop, to sprint say, is kept. From the tray, the trip to the tray at the end (the moves and clicks to open the menu and choose Stop recording) is cut off. Key repeat is not recorded: a held key is one press and one release.
 - **What is added.** Keys and buttons held when recording starts (W, to walk on) count as pressed at the start; those of the Ctrl+F7 that started it do not. Anything still held when the recording stops, or on a mouse or keyboard unplugged while recording, gets a release at that moment, so a recording always ends with nothing pressed.

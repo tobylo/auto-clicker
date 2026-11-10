@@ -47,14 +47,24 @@ fn recordings_dir_from(xdg_data_home: Option<OsString>, home: Option<OsString>) 
 /// the file cannot be written; or every name tried is taken.
 pub fn save(dir: &Path, recording: &Recording) -> io::Result<PathBuf> {
     let checked = private_dir(dir)?;
-    let name = save_in(&checked, recording)?;
+    let name = save_in(&checked, recording).map_err(|err| {
+        // An error names the folder as the user knows it, not the handle.
+        let held = held_path(&checked).display().to_string();
+        let message = err.to_string().replace(&held, &dir.display().to_string());
+        io::Error::new(err.kind(), message)
+    })?;
     Ok(dir.join(name))
+}
+
+/// A path the kernel resolves through the open directory `checked`, not
+/// through its name.
+fn held_path(checked: &File) -> PathBuf {
+    PathBuf::from(format!("/proc/self/fd/{}", checked.as_raw_fd()))
 }
 
 /// Saves `recording` in the open directory `checked`; the file's name.
 fn save_in(checked: &File, recording: &Recording) -> io::Result<OsString> {
-    // The kernel resolves this through the open directory, not its name.
-    let held = PathBuf::from(format!("/proc/self/fd/{}", checked.as_raw_fd()));
+    let held = held_path(checked);
     let stem = recording.created().file_stem();
     let paths: Vec<PathBuf> = (0..NAMES_TRIED)
         .map(|n| match n {
@@ -263,6 +273,13 @@ mod tests {
         let before = fs::read(&first).unwrap();
 
         let second = save(dir.path(), &recording).unwrap();
+        for n in 2..10 {
+            let taken = dir.path().join(format!("2026-11-09_18-04-05.123-{n}.json"));
+            fs::write(taken, b"").unwrap();
+        }
+        let full = save(dir.path(), &recording).unwrap_err().to_string();
+        let named = dir.path().join("2026-11-09_18-04-05.123.json");
+        assert!(full.starts_with(&named.display().to_string()), "{full}");
 
         assert_eq!(second, dir.path().join("2026-11-09_18-04-05.123-1.json"));
         assert_eq!(fs::read(&first).unwrap(), before);
