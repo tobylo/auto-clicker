@@ -2,9 +2,9 @@
 //! file per recording, named after the time it was made.
 
 use std::ffi::OsString;
-use std::fs::DirBuilder;
+use std::fs::{DirBuilder, File, Permissions};
 use std::io;
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use super::Recording;
@@ -38,10 +38,10 @@ fn recordings_dir_from(xdg_data_home: Option<OsString>, home: Option<OsString>) 
 /// replaces a file. Returns the file's path.
 ///
 /// # Errors
-/// The directory cannot be created, the file cannot be written, or every
-/// name tried is taken.
+/// The directory cannot be created or made private, the file cannot be
+/// written, or every name tried is taken.
 pub fn save(dir: &Path, recording: &Recording) -> io::Result<PathBuf> {
-    DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    private_dir(dir)?;
     let stem = recording.created().file_stem();
     let paths: Vec<PathBuf> = (0..NAMES_TRIED)
         .map(|n| match n {
@@ -50,6 +50,28 @@ pub fn save(dir: &Path, recording: &Recording) -> io::Result<PathBuf> {
         })
         .collect();
     atomic_create(&paths, |out| recording.write_json(out))
+}
+
+/// Makes `dir` exist and be readable by its owner only. An existing one
+/// that others may read is closed to them; one this user does not own
+/// cannot be, and fails. Directories it creates are flushed into their
+/// parents, so a recording saved in them survives a power loss.
+fn private_dir(dir: &Path) -> io::Result<()> {
+    let missing: Vec<&Path> = dir
+        .ancestors()
+        .take_while(|ancestor| !ancestor.as_os_str().is_empty() && !ancestor.exists())
+        .collect();
+    DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    let handle = File::open(dir)?;
+    if handle.metadata()?.permissions().mode() & 0o077 != 0 {
+        handle.set_permissions(Permissions::from_mode(0o700))?;
+    }
+    for created in missing {
+        if let Some(parent) = created.parent() {
+            File::open(parent)?.sync_all()?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -102,6 +124,19 @@ mod tests {
         assert_eq!((mode(&dir), mode(&path)), (0o700, 0o600));
         let read = Recording::from_json(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(read, recording);
+    }
+
+    #[test]
+    fn an_existing_directory_others_can_read_is_made_private() {
+        let root = TempDir::new();
+        let dir = root.path().join("recordings");
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        save(&dir, &sample()).unwrap();
+
+        let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
     }
 
     #[test]

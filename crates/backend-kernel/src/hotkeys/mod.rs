@@ -330,13 +330,13 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
         let Some(device) = self.devices.get_mut(index) else {
             return;
         };
-        let (id, record) = (device.id, device.role.record);
+        let (id, role) = (device.id, device.role);
         let event = match event {
             Ok(event) => event,
             Err(err) => return self.read_failed(id, &err),
         };
         let time = events::time(&event);
-        let feed = if record { Some(&self.feed) } else { None };
+        let feed = if role.record { Some(&self.feed) } else { None };
         let record = |input: &mut dyn FnMut(&mut Recorder)| {
             if let Some(feed) = feed {
                 feed.with(|recorder| input(recorder));
@@ -344,7 +344,12 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
         };
         match events::step(&mut device.dropped, &event) {
             Step::Key(key, change) => {
-                let reaction = self.matcher.key(id, key);
+                // A device read only for a recording has no say in hotkeys.
+                let reaction = if role.hotkeys {
+                    self.matcher.key(id, key)
+                } else {
+                    Reaction::default()
+                };
                 if let Some((code, pressed)) = change {
                     record(&mut |recorder| {
                         let input = KeyInput {
@@ -358,31 +363,38 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
             }
             Step::Motion { dx, dy } => record(&mut |recorder| recorder.motion(time, dx, dy)),
             Step::Wheel(notches) => record(&mut |recorder| recorder.wheel(time, notches)),
-            Step::Lost => {
+            Step::Lost if role.hotkeys => {
                 let reaction = self.matcher.events_lost(id);
                 self.send_reaction(reaction);
             }
+            Step::Lost => {}
             Step::Resync => self.read_state(id),
             Step::Nothing => {}
         }
     }
 
     /// Reads what a device holds now, after lost events or as a recording
-    /// starts, and tells the matcher and the recorder. Every event read
-    /// from it before is older than the read, and dropped.
+    /// starts, and tells the matcher (a hotkey keyboard's) and the recorder
+    /// (a recordable device's). Every event read from it before is older
+    /// than the read, and dropped.
     fn read_state(&mut self, id: DeviceId) {
         let Some(device) = self.devices.iter_mut().find(|device| device.id == id) else {
             return;
         };
         device.ahead = None;
         device.dropped = false;
-        let record = device.role.record;
+        let role = device.role;
         match read_after_loss(&mut device.stream) {
             Ok(keys) => {
                 let held = |code| keys.contains(KeyCode(code));
                 let now = monotonic_now();
-                self.matcher.resync(id, held, now);
-                if record {
+                // Only a hotkey keyboard's read moves the matcher's cutoff:
+                // a mouse opened for a recording must not hold back a
+                // hotkey pressed just before.
+                if role.hotkeys {
+                    self.matcher.resync(id, held, now);
+                }
+                if role.record {
                     self.feed.with(|recorder| recorder.resync(id, held, now));
                 }
             }
@@ -414,10 +426,13 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
     /// node's name.
     fn remove(&mut self, id: DeviceId) -> Option<OsString> {
         let index = self.devices.iter().position(|device| device.id == id)?;
-        let name = self.devices.swap_remove(index).name;
+        let removed = self.devices.swap_remove(index);
         let now = monotonic_now();
-        let reaction = self.matcher.device_lost(id, now);
-        self.send_reaction(reaction);
+        if removed.role.hotkeys {
+            let reaction = self.matcher.device_lost(id, now);
+            self.send_reaction(reaction);
+        }
+        let name = removed.name;
         self.feed.with(|recorder| recorder.device_lost(id, now));
         Some(name)
     }
