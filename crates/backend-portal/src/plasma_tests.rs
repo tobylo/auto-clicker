@@ -155,14 +155,18 @@ async fn find_window_output(
             input
                 .move_absolute(layout.position_of(x - 50.0, y - 50.0))
                 .unwrap();
-            window.drain().await;
             input.move_absolute(layout.position_of(x, y)).unwrap();
-            let seen = window.find(Duration::from_millis(300), parse_motion).await;
-            if let Some((x, y)) = seen {
-                assert!(
-                    (x - w / 2.0).abs() <= 1.0 && (y - h / 2.0).abs() <= 1.0,
-                    "output {index} ({region:?}): the middle arrived at {x},{y}"
-                );
+            // The step beside the middle may show too; wait for the middle.
+            // A middle that lands anywhere else never matches, and the test
+            // fails below.
+            let (mid_x, mid_y) = (w / 2.0, h / 2.0);
+            let seen = window
+                .find(Duration::from_millis(500), |line| {
+                    parse_motion(line)
+                        .filter(|&(x, y)| (x - mid_x).abs() <= 1.0 && (y - mid_y).abs() <= 1.0)
+                })
+                .await;
+            if seen.is_some() {
                 return index;
             }
         }
