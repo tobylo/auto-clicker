@@ -44,8 +44,7 @@ fn main() -> ExitCode {
 /// Runs the daemon until Quit, SIGTERM or SIGINT.
 async fn daemon() -> ExitCode {
     match start().await {
-        // The bus connection holds the single-instance name until the end.
-        Ok((controller, _name)) => {
+        Ok(controller) => {
             controller.run().await;
             ExitCode::SUCCESS
         }
@@ -54,7 +53,7 @@ async fn daemon() -> ExitCode {
 }
 
 /// Everything before the controller runs; the exit status when it fails.
-async fn start() -> Result<(Controller<Kernel>, zbus::Connection), ExitCode> {
+async fn start() -> Result<Controller<Kernel>, ExitCode> {
     let (config, config_error) = load_config();
     // Claimed first: a second daemon opens no device and reads no keyboard.
     let name = claim_name().await?;
@@ -73,18 +72,24 @@ async fn start() -> Result<(Controller<Kernel>, zbus::Connection), ExitCode> {
         Ok(Err(err)) => return Err(fail(&format!("tray icon: {err}"))),
         Err(_) => return Err(fail("tray icon: the session bus did not answer")),
     }
-    tokio::spawn(session::watch(send));
-    Ok((controller, name))
+    tokio::spawn(session::watch(send.clone()));
+    tokio::spawn(async move {
+        name.lost().await;
+        eprintln!("auto-clicker: lost the session bus name; quitting");
+        let _ = send.send(Message::Quit);
+    });
+    Ok(controller)
 }
 
 /// Claims the single-instance name on the session bus.
-async fn claim_name() -> Result<zbus::Connection, ExitCode> {
+async fn claim_name() -> Result<instance::Claim, ExitCode> {
     match timeout(BUS_TIMEOUT, instance::claim()).await {
         Ok(Ok(bus)) => Ok(bus),
         Ok(Err(ClaimError::Taken)) => {
             eprintln!("auto-clicker is already running");
             Err(ExitCode::from(EXIT_ALREADY_RUNNING))
         }
+        Ok(Err(ClaimError::Transport(why))) => Err(fail(&why)),
         Ok(Err(ClaimError::Bus(err))) => Err(fail(&format!("session bus: {err}"))),
         Err(_) => Err(fail("the session bus did not answer")),
     }

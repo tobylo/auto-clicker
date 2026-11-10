@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
 use tokio::task::{JoinHandle, LocalSet, yield_now};
-use tokio::time::{Instant, sleep};
+use tokio::time::{Instant, sleep, timeout};
 
 use super::*;
 use crate::clicker::{ClickerSettings, Mode, Repeat};
@@ -484,6 +484,22 @@ async fn a_release_wait_gives_up_after_its_deadline() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_release_seen_only_after_the_deadline_starts_nothing() {
+    local(async {
+        let d = daemon(Mode::HoldButton).await;
+        d.press_hotkey().await;
+        // The release and the deadline are both ready when the controller
+        // next runs; the release is looked at first.
+        d.shared.hotkey(HotkeyEvent::ModifiersReleased);
+        tokio::time::advance(RELEASE_WAIT).await;
+        d.settle().await;
+        d.assert_idle_after(&[]);
+        assert!(d.notice().contains("held for 30 s"), "{}", d.notice());
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_lost_release_says_to_press_again() {
     local(async {
         let d = daemon(Mode::HoldButton).await;
@@ -577,7 +593,7 @@ async fn quit_while_holding_leaves_nothing_pressed() {
                 "quit" => inbox.send(Message::Quit).unwrap(),
                 _ => drop(inbox),
             }
-            task.await.unwrap();
+            timeout(secs(1), task).await.unwrap().unwrap();
             assert_eq!(Instant::now(), before, "{how}");
             assert_eq!(shared.calls(), [LEFT_DOWN, LEFT_UP], "{how}");
         })
@@ -595,7 +611,7 @@ async fn quit_while_a_click_is_down_releases_it() {
         d.settle().await;
         assert_eq!(d.shared.calls(), [LEFT_DOWN]);
         d.inbox.send(Message::Quit).unwrap();
-        d.task.await.unwrap();
+        timeout(secs(1), d.task).await.unwrap().unwrap();
         assert_eq!(d.shared.calls(), [LEFT_DOWN, LEFT_UP]);
     })
     .await;

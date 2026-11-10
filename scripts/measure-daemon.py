@@ -81,6 +81,8 @@ def main(argv):
         f"{new_switches(switches0, switches1)} context switches, {len(switches1)} threads, RSS {rss / 1024:.1f} MiB; "
         f"exit status after SIGTERM: {status}"
     )
+    if status != 0:
+        sys.exit("the daemon did not exit cleanly after SIGTERM")
 
 
 if __name__ == "__main__":

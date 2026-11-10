@@ -179,6 +179,14 @@ mod tests {
     }
 
     #[test]
+    fn only_whole_seconds_are_shown_in_seconds() {
+        let shown = |ms| duration(Duration::from_millis(ms));
+        assert_eq!(shown(1500), "1500 ms");
+        assert_eq!(shown(1000), "1 s");
+        assert_eq!(shown(100), "100 ms");
+    }
+
+    #[test]
     fn a_key_mode_ignores_the_fixed_point_and_names_unnamed_keys_by_code() {
         let settings = ClickerSettings {
             mode: Mode::HoldKey,

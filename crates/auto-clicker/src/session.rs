@@ -3,13 +3,31 @@
 //!
 //! The daemon runs as a user service, outside the session it serves, so it
 //! follows the user's `Display` session and switches when that changes.
+//! Changes are read from logind's own signals, in order, with the values
+//! they carry: a session that goes inactive and back stops clicking, however
+//! fast it comes back. While logind is gone (restarting), starts are refused.
+
+use std::collections::HashMap;
+use std::time::Duration;
 
 use auto_clicker_core::controller::{Blocked, Message, SessionFacts};
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
-use zbus::Connection;
-use zbus::proxy::PropertyStream;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::fdo::{
+    DBusProxy, NameOwnerChangedStream, PropertiesChanged, PropertiesChangedStream, PropertiesProxy,
+};
+use zbus::proxy::CacheProperties;
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, Value};
+use zbus::{Connection, connection};
+
+const LOGIND: &str = "org.freedesktop.login1";
+const SESSION_INTERFACE: &str = "org.freedesktop.login1.Session";
+const USER_INTERFACE: &str = "org.freedesktop.login1.User";
+/// The system bus, by its fixed socket: the environment cannot point the
+/// daemon at another bus or another transport.
+const SYSTEM_BUS: &str = "unix:path=/run/dbus/system_bus_socket";
+/// How long logind may take to answer any call.
+const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[zbus::proxy(
     interface = "org.freedesktop.login1.Manager",
@@ -19,12 +37,17 @@ use zbus::zvariant::OwnedObjectPath;
 trait Manager {
     #[zbus(signal)]
     fn prepare_for_sleep(&self, start: bool) -> zbus::Result<()>;
+
+    #[zbus(property)]
+    fn preparing_for_sleep(&self) -> zbus::Result<bool>;
+
+    #[zbus(name = "GetUserByPID")]
+    fn get_user_by_pid(&self, pid: u32) -> zbus::Result<OwnedObjectPath>;
 }
 
 #[zbus::proxy(
     interface = "org.freedesktop.login1.User",
-    default_service = "org.freedesktop.login1",
-    default_path = "/org/freedesktop/login1/user/self"
+    default_service = "org.freedesktop.login1"
 )]
 trait User {
     #[zbus(property)]
@@ -46,136 +69,209 @@ trait Session {
     fn locked_hint(&self) -> zbus::Result<bool>;
 }
 
-/// Sends the session's state to the controller whenever it changes. When
-/// logind cannot be followed any more, says why: the controller then refuses
-/// to start, since a state it cannot read is not "unlocked".
+/// Sends the session's state to the controller whenever it changes, until
+/// the controller is gone. When logind cannot be followed, says why and
+/// stops: the controller then refuses to start, since a state it cannot read
+/// is not "unlocked".
 pub async fn watch(send: mpsc::UnboundedSender<Message>) {
-    let reason = match follow(&send).await {
-        Ok(()) => "logind stopped sending changes".to_owned(),
-        Err(err) => format!("logind: {err}"),
-    };
-    let _ = send.send(Message::Session(Some(Blocked::Unknown(reason))));
+    if let Err(err) = watch_logind(&send).await {
+        let reason = format!("logind: {err}");
+        let _ = send.send(Message::Session(Some(Blocked::Unknown(reason))));
+    }
 }
 
-/// Something logind said, or the end of a stream (`None`).
+/// Something logind said.
+#[derive(Debug, PartialEq)]
 enum Change {
     Sleep(bool),
     Locked(bool),
     Active(bool),
     LockRequested,
     Display(OwnedObjectPath),
+    /// logind left the bus, or another process took its name.
+    LogindGone,
 }
 
-/// The streams of one session.
+/// How following one logind instance ended without an error.
+enum End {
+    ControllerGone,
+    LogindGone,
+}
+
+/// Follows logind, again after each restart, until the controller is gone
+/// or something fails.
+async fn watch_logind(send: &mpsc::UnboundedSender<Message>) -> zbus::Result<()> {
+    let bus = connection::Builder::address(SYSTEM_BUS)?
+        .method_timeout(CALL_TIMEOUT)
+        .build()
+        .await?;
+    // Subscribed before anything is read, so no restart goes unseen.
+    let mut owners = DBusProxy::new(&bus)
+        .await?
+        .receive_name_owner_changed_with_args(&[(0, LOGIND)])
+        .await?;
+    loop {
+        let mut logind = Logind::subscribe(&bus, send).await?;
+        match logind.follow(&mut owners).await? {
+            End::ControllerGone => return Ok(()),
+            End::LogindGone => {
+                let gone = Blocked::Unknown("logind is restarting".to_owned());
+                if send.send(Message::Session(Some(gone))).is_err() {
+                    return Ok(());
+                }
+                wait_for_owner(&mut owners).await?;
+            }
+        }
+    }
+}
+
+/// Waits until logind is on the bus again.
+async fn wait_for_owner(owners: &mut NameOwnerChangedStream) -> zbus::Result<()> {
+    while let Some(change) = owners.next().await {
+        if change.args()?.new_owner().is_some() {
+            return Ok(());
+        }
+    }
+    Err(ended("logind's name changes"))
+}
+
+fn ended(what: &str) -> zbus::Error {
+    zbus::Error::Failure(format!("the system bus stopped sending {what}"))
+}
+
+/// The streams of the session being followed.
 struct SessionStreams {
+    path: OwnedObjectPath,
     locks: LockStream,
-    locked: PropertyStream<'static, bool>,
-    active: PropertyStream<'static, bool>,
+    properties: PropertiesChangedStream,
 }
 
-/// Follows logind until a stream ends, a call fails or the controller is
-/// gone.
-struct Follower<'a> {
+/// Everything subscribed to on one logind instance.
+struct Logind<'a> {
     bus: Connection,
     send: &'a mpsc::UnboundedSender<Message>,
     facts: SessionFacts,
     sleeps: PrepareForSleepStream,
-    /// Yields the current session first, then each change.
-    displays: PropertyStream<'static, (String, OwnedObjectPath)>,
+    /// The user's properties: `Display` changes.
+    user: PropertiesChangedStream,
+    /// `None` while the user has no graphical session.
+    session: Option<SessionStreams>,
 }
 
-async fn follow(send: &mpsc::UnboundedSender<Message>) -> zbus::Result<()> {
-    let bus = Connection::system().await?;
-    let sleeps = ManagerProxy::new(&bus)
-        .await?
-        .receive_prepare_for_sleep()
-        .await?;
-    let displays = UserProxy::new(&bus).await?.receive_display_changed().await;
-    let mut follower = Follower {
-        bus,
-        send,
-        facts: SessionFacts::default(),
-        sleeps,
-        displays,
-    };
-    let mut display = follower.next_display().await?;
-    while let Some(path) = display {
-        display = follower.follow_display(path).await?;
-    }
-    Ok(())
-}
-
-impl Follower<'_> {
-    /// The next `Display` session, or `None` when the stream ended.
-    async fn next_display(&mut self) -> zbus::Result<Option<OwnedObjectPath>> {
-        match self.displays.next().await {
-            Some(change) => Ok(Some(change.get().await?.1)),
-            None => Ok(None),
-        }
-    }
-
-    /// Follows `path` until the user's display session changes; the new one.
-    async fn follow_display(
-        &mut self,
-        path: OwnedObjectPath,
-    ) -> zbus::Result<Option<OwnedObjectPath>> {
-        // logind's `Display` is ("", "/") when the user has none.
-        if path.as_str() == "/" {
-            let reason = "no graphical session".to_owned();
-            self.tell(Message::Session(Some(Blocked::Unknown(reason))));
-            return self.next_display().await;
-        }
-        let session = SessionProxy::builder(&self.bus)
-            .path(path.clone())?
+impl<'a> Logind<'a> {
+    /// Subscribes to everything, then reads the current state and tells the
+    /// controller. Signals are subscribed to before the state is read, so
+    /// none is missed in between.
+    async fn subscribe(
+        bus: &Connection,
+        send: &'a mpsc::UnboundedSender<Message>,
+    ) -> zbus::Result<Logind<'a>> {
+        let manager = ManagerProxy::builder(bus)
+            .cache_properties(CacheProperties::No)
             .build()
             .await?;
-        let mut streams = SessionStreams {
-            locks: session.receive_lock().await?,
-            // Each yields the current value first.
-            locked: session.receive_locked_hint_changed().await,
-            active: session.receive_active_changed().await,
+        let sleeps = manager.receive_prepare_for_sleep().await?;
+        let user_path = manager.get_user_by_pid(std::process::id()).await?;
+        let user = properties(bus, &user_path).await?;
+        let facts = SessionFacts {
+            sleeping: manager.preparing_for_sleep().await?,
+            ..SessionFacts::default()
         };
+        let display = UserProxy::builder(bus)
+            .path(user_path)?
+            .cache_properties(CacheProperties::No)
+            .build()
+            .await?
+            .display()
+            .await?
+            .1;
+        let mut logind = Logind {
+            bus: bus.clone(),
+            send,
+            facts,
+            sleeps,
+            user,
+            session: None,
+        };
+        logind.switch_to(display).await?;
+        Ok(logind)
+    }
+
+    /// Follows the session at `path` from now on, and tells the controller
+    /// its state; `false` when the controller is gone.
+    async fn switch_to(&mut self, path: OwnedObjectPath) -> zbus::Result<bool> {
+        self.session = None;
+        if is_no_session(&path) {
+            let reason = "no graphical session".to_owned();
+            return Ok(self.tell(Message::Session(Some(Blocked::Unknown(reason)))));
+        }
+        let properties = properties(&self.bus, &path).await?;
+        let session = SessionProxy::builder(&self.bus)
+            .path(path.clone())?
+            .cache_properties(CacheProperties::No)
+            .build()
+            .await?;
+        let locks = session.receive_lock().await?;
         self.facts.locked = session.locked_hint().await?;
         self.facts.active = session.active().await?;
-        self.tell(Message::Session(self.facts.blocked()));
+        self.session = Some(SessionStreams {
+            path,
+            locks,
+            properties,
+        });
+        Ok(self.tell(Message::Session(self.facts.blocked())))
+    }
+
+    /// Follows logind until it leaves the bus or the controller is gone.
+    async fn follow(&mut self, owners: &mut NameOwnerChangedStream) -> zbus::Result<End> {
         loop {
-            let message = match self.next_change(&mut streams).await? {
-                None => return Ok(None),
-                Some(Change::Display(new)) if new == path => continue,
-                Some(Change::Display(new)) => return Ok(Some(new)),
-                Some(change) => self.apply(change),
-            };
-            if !self.tell(message) {
-                return Ok(None);
+            for change in self.next_changes(owners).await? {
+                let path = match &self.session {
+                    Some(session) => session.path.clone(),
+                    None => no_session(),
+                };
+                let told = match step(&mut self.facts, &path, change) {
+                    Step::Tell(message) => self.tell(message),
+                    Step::Switch(path) => self.switch_to(path).await?,
+                    Step::LogindGone => return Ok(End::LogindGone),
+                    Step::Ignore => true,
+                };
+                if !told {
+                    return Ok(End::ControllerGone);
+                }
             }
         }
     }
 
-    /// The next thing logind says; `None` when a stream ended.
-    async fn next_change(&mut self, streams: &mut SessionStreams) -> zbus::Result<Option<Change>> {
+    /// What logind says next, in the order it said it.
+    async fn next_changes(
+        &mut self,
+        owners: &mut NameOwnerChangedStream,
+    ) -> zbus::Result<Vec<Change>> {
+        let (locks, session) = match self.session.as_mut() {
+            Some(streams) => (Some(&mut streams.locks), Some(&mut streams.properties)),
+            None => (None, None),
+        };
         tokio::select! {
-            sleep = self.sleeps.next() => sleep.map(|s| s.args().map(|a| Change::Sleep(a.start))).transpose(),
-            lock = streams.locks.next() => Ok(lock.map(|_| Change::LockRequested)),
-            hint = streams.locked.next() => property(hint, Change::Locked).await,
-            now = streams.active.next() => property(now, Change::Active).await,
-            display = self.displays.next() => match display {
-                Some(change) => Ok(Some(Change::Display(change.get().await?.1))),
-                None => Ok(None),
-            },
+            owner = owners.next() => {
+                owner.ok_or_else(|| ended("logind's name changes"))?;
+                Ok(vec![Change::LogindGone])
+            }
+            sleep = self.sleeps.next() => {
+                let sleep = sleep.ok_or_else(|| ended("sleep signals"))?;
+                Ok(vec![Change::Sleep(sleep.args()?.start)])
+            }
+            changed = self.user.next() => {
+                user_changes(&changed.ok_or_else(|| ended("user changes"))?)
+            }
+            lock = next_of(locks) => {
+                lock.ok_or_else(|| ended("lock signals"))?;
+                Ok(vec![Change::LockRequested])
+            }
+            changed = next_of(session) => {
+                session_changes(&changed.ok_or_else(|| ended("session changes"))?)
+            }
         }
-    }
-
-    /// The message for a change of the session's state.
-    fn apply(&mut self, change: Change) -> Message {
-        match change {
-            Change::Sleep(sleeping) => self.facts.sleeping = sleeping,
-            Change::Locked(locked) => self.facts.locked = locked,
-            Change::Active(active) => self.facts.active = active,
-            Change::LockRequested => return Message::LockRequested,
-            // Handled by the caller.
-            Change::Display(_) => {}
-        }
-        Message::Session(self.facts.blocked())
     }
 
     /// Sends `message`; `false` when the controller is gone.
@@ -184,13 +280,191 @@ impl Follower<'_> {
     }
 }
 
-/// A property's new value as a change, `None` when its stream ended.
-async fn property(
-    changed: Option<zbus::proxy::PropertyChanged<'static, bool>>,
-    change: fn(bool) -> Change,
-) -> zbus::Result<Option<Change>> {
-    match changed {
-        Some(changed) => Ok(Some(change(changed.get().await?))),
-        None => Ok(None),
+/// The `PropertiesChanged` signal of the logind object at `path`.
+async fn properties(
+    bus: &Connection,
+    path: &OwnedObjectPath,
+) -> zbus::Result<PropertiesChangedStream> {
+    PropertiesProxy::builder(bus)
+        .destination(LOGIND)?
+        .path(path.clone())?
+        .cache_properties(CacheProperties::No)
+        .build()
+        .await?
+        .receive_properties_changed()
+        .await
+}
+
+/// The next item of `stream`; never resolves without a stream.
+async fn next_of<S: futures_util::Stream + Unpin>(stream: Option<&mut S>) -> Option<S::Item> {
+    match stream {
+        Some(stream) => stream.next().await,
+        None => std::future::pending().await,
+    }
+}
+
+fn session_changes(changed: &PropertiesChanged) -> zbus::Result<Vec<Change>> {
+    interface_changes(changed, SESSION_INTERFACE, &["Active", "LockedHint"])
+}
+
+fn user_changes(changed: &PropertiesChanged) -> zbus::Result<Vec<Change>> {
+    interface_changes(changed, USER_INTERFACE, &["Display"])
+}
+
+/// The changes a `PropertiesChanged` of `interface` carries. A watched
+/// property it only invalidates, without a value, is an error: logind always
+/// sends values, and a value not sent is not known.
+fn interface_changes(
+    changed: &PropertiesChanged,
+    interface: &str,
+    watched: &[&str],
+) -> zbus::Result<Vec<Change>> {
+    let args = changed.args()?;
+    if args.interface_name().as_str() != interface {
+        return Ok(Vec::new());
+    }
+    refuse_invalidated(args.invalidated_properties(), watched)?;
+    property_changes(args.changed_properties())
+}
+
+fn refuse_invalidated(invalidated: &[&str], watched: &[&str]) -> zbus::Result<()> {
+    match invalidated.iter().find(|name| watched.contains(name)) {
+        Some(name) => Err(zbus::Error::Failure(format!(
+            "logind sent no value for {name}"
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// The watched properties among `changed`, as changes. Active comes before
+/// LockedHint, so a session that went inactive is stopped as such.
+fn property_changes(changed: &HashMap<&str, Value<'_>>) -> zbus::Result<Vec<Change>> {
+    let mut changes = Vec::new();
+    if let Some(value) = changed.get("Active") {
+        changes.push(Change::Active(bool::try_from(value)?));
+    }
+    if let Some(value) = changed.get("LockedHint") {
+        changes.push(Change::Locked(bool::try_from(value)?));
+    }
+    if let Some(value) = changed.get("Display") {
+        let (_, path) = <(String, OwnedObjectPath)>::try_from(value.try_clone()?)?;
+        changes.push(Change::Display(path));
+    }
+    Ok(changes)
+}
+
+/// What to do about a change while following the session at `path`.
+#[derive(Debug, PartialEq)]
+enum Step {
+    Tell(Message),
+    /// The user's display session is another one now: follow it instead.
+    Switch(OwnedObjectPath),
+    LogindGone,
+    Ignore,
+}
+
+/// Folds `change` into `facts`, and says what follows from it.
+fn step(facts: &mut SessionFacts, path: &OwnedObjectPath, change: Change) -> Step {
+    match change {
+        Change::Display(new) if new == *path => return Step::Ignore,
+        Change::Display(new) => return Step::Switch(new),
+        Change::LogindGone => return Step::LogindGone,
+        Change::LockRequested => return Step::Tell(Message::LockRequested),
+        Change::Sleep(sleeping) => facts.sleeping = sleeping,
+        Change::Locked(locked) => facts.locked = locked,
+        Change::Active(active) => facts.active = active,
+    }
+    Step::Tell(Message::Session(facts.blocked()))
+}
+
+/// logind's `Display` path when the user has no graphical session.
+fn no_session() -> OwnedObjectPath {
+    OwnedObjectPath::from(ObjectPath::from_static_str_unchecked("/"))
+}
+
+fn is_no_session(path: &OwnedObjectPath) -> bool {
+    *path == no_session()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn path(text: &str) -> OwnedObjectPath {
+        OwnedObjectPath::try_from(text).unwrap()
+    }
+
+    #[test]
+    fn each_fact_change_tells_the_whole_state() {
+        let here = path("/org/freedesktop/login1/session/_31");
+        let mut facts = SessionFacts {
+            active: true,
+            ..SessionFacts::default()
+        };
+        let mut tell = |change| step(&mut facts, &here, change);
+        let session = |blocked| Step::Tell(Message::Session(blocked));
+        assert_eq!(tell(Change::Locked(true)), session(Some(Blocked::Locked)));
+        assert_eq!(tell(Change::Sleep(true)), session(Some(Blocked::Sleeping)));
+        assert_eq!(tell(Change::Sleep(false)), session(Some(Blocked::Locked)));
+        assert_eq!(tell(Change::Locked(false)), session(None));
+        assert_eq!(
+            tell(Change::Active(false)),
+            session(Some(Blocked::Inactive))
+        );
+        assert_eq!(
+            tell(Change::LockRequested),
+            Step::Tell(Message::LockRequested)
+        );
+        assert_eq!(tell(Change::LogindGone), Step::LogindGone);
+    }
+
+    #[test]
+    fn only_another_display_session_switches() {
+        let here = path("/org/freedesktop/login1/session/_31");
+        let there = path("/org/freedesktop/login1/session/_32");
+        let mut facts = SessionFacts::default();
+        let same = step(&mut facts, &here, Change::Display(here.clone()));
+        assert_eq!(same, Step::Ignore);
+        let other = step(&mut facts, &here, Change::Display(there.clone()));
+        assert_eq!(other, Step::Switch(there));
+    }
+
+    #[test]
+    fn the_root_path_means_no_session() {
+        assert!(is_no_session(&path("/")));
+        assert!(!is_no_session(&path("/org/freedesktop/login1/session/_31")));
+    }
+
+    #[test]
+    fn every_watched_property_becomes_a_change_in_order() {
+        let session = path("/org/freedesktop/login1/session/_32");
+        let display = Value::from(("2".to_owned(), session.clone()));
+        let changed = HashMap::from([
+            ("LockedHint", Value::from(true)),
+            ("Active", Value::from(false)),
+            ("IdleHint", Value::from(true)),
+            ("Display", display),
+        ]);
+        assert_eq!(
+            property_changes(&changed).unwrap(),
+            [
+                Change::Active(false),
+                Change::Locked(true),
+                Change::Display(session),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_value_of_the_wrong_type_is_an_error() {
+        let changed = HashMap::from([("Active", Value::from("yes"))]);
+        assert!(property_changes(&changed).is_err());
+    }
+
+    #[test]
+    fn an_invalidated_watched_property_is_an_error() {
+        let watched = ["Active", "LockedHint"];
+        assert!(refuse_invalidated(&["IdleHint"], &watched).is_ok());
+        assert!(refuse_invalidated(&["LockedHint"], &watched).is_err());
     }
 }

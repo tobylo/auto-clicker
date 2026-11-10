@@ -252,17 +252,35 @@ impl<P: Platform> Controller<P> {
             HotkeyEvent::Fired(Action::ToggleClicking) => self.toggle(),
             // Recording and playback come with M2.
             HotkeyEvent::Fired(Action::ToggleRecording | Action::TogglePlayback) => {}
-            HotkeyEvent::ModifiersReleased => {
-                if matches!(self.state, State::Release(_)) {
-                    self.begin_run();
-                }
-            }
+            HotkeyEvent::ModifiersReleased => self.released(),
             HotkeyEvent::ReleaseLost => self.cancel_release(format!(
                 "Not started: could not tell when the hotkey was let go; press {} again",
                 self.config.hotkeys.toggle_clicking
             )),
             HotkeyEvent::Status(status) => self.hotkey_status_changed(status),
         }
+    }
+
+    /// The modifiers came up: a pending hotkey start begins, unless its wait
+    /// ran out first. A late controller can see the release and the deadline
+    /// at once; the release is handled first, so it checks the time itself.
+    fn released(&mut self) {
+        let State::Release(deadline) = self.state else {
+            return;
+        };
+        if Instant::now() < deadline {
+            self.begin_run();
+        } else {
+            self.release_expired();
+        }
+    }
+
+    fn release_expired(&mut self) {
+        self.state = State::Idle;
+        self.notice = Some(format!(
+            "Not started: the hotkey was held for {} s; let go of it to start",
+            RELEASE_WAIT.as_secs()
+        ));
     }
 
     fn hotkey_status_changed(&mut self, status: HotkeyStatus) {
@@ -340,16 +358,10 @@ impl<P: Platform> Controller<P> {
     }
 
     fn deadline(&mut self) {
-        let now = Instant::now();
         match self.state {
-            State::Countdown(deadline) if now >= deadline => self.begin_run(),
-            State::Release(deadline) if now >= deadline => {
-                self.state = State::Idle;
-                self.notice = Some(format!(
-                    "Not started: the hotkey was held for {} s; let go of it to start",
-                    RELEASE_WAIT.as_secs()
-                ));
-            }
+            State::Countdown(deadline) if Instant::now() >= deadline => self.begin_run(),
+            // Its deadline is the only time a release wait wakes by itself.
+            State::Release(_) => self.release_expired(),
             // A second of the countdown passed; the view shows it.
             _ => {}
         }

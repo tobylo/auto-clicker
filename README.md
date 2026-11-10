@@ -18,7 +18,7 @@ The hotkey (Ctrl+F6 by default) starts and stops clicking at once, without a cou
 
 Clicking stops when the screen locks, another user's session comes to the front, or the computer goes to sleep, and it cannot start again until the session is back. The tooltip says what the clicker will do, and why it stopped or cannot start.
 
-Only one copy runs per session: a second one prints "auto-clicker is already running" and exits.
+Only one copy runs per session: a second one prints "auto-clicker is already running" and exits. A running copy quits if it loses the session bus. It talks to the session and system buses through their Unix sockets only, and refuses to start when `DBUS_SESSION_BUS_ADDRESS` names anything else.
 
 Exit statuses: 0 after Quit, SIGTERM or SIGINT; 3 when another copy is already running; 77 when `/dev/uinput` cannot be used (no permission, or the `uinput` module is not loaded), which restarting does not fix; 1 for any other failure at start.
 
