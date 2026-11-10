@@ -45,7 +45,11 @@ The icon then appears in the system tray. After **Quit**, start it again from "A
 
 The program does not update itself. To install a newer version, from the account that installed it:
 
-`cd ~/auto-clicker/packaging/arch && git pull --ff-only && makepkg -sif`
+1. Fetch the new commits and list them:
+   `cd ~/auto-clicker && git fetch && git log --oneline HEAD..origin/main`
+2. Check that each one is a change you reviewed and merged on GitHub. Don't go on if one is not.
+3. Bring them in, then build and install:
+   `cd ~/auto-clicker/packaging/arch && git merge --ff-only origin/main && makepkg -sif`
 
 Then restart the computer, or, for each person, `systemctl --user restart auto-clicker`. Always use `-f`: without it, makepkg would reinstall the package it built last time.
 
