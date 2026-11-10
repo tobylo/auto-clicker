@@ -42,10 +42,12 @@ advisory_db_reachable() {
 }
 
 # A Cargo config in the tree could replace crates.io with another registry,
-# which cargo-deny would still report as crates.io. The repository keeps none.
+# which cargo-deny would still report as crates.io, or alias a cargo command
+# the gates run. The repository tracks no `.cargo` path at all, so this runs
+# before the first cargo command.
 no_cargo_config() {
     local found
-    found="$(git ls-files -- ':(glob)**/.cargo/config' ':(glob)**/.cargo/config.toml')"
+    found="$(git ls-files -- ':(glob)**/.cargo' ':(glob)**/.cargo/**')" || return 1
     if [[ -n "$found" ]]; then
         echo "Cargo configuration is not allowed in the repository: $found" >&2
         return 1
@@ -59,7 +61,6 @@ no_cargo_config() {
 # fails once older than deny.toml allows. It builds nothing, so it runs before
 # any build script or proc macro does.
 deny_check() {
-    no_cargo_config || return 1
     local want="cargo-deny $CARGO_DENY_VERSION" found
     found="$(cargo deny --version 2>/dev/null || true)"
     if [[ "$found" != "$want" ]]; then
@@ -80,6 +81,7 @@ deny_check() {
     fi
 }
 
+gate cargo-config no_cargo_config
 gate fmt cargo fmt --all --check
 gate deny deny_check
 gate clippy cargo clippy --workspace --all-targets --locked -- -D warnings
