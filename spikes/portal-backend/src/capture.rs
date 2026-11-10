@@ -54,15 +54,12 @@ pub async fn run(secs: u64) -> Result<(), String> {
         .await
         .map_err(err("Enable"))?;
     line("enabled: push the pointer against the top edge");
-    let receiver = Receiver { connection, events };
-    let result = watch(
-        &portal,
-        &session,
-        receiver,
+    let receiver = Receiver {
+        connection,
+        events,
         signals,
-        Duration::from_secs(secs),
-    )
-    .await;
+    };
+    let result = watch(&portal, &session, receiver, Duration::from_secs(secs)).await;
     let closed = tokio::time::timeout(CALL_LIMIT, session.close()).await;
     line(&format!("closed session: {closed:?}"));
     result
@@ -133,10 +130,11 @@ fn top_edge((region, id): (&ashpd::desktop::input_capture::Region, u32)) -> Barr
     Barrier::new(id, (x, y, right, y))
 }
 
-/// The receiving end of the capture's EIS connection.
-struct Receiver {
+/// What the capture receives: its EIS connection and the portal's signals.
+struct Receiver<'a> {
     connection: reis::event::Connection,
     events: reis::tokio::EiConvertEventStream,
+    signals: Signals<'a>,
 }
 
 /// Counts what arrives, and hands input back [`HAND_BACK`] after each
@@ -144,8 +142,7 @@ struct Receiver {
 async fn watch(
     portal: &InputCapture,
     session: &Session<InputCapture>,
-    mut receiver: Receiver,
-    mut signals: Signals<'_>,
+    mut receiver: Receiver<'_>,
     duration: Duration,
 ) -> Result<(), String> {
     let mut counts = BTreeMap::<&'static str, u64>::new();
@@ -161,12 +158,12 @@ async fn watch(
                 hand_back(portal, session).await?;
                 release.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(86_400));
             }
-            Some(a) = signals.activated.next() => {
+            Some(a) = receiver.signals.activated.next() => {
                 line(&format!("activated: barrier {:?}", a.barrier_id()));
                 release.as_mut().reset(tokio::time::Instant::now() + HAND_BACK);
             }
-            Some(_) = signals.deactivated.next() => line("deactivated"),
-            Some(_) = signals.disabled.next() => line("disabled"),
+            Some(_) = receiver.signals.deactivated.next() => line("deactivated"),
+            Some(_) = receiver.signals.disabled.next() => line("disabled"),
             Some(event) = receiver.events.next() => {
                 count(&mut counts, event);
                 // The seat bind is only buffered until flushed.
