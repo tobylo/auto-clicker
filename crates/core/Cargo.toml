@@ -4,6 +4,7 @@ description = "Core logic of auto-clicker: engine, recording format and config, 
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [features]

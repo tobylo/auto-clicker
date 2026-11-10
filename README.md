@@ -2,9 +2,9 @@
 
 # auto-clicker
 
-An auto clicker with macro record and playback for KDE Plasma on Wayland, living in the system tray. Written in Rust to stay light while idle.
+An auto clicker with macro record and playback for KDE Plasma on Wayland, living in the system tray. It is for anyone who plays games on a Plasma desktop and wants fast clicking, a held button or key, or a recorded routine, switched on and off by a hotkey that works inside fullscreen games. Written in Rust to stay light while idle.
 
-Status: the auto clicker runs from the tray and the hotkey, records macros, and installs as a package on CachyOS and Arch; playback is still to come. See [docs/planning/map.md](docs/planning/map.md) for what it will do and why, and [the Project](https://github.com/users/tobylo/projects/4) for the work.
+Status: the auto clicker runs from the tray and the hotkey, records macros, and installs as a package on CachyOS and Arch (see [Install](#install)); playback is still to come. See [docs/planning/map.md](docs/planning/map.md) for what it will do and why, and [the Project](https://github.com/users/tobylo/projects/4) for the work.
 
 ## Install
 
@@ -47,7 +47,9 @@ The program does not update itself. To install a newer version, from the account
 
 1. Fetch the new commits and list them:
    `cd ~/auto-clicker && git fetch && git log --oneline HEAD..origin/main`
-2. Check that each one is a change you reviewed and merged on GitHub. Don't go on if one is not.
+2. Read what they change, all of it in one diff:
+   `git diff HEAD origin/main`
+   The program presses keys and reads keyboards: don't go on past a change you don't trust.
 3. Bring them in, then build and install:
    `cd ~/auto-clicker/packaging/arch && git merge --ff-only origin/main && makepkg -sif`
 
@@ -67,8 +69,10 @@ The build refuses to run if the downloaded copy has been changed by hand (`git s
    `sudo pacman -Rns tobylo-auto-clicker`
 3. Take each person out of the `input` group, unless something else needs it, then restart the computer: programs already running keep the group until then.
    `sudo gpasswd -d NAME input`
-4. Optionally, from the account that installed it, delete the downloaded copy and Rust, which the build installed:
-   `rm -rf ~/auto-clicker; sudo pacman -Rns rust`
+4. Optionally, from the account that installed it, delete the downloaded copy:
+   `rm -rf ~/auto-clicker`
+   and Rust, if the build installed it and nothing else of yours needs it:
+   `sudo pacman -Rns rust`
 5. Optionally, as each person, delete their settings:
    `rm -rf ~/.config/auto-clicker`
 
@@ -159,3 +163,11 @@ The keyboards are only read, never taken over, so the game also gets the hotkey.
 If a key remapper (keyd, kanata) takes over a keyboard while Ctrl or another modifier is held on it, the program never sees that key come up, and hotkeys stay blocked until the keyboard is unplugged or the program restarts.
 
 A run that holds a modifier itself (`hold_key` with `key = "leftshift"`, say) and a remapper that re-sends this program's virtual keyboard (keyd's default, which takes over every keyboard) do not mix: the hotkey then arrives with that modifier added, does not match, and cannot stop the run. Stop it from the tray, or set the remapper to leave the "auto-clicker virtual keyboard" device alone.
+
+## Contributing
+
+Bug reports and ideas are welcome as [issues](https://github.com/tobylo/auto-clicker/issues). The program installs only from this repository, and a pull request from outside is merged only by the maintainer, so it may wait a while or be turned down. Report a security problem privately, with "Report a vulnerability" under the repository's [Security tab](https://github.com/tobylo/auto-clicker/security), not in a public issue.
+
+## License
+
+Licensed under either of the [Apache License, Version 2.0](LICENSE-APACHE) or the [MIT license](LICENSE-MIT), at your option. Unless you state otherwise, any contribution you submit for inclusion is licensed the same way, with no additional terms.

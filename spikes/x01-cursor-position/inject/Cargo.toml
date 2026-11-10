@@ -3,6 +3,7 @@ name = "x01-inject"
 description = "X01 spike: moves C01's virtual mouse on command and timestamps each move"
 version = "0.0.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 publish = false
 
 # Not a member of the repository's workspace: spikes are not built by it.
