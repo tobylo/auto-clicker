@@ -304,6 +304,8 @@ mod tests {
 
         assert_eq!((first, second), (paths[1].clone(), paths[2].clone()));
         assert_eq!(full.kind(), io::ErrorKind::AlreadyExists);
+        let named = paths[0].display().to_string();
+        assert!(full.to_string().starts_with(&named), "{full}");
         let contents = paths.clone().map(|path| fs::read(path).unwrap());
         assert_eq!(
             contents,

@@ -135,6 +135,7 @@ mod tests {
 
         assert!(slot.take().is_some());
         assert!(slot.take().is_none());
+        assert!(!slot.is_recording());
         timeout(Duration::from_secs(5), feed.changed())
             .await
             .unwrap();

@@ -71,18 +71,11 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    /// Stops and saves a recording, or cancels its countdown, saying why
-    /// when `why` is given; anything else is left alone.
+    /// Stops and saves a recording, saying why when `why` is given;
+    /// anything else is left alone.
     pub(super) fn stop_recording(&mut self, why: Option<String>) {
-        match self.state {
-            State::RecordCountdown(_) => {
-                self.state = State::Idle;
-                if why.is_some() {
-                    self.notice = why;
-                }
-            }
-            State::Recording(_) => self.finish_recording(StoppedBy::Other, why),
-            _ => {}
+        if matches!(self.state, State::Recording(_)) {
+            self.finish_recording(StoppedBy::Other, why);
         }
     }
 

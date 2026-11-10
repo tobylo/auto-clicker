@@ -571,14 +571,15 @@ fn a_press_dragged_to_the_menu_item_is_one_click() {
     let mut recorder = recorder();
     recorder.key(MOUSE, KeyInput::press(button_code(LEFT)), t(0));
     recorder.key(MOUSE, KeyInput::release(button_code(LEFT)), t(100_000));
-    recorder.motion(t(1_000_000), 300, -200);
-    // Pressed on the icon (the menu opens), dragged to the item, let go.
-    recorder.key(MOUSE, KeyInput::press(button_code(LEFT)), t(1_200_000));
-    recorder.motion(t(1_400_000), 0, -40);
-    recorder.key(MOUSE, KeyInput::release(button_code(LEFT)), t(1_600_000));
+    recorder.motion(t(21_000_000), 300, -200);
+    // 20 s later: pressed on the icon (the menu opens), dragged to the
+    // item, let go.
+    recorder.key(MOUSE, KeyInput::press(button_code(LEFT)), t(21_200_000));
+    recorder.motion(t(21_400_000), 0, -40);
+    recorder.key(MOUSE, KeyInput::release(button_code(LEFT)), t(21_600_000));
     let ending = Ending::Tray {
-        at: t(1_700_000),
-        menu_opened: Some(t(1_250_000)),
+        at: t(21_700_000),
+        menu_opened: Some(t(21_250_000)),
     };
     let recording = recorder.finish(ending).unwrap().unwrap();
     assert_eq!(
@@ -591,10 +592,11 @@ fn a_press_dragged_to_the_menu_item_is_one_click() {
 fn a_stale_menu_opening_falls_back_to_the_last_two_clicks() {
     let mut recorder = recorder();
     mining_then_tray_trip(&mut recorder);
-    // Opened 12 s before the stop: too old to be this trip's.
+    // Stopped at 16 s, the menu last said it opened at 2 s, after the
+    // mining click: too long ago to be this trip's opening.
     let ending = Ending::Tray {
-        at: t(5_100_000),
-        menu_opened: Some(START - Duration::from_secs(7)),
+        at: t(16_000_000),
+        menu_opened: Some(t(2_000_000)),
     };
     let recording = recorder.finish(ending).unwrap().unwrap();
     assert_eq!(changes(&recording), mining());
