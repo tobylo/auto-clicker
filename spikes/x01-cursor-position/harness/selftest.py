@@ -10,6 +10,7 @@ Run: dbus-run-session -- python3 harness/selftest.py
 
 import subprocess
 import sys
+import time
 
 import dbus
 
@@ -23,6 +24,9 @@ HELPERS = {
     "silent": ("pass", None),
 }
 SLEEP = "; import time; time.sleep(30)"
+# Well under the helpers' 30 s lifetime, above the 0.5 s deadline plus
+# stop()'s 5 s grace: a reader that ignored its deadline would take 30 s.
+BOUND = 15
 
 
 def check(condition, what):
@@ -56,14 +60,16 @@ def receiver_checks():
 
 def helper_check(name, code, expected):
     proc = subprocess.Popen([sys.executable, "-c", code + SLEEP], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    start = time.monotonic()
     try:
         line = wait_ready(proc, timeout=0.5)
     except RuntimeError:
         line = None
+    took = time.monotonic() - start
     if expected:
         ok = line == expected and proc.stdout.readline() == b"motion 1 2\n"
     else:
-        ok = line is None and proc.poll() is not None
+        ok = line is None and proc.poll() is not None and took < BOUND
     if proc.poll() is None:
         proc.kill()
         proc.wait()
