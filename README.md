@@ -4,11 +4,77 @@
 
 An auto clicker with macro record and playback for KDE Plasma on Wayland, living in the system tray. Written in Rust to stay light while idle.
 
-Status: the auto clicker runs from the tray and the hotkey; installing, recording and playback are still to come. See [docs/planning/map.md](docs/planning/map.md) for what it will do and why, and [the Project](https://github.com/users/tobylo/projects/4) for the work.
+Status: the auto clicker runs from the tray and the hotkey, and installs as a package on CachyOS and Arch; recording and playback are still to come. See [docs/planning/map.md](docs/planning/map.md) for what it will do and why, and [the Project](https://github.com/users/tobylo/projects/4) for the work.
+
+## Install
+
+These steps are for CachyOS (or Arch Linux) with Plasma. The computer builds the program itself from this repository; nothing else is downloaded except the Rust libraries it uses, from crates.io, at the exact versions in `Cargo.lock`. Each command is one line; paste it into a terminal (Konsole).
+
+### Once per computer
+
+Run these from an account that can use `sudo`.
+
+1. Bring the system up to date, then restart the computer if the update included a new kernel:
+   `sudo pacman -Syu`
+2. Install the build tools:
+   `sudo pacman -S --needed base-devel git`
+3. Download this repository:
+   `git clone https://github.com/tobylo/auto-clicker.git ~/auto-clicker`
+4. Build and install the package. This takes a few minutes, installs Rust the first time, and asks for your password:
+   `cd ~/auto-clicker/packaging/arch && makepkg -sif`
+
+The package is called `tobylo-auto-clicker`. It installs the program, its tray icons, an "Auto Clicker" entry in the app menu, a background service, and a rule that lets the person at the screen use `/dev/uinput`.
+
+### For each person who uses it
+
+1. Let them read the keyboard for the hotkeys (replace `NAME` with their login name):
+   `sudo usermod -aG input NAME`
+2. Restart the computer, so the new group and the `/dev/uinput` rule take effect.
+3. Logged in as that person, start it now and at every login:
+   `systemctl --user enable --now auto-clicker`
+
+The icon then appears in the system tray. After **Quit**, start it again from "Auto Clicker" in the app menu, or log in again.
+
+### What the permissions mean
+
+- **`/dev/uinput`** lets a program create a virtual mouse and keyboard, which is how auto-clicker clicks. The rule lets programs of the person logged in at the screen open it, any of their programs, not just this one. When someone else takes over the screen, no new program of the first person can open it, but one that already has it open keeps it. auto-clicker itself stops clicking and lets go of everything when the screen locks or another user's session comes to the front.
+- **The `input` group** lets a program read every keyboard and mouse directly, so the hotkey works inside fullscreen games. auto-clicker only looks for its hotkeys, and records keys only while you record a macro. But the group applies to every program that person runs, not just this one: only add people whose programs you trust.
+- The background service may use local Unix sockets only, so the program cannot reach the network even by mistake. The program itself opens no network connection.
+
+### Updating
+
+The program does not update itself. To install a newer version, from the account that installed it:
+
+1. Fetch the new commits and list them:
+   `cd ~/auto-clicker && git fetch && git log --oneline HEAD..origin/main`
+2. Check that each one is a change you reviewed and merged on GitHub. Don't go on if one is not.
+3. Bring them in, then build and install:
+   `cd ~/auto-clicker/packaging/arch && git merge --ff-only origin/main && makepkg -sif`
+
+Then restart the computer, or, for each person, `systemctl --user restart auto-clicker`. Always use `-f`: without it, makepkg would reinstall the package it built last time.
+
+The build refuses to run if the downloaded copy has been changed by hand (`git status` shows changes), so what gets installed is always a version from this repository.
+
+### If it does not start
+
+`systemctl --user status auto-clicker` shows whether it runs, and `journalctl --user -b -u auto-clicker` shows its messages. Exit status 77 means it cannot use `/dev/uinput`: restart the computer after installing. Exit status 3 means another copy is already running.
+
+### Uninstall
+
+1. For each person who enabled it, logged in as them:
+   `systemctl --user disable --now auto-clicker`
+2. Remove the package:
+   `sudo pacman -Rns tobylo-auto-clicker`
+3. Take each person out of the `input` group, unless something else needs it, then restart the computer: programs already running keep the group until then.
+   `sudo gpasswd -d NAME input`
+4. Optionally, from the account that installed it, delete the downloaded copy and Rust, which the build installed:
+   `rm -rf ~/auto-clicker; sudo pacman -Rns rust`
+5. Optionally, as each person, delete their settings:
+   `rm -rf ~/.config/auto-clicker`
 
 ## Using it
 
-Run `auto-clicker`. It stays in the system tray; a left or right click on its icon opens the menu:
+Once installed and enabled, it starts at login and stays in the system tray (run `auto-clicker` to start it by hand). A left or right click on its icon opens the menu:
 
 - **Start clicking** counts down `tray_start_delay` seconds (5 by default), so you can switch to the game, then clicks. The icon's tooltip shows the seconds left. **Stop clicking** stops it, or cancels the countdown.
 - **Record**, **Play** and **Settings** come in later versions.
@@ -24,7 +90,7 @@ Exit statuses: 0 after Quit, SIGTERM or SIGINT; 3 when another copy is already r
 
 ## Configuration
 
-Settings live in `~/.config/auto-clicker/config.toml` (or under `$XDG_CONFIG_HOME`). Without the file, the defaults below apply; the program never writes it. If the file is invalid, the program runs on the defaults, leaves the file alone and reports the line and reason in the tray's tooltip. The file is read at start only: restart the program after editing it.
+Settings live in `~/.config/auto-clicker/config.toml` (or under `$XDG_CONFIG_HOME`). Without the file, the defaults below apply; the program never writes it. If the file is invalid, the program runs on the defaults, leaves the file alone and reports the line and reason in the tray's tooltip. The file is read at start only: after editing it, restart the program (`systemctl --user restart auto-clicker`).
 
 ```toml
 version = 1
@@ -51,7 +117,7 @@ toggle_playback = "Ctrl+F8"   # play or stop the macro
 
 ## Hotkeys
 
-Hotkeys work in every window, fullscreen games included, because the program reads the keyboards directly. That needs read access to `/dev/input`: the user must be in the `input` group. When no keyboard can be read, the program keeps running and the tray says why.
+Hotkeys work in every window, fullscreen games included, because the program reads the keyboards directly. That needs read access to `/dev/input`: the user must be in the `input` group (see [Install](#install)). When no keyboard can be read, the program keeps running and the tray says why.
 
 The keyboards are only read, never taken over, so the game also gets the hotkey. In Minecraft, Ctrl is sprint: pressing Ctrl+F6 also starts sprinting for a moment. Pick a hotkey the game ignores if that gets in the way.
 

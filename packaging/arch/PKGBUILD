@@ -1,0 +1,75 @@
+# Builds auto-clicker from the checkout this file sits in: run makepkg in
+# packaging/arch. It downloads nothing but the crates Cargo.lock pins,
+# refuses a checkout with uncommitted changes, and builds a fresh copy of the
+# checked-out commit, so a stray local edit never reaches the package. The
+# account that runs makepkg is trusted: it runs this file, and Cargo reads its
+# ~/.cargo/config.toml, so nothing here guards against that account changing
+# files during its own build.
+
+pkgname=tobylo-auto-clicker
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Auto clicker for KDE Plasma on Wayland, in the system tray'
+arch=(x86_64)
+url='https://github.com/tobylo/auto-clicker'
+license=('LicenseRef-unknown')
+depends=(glibc libgcc hicolor-icon-theme)
+makedepends=(cargo git)
+options=(!debug)
+
+_root=$(realpath "$startdir/../..")
+
+prepare() {
+  cd "$_root"
+  local top changes commit
+  # A failed git command is never read as "nothing changed".
+  if ! top=$(git rev-parse --show-toplevel) || [[ $top != "$_root" ]]; then
+    error "$_root is not the top of a git checkout of this repository."
+    return 1
+  fi
+  if ! changes=$(git status --porcelain); then
+    error 'git status failed.'
+    return 1
+  fi
+  if [[ -n $changes ]]; then
+    error 'The checkout has uncommitted changes: commit or discard them first.'
+    return 1
+  fi
+  commit=$(git rev-parse --verify 'HEAD^{commit}')
+  # Everything below reads a fresh copy of that commit, never the checkout,
+  # and no earlier build's output is reused.
+  rm -rf "$srcdir/auto-clicker"
+  mkdir "$srcdir/auto-clicker"
+  git archive --format=tar "$commit" | tar -x -C "$srcdir/auto-clicker"
+  if [[ ${PIPESTATUS[*]} != '0 0' ]]; then
+    error "Could not copy commit $commit."
+    return 1
+  fi
+  msg2 "Building commit $commit"
+
+  cd "$srcdir/auto-clicker"
+  local id
+  id=$(cargo pkgid --locked -p auto-clicker)
+  if [[ ${id##*[@#]} != "$pkgver" ]]; then
+    error "pkgver $pkgver does not match the crate version in $id."
+    return 1
+  fi
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
+}
+
+build() {
+  cd "$srcdir/auto-clicker"
+  export CARGO_TARGET_DIR="$srcdir/auto-clicker/target"
+  cargo build --release --frozen -p auto-clicker
+}
+
+package() {
+  cd "$srcdir/auto-clicker"
+  install -Dm755 target/release/auto-clicker -t "$pkgdir/usr/bin"
+  install -Dm644 data/systemd/auto-clicker.service -t "$pkgdir/usr/lib/systemd/user"
+  install -Dm644 data/udev/70-auto-clicker-uinput.rules -t "$pkgdir/usr/lib/udev/rules.d"
+  install -Dm644 data/applications/io.github.tobylo.AutoClicker.desktop \
+    -t "$pkgdir/usr/share/applications"
+  install -Dm644 data/icons/hicolor/scalable/apps/*.svg \
+    -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
+}
