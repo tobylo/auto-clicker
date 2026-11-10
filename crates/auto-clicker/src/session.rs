@@ -32,6 +32,8 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long sleep waits for the controller to let go of everything. logind
 /// waits for a delay lock 5 s at most by default (`InhibitDelayMaxSec`).
 const RELEASE_BEFORE_SLEEP: Duration = Duration::from_secs(2);
+/// How long after a failure logind is followed again.
+const RETRY_AFTER_FAILURE: Duration = Duration::from_secs(30);
 
 #[zbus::proxy(
     interface = "org.freedesktop.login1.Manager",
@@ -76,9 +78,9 @@ trait Session {
 }
 
 /// Sends the session's state to the controller whenever it changes, until
-/// the controller is gone. When logind cannot be followed, says why and
-/// stops: the controller then refuses to start, since a state it cannot read
-/// is not "unlocked".
+/// the controller is gone. When logind cannot be followed, says why (the
+/// controller then refuses to start, since a state it cannot read is not
+/// "unlocked") and tries again `RETRY_AFTER_FAILURE` later.
 ///
 /// While the machine is awake it holds a sleep delay lock. When logind
 /// announces sleep, it tells the controller, waits (at most
@@ -86,9 +88,21 @@ trait Session {
 /// nothing is held, and only then gives the lock back, so the machine never
 /// sleeps with a button or key down.
 pub async fn watch(send: mpsc::UnboundedSender<Message>, released: watch::Receiver<u64>) {
-    if let Err(err) = watch_logind(&send, released).await {
+    loop {
+        let Err(err) = watch_logind(&send, &released).await else {
+            return;
+        };
         let reason = format!("logind: {err}");
-        let _ = send.send(Message::Session(Some(Blocked::Unknown(reason))));
+        if send
+            .send(Message::Session(Some(Blocked::Unknown(reason))))
+            .is_err()
+        {
+            return;
+        }
+        // A failure may pass (a busy logind, a timeout): try again on a
+        // fresh connection, which also drops whatever the failed one had
+        // half set up. Waits only after a failure; idle costs nothing.
+        tokio::time::sleep(RETRY_AFTER_FAILURE).await;
     }
 }
 
@@ -116,13 +130,12 @@ enum End {
     },
 }
 
-/// Follows logind until the controller is gone. Whatever stops it (logind
-/// restarting, a call that failed, a session it could not read), starts are
-/// refused with the reason until logind next changes owner, and then it is
-/// followed afresh. Nothing is retried on a timer.
+/// Follows logind on one connection until the controller is gone (`Ok`) or
+/// something fails. When logind restarts, starts are refused until it is
+/// back, and it is followed afresh.
 async fn watch_logind(
     send: &mpsc::UnboundedSender<Message>,
-    released: watch::Receiver<u64>,
+    released: &watch::Receiver<u64>,
 ) -> zbus::Result<()> {
     let (bus, mut owners) = bounded("connecting", connect()).await?;
     loop {
@@ -130,15 +143,12 @@ async fn watch_logind(
             send,
             released: released.clone(),
         };
-        let (reason, back) = match follow_once(&bus, reach, &mut owners).await {
-            Ok(End::ControllerGone) => return Ok(()),
-            Ok(End::LogindGone { back }) => ("logind is restarting".to_owned(), back),
-            Err(err) => (format!("logind: {err}"), false),
+        let back = match follow_once(&bus, reach, &mut owners).await? {
+            End::ControllerGone => return Ok(()),
+            End::LogindGone { back } => back,
         };
-        if send
-            .send(Message::Session(Some(Blocked::Unknown(reason))))
-            .is_err()
-        {
+        let restarting = Blocked::Unknown("logind is restarting".to_owned());
+        if send.send(Message::Session(Some(restarting))).is_err() {
             return Ok(());
         }
         if !back {
