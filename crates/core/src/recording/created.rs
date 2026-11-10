@@ -57,9 +57,10 @@ impl Created {
         let minute = u8::try_from(local.minute).ok().filter(|&m| m < 60)?;
         let second = u8::try_from(local.second.min(59)).ok()?;
         let millis = u16::try_from(local.millis).ok().filter(|&ms| ms < 1000)?;
-        let offset_minutes = i16::try_from(local.offset_seconds / 60)
-            .ok()
-            .filter(|offset| offset.abs() <= MAX_OFFSET_MINUTES)?;
+        let widest = i64::from(MAX_OFFSET_MINUTES);
+        let offset_minutes = Some(local.offset_seconds / 60)
+            .filter(|offset| (-widest..=widest).contains(offset))
+            .and_then(|offset| i16::try_from(offset).ok())?;
         Some(Created {
             year,
             month,
@@ -254,6 +255,9 @@ mod tests {
     #[test]
     fn a_day_long_offset_is_refused_and_seconds_are_cut() {
         assert_eq!(Created::new(local(24 * 3600)), None);
+        assert_eq!(Created::new(local(-24 * 3600)), None);
+        assert_eq!(Created::new(local(i64::from(i16::MIN) * 60)), None);
+        assert_eq!(Created::new(local(i64::MIN)), None);
         let widest = Created::new(local(-(23 * 3600 + 59 * 60))).unwrap();
         assert_eq!(widest.to_string(), "2026-11-09T18:04:05.123-23:59");
         let odd = Created::new(local(3600 + 59)).unwrap();

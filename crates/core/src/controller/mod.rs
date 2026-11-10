@@ -33,7 +33,7 @@ pub use view::{Activity, View, describe};
 
 use crate::clicker::{Ended, RunEnd, Signals, run};
 use crate::config::Config;
-use crate::hotkeys::{Action, HotkeyEvent, HotkeyStatus};
+use crate::hotkeys::{Action, HotkeyEvent, HotkeyStatus, Unavailable};
 use crate::input::{Input, InputBackend, InputError};
 use crate::recording::{LocalTime, RecordingFeed, RecordingSlot};
 use hotkeys::HotkeySource;
@@ -396,6 +396,9 @@ impl<P: Platform> Controller<P> {
 
     fn hotkey_status_changed(&mut self, status: HotkeyStatus) {
         let unavailable = matches!(status, HotkeyStatus::Unavailable(_));
+        if let HotkeyStatus::Unavailable(why @ Unavailable::WatchFailed(_)) = &status {
+            self.input_lost(why.to_string());
+        }
         self.hotkey_status = Some(status);
         if unavailable {
             self.cancel_release("Not started: hotkeys stopped working".to_owned());

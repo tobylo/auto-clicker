@@ -79,6 +79,21 @@ impl<P: Platform> Controller<P> {
         }
     }
 
+    /// The input reader ended: a recording has nothing left to read, so it
+    /// stops and saves what it has, and a countdown to one is cancelled.
+    pub(super) fn input_lost(&mut self, why: String) {
+        match self.state {
+            State::RecordCountdown(_) => {
+                self.state = State::Idle;
+                self.notice = Some(format!("Not recording: {why}"));
+            }
+            State::Recording(_) => {
+                self.finish_recording(StoppedBy::Other, Some(format!("Recording stopped: {why}")));
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn recording_limit_reached(&mut self) {
         let minutes = MAX_DURATION.as_secs() / 60;
         let why = format!("Recording stopped at its {minutes}-minute limit");

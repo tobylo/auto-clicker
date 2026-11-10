@@ -385,3 +385,37 @@ async fn nothing_the_tray_shows_names_a_recorded_key() {
     })
     .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn losing_the_input_reader_stops_and_saves_or_cancels_at_once() {
+    let lost = || {
+        HotkeyEvent::Status(HotkeyStatus::Unavailable(Unavailable::WatchFailed(
+            "gone".to_owned(),
+        )))
+    };
+    let why = "hotkeys stopped: watching for keyboards failed: gone";
+    local(async {
+        let d = daemon(Mode::Click).await;
+        d.record_hotkey().await;
+        d.key(KEYBOARD, W, true);
+        sleep(secs(1)).await;
+        let before = Instant::now();
+        d.hotkey(lost()).await;
+        assert_eq!(Instant::now(), before);
+        assert_eq!(d.activity(), Activity::Idle);
+        assert_eq!(d.notice(), format!("Recording stopped: {why}. {SAVED}"));
+        assert_eq!(d.saved_changes(), [(0, press(W)), (1000, release(W))]);
+    })
+    .await;
+    local(async {
+        let d = daemon(Mode::Click).await;
+        d.send(Message::Record).await;
+        d.hotkey(lost()).await;
+        assert_eq!(d.activity(), Activity::Idle);
+        assert_eq!(d.notice(), format!("Not recording: {why}"));
+        sleep(secs(10)).await;
+        d.settle().await;
+        assert!(d.saved().is_empty());
+    })
+    .await;
+}
