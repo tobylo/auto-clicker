@@ -372,7 +372,7 @@ fn interface_changes(
         return Ok(Vec::new());
     }
     refuse_invalidated(args.invalidated_properties(), watched)?;
-    property_changes(args.changed_properties())
+    property_changes(args.changed_properties(), watched)
 }
 
 fn refuse_invalidated(invalidated: &[&str], watched: &[&str]) -> zbus::Result<()> {
@@ -384,17 +384,23 @@ fn refuse_invalidated(invalidated: &[&str], watched: &[&str]) -> zbus::Result<()
     }
 }
 
-/// The watched properties among `changed`, as changes. Active comes before
-/// LockedHint, so a session that went inactive is stopped as such.
-fn property_changes(changed: &HashMap<&str, Value<'_>>) -> zbus::Result<Vec<Change>> {
+/// The `watched` properties among `changed`, as changes; others are
+/// ignored, whatever they are called (a session's `Display` is the X display
+/// string, not the user's session). Active comes before LockedHint, so a
+/// session that went inactive is stopped as such.
+fn property_changes(
+    changed: &HashMap<&str, Value<'_>>,
+    watched: &[&str],
+) -> zbus::Result<Vec<Change>> {
+    let get = |name: &str| watched.contains(&name).then(|| changed.get(name)).flatten();
     let mut changes = Vec::new();
-    if let Some(value) = changed.get("Active") {
+    if let Some(value) = get("Active") {
         changes.push(Change::Active(bool::try_from(value)?));
     }
-    if let Some(value) = changed.get("LockedHint") {
+    if let Some(value) = get("LockedHint") {
         changes.push(Change::Locked(bool::try_from(value)?));
     }
-    if let Some(value) = changed.get("Display") {
+    if let Some(value) = get("Display") {
         let (_, path) = <(String, OwnedObjectPath)>::try_from(value.try_clone()?)?;
         changes.push(Change::Display(path));
     }
@@ -509,30 +515,38 @@ mod tests {
         assert!(!is_no_session(&path("/org/freedesktop/login1/session/_31")));
     }
 
+    const SESSION: [&str; 2] = ["Active", "LockedHint"];
+
     #[test]
-    fn every_watched_property_becomes_a_change_in_order() {
-        let session = path("/org/freedesktop/login1/session/_32");
-        let display = Value::from(("2".to_owned(), session.clone()));
+    fn a_session_change_becomes_changes_in_order_and_ignores_the_rest() {
         let changed = HashMap::from([
             ("LockedHint", Value::from(true)),
             ("Active", Value::from(false)),
             ("IdleHint", Value::from(true)),
-            ("Display", display),
+            // A session's own Display: the X display name, a string.
+            ("Display", Value::from(":0")),
         ]);
         assert_eq!(
-            property_changes(&changed).unwrap(),
-            [
-                Change::Active(false),
-                Change::Locked(true),
-                Change::Display(session),
-            ]
+            property_changes(&changed, &SESSION).unwrap(),
+            [Change::Active(false), Change::Locked(true)]
+        );
+    }
+
+    #[test]
+    fn a_user_change_carries_the_display_session() {
+        let session = path("/org/freedesktop/login1/session/_32");
+        let display = Value::from(("2".to_owned(), session.clone()));
+        let changed = HashMap::from([("Display", display), ("State", Value::from("active"))]);
+        assert_eq!(
+            property_changes(&changed, &["Display"]).unwrap(),
+            [Change::Display(session)]
         );
     }
 
     #[test]
     fn a_value_of_the_wrong_type_is_an_error() {
         let changed = HashMap::from([("Active", Value::from("yes"))]);
-        assert!(property_changes(&changed).is_err());
+        assert!(property_changes(&changed, &SESSION).is_err());
     }
 
     #[test]
