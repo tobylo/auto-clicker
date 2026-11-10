@@ -10,39 +10,39 @@ use super::*;
 type OpenGate = oneshot::Sender<Result<(), InputError>>;
 
 #[derive(Default)]
-struct Gates {
+pub(super) struct Gates {
     /// The open in flight, waiting for the test.
     open: Option<OpenGate>,
     /// Fires the loss of the devices opened last.
     loss: Option<oneshot::Sender<InputError>>,
     /// How many opens were dropped before they ended.
-    opens_dropped: usize,
+    pub(super) opens_dropped: usize,
     /// How many devices were closed (dropped).
-    closed: usize,
+    pub(super) closed: usize,
 }
 
 #[derive(Clone, Default)]
-struct PerRunShared {
+pub(super) struct PerRunShared {
     devices: Shared,
     gates: Arc<Mutex<Gates>>,
 }
 
 impl PerRunShared {
-    fn gates<R>(&self, f: impl FnOnce(&mut Gates) -> R) -> R {
+    pub(super) fn gates<R>(&self, f: impl FnOnce(&mut Gates) -> R) -> R {
         f(&mut self.gates.lock().unwrap())
     }
 
     /// Ends the open in flight with `result`.
-    fn finish_open(&self, result: Result<(), InputError>) {
+    pub(super) fn finish_open(&self, result: Result<(), InputError>) {
         let gate = self.gates(|g| g.open.take()).expect("an open in flight");
         let _ = gate.send(result);
     }
 
-    fn open_in_flight(&self) -> bool {
+    pub(super) fn open_in_flight(&self) -> bool {
         self.gates(|g| g.open.as_ref().is_some_and(|gate| !gate.is_closed()))
     }
 
-    fn lose(&self, err: InputError) {
+    pub(super) fn lose(&self, err: InputError) {
         let loss = self.gates(|g| g.loss.take()).expect("devices to lose");
         let _ = loss.send(err);
     }
@@ -174,7 +174,7 @@ impl PerRunPlatform {
     }
 }
 
-async fn per_run_daemon(mode: Mode) -> (Daemon, PerRunShared) {
+pub(super) async fn per_run_daemon(mode: Mode) -> (Daemon, PerRunShared) {
     let shared = PerRunShared::default();
     let config = Config {
         tray_start_delay: Duration::ZERO,

@@ -1109,4 +1109,5 @@ fn the_countdown_wakes_on_each_whole_second_and_then_the_deadline() {
 }
 
 mod per_run;
+mod playback;
 mod recording;

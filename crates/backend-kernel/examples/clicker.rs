@@ -124,7 +124,7 @@ async fn click(config: Config, args: &Args) -> Result<(), String> {
         () = tokio::time::sleep(args.start_delay) => {}
     }
     println!("start");
-    let signals = clicker::Signals { stop, shutdown };
+    let signals = auto_clicker_core::run::Signals { stop, shutdown };
     let end = clicker::run(input, &config.clicker, fastrand::Rng::new(), signals).await;
     let ended = end.result.map_err(|err| err.to_string())?;
     println!("ended {ended:?}");

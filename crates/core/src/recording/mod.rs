@@ -25,7 +25,7 @@ use std::time::Duration;
 pub use codes::{name as code_name, parse as parse_code, recordable};
 pub use created::{Created, LocalTime};
 pub use recorder::{Ending, KeyInput, Recorder};
-pub use store::{recordings_dir, save};
+pub use store::{FileName, LoadError, MAX_FILE_BYTES, list, load, recordings_dir, save};
 pub use tap::{RecordingFeed, RecordingSlot};
 
 use crate::input::Held;
@@ -227,4 +227,4 @@ fn check_change(change: Change, down: &mut BTreeSet<Held>) -> Result<(), &'stati
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
