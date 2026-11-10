@@ -22,13 +22,14 @@ These hold everywhere below and are stated once.
 - **I2, a position.** A recorded position lies on at least one output of its recording's layout. The recorder drops a report that does not; a file holding one is refused.
 - **I3, one validated form.** Reports from KWin are parsed once into the same types the file is parsed into. No sequence of reports makes a recording fail to finish, and the recorder never writes a file the program then refuses to load, by its content or its size.
 - **I4, the current layout is known or unknown.** It is unknown until the layout script loaded by this daemon has reported with the token of that load, and becomes unknown again the moment `org.kde.KWin` changes or loses its owner, or a load fails.
-- **I5, every call to KWin is bounded** by its own deadline and ends at once on shutdown. A failure never blocks or fails a recording or a playback: the recording carries on without positions, and the playback uses relative motion.
+- **I5, every call to KWin is bounded** by its own deadline and ends at once on shutdown. A failure never blocks or fails a recording or the start of a playback: the recording carries on without positions, and a playback that starts while the layout is unknown uses relative motion. A playback already using positions is stopped instead ("Playback").
 
 ## Behaviour
 
 **Recording.**
 - While a recording runs, a KWin script reports `workspace.cursorPos` (whole logical px) once at load and on every change that differs from the last one sent. The daemon stamps each report on the event clock when it arrives.
-- The recorder writes positions as events of their own, beside the relative moves it already writes. It keeps at most one position per millisecond, the latest; a press, a release or a turn of the wheel ends that millisecond, so the position before a click or a scroll is never replaced by one after it.
+- The recorder writes positions as events of their own, beside the relative moves it already writes. It keeps at most one position per millisecond, the latest; a press, a release or a turn of the wheel ends that millisecond, so the position before a click or a scroll is never replaced by one after it. The first position after such an event is kept as it is, and counting starts with the next one: it may belong to the move before the event, and a later one must not stand in for it.
+- The first position of a recording is written at the recording's start when no relative move came before it: the pointer has not moved since, so input in the few milliseconds the script takes to load still has its position.
 - Events are ordered by time, not by arrival. A report is never stamped earlier than the move that caused it, so an input event read late goes before the positions stamped after it, where today it would be moved forward.
 - A recording has one layout: the current one at its start. Positions are written only while the current layout is known and equal to it. So a recording started while the layout is unknown has no positions; a layout change ends them for good or until the layout is the recording's again; and after a KWin restart they resume only once the new layout script has reported the same layout.
 - An idle recording still saves nothing: positions alone do not make a recording. The trip to the tray is trimmed as today; positions inside the trip go with its motion.
@@ -82,7 +83,7 @@ R03a, each a test against the fake backend:
 4. A layout that moved or lost an output the recording used falls back to relative motion and says so; an added output beside unchanged ones does not; an unknown layout falls back.
 5. The current layout changing or becoming unknown during a playback that uses positions stops it at once, with nothing pressed (time-bounded).
 6. Format: version 2 round-trips; a recording without positions is written as version 1; the refusals of decision 7, I1 and I2 each have a fixture.
-7. Recorder: events come out in time order when an input event is read late; one position per millisecond; no positions while the layout is unknown or differs, and again once it matches; an idle recording saves nothing; the tray trim takes its positions.
+7. Recorder: events come out in time order when an input event is read late; one position per millisecond, with the first after a press, release or wheel turn kept; the first position written at the start when nothing moved before it; no positions while the layout is unknown or differs, and again once it matches; an idle recording saves nothing; the tray trim takes its positions.
 8. I3: reports the recorder must drop never fail a recording, and the longest recording the recorder writes, with positions, loads.
 
 R03b:
@@ -105,7 +106,7 @@ R03a:
 R03b:
 - Whether the script file can be removed as soon as `run()` returns (check on the laptop); KWin opens it by path.
 - A stop and a start between two polls of the watcher must give the new recording its own initial position (key on the slot's change counter and the load token). The token is random hex, unique across daemon runs.
-- The hand-off from the handler to the watcher is bounded (latest position wins); sender and token are checked before anything else; the cached owner is read after subscribing to `NameOwnerChanged`.
+- The hand-off from the handler to the watcher keeps every report, in order: playback's pairing of clicks and positions depends on none being replaced. How it stays bounded when the daemon's thread stalls (positions stop until it is drained, leaving a gap) is this slice's to settle; sender and token are checked before anything else; the cached owner is read after subscribing to `NameOwnerChanged`.
 - A layout-change call that never arrives leaves the current layout stale; whether to reconcile it, and when.
 - The monotonic clock for stamping without a second `unsafe` copy of `backend-kernel`'s.
 - What KWin does with an absolute move while a game holds the pointer (X01 sent relative moves only), and which output route criterion 12 is measured on (the portal route maps positions through its own regions).
