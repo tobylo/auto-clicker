@@ -10,8 +10,10 @@
 //! cargo test --locked -p auto-clicker-backend-kernel --test playback -- --ignored --test-threads=1 --nocapture
 //! ```
 //!
-//! The second test measures and prints; it asserts only that the pointer
-//! moved. Its numbers go in the README ("Playing a recording").
+//! The last two tests observe and print: one measures how far replayed
+//! motion moves the pointer, the other what a window sees of a key held on a
+//! real keyboard while playback presses the same key. What they print goes
+//! in the README ("Playing a recording"). Neither needs the `input` group.
 
 // clippy.toml exempts `#[test]` functions only; this whole file is test code.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -30,12 +32,14 @@ use auto_clicker_backend_kernel::{
 };
 use auto_clicker_core::clicker::Repeat;
 use auto_clicker_core::hotkeys::{Binding, Bindings, HotkeyEvent, HotkeyStatus};
-use auto_clicker_core::input::{AbsolutePosition, Input};
+use auto_clicker_core::input::{AbsolutePosition, Input, Key};
 use auto_clicker_core::playback::{Playback, PlaybackSettings, Speed, play};
 use auto_clicker_core::recording::{
     Change, Created, Ending, Event, Recorder, Recording, RecordingSlot, recordable,
 };
 use auto_clicker_core::run::{Ended, Signals};
+use evdev::uinput::VirtualDevice;
+use evdev::{AttributeSet, EventType, InputEvent, KeyCode};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{sleep, timeout};
 
@@ -81,17 +85,35 @@ impl Window {
         window
     }
 
+    /// What the window reported until it went quiet for [`SETTLE`], or for
+    /// a second if it never did (a held key repeats for as long as it is
+    /// held).
+    fn settled(&self) -> Vec<String> {
+        let end = std::time::Instant::now() + Duration::from_secs(1);
+        let next = || {
+            let left = end.checked_duration_since(std::time::Instant::now())?;
+            self.1.recv_timeout(left.min(SETTLE)).ok()
+        };
+        std::iter::from_fn(next).collect()
+    }
+
     /// The pointer's x in the window, from the last motion reported before
-    /// the window went quiet for [`SETTLE`]; `None` when it reported none.
+    /// the window went quiet; `None` when it reported none.
     fn settled_x(&self) -> Option<i64> {
-        let mut last = None;
-        while let Ok(line) = self.1.recv_timeout(SETTLE) {
-            let x = line
-                .strip_prefix("motion ")
-                .and_then(|rest| rest.split(' ').next()?.parse().ok());
-            last = x.or(last);
-        }
-        last
+        let x_of = |line: &String| -> Option<i64> {
+            let rest = line.strip_prefix("motion ")?;
+            rest.split(' ').next()?.parse().ok()
+        };
+        self.settled().iter().filter_map(x_of).next_back()
+    }
+
+    /// The key presses and releases among what the window reported, a run
+    /// of the same line (a key repeating) given once.
+    fn settled_keys(&self) -> Vec<String> {
+        let keys = |line: &String| line.starts_with("key");
+        let mut lines: Vec<String> = self.settled().into_iter().filter(keys).collect();
+        lines.dedup();
+        lines
     }
 }
 
@@ -301,4 +323,67 @@ async fn replayed_motion_moves_the_pointer_and_its_distance_is_measured() {
             assert!(moved > 0, "the pointer moved {moved} px");
         }
     }
+}
+
+/// A keyboard that is not this program's: it stands for a real one.
+fn real_keyboard() -> VirtualDevice {
+    let mut keys = AttributeSet::<KeyCode>::new();
+    for code in [KEY_A, KEY_W] {
+        keys.insert(KeyCode(code));
+    }
+    let builder = VirtualDevice::builder().unwrap();
+    let builder = builder.name("auto-clicker test keyboard");
+    builder.with_keys(&keys).unwrap().build().unwrap()
+}
+
+fn key(keyboard: &mut VirtualDevice, code: u16, value: i32) {
+    let event = InputEvent::new(EventType::KEY.0, code, value);
+    keyboard.emit(&[event]).unwrap();
+}
+
+/// Taps W on both keyboards until the window has seen each: the compositor
+/// adds a new device a moment after it appears.
+fn until_both_type(input: &mut Input<KernelBackend>, real: &mut VirtualDevice, window: &Window) {
+    let w = Key::new(KEY_W).unwrap();
+    let seen = |window: &Window| !window.settled_keys().is_empty();
+    let ours = (0..20).any(|_| {
+        input.press_key(w).unwrap();
+        input.release_key(w).unwrap();
+        seen(window)
+    });
+    let theirs = (0..20).any(|_| {
+        key(real, KEY_W, 1);
+        key(real, KEY_W, 0);
+        seen(window)
+    });
+    assert!(
+        ours && theirs,
+        "the window never saw a key from both keyboards"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "needs /dev/uinput and a Wayland session with GTK 4; prints what it sees; run by hand"]
+async fn a_key_held_by_the_user_while_playback_presses_it_is_observed() {
+    let window = Window::open();
+    let mut input = KernelBackend::open().unwrap();
+    let mut real = real_keyboard();
+    until_both_type(&mut input, &mut real, &window);
+    let a = recordable(KEY_A).unwrap();
+    let tap = recording(300, &[(50, Change::Press(a)), (150, Change::Release(a))]);
+
+    println!("A held on a real keyboard while playback presses and releases A:");
+    key(&mut real, KEY_A, 1);
+    println!("  the user presses A:      {:?}", window.settled_keys());
+    let input = play_through(input, &playback(tap, 1.0, 1)).await;
+    let during = window.settled_keys();
+    println!("  playback taps A:         {during:?}");
+    key(&mut real, KEY_A, 0);
+    let after = window.settled_keys();
+    println!("  the user lets go of A:   {after:?}");
+    drop(input);
+
+    // Whatever the window saw in between, A is up once both let go.
+    let last = during.iter().chain(&after).next_back();
+    assert_eq!(last.map(String::as_str), Some("keyup 30"));
 }
