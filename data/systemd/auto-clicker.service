@@ -1,0 +1,27 @@
+# Starts auto-clicker with the graphical session. Enable it once per user:
+#   systemctl --user enable --now auto-clicker
+[Unit]
+Description=Auto clicker in the system tray
+Documentation=https://github.com/tobylo/auto-clicker#readme
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/auto-clicker
+# Exit statuses: 0 after Quit, SIGTERM or SIGINT; 3 when another copy runs in
+# this session; 77 when /dev/uinput cannot be used. Restarting fixes neither
+# 3 nor 77. Any other failure restarts after 5 s, backing off to 5 min.
+Restart=on-failure
+RestartSec=5s
+RestartSteps=5
+RestartMaxDelaySec=5min
+RestartPreventExitStatus=3 77
+# The daemon reaches the session and system buses through Unix sockets only.
+# IPAddressDeny= would be ignored here: a user manager cannot set up the
+# firewall it needs.
+RestrictAddressFamilies=AF_UNIX
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=graphical-session.target
