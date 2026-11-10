@@ -37,7 +37,7 @@ The icon then appears in the system tray. After **Quit**, start it again from "A
 
 ### What the permissions mean
 
-- **`/dev/uinput`** lets the program create a virtual mouse and keyboard, which is how it clicks. The rule gives this only to the person logged in at the screen, and only while they are.
+- **`/dev/uinput`** lets a program create a virtual mouse and keyboard, which is how auto-clicker clicks. The rule lets programs of the person logged in at the screen open it, any of their programs, not just this one. When someone else takes over the screen, no new program of the first person can open it, but one that already has it open keeps it. auto-clicker itself stops clicking and lets go of everything when the screen locks or another user's session comes to the front.
 - **The `input` group** lets a program read every keyboard and mouse directly, so the hotkey works inside fullscreen games. auto-clicker only looks for its hotkeys, and records keys only while you record a macro. But the group applies to every program that person runs, not just this one: only add people whose programs you trust.
 - The background service may use local Unix sockets only, so the program cannot reach the network even by mistake. The program itself opens no network connection.
 
