@@ -1,10 +1,12 @@
 //! Names for keyboard keys, as config files and hotkey bindings spell them.
 //!
 //! A name is the kernel's `KEY_*` name in lowercase without the prefix:
-//! `KEY_SPACE` is "space", `KEY_F6` is "f6". Names describe key positions on a
-//! US keyboard, not the label printed on the key: on a German layout, "z" is
-//! the key labelled Y. Only lowercase is accepted, so every key has one
-//! spelling.
+//! `KEY_SPACE` is "space", `KEY_F6` is "f6". A name says where the key sits,
+//! not what is printed on it, and the kernel takes its letter and symbol
+//! names from the US layout: on a German keyboard, "z" is the key labelled Y.
+//! "102nd" is the extra key beside the left Shift on ISO keyboards, which a
+//! US keyboard does not have. Only lowercase is accepted, so every key has
+//! one spelling.
 
 use super::Key;
 
@@ -93,6 +95,7 @@ const NAMES: &[(&str, u16)] = &[
     ("kp3", 81),
     ("kp0", 82),
     ("kpdot", 83),
+    ("102nd", 86),
     ("f11", 87),
     ("f12", 88),
     ("kpenter", 96),
@@ -177,6 +180,7 @@ mod tests {
         assert_eq!(code("f6"), Some(64));
         assert_eq!(code("f24"), Some(194));
         assert_eq!(code("leftctrl"), Some(29));
+        assert_eq!(code("102nd"), Some(86));
     }
 
     #[test]

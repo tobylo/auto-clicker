@@ -45,6 +45,7 @@ fn bindings_show_in_one_form() {
         ("META+alt+w", "Alt+Meta+W"),
         ("f24", "F24"),
         ("ctrl+1", "Ctrl+1"),
+        ("ctrl+102nd", "Ctrl+102nd"),
     ] {
         assert_eq!(binding(text).to_string(), shown, "{text}");
     }
