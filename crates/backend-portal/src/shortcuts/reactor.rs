@@ -45,7 +45,8 @@ pub(super) enum Signal {
     Changed(Vec<Listed>),
     /// The portal closed the session.
     Closed,
-    /// A signal that did not parse; its name.
+    /// A signal of the shortcuts that did not parse; its name. What it
+    /// said is lost, so the session can no longer be trusted.
     Malformed(String),
 }
 
