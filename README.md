@@ -141,7 +141,7 @@ toggle_playback = "Ctrl+F8"   # play or stop the macro
 
 Hotkeys work in every window, fullscreen games included, because the program reads the keyboards directly. Mice are read only while recording, so the program sleeps while you play. That needs read access to `/dev/input`: the user must be in the `input` group (see [Install](#install)). When no keyboard can be read, the program keeps running and the tray says why.
 
-The keyboards are only read, never taken over, so the game also gets the hotkey. In Minecraft, Ctrl is sprint: pressing Ctrl+F6 also starts sprinting for a moment. Pick a hotkey the game ignores if that gets in the way.
+The keyboards are only read, never taken over, so the game also gets the hotkey. On Plasma, Ctrl+F7 is also KWin's "Toggle Present Windows (Window class)" shortcut, so recording with it opens that overview too; change the binding in either place if it gets in the way. In Minecraft, Ctrl is sprint: pressing Ctrl+F6 also starts sprinting for a moment. Pick a hotkey the game ignores if that gets in the way.
 
 If a key remapper (keyd, kanata) takes over a keyboard while Ctrl or another modifier is held on it, the program never sees that key come up, and hotkeys stay blocked until the keyboard is unplugged or the program restarts.
 
