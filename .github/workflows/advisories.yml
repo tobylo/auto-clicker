@@ -33,6 +33,6 @@ jobs:
       # Refreshes the cached crates.io index entries that cargo-deny reads yanks
       # from; a dry run writes no Cargo.lock.
       - name: Refresh the crates.io index
-        run: cargo update --dry-run
+        run: cargo --config net.offline=false update --dry-run
       - name: Advisories in every crate
         run: cargo deny --locked --config .github/deny-weekly.toml check advisories

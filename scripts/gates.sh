@@ -45,7 +45,8 @@ advisory_db_reachable() {
 # not yanked and carries an allowed licence (deny.toml), with the cargo-deny
 # release CI installs. Online, it first refreshes the cached crates.io index
 # entries that cargo-deny reads yanks from (a dry run, which writes no
-# Cargo.lock); offline, it checks against the cached advisory database, which
+# Cargo.lock and refreshes every crate today's resolution reaches, so a locked
+# crate that a newer release no longer needs keeps its cached entry); offline, it checks against the cached advisory database, which
 # fails once older than deny.toml allows. It builds nothing, so it runs before
 # any build script or proc macro does.
 deny_check() {
@@ -57,7 +58,7 @@ deny_check() {
         return 1
     fi
     if advisory_db_reachable; then
-        bounded 300 cargo update --dry-run --quiet &&
+        bounded 300 cargo --config net.offline=false update --dry-run --quiet &&
             bounded 900 cargo deny --locked check
         return
     fi
