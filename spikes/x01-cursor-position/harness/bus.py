@@ -51,7 +51,12 @@ class Receiver(dbus.service.Object):
         self.layouts = []
         self.rejected = 0
         self._kwin = str(bus.get_name_owner("org.kde.KWin"))
+        bus.watch_name_owner("org.kde.KWin", self._kwin_moved)
         super().__init__(dbus.service.BusName(SERVICE, bus, do_not_queue=True), "/")
+
+    def _kwin_moved(self, owner):
+        """Follow org.kde.KWin's current owner; a former one is not trusted."""
+        self._kwin = str(owner)
 
     def _from_kwin(self, sender):
         """Only KWin's current connection may report; anyone can call us."""
