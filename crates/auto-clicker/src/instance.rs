@@ -43,10 +43,15 @@ pub async fn claim() -> Result<Claim, ClaimError> {
     let reply = bus
         .request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())
         .await;
+    owned(reply)?;
+    Ok(Claim { _bus: bus, lost })
+}
+
+/// Whether the name request made this daemon the owner. zbus reports a name
+/// held by another as an `Exists` reply, and some paths as `NameTaken`.
+fn owned(reply: zbus::Result<RequestNameReply>) -> Result<(), ClaimError> {
     match reply {
-        Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => {
-            Ok(Claim { _bus: bus, lost })
-        }
+        Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => Ok(()),
         Ok(RequestNameReply::Exists | RequestNameReply::InQueue) | Err(zbus::Error::NameTaken) => {
             Err(ClaimError::Taken)
         }
@@ -80,6 +85,21 @@ fn check_address(address: Option<&str>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_held_by_another_is_taken() {
+        assert!(owned(Ok(RequestNameReply::PrimaryOwner)).is_ok());
+        assert!(owned(Ok(RequestNameReply::AlreadyOwner)).is_ok());
+        for taken in [
+            Ok(RequestNameReply::Exists),
+            Ok(RequestNameReply::InQueue),
+            Err(zbus::Error::NameTaken),
+        ] {
+            assert!(matches!(owned(taken), Err(ClaimError::Taken)));
+        }
+        let failed = owned(Err(zbus::Error::Failure("x".to_owned())));
+        assert!(matches!(failed, Err(ClaimError::Bus(_))));
+    }
 
     #[test]
     fn only_unix_socket_addresses_are_accepted() {

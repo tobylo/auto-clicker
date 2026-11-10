@@ -2,8 +2,9 @@
 //! drive it through messages and hotkey events only, and read what it does
 //! from the view and from the calls its fake devices received.
 //!
-//! "At once" means no virtual time passed: a controller that ignored a stop
-//! would only end the wait at its deadline, seconds later.
+//! "At once" means the outcome is there before any virtual time passed:
+//! `settle` only yields, so the paused clock cannot move while it runs, and a
+//! controller that ignored a stop would still be waiting for its deadline.
 
 use std::fmt;
 use std::future::{Future, pending};
@@ -563,10 +564,17 @@ async fn a_stale_tray_request_never_flips_the_mode() {
         d.send(Message::Start).await;
         assert_eq!(d.activity(), Activity::Clicking);
         d.press_hotkey().await;
+        // A Start during a hotkey start waiting for the modifiers.
+        d.press_hotkey().await;
         d.send(Message::Start).await;
-        assert!(matches!(d.activity(), Activity::StartingIn(5)));
+        assert_eq!(d.activity(), Activity::WaitingForRelease);
+        d.press_hotkey().await;
+        // A second Start a second into the countdown does not restart it.
         d.send(Message::Start).await;
-        sleep(secs(5)).await;
+        sleep(secs(1)).await;
+        d.send(Message::Start).await;
+        assert_eq!(d.activity(), Activity::StartingIn(4));
+        sleep(secs(4)).await;
         d.settle().await;
         assert_eq!(d.shared.calls(), [LEFT_DOWN, LEFT_UP, LEFT_DOWN]);
     })
@@ -610,8 +618,11 @@ async fn quit_while_a_click_is_down_releases_it() {
         // One poll: the run has pressed and waits in its hold.
         d.settle().await;
         assert_eq!(d.shared.calls(), [LEFT_DOWN]);
+        let before = Instant::now();
         d.inbox.send(Message::Quit).unwrap();
         timeout(secs(1), d.task).await.unwrap().unwrap();
+        // The hold inside the click is not waited out.
+        assert_eq!(Instant::now(), before);
         assert_eq!(d.shared.calls(), [LEFT_DOWN, LEFT_UP]);
     })
     .await;
@@ -625,6 +636,7 @@ async fn starts_are_refused_until_the_session_is_known() {
     local(async {
         let d = daemon_with(config(Mode::HoldButton), Shared::default(), false).await;
         d.send(Message::Start).await;
+        assert_eq!(d.activity(), Activity::Idle);
         d.press_hotkey().await;
         d.assert_idle_after(&[]);
         assert!(d.notice().contains("unknown"), "{}", d.notice());
@@ -651,6 +663,7 @@ async fn a_blocked_session_stops_clicking_and_refuses_starts() {
             assert_eq!(d.activity(), Activity::Idle, "{reason:?}");
             assert_eq!(d.notice(), format!("Stopped: {reason}"));
             d.send(Message::Start).await;
+            assert_eq!(d.activity(), Activity::Idle, "{reason:?}");
             d.press_hotkey().await;
             d.assert_idle_after(&[LEFT_DOWN, LEFT_UP]);
             assert_eq!(d.notice(), format!("Not started: {reason}"));
@@ -683,6 +696,46 @@ async fn a_lock_request_stops_clicking_but_does_not_block() {
         d.send(Message::LockRequested).await;
         assert_eq!(d.activity(), Activity::Idle);
         d.start_by_hotkey().await;
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_block_while_idle_says_nothing_stopped_and_stop_keeps_the_notice() {
+    local(async {
+        let d = daemon(Mode::HoldButton).await;
+        d.send(Message::Session(Some(Blocked::Locked))).await;
+        d.send(Message::LockRequested).await;
+        assert_eq!(d.view().notice, None);
+        d.send(Message::Session(None)).await;
+        // A run that ended with a notice, then a plain Stop while idle and
+        // during the next run: the notice stays until a run starts.
+        d.press_hotkey().await;
+        d.hotkey(HotkeyEvent::ReleaseLost).await;
+        let lost = d.notice();
+        d.send(Message::Stop).await;
+        assert_eq!(d.notice(), lost);
+        d.send(Message::Start).await;
+        d.send(Message::Stop).await;
+        assert_eq!(d.notice(), lost);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn hotkey_trouble_only_cancels_a_start_waiting_for_the_modifiers() {
+    local(async {
+        let d = daemon(Mode::HoldButton).await;
+        d.start_by_hotkey().await;
+        d.hotkey(HotkeyEvent::ReleaseLost).await;
+        let unavailable = HotkeyStatus::Unavailable(Unavailable::NoKeyboard);
+        d.hotkey(HotkeyEvent::Status(unavailable)).await;
+        assert_eq!(d.activity(), Activity::Clicking);
+        assert_eq!(d.shared.calls(), [LEFT_DOWN]);
+        d.send(Message::Stop).await;
+        d.press_hotkey().await;
+        d.hotkey(HotkeyEvent::Status(HotkeyStatus::Available)).await;
+        assert_eq!(d.activity(), Activity::WaitingForRelease);
     })
     .await;
 }

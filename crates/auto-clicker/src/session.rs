@@ -104,8 +104,10 @@ enum End {
     },
 }
 
-/// Follows logind, again after each restart, until the controller is gone
-/// or something fails.
+/// Follows logind until the controller is gone. Whatever stops it (logind
+/// restarting, a call that failed, a session it could not read), starts are
+/// refused with the reason until logind next changes owner, and then it is
+/// followed afresh. Nothing is retried on a timer.
 async fn watch_logind(send: &mpsc::UnboundedSender<Message>) -> zbus::Result<()> {
     let bus = connection::Builder::address(SYSTEM_BUS)?
         .method_timeout(CALL_TIMEOUT)
@@ -117,20 +119,30 @@ async fn watch_logind(send: &mpsc::UnboundedSender<Message>) -> zbus::Result<()>
         .receive_name_owner_changed_with_args(&[(0, LOGIND)])
         .await?;
     loop {
-        let mut logind = Logind::subscribe(&bus, send).await?;
-        match logind.follow(&mut owners).await? {
-            End::ControllerGone => return Ok(()),
-            End::LogindGone { back } => {
-                let gone = Blocked::Unknown("logind is restarting".to_owned());
-                if send.send(Message::Session(Some(gone))).is_err() {
-                    return Ok(());
-                }
-                if !back {
-                    wait_for_owner(&mut owners).await?;
-                }
-            }
+        let (reason, back) = match follow_once(&bus, send, &mut owners).await {
+            Ok(End::ControllerGone) => return Ok(()),
+            Ok(End::LogindGone { back }) => ("logind is restarting".to_owned(), back),
+            Err(err) => (format!("logind: {err}"), false),
+        };
+        if send
+            .send(Message::Session(Some(Blocked::Unknown(reason))))
+            .is_err()
+        {
+            return Ok(());
+        }
+        if !back {
+            wait_for_owner(&mut owners).await?;
         }
     }
+}
+
+/// Subscribes to one logind instance and follows it.
+async fn follow_once(
+    bus: &Connection,
+    send: &mpsc::UnboundedSender<Message>,
+    owners: &mut NameOwnerChangedStream,
+) -> zbus::Result<End> {
+    Logind::subscribe(bus, send).await?.follow(owners).await
 }
 
 /// Waits until logind is on the bus again.
@@ -208,7 +220,14 @@ impl<'a> Logind<'a> {
     /// Follows the session at `path` from now on, and tells the controller
     /// its state; `false` when the controller is gone.
     async fn switch_to(&mut self, path: OwnedObjectPath) -> zbus::Result<bool> {
+        // The old session's unread signals go with its streams, so whatever
+        // they said, clicking stops here, and stays stopped until the new
+        // session says otherwise.
+        let left = leave_session(&mut self.facts);
         self.session = None;
+        if !self.tell(left) {
+            return Ok(false);
+        }
         if is_no_session(&path) {
             let reason = "no graphical session".to_owned();
             return Ok(self.tell(Message::Session(Some(Blocked::Unknown(reason)))));
@@ -362,6 +381,13 @@ fn property_changes(changed: &HashMap<&str, Value<'_>>) -> zbus::Result<Vec<Chan
     Ok(changes)
 }
 
+/// Leaves the followed session: until another one is read, the user has no
+/// session in front. The message that stops clicking.
+fn leave_session(facts: &mut SessionFacts) -> Message {
+    facts.active = false;
+    Message::Session(facts.blocked())
+}
+
 /// What to do about a change while following the session at `path`.
 #[derive(Debug, PartialEq)]
 enum Step {
@@ -428,6 +454,22 @@ mod tests {
         );
         let gone = Change::LogindGone { back: true };
         assert_eq!(tell(gone), Step::LogindGone { back: true });
+    }
+
+    #[test]
+    fn leaving_a_session_blocks_until_another_is_read() {
+        let mut facts = SessionFacts {
+            active: true,
+            ..SessionFacts::default()
+        };
+        let left = leave_session(&mut facts);
+        assert_eq!(left, Message::Session(Some(Blocked::Inactive)));
+        // A resume while no session is followed still blocks.
+        let resumed = step(&mut facts, &no_session(), Change::Sleep(false));
+        assert_eq!(
+            resumed,
+            Step::Tell(Message::Session(Some(Blocked::Inactive)))
+        );
     }
 
     #[test]
