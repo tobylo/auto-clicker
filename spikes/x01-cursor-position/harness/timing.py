@@ -48,22 +48,37 @@ def sweep(session, hz, count):
 
 
 def match(samples, sent, width):
-    """(sample, move index) for every sample that maps back onto a move."""
+    """(sample, move index, move time) for every sample that maps back onto a
+    move; samples off the sweep (the move onto its start row) are left out."""
     pairs = []
     for sample in samples:
         index = round(sample.x * 65536 / width / STEP) - 1
         if 0 <= index < len(sent):
-            pairs.append((sample, sent[index]))
+            pairs.append((sample, index, sent[index]))
     return pairs
+
+
+def coverage(rows):
+    """Moves matched by exactly one call, moves matched by several, moves
+    matched by none: one-to-one delivery needs the last two to be zero."""
+    once = several = missing = 0
+    for row in rows:
+        counts = [0] * row["sent"]
+        for _, index, _ in row["matched"]:
+            counts[index] += 1
+        once += counts.count(1)
+        several += sum(1 for c in counts if c > 1)
+        missing += counts.count(0)
+    return f"moves matched once {once}, more than once {several}, never {missing}"
 
 
 def report_latency(hz, rows):
     sent = sum(row["sent"] for row in rows)
     received = sum(len(row["samples"]) for row in rows)
     callbacks = sum(row["samples"][-1].callbacks - row["samples"][0].callbacks + 1 for row in rows if row["samples"])
-    end_to_end = [(s.recv_ns - t) / 1e6 for row in rows for s, t in row["matched"]]
+    end_to_end = [(s.recv_ns - t) / 1e6 for row in rows for s, _, t in row["matched"]]
     script_to_receipt = [s.recv_wall_ms - s.script_ms for row in rows for s in row["samples"]]
-    print(f"rate {hz} Hz: moves {sent}, callbacks {callbacks}, received {received}")
+    print(f"rate {hz} Hz: moves {sent}, callbacks {callbacks}, received {received}; {coverage(rows)}")
     print(f"  uinput write -> receipt: {summary(end_to_end, 'ms')}")
     print(f"  script callback -> receipt (ms clock): {summary(script_to_receipt, 'ms')}")
 
