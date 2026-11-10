@@ -118,7 +118,7 @@ The locked pointer stands still in KWin (`PointerInputRedirection::updatePositio
 - **Loading needs no consent and no setting.** `loadScript`, `run` and `unloadScript` worked from an unprivileged session client with no prompt. `~/.config/kwinrc` had the same checksum before and after each load (`lifecycle.sh`).
 - **`run()` returns after the script has run.** Called over D-Bus, `Script::run` defers its reply until the script has been read and evaluated (`src/scripting/scripting.cpp:166`). The first Layout call arrived about 3 ms after `loadScript`.
 - **A crashed receiver leaves the script loaded.** After the receiver was killed with SIGKILL, `isScriptLoaded("x01-cursor")` was true and KWin kept paying for the calls (see CPU). The next start found the script by its plugin name and unloaded it before loading its own.
-- **KWin restarts drop the script.** On a nested, virtual KWin in a private D-Bus session, the script was gone after KWin was killed and started again, and `org.kde.KWin` had a new owner. A daemon recording across a KWin restart has to watch that name and load the script again. The live session's KWin was never restarted.
+- **KWin restarts drop the script.** On a nested, virtual KWin in a private D-Bus session (and private config directories: a virtual KWin writes `kwinrc`, adding desktops and tiling for its virtual output), the script was gone after KWin was killed and started again, and `org.kde.KWin` had a new owner. A daemon recording across a KWin restart has to watch that name and load the script again. The live session's KWin was never restarted.
 
 ## Other routes
 

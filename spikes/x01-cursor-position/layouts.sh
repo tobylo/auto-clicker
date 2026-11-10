@@ -9,7 +9,7 @@ restore() {
     kscreen-doctor output.DP-1.enable output.DP-1.mode.1 output.DP-1.scale.1 \
         output.eDP-1.scale.1.25 output.eDP-1.position.0,0 output.DP-1.position.2048,0 >/dev/null
 }
-trap restore EXIT
+trap 'restore || echo "WARNING: could not restore the display layout" >&2' EXIT
 check() {
     local title=$1 monitors=$2
     shift 2

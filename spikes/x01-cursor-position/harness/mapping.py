@@ -49,8 +49,12 @@ class Probe:
 
     def __init__(self, index):
         self.proc = subprocess.Popen(["python3", PROBE, str(index)], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        _, x, y = wait_ready(self.proc).split()
-        self.origin = (int(x), int(y))
+        try:
+            _, x, y = wait_ready(self.proc).split()
+            self.origin = (int(x), int(y))
+        except BaseException:
+            stop(self.proc)
+            raise
         self.pid = self.proc.pid
         self.motion = None
         self._buffer = b""

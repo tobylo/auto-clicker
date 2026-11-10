@@ -140,7 +140,10 @@ def loaded_script(bus):
         load_script(bus, kwin)
         yield
     finally:
-        scripting(bus, kwin).unloadScript(PLUGIN)
+        try:
+            scripting(bus, kwin).unloadScript(PLUGIN)
+        except dbus.DBusException as error:
+            print(f"could not unload the script (KWin gone?): {error.get_dbus_name()}")
 
 
 def exit_on_sigterm():
