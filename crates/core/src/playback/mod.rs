@@ -59,10 +59,6 @@ impl Playback {
     pub fn recording(&self) -> &Recording {
         &self.recording
     }
-
-    pub fn settings(&self) -> PlaybackSettings {
-        self.settings
-    }
 }
 
 #[cfg(test)]

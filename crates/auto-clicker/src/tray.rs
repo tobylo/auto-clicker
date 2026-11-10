@@ -10,6 +10,9 @@ use tokio::sync::{mpsc, watch};
 pub struct Tray {
     view: View,
     send: mpsc::UnboundedSender<Message>,
+    /// Flips whenever the list of recordings changes, which changes the
+    /// menu's shape (see [`Tray::menu`](ksni::Tray::menu)).
+    relisted: bool,
 }
 
 /// Shows the tray icon and keeps it in step with the controller's view.
@@ -22,7 +25,7 @@ pub async fn show(
     send: mpsc::UnboundedSender<Message>,
 ) -> Result<(), ksni::Error> {
     let view = views.borrow_and_update().clone();
-    let handle = Tray { view, send }
+    let handle = Tray::new(view, send)
         .assume_sni_available(true)
         .spawn()
         .await?;
@@ -30,7 +33,7 @@ pub async fn show(
         // Ends when the controller is gone, or the tray service stopped.
         while views.changed().await.is_ok() {
             let view = views.borrow_and_update().clone();
-            if handle.update(|tray| tray.view = view).await.is_none() {
+            if handle.update(|tray| tray.show(view)).await.is_none() {
                 break;
             }
         }
@@ -39,6 +42,20 @@ pub async fn show(
 }
 
 impl Tray {
+    fn new(view: View, send: mpsc::UnboundedSender<Message>) -> Tray {
+        Tray {
+            view,
+            send,
+            relisted: false,
+        }
+    }
+
+    /// Takes the controller's latest view.
+    fn show(&mut self, view: View) {
+        self.relisted ^= self.view.recordings != view.recordings;
+        self.view = view;
+    }
+
     fn send(&self, message: Message) {
         // The controller is gone only while the daemon exits.
         let _ = self.send.send(message);
@@ -73,10 +90,14 @@ impl Entry {
 /// The menu for `view`. The items are always the same, in the same places;
 /// only which shows, which is enabled and what the Play submenu's places
 /// hold changes. The host clicks an item by its place, so a click on a menu
-/// opened before the state changed still sends what that item said, and a
-/// click on a recording plays what that place holds now: the list changes
-/// only when a recording is saved or the folder is changed by hand.
-fn entries(view: &View) -> [Entry; 8] {
+/// opened before the state changed still sends what that item said.
+///
+/// The Play submenu's places are the exception, since what a place holds
+/// changes with the list: `relisted` adds one hidden item to it, so the
+/// menu's shape differs from before whenever the list does. The host is then
+/// told to lay the menu out again, and a click it sends for the old layout
+/// is refused rather than playing the recording that took the place.
+fn entries(view: &View, relisted: bool) -> [Entry; 8] {
     let activity = view.activity;
     let idle = activity == Activity::Idle;
     [
@@ -100,7 +121,7 @@ fn entries(view: &View) -> [Entry; 8] {
             activity.recording(),
         ),
         Entry {
-            children: recordings(view),
+            children: recordings(view, relisted),
             ..Entry::item("Play", None, false, !activity.playing())
         },
         Entry::item(
@@ -117,8 +138,9 @@ fn entries(view: &View) -> [Entry; 8] {
 
 /// The Play submenu: one place for each recording the controller may list,
 /// newest first, the unused ones hidden, and a line that shows when there
-/// are none. A recording can be chosen only while idle.
-fn recordings(view: &View) -> Vec<Entry> {
+/// are none. A recording can be chosen only while idle. `relisted` adds a
+/// hidden item at the end.
+fn recordings(view: &View, relisted: bool) -> Vec<Entry> {
     let idle = view.activity == Activity::Idle;
     let listed = (0..LISTED_RECORDINGS).map(|place| match view.recordings.get(place) {
         Some(listed) => Entry::item(
@@ -130,7 +152,8 @@ fn recordings(view: &View) -> Vec<Entry> {
         None => Entry::item("", None, false, false),
     });
     let none = Entry::item("No recordings yet", None, false, view.recordings.is_empty());
-    listed.chain([none]).collect()
+    let marker = relisted.then(|| Entry::item("", None, false, false));
+    listed.chain([none]).chain(marker).collect()
 }
 
 /// The icon for `activity`, by name from the icon theme.
@@ -231,7 +254,8 @@ impl ksni::Tray for Tray {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let mut items: Vec<MenuItem<Self>> = entries(&self.view).into_iter().map(item).collect();
+        let entries = entries(&self.view, self.relisted);
+        let mut items: Vec<MenuItem<Self>> = entries.into_iter().map(item).collect();
         // Quit sits apart from the rest.
         items.insert(items.len().saturating_sub(1), MenuItem::Separator);
         items
@@ -293,7 +317,7 @@ mod tests {
 
     /// The visible items: label, and whether enabled.
     fn shown(activity: Activity) -> Vec<(String, bool)> {
-        entries(&view(activity))
+        entries(&view(activity), false)
             .into_iter()
             .filter(|entry| entry.visible)
             .map(|entry| (entry.label, entry.enabled))
@@ -351,7 +375,7 @@ mod tests {
     #[test]
     fn every_item_keeps_its_place_and_message() {
         use Activity::*;
-        let messages = |activity| entries(&view(activity)).map(|entry| entry.sends);
+        let messages = |activity| entries(&view(activity), false).map(|entry| entry.sends);
         let expected = [
             Some(Message::Start),
             Some(Message::Stop),
@@ -364,7 +388,7 @@ mod tests {
         ];
         for activity in [Idle, Clicking, Recording, RecordingIn(1), Playing] {
             assert_eq!(messages(activity), expected, "{activity:?}");
-            let places = entries(&view(activity))[4].children.len();
+            let places = entries(&view(activity), false)[4].children.len();
             assert_eq!(places, LISTED_RECORDINGS + 1, "{activity:?}");
         }
     }
@@ -372,7 +396,7 @@ mod tests {
     /// The Play submenu's visible items: label, whether enabled, and what
     /// each sends.
     fn play_menu(view: &View) -> Vec<(String, bool, Option<Message>)> {
-        let [_, _, _, _, play, ..] = entries(view);
+        let [_, _, _, _, play, ..] = entries(view, false);
         play.children
             .into_iter()
             .filter(|entry| entry.visible)
@@ -404,6 +428,46 @@ mod tests {
             [("No recordings yet".to_owned(), false, None)]
         );
         assert_eq!(play_menu(&view_listing(Activity::Idle, 10)).len(), 10);
+    }
+
+    #[test]
+    fn the_play_menu_gives_way_to_stop_playing() {
+        use ksni::Tray as _;
+        let (send, _received) = mpsc::unbounded_channel();
+        let tray = Tray::new(view(Activity::Playing), send);
+        let shown: Vec<(String, bool)> = tray
+            .menu()
+            .iter()
+            .map(shown_item)
+            .filter(|(label, ..)| label.starts_with("Play") || label.starts_with("Stop playing"))
+            .map(|(label, _, visible, _)| (label, visible))
+            .collect();
+        assert_eq!(shown, labelled([("Play", false), ("Stop playing", true)]));
+    }
+
+    #[test]
+    fn a_changed_list_changes_the_shape_of_the_play_menu_and_nothing_else_does() {
+        use ksni::Tray as _;
+        let (send, _received) = mpsc::unbounded_channel();
+        let mut tray = Tray::new(view_listing(Activity::Idle, 10), send);
+        let places = |tray: &Tray| match &tray.menu()[4] {
+            MenuItem::SubMenu(play) => play.submenu.len(),
+            _ => 0,
+        };
+        let full = places(&tray);
+        // The state and the notice change: the same shape.
+        tray.show(view_listing(Activity::Clicking, 10));
+        assert_eq!(places(&tray), full);
+        // Another recording in every place, as after a save with ten
+        // listed: a different shape, each time.
+        let mut shifted = view_listing(Activity::Idle, 11);
+        shifted.recordings = Arc::from(&shifted.recordings[1..]);
+        tray.show(shifted.clone());
+        assert_eq!(places(&tray), full + 1);
+        tray.show(shifted);
+        assert_eq!(places(&tray), full + 1);
+        tray.show(view_listing(Activity::Idle, 10));
+        assert_eq!(places(&tray), full);
     }
 
     #[test]
@@ -467,10 +531,7 @@ mod tests {
     fn the_tray_shows_the_view_and_its_menu_sends_messages() {
         use ksni::Tray as _;
         let (send, mut received) = mpsc::unbounded_channel();
-        let mut tray = Tray {
-            view: view_listing(Activity::Idle, 1),
-            send,
-        };
+        let mut tray = Tray::new(view_listing(Activity::Idle, 1), send);
         assert_eq!(tray.id(), "auto-clicker");
         assert_eq!(tray.title(), "Auto clicker: idle");
         assert_eq!(tray.icon_name(), "auto-clicker-idle");

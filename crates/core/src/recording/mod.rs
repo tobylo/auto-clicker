@@ -5,7 +5,8 @@
 //! it, so every recording in memory is one playback can trust: times never go
 //! back, every release follows its press, and nothing is down at the end.
 //! Files are JSON ([`json`]); the [`Recorder`] builds a recording from what
-//! the input reader sees, and [`store`] saves it.
+//! the input reader sees, [`store`] saves it, and [`library`] lists and
+//! reads what was saved.
 //!
 //! Key data stays inside a recording: [`Recording`]'s `Debug` shows how many
 //! events it holds, not which, and no error here names a key.
@@ -13,6 +14,7 @@
 mod codes;
 mod created;
 mod json;
+mod library;
 mod recorder;
 mod store;
 mod tap;
@@ -24,8 +26,9 @@ use std::time::Duration;
 
 pub use codes::{name as code_name, parse as parse_code, recordable};
 pub use created::{Created, LocalTime};
+pub use library::{FileName, LoadError, MAX_FILE_BYTES, list, load};
 pub use recorder::{Ending, KeyInput, Recorder};
-pub use store::{FileName, LoadError, MAX_FILE_BYTES, list, load, recordings_dir, save};
+pub use store::{recordings_dir, save};
 pub use tap::{RecordingFeed, RecordingSlot};
 
 use crate::input::Held;

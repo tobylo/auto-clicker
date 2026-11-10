@@ -198,6 +198,13 @@ async fn plays_until_stopped() {
 
 #[tokio::test(start_paused = true)]
 async fn an_empty_recording_still_takes_its_time_each_round() {
+    let thrice = playback(recording(100_000, &[]), 1.0, times(3));
+    let outcome = play_with(&thrice, never()).await;
+    assert_eq!(
+        (outcome.ended(), outcome.returned),
+        (Ended::Finished, ms(200))
+    );
+
     let empty = playback(recording(100_000, &[]), 1.0, Repeat::UntilStopped);
     let outcome = play_with(&empty, stop_after(ms(350))).await;
     assert_eq!(
@@ -205,13 +212,6 @@ async fn an_empty_recording_still_takes_its_time_each_round() {
         (Ended::Stopped, ms(350))
     );
     assert_eq!(outcome.calls, []);
-
-    let thrice = playback(recording(100_000, &[]), 1.0, times(3));
-    let outcome = play_with(&thrice, never()).await;
-    assert_eq!(
-        (outcome.ended(), outcome.returned),
-        (Ended::Finished, ms(200))
-    );
 }
 
 #[test]
@@ -371,12 +371,15 @@ async fn many_events_at_one_moment_hand_the_thread_back_between_batches() {
     let events: Vec<(u64, Change)> = (0..1000).map(|_| (0, Change::Wheel(1))).collect();
     let playback = playback(recording(1_000, &events), 1.0, times(1));
     let (input, calls, _) = timed_input();
-    // Outside tokio's own budget, which would hand the thread back as well.
+    // Outside tokio's own task budget, which hands the thread back as well,
+    // at its own count.
     let mut run = pin!(unconstrained(play(input, &playback, never())));
 
     let mut fired = Vec::new();
     while poll_once(run.as_mut()).await.is_pending() {
         fired.push(calls.lock().unwrap().len());
+        // Overdue from here on, not merely due: batches end all the same.
+        sleep(ms(1)).await;
     }
 
     // A batch is 256 deadlines already due. The first one holds the round's
@@ -387,34 +390,62 @@ async fn many_events_at_one_moment_hand_the_thread_back_between_batches() {
 
 #[tokio::test(start_paused = true)]
 async fn a_stop_lands_between_the_batches_of_one_moment() {
-    // One event, then clicks: the first batch ends on a press.
-    let clicks = (0..500).flat_map(|_| [(0, Change::Press(LEFT)), (0, Change::Release(LEFT))]);
-    let events: Vec<(u64, Change)> = [(0, Change::Wheel(1))].into_iter().chain(clicks).collect();
+    // The first batch ends on a press, and the wheel is next.
+    let clicks = (0..126).flat_map(|_| [(0, Change::Press(LEFT)), (0, Change::Release(LEFT))]);
+    let pressed = [(0, Change::Press(key(W)))];
+    let wheel = (0..500).map(|_| (0, Change::Wheel(1)));
+    let events: Vec<(u64, Change)> = [(0, Change::Wheel(1))]
+        .into_iter()
+        .chain(clicks)
+        .chain(pressed)
+        .chain(wheel)
+        .chain([(0, Change::Release(key(W)))])
+        .collect();
     let playback = playback(recording(1_000, &events), 1.0, times(1));
+    let w = crate::input::Key::new(W).unwrap();
+    for ended in [Ended::Stopped, Ended::ShutDown] {
+        let (input, calls, _) = timed_input();
+        let (fire, fired) = tokio::sync::oneshot::channel::<()>();
+        let fired = async {
+            let _ = fired.await;
+        };
+        let signals = match ended {
+            Ended::ShutDown => signals(pending(), fired),
+            _ => signals(fired, pending()),
+        };
+        let mut run = pin!(unconstrained(play(input, &playback, signals)));
+
+        assert!(poll_once(run.as_mut()).await.is_pending());
+        fire.send(()).unwrap();
+        let end = run.await;
+
+        // No wheel turn after the signal: only the release of the key
+        // that was down.
+        assert_eq!(*end.result.as_ref().unwrap(), ended);
+        let calls = calls.lock().unwrap();
+        let last = [calls[253].1, calls[254].1];
+        assert_eq!(calls.len(), 255, "{ended:?}");
+        assert_eq!(
+            last,
+            [Call::Key(w, PressState::Down), Call::Key(w, PressState::Up)]
+        );
+        assert_eq!(
+            end.input.as_ref().map(|input| input.held().count()),
+            Some(0)
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn dropping_the_run_mid_press_releases() {
     let (input, calls, _) = timed_input();
-    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let stopped = async {
-        let _ = stopped.await;
-    };
-    let mut run = pin!(unconstrained(play(
-        input,
-        &playback,
-        signals(stopped, pending())
-    )));
-
-    assert!(poll_once(run.as_mut()).await.is_pending());
-    stop.send(()).unwrap();
-    let end = run.await;
-
-    // Nothing more fired after the stop but the release of the press that
-    // was down.
-    assert!(matches!(end.result, Ok(Ended::Stopped)), "{:?}", end.result);
-    let calls = calls.lock().unwrap();
+    let playback = playback(click(), 1.0, times(1));
+    let dropped = timeout(ms(20), play(input, &playback, never())).await;
+    assert!(dropped.is_err(), "the run was still going");
     assert_eq!(
-        (calls.len(), calls[253].1, calls[254].1),
-        (255, LEFT_DOWN, LEFT_UP)
+        *calls.lock().unwrap(),
+        [(ms(10), LEFT_DOWN), (ms(20), LEFT_UP)]
     );
-    assert_eq!(end.input.map(|input| input.held().count()), Some(0));
 }
 
 // Settings

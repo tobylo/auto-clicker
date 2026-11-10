@@ -15,8 +15,9 @@ use crate::recording::Change;
 use crate::run::{Ended, Interrupted, RunEnd, Signals, Waiter, finish};
 
 /// How many events that are already due fire before the run hands the thread
-/// back. The run's signals fire only while the controller runs, so a long
-/// batch of events at one moment must not keep it from running.
+/// back. The run's signals fire only while the controller runs, and hotkeys
+/// are read only then, so a long batch of events at one moment must not keep
+/// it from running.
 const BATCH: u32 = 256;
 
 /// Plays `playback` until it has played as often as its settings say, a
@@ -28,6 +29,10 @@ const BATCH: u32 = 256;
 /// from the start, so delays never add up. Events that are already due when
 /// the run wakes fire in order without waiting, and a late event does not
 /// move the ones after it.
+///
+/// A long run of events that are all due is played in batches of [`BATCH`],
+/// with the thread handed back between them, so the caller gets to handle a
+/// stop and to read the hotkeys in the middle of it.
 ///
 /// Every wait ends at once when a signal fires, and a signal that has
 /// already fired prevents the first event. Shutdown wins over a stop at the
