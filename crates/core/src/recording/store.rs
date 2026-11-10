@@ -54,10 +54,12 @@ pub fn save(dir: &Path, recording: &Recording) -> io::Result<PathBuf> {
 
 /// Makes `dir` (absolute) exist and be readable by its owner only. An
 /// existing one that others may read is closed to them; one this user does
-/// not own, or a symlink in its place, fails. Every ancestor up to the root
-/// is flushed every time, so the directory survives a power loss whichever
-/// save, failed or not, created which part of the path; flushing a
-/// directory with nothing new in it costs next to nothing.
+/// not own, or a symlink in its place, fails. Its ancestors are flushed every
+/// time, up to the first this user may not read, so the directory survives a
+/// power loss whichever save, failed or not, created which part of the path.
+/// A directory the user may not list (`/home` at mode 0711, say) is none
+/// their saves made; flushing one with nothing new in it costs next to
+/// nothing.
 fn private_dir(dir: &Path) -> io::Result<()> {
     if !dir.is_absolute() {
         return Err(io::Error::new(
@@ -74,7 +76,11 @@ fn private_dir(dir: &Path) -> io::Result<()> {
         handle.set_permissions(Permissions::from_mode(0o700))?;
     }
     for ancestor in dir.ancestors().skip(1) {
-        open_dir(ancestor)?.sync_all()?;
+        match open_dir(ancestor) {
+            Ok(opened) => opened.sync_all()?,
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => break,
+            Err(err) => return Err(err),
+        }
     }
     Ok(())
 }
@@ -159,6 +165,23 @@ mod tests {
         let dir = root.path().join("new/data/auto-clicker/recordings");
         save(&dir, &sample()).unwrap();
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn an_ancestor_that_may_be_searched_but_not_read_ends_the_flush() {
+        if !crate::test_support::permissions_apply() {
+            return;
+        }
+        let root = TempDir::new();
+        let closed = root.path().join("closed");
+        let dir = closed.join("alice/data/auto-clicker/recordings");
+        fs::create_dir_all(closed.join("alice")).unwrap();
+        fs::set_permissions(&closed, fs::Permissions::from_mode(0o311)).unwrap();
+
+        let saved = save(&dir, &sample());
+
+        fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(saved.is_ok(), "{saved:?}");
     }
 
     #[test]
