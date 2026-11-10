@@ -34,8 +34,10 @@ prepare() {
   fi
   commit=$(git rev-parse --verify 'HEAD^{commit}')
   # Everything below reads a fresh copy of that commit, never the live
-  # checkout, and no earlier build's output is reused.
-  rm -rf "$srcdir/auto-clicker" "$srcdir/auto-clicker.tar"
+  # checkout, in an emptied build directory: no earlier build's output or
+  # leftover file is reused. (Cargo also reads ~/.cargo/config.toml; the
+  # account that builds is trusted.)
+  find "$srcdir" -mindepth 1 -delete
   git archive --format=tar --output="$srcdir/auto-clicker.tar" "$commit"
   mkdir "$srcdir/auto-clicker"
   tar -xf "$srcdir/auto-clicker.tar" -C "$srcdir/auto-clicker"
@@ -60,6 +62,12 @@ build() {
 
 package() {
   cd "$srcdir/auto-clicker"
+  # makepkg reads this file again for package(): it must still be the one
+  # from the commit that was built.
+  if ! cmp -s "$startdir/PKGBUILD" packaging/arch/PKGBUILD; then
+    error 'PKGBUILD changed during the build: run makepkg -sif again.'
+    return 1
+  fi
   install -Dm755 target/release/auto-clicker -t "$pkgdir/usr/bin"
   install -Dm644 data/systemd/auto-clicker.service -t "$pkgdir/usr/lib/systemd/user"
   install -Dm644 data/udev/70-auto-clicker-uinput.rules -t "$pkgdir/usr/lib/udev/rules.d"
