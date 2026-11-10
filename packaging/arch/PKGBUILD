@@ -12,7 +12,7 @@ pkgrel=1
 pkgdesc='Auto clicker for KDE Plasma on Wayland, in the system tray'
 arch=(x86_64)
 url='https://github.com/tobylo/auto-clicker'
-license=('LicenseRef-unknown')
+license=('MIT OR Apache-2.0')
 depends=(glibc libgcc hicolor-icon-theme)
 makedepends=(cargo git)
 options=(!debug)
@@ -72,4 +72,5 @@ package() {
     -t "$pkgdir/usr/share/applications"
   install -Dm644 data/icons/hicolor/scalable/apps/*.svg \
     -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
+  install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$pkgdir/usr/share/licenses/$pkgname"
 }
