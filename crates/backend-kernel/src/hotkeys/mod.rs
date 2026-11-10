@@ -239,7 +239,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
                 self.send_reaction(reaction);
             }
             Step::Lost => {
-                let reaction = self.matcher.events_lost();
+                let reaction = self.matcher.events_lost(id);
                 self.send_reaction(reaction);
             }
             Step::Resync => match device.stream.device().get_key_state() {

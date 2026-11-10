@@ -131,8 +131,8 @@ enum Step {
     Key(DeviceId, u16, i32),
     /// The device was unplugged or failed.
     Gone(DeviceId),
-    /// Some device's events were lost.
-    Lost,
+    /// The device's events were lost.
+    Lost(DeviceId),
 }
 
 fn down(device: DeviceId, code: u16) -> Step {
@@ -157,7 +157,7 @@ fn feed(matcher: &mut Matcher, steps: &[Step]) -> Vec<HotkeyEvent> {
                     matcher.key(device, KeyEvent::new(code, value).unwrap())
                 }
                 Step::Gone(device) => matcher.device_lost(device),
-                Step::Lost => matcher.events_lost(),
+                Step::Lost(device) => matcher.events_lost(device),
             };
             reaction.events()
         })
@@ -365,7 +365,7 @@ fn a_release_never_seen_pressed_leaves_nothing_held() {
 #[test]
 fn nothing_fires_after_lost_events_until_every_modifier_is_up() {
     let mut matcher = Matcher::new(Bindings::default());
-    let lost = feed(&mut matcher, &[Step::Lost]);
+    let lost = feed(&mut matcher, &[Step::Lost(A)]);
     matcher.resync(A, |code| [RIGHTCTRL, F6].contains(&code));
     // F7 queued before the read, though the read already saw Ctrl.
     let queued = feed(&mut matcher, &[down(B, F7), down(B, LEFTCTRL), down(B, F7)]);
@@ -387,7 +387,7 @@ fn nothing_fires_after_lost_events_until_every_modifier_is_up() {
 #[test]
 fn a_resync_holding_nothing_ends_the_suspension() {
     let mut matcher = Matcher::new(Bindings::default());
-    feed(&mut matcher, &[Step::Lost]);
+    feed(&mut matcher, &[Step::Lost(A)]);
     matcher.resync(A, |_| false);
     let sent = feed(&mut matcher, &[down(A, LEFTCTRL), down(A, F6)]);
     assert_eq!(sent, [Fired(Action::ToggleClicking)]);
@@ -396,19 +396,64 @@ fn a_resync_holding_nothing_ends_the_suspension() {
 #[test]
 fn the_suspension_lasts_while_another_device_holds_a_modifier() {
     let mut matcher = Matcher::new(Bindings::default());
-    feed(&mut matcher, &[down(A, LEFTSHIFT), Step::Lost]);
+    feed(&mut matcher, &[down(A, LEFTCTRL), Step::Lost(B)]);
     matcher.resync(B, |_| false);
+    // A's Ctrl may predate B's read: Ctrl+F6 waits until it is up.
+    let held = feed(&mut matcher, &[down(A, F6)]);
+    let after = feed(
+        &mut matcher,
+        &[up(A, LEFTCTRL), down(A, LEFTCTRL), down(A, F6)],
+    );
+    assert_eq!((held, after), (vec![], vec![Fired(Action::ToggleClicking)]));
+}
+
+#[test]
+fn the_suspension_lasts_until_every_device_that_lost_events_is_read() {
+    let bindings = Bindings {
+        toggle_clicking: binding("F9"),
+        ..Bindings::default()
+    };
+    let mut matcher = Matcher::new(bindings);
+    // A lost events; B lets go of its Ctrl before A is read again.
+    let before = feed(
+        &mut matcher,
+        &[
+            down(B, LEFTCTRL),
+            Step::Lost(A),
+            up(B, LEFTCTRL),
+            down(B, F9),
+        ],
+    );
+    matcher.resync(A, |code| code == LEFTSHIFT);
+    let held = feed(&mut matcher, &[down(B, F9)]);
+    let after = feed(&mut matcher, &[up(A, LEFTSHIFT), down(B, F9)]);
+    assert_eq!(
+        (before, held, after),
+        (
+            vec![],
+            vec![],
+            vec![Fired(Action::ToggleClicking), ModifiersReleased]
+        )
+    );
+}
+
+#[test]
+fn a_device_gone_before_its_read_ends_the_wait_for_it() {
+    let mut matcher = Matcher::new(Bindings::default());
     let sent = feed(
         &mut matcher,
-        &[Step::Gone(B), down(B, LEFTCTRL), down(B, F6)],
+        &[Step::Lost(A), Step::Gone(A), down(B, LEFTCTRL), down(B, F6)],
     );
-    assert_eq!(sent, []);
+    assert_eq!(sent, [Fired(Action::ToggleClicking)]);
 }
 
 #[test]
 fn lost_events_lose_an_awaited_release_and_a_resync_never_claims_one() {
     let mut matcher = Matcher::new(Bindings::default());
-    let sent = feed(&mut matcher, &[down(A, LEFTCTRL), down(A, F6), Step::Lost]);
+    let sent = feed(
+        &mut matcher,
+        &[down(A, LEFTCTRL), down(A, F6), Step::Lost(A)],
+    );
     matcher.resync(A, |_| false);
     let after = feed(&mut matcher, &[down(B, LEFTSHIFT), up(B, LEFTSHIFT)]);
     assert_eq!(
@@ -461,7 +506,7 @@ fn a_device_lost_holding_nothing_keeps_the_wait() {
 
 #[test]
 fn nothing_is_lost_without_a_wait() {
-    let sent = run(&[down(A, LEFTCTRL), Step::Gone(A), Step::Lost]);
+    let sent = run(&[down(A, LEFTCTRL), Step::Gone(A), Step::Lost(A)]);
     assert_eq!(sent, []);
 }
 

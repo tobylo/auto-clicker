@@ -64,9 +64,13 @@ pub struct Matcher {
     held: Vec<(DeviceId, u8)>,
     /// A binding fired and not every modifier was released since.
     awaiting_release: bool,
-    /// Keys were read after lost events, and nothing fires until every
-    /// modifier is up: events queued before the read are older than it.
+    /// Events were lost, and nothing fires until every device that lost
+    /// them has been read again and every modifier is up: what a device
+    /// holds is unknown until it is read, and events queued before the read
+    /// are older than it.
     suspended: bool,
+    /// The devices that lost events and were not read again yet.
+    unread: Vec<DeviceId>,
 }
 
 /// Every modifier key code, left and right, as [`Modifier::codes`] gives
@@ -87,6 +91,7 @@ impl Matcher {
             held: Vec::new(),
             awaiting_release: false,
             suspended: false,
+            unread: Vec::new(),
         }
     }
 
@@ -111,6 +116,7 @@ impl Matcher {
     /// may still be queued: if it held a modifier while a release is
     /// awaited, the release is lost rather than claimed.
     pub fn device_lost(&mut self, device: DeviceId) -> Reaction {
+        self.unread.retain(|unread| *unread != device);
         let held_any = self.take(device) != 0;
         self.settle();
         self.lose_release_if(held_any)
@@ -120,7 +126,10 @@ impl Matcher {
     /// [`Matcher::resync`]: an awaited release is lost, and nothing fires
     /// until every modifier is up again, since the state read then is newer
     /// than events still queued on this device or others.
-    pub fn events_lost(&mut self) -> Reaction {
+    pub fn events_lost(&mut self, device: DeviceId) -> Reaction {
+        if !self.unread.contains(&device) {
+            self.unread.push(device);
+        }
         self.suspended = true;
         self.lose_release_if(true)
     }
@@ -133,6 +142,7 @@ impl Matcher {
             .enumerate()
             .filter(|&(_, &code)| held(code))
             .fold(0, |keys, (index, _)| keys | 1 << index);
+        self.unread.retain(|unread| *unread != device);
         self.update(device, |_| keys);
     }
 
@@ -152,9 +162,10 @@ impl Matcher {
         ended
     }
 
-    /// Ends a suspension once no modifier is held.
+    /// Ends a suspension once every device that lost events was read again
+    /// and no modifier is held.
     fn settle(&mut self) {
-        if self.held.is_empty() {
+        if self.held.is_empty() && self.unread.is_empty() {
             self.suspended = false;
         }
     }
