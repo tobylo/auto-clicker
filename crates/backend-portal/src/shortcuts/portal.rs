@@ -16,6 +16,7 @@ use ashpd::desktop::global_shortcuts::{
 };
 use ashpd::desktop::{CreateSessionOptions, ResponseError, Session};
 use auto_clicker_core::hotkeys::{Action, Binding, Bindings, HotkeyEvent, Modifier};
+use auto_clicker_core::input::InputError;
 use futures_util::{Stream, StreamExt, stream};
 use tokio::time::timeout;
 
@@ -60,7 +61,9 @@ struct Bound<S> {
 
 /// Opens a session on a new connection and binds the three shortcuts.
 async fn bind(bindings: Bindings) -> Result<Bound<impl Stream<Item = Signal>>, String> {
-    let portal = Portal::connect().await.map_err(|err| err.to_string())?;
+    let portal = Portal::connect()
+        .await
+        .map_err(|err| connect_failure(&err))?;
     let proxy = within(
         "GlobalShortcuts",
         GlobalShortcuts::with_connection(portal.connection().clone()),
@@ -97,7 +100,7 @@ async fn bind(bindings: Bindings) -> Result<Bound<impl Stream<Item = Signal>>, S
     // This connection carries one session, so every signal on it is that
     // session's.
     let signals = stream::select(
-        heard.map(|message| parse(&message)),
+        heard.filter_map(|message| ready(parse(&message))),
         closed.map(|_| Signal::Closed),
     );
     Ok(Bound {
@@ -126,8 +129,10 @@ fn listed(shortcut: &Shortcut) -> Listed {
     )
 }
 
-/// One signal of the GlobalShortcuts interface, parsed once.
-pub(super) fn parse(message: &zbus::Message) -> Signal {
+/// One signal of the GlobalShortcuts interface, parsed once. `None` for a
+/// signal the program does not know: one a newer portal added, which says
+/// nothing about the shortcuts it bound.
+pub(super) fn parse(message: &zbus::Message) -> Option<Signal> {
     let header = message.header();
     let name = header.member().map_or("", |member| member.as_str());
     let body = message.body();
@@ -141,11 +146,9 @@ pub(super) fn parse(message: &zbus::Message) -> Signal {
         "ShortcutsChanged" => body
             .deserialize::<ShortcutsChanged>()
             .map(|signal| Signal::Changed(signal.shortcuts().iter().map(listed).collect())),
-        // A signal a newer portal added: nothing the program asked for, and
-        // nothing it can act on.
-        _ => return Signal::Malformed(name.to_owned()),
+        _ => return None,
     };
-    parsed.unwrap_or_else(|_| Signal::Malformed(name.to_owned()))
+    Some(parsed.unwrap_or_else(|_| Signal::Malformed(name.to_owned())))
 }
 
 /// What the program asks the desktop to bind for `action`.
@@ -205,6 +208,15 @@ pub(super) async fn watch_owner() -> Result<impl Stream<Item = bool>, String> {
         // The stream keeps the connection it listens on.
         ready(change.args().ok().map(|args| args.new_owner().is_some()))
     }))
+}
+
+/// Why the registered connection could not be made, without the wording of
+/// the remote input portal it is shared with.
+pub(super) fn connect_failure(err: &InputError) -> String {
+    match err {
+        InputError::PortalUnavailable(why) | InputError::Portal(why) => why.clone(),
+        other => other.to_string(),
+    }
 }
 
 /// Runs a portal call with [`CALL_TIMEOUT`].

@@ -11,13 +11,14 @@ use auto_clicker_core::hotkeys::{
     Action, Binding, DESKTOP_RELEASE_PAUSE, HotkeyEvent, HotkeyStatus, Trigger, Triggers,
     Unavailable,
 };
+use auto_clicker_core::input::InputError;
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
 use tokio::task::yield_now;
 use tokio::time::{Instant, advance};
 use zbus::zvariant::{ObjectPath, Value};
 
-use super::portal::{failed, parse, preferred_trigger};
+use super::portal::{connect_failure, failed, parse, preferred_trigger};
 use super::reactor::{Listed, Signal, bound_triggers, serve};
 use super::*;
 
@@ -499,9 +500,15 @@ fn session_path() -> ObjectPath<'static> {
 fn the_portals_signals_parse_into_what_they_say() {
     let options: HashMap<&str, Value<'_>> = HashMap::new();
     let pressed = signal("Activated", &(session_path(), CLICKING, 0u64, &options));
-    assert_eq!(parse(&pressed), Signal::Activated(CLICKING.to_owned()));
+    assert_eq!(
+        parse(&pressed),
+        Some(Signal::Activated(CLICKING.to_owned()))
+    );
     let let_go = signal("Deactivated", &(session_path(), RECORDING, 0u64, &options));
-    assert_eq!(parse(&let_go), Signal::Deactivated(RECORDING.to_owned()));
+    assert_eq!(
+        parse(&let_go),
+        Some(Signal::Deactivated(RECORDING.to_owned()))
+    );
     let info: HashMap<&str, Value<'_>> = HashMap::from([
         ("description", Value::from("Start or stop clicking")),
         ("trigger_description", Value::from("Ctrl+Shift+F6")),
@@ -512,24 +519,34 @@ fn the_portals_signals_parse_into_what_they_say() {
     );
     assert_eq!(
         parse(&changed),
-        Signal::Changed(listed(&[(CLICKING, "Ctrl+Shift+F6")]))
+        Some(Signal::Changed(listed(&[(CLICKING, "Ctrl+Shift+F6")])))
     );
 }
 
 #[test]
-fn a_signal_that_does_not_parse_is_malformed_not_ignored() {
-    // An activation without its shortcut id, and a signal nobody defined.
+fn a_known_signal_that_does_not_parse_is_malformed_not_ignored() {
+    let malformed = |name: &str| Some(Signal::Malformed(name.to_owned()));
+    // An activation and a release without their shortcut id.
     let short = signal("Activated", &(session_path(),));
-    assert_eq!(parse(&short), Signal::Malformed("Activated".to_owned()));
+    assert_eq!(parse(&short), malformed("Activated"));
+    let short = signal("Deactivated", &(session_path(),));
+    assert_eq!(parse(&short), malformed("Deactivated"));
     let wrong = signal("ShortcutsChanged", &(session_path(), "not a list"));
-    assert_eq!(
-        parse(&wrong),
-        Signal::Malformed("ShortcutsChanged".to_owned())
-    );
+    assert_eq!(parse(&wrong), malformed("ShortcutsChanged"));
+    // A signal a newer portal added is none of the program's.
     let unknown = signal("Reconfigured", &(session_path(),));
+    assert_eq!(parse(&unknown), None);
+}
+
+#[test]
+fn a_connection_that_cannot_be_made_says_why_in_its_own_words() {
+    let no_file = InputError::PortalUnavailable("could not register the app id".to_owned());
+    assert_eq!(connect_failure(&no_file), "could not register the app id");
+    let slow = InputError::Portal("session bus: no answer within 10 s".to_owned());
+    assert_eq!(connect_failure(&slow), "session bus: no answer within 10 s");
     assert_eq!(
-        parse(&unknown),
-        Signal::Malformed("Reconfigured".to_owned())
+        connect_failure(&InputError::NotAllowed),
+        InputError::NotAllowed.to_string()
     );
 }
 
