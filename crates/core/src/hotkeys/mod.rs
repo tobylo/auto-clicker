@@ -68,17 +68,17 @@ impl Bindings {
 pub enum HotkeyEvent {
     /// A binding was pressed.
     Fired(Action),
-    /// No modifier is held any more, after a [`HotkeyEvent::Fired`]: every
-    /// modifier was seen coming up, or its keyboard was unplugged. Comes once
-    /// after every fire, right after it for a binding without modifiers;
-    /// fires while modifiers stay held share one. A run started by a hotkey
-    /// can wait for it, so its first clicks are not Ctrl+click. It does not
-    /// come when reading fails: [`HotkeyEvent::ReleaseLost`] or a
-    /// [`HotkeyStatus::Unavailable`] ends such a wait instead.
+    /// No modifier is held any more, after a [`HotkeyEvent::Fired`]: the
+    /// last one was seen coming up. Comes once after every fire, right after
+    /// it for a binding without modifiers; fires while modifiers stay held
+    /// share one. A run started by a hotkey can wait for it, so its first
+    /// clicks are not Ctrl+click. Instead of it, [`HotkeyEvent::ReleaseLost`]
+    /// or a [`HotkeyStatus::Unavailable`] may end such a wait.
     ModifiersReleased,
-    /// A keyboard holding a modifier failed while a release was awaited:
-    /// whether it came up can no longer be seen, and no release follows. A
-    /// run waiting for the release should not start.
+    /// Whether the modifiers came up after a fire can no longer be known: a
+    /// keyboard holding one was unplugged or failed, or a keyboard's events
+    /// were lost. No release follows. A run waiting for the release should
+    /// not start.
     ReleaseLost,
     /// Whether hotkeys work now. Sent once the devices were first looked at,
     /// and again whenever it changes.

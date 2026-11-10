@@ -39,7 +39,7 @@ impl Drop for TempDir {
     }
 }
 
-/// A stand-in for `/dev/input`, udev's database and `/sys/dev/char`.
+/// A stand-in for `/dev/input` and `/sys/dev/char`.
 struct Fixture {
     _root: TempDir,
     paths: Paths,
@@ -50,10 +50,9 @@ impl Fixture {
         let root = TempDir::new();
         let paths = Paths {
             dev: root.0.join("input"),
-            udev_data: root.0.join("udev"),
             sys_char: root.0.join("char"),
         };
-        for dir in [&paths.dev, &paths.udev_data, &paths.sys_char] {
+        for dir in [&paths.dev, &paths.sys_char] {
             fs::create_dir(dir).unwrap();
         }
         Fixture { _root: root, paths }
@@ -61,12 +60,6 @@ impl Fixture {
 
     fn node(&self, name: &str) -> PathBuf {
         self.paths.dev.join(name)
-    }
-
-    /// Makes udev's record for every node here: they are all regular files,
-    /// device number 0.
-    fn udev_done(&self) {
-        fs::write(self.paths.udev_data.join("c0:0"), b"").unwrap();
     }
 }
 
@@ -147,7 +140,6 @@ async fn nodes_that_are_no_keyboards_change_nothing() {
         return;
     }
     let fixture = Fixture::new();
-    fixture.udev_done();
     let fx = &fixture;
     with_reader(fx, |mut received, stop| async move {
         assert_eq!(
@@ -169,12 +161,11 @@ async fn nodes_that_are_no_keyboards_change_nothing() {
 }
 
 #[tokio::test]
-async fn a_node_udev_has_finished_that_cannot_be_opened_means_no_permission() {
+async fn a_node_that_cannot_be_opened_means_no_permission() {
     if !permissions_apply() {
         return;
     }
     let fixture = Fixture::new();
-    fixture.udev_done();
     let fx = &fixture;
     with_reader(fx, |mut received, stop| async move {
         assert_eq!(
@@ -202,7 +193,6 @@ async fn nodes_there_before_the_start_are_looked_at() {
         return;
     }
     let fixture = Fixture::new();
-    fixture.udev_done();
     unreadable(&fixture.node("event2"));
     let fx = &fixture;
     with_reader(fx, |mut received, stop| async move {
@@ -216,7 +206,7 @@ async fn nodes_there_before_the_start_are_looked_at() {
 }
 
 #[tokio::test]
-async fn a_denied_node_is_final_only_after_udev_changes_it() {
+async fn a_denied_node_is_retried_when_its_permissions_change() {
     if !permissions_apply() {
         return;
     }
@@ -224,17 +214,16 @@ async fn a_denied_node_is_final_only_after_udev_changes_it() {
     unreadable(&fixture.node("event4"));
     let fx = &fixture;
     with_reader(fx, |mut received, stop| async move {
-        // udev has not looked at the node yet: no verdict.
-        assert_eq!(
-            next(&mut received).await,
-            Some(unavailable(Unavailable::NoKeyboard))
-        );
-        // udev sets the mode, which is still not enough.
-        let mode = fs::Permissions::from_mode(0o000);
-        fs::set_permissions(fx.node("event4"), mode).unwrap();
         assert_eq!(
             next(&mut received).await,
             Some(unavailable(Unavailable::NoPermission))
+        );
+        // udev opens it up: now it is seen to be no keyboard at all.
+        let mode = fs::Permissions::from_mode(0o644);
+        fs::set_permissions(fx.node("event4"), mode).unwrap();
+        assert_eq!(
+            next(&mut received).await,
+            Some(unavailable(Unavailable::NoKeyboard))
         );
         stop.send(()).unwrap();
     })

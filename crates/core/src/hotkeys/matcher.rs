@@ -106,47 +106,50 @@ impl Matcher {
         }
     }
 
-    /// Forgets the keys a device held, once it is gone: unplugged keys are
-    /// up.
-    pub fn device_gone(&mut self, device: DeviceId) -> Reaction {
-        self.forget(device);
-        self.release_reaction()
+    /// Forgets the keys a device held once it is unplugged or cannot be
+    /// read. Its keys are not seen coming up, and events from other devices
+    /// may still be queued: if it held a modifier while a release is
+    /// awaited, the release is lost rather than claimed.
+    pub fn device_lost(&mut self, device: DeviceId) -> Reaction {
+        let held_any = self.take(device) != 0;
+        self.settle();
+        self.lose_release_if(held_any)
     }
 
-    /// Forgets the keys a device held after reading it failed. Nothing says
-    /// they came up: when it held a modifier while a release is awaited,
-    /// the release is lost instead, so no other keyboard can complete it.
-    pub fn device_failed(&mut self, device: DeviceId) -> Reaction {
-        let held_any = self.held.iter().any(|(held_by, _)| *held_by == device);
-        self.forget(device);
-        let release_lost = self.awaiting_release && held_any;
-        if release_lost {
-            self.awaiting_release = false;
-        }
-        Reaction {
-            release_lost,
-            ..Reaction::default()
-        }
+    /// A device's events were lost. Its state is unknown until
+    /// [`Matcher::resync`]: an awaited release is lost, and nothing fires
+    /// until every modifier is up again, since the state read then is newer
+    /// than events still queued on this device or others.
+    pub fn events_lost(&mut self) -> Reaction {
+        self.suspended = true;
+        self.lose_release_if(true)
     }
 
     /// Replaces what a device holds with what it reports holding now, after
-    /// its events were lost. Nothing fires until every modifier is up again:
-    /// the read state is newer than events still queued on this device or
-    /// others, so an F6 pressed before Ctrl could otherwise match it.
-    pub fn resync(&mut self, device: DeviceId, held: impl Fn(u16) -> bool) -> Reaction {
+    /// its events were lost.
+    pub fn resync(&mut self, device: DeviceId, held: impl Fn(u16) -> bool) {
         let keys = MODIFIER_CODES
             .iter()
             .enumerate()
             .filter(|&(_, &code)| held(code))
             .fold(0, |keys, (index, _)| keys | 1 << index);
-        self.suspended = true;
         self.update(device, |_| keys);
-        self.release_reaction()
     }
 
-    fn forget(&mut self, device: DeviceId) {
-        self.take(device);
-        self.settle();
+    fn lose_release_if(&mut self, uncertain: bool) -> Reaction {
+        Reaction {
+            release_lost: self.end_wait(uncertain),
+            ..Reaction::default()
+        }
+    }
+
+    /// Ends an awaited release when `now`; returns whether it ended.
+    fn end_wait(&mut self, now: bool) -> bool {
+        let ended = self.awaiting_release && now;
+        if ended {
+            self.awaiting_release = false;
+        }
+        ended
     }
 
     /// Ends a suspension once no modifier is held.
@@ -201,12 +204,8 @@ impl Matcher {
 
     /// The release, when a fire awaits one and no modifier is held.
     fn release_reaction(&mut self) -> Reaction {
-        let released = self.awaiting_release && self.held.is_empty();
-        if released {
-            self.awaiting_release = false;
-        }
         Reaction {
-            released,
+            released: self.end_wait(self.held.is_empty()),
             ..Reaction::default()
         }
     }

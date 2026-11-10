@@ -6,6 +6,9 @@ use evdev::{EventType, InputEvent, SynchronizationCode};
 /// What to do with one event.
 pub(crate) enum Step {
     Key(KeyEvent),
+    /// Events were lost: what the device holds is unknown until the frame
+    /// ends.
+    Lost,
     /// Events were lost and the device's frame is over: read which keys it
     /// holds now.
     Resync,
@@ -21,6 +24,7 @@ pub(crate) fn step(dropped: &mut bool, event: &InputEvent) -> Step {
         let code = event.code();
         if code == SynchronizationCode::SYN_DROPPED.0 {
             *dropped = true;
+            return Step::Lost;
         } else if code == SynchronizationCode::SYN_REPORT.0 && *dropped {
             *dropped = false;
             return Step::Resync;
@@ -31,6 +35,12 @@ pub(crate) fn step(dropped: &mut bool, event: &InputEvent) -> Step {
         Some(key) if !*dropped => Step::Key(key),
         _ => Step::Nothing,
     }
+}
+
+/// Whether the event reports lost events (`SYN_DROPPED`).
+pub(crate) fn is_loss(event: &InputEvent) -> bool {
+    event.event_type() == EventType::SYNCHRONIZATION
+        && event.code() == SynchronizationCode::SYN_DROPPED.0
 }
 
 /// The key event an input event is, if it is one.
@@ -59,6 +69,7 @@ mod tests {
     fn name(step: Step) -> &'static str {
         match step {
             Step::Key(_) => "key",
+            Step::Lost => "lost",
             Step::Resync => "resync",
             Step::Nothing => "nothing",
         }
@@ -96,7 +107,7 @@ mod tests {
         assert_eq!(
             steps,
             [
-                "key", "nothing", "nothing", "nothing", "nothing", "resync", "key", "nothing"
+                "key", "nothing", "lost", "nothing", "nothing", "resync", "key", "nothing"
             ]
         );
     }

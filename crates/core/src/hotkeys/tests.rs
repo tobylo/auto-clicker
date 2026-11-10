@@ -129,7 +129,10 @@ const F9: u16 = 67;
 #[derive(Clone, Copy)]
 enum Step {
     Key(DeviceId, u16, i32),
+    /// The device was unplugged or failed.
     Gone(DeviceId),
+    /// Some device's events were lost.
+    Lost,
 }
 
 fn down(device: DeviceId, code: u16) -> Step {
@@ -153,7 +156,8 @@ fn feed(matcher: &mut Matcher, steps: &[Step]) -> Vec<HotkeyEvent> {
                 Step::Key(device, code, value) => {
                     matcher.key(device, KeyEvent::new(code, value).unwrap())
                 }
-                Step::Gone(device) => matcher.device_gone(device),
+                Step::Gone(device) => matcher.device_lost(device),
+                Step::Lost => matcher.events_lost(),
             };
             reaction.events()
         })
@@ -361,8 +365,8 @@ fn a_release_never_seen_pressed_leaves_nothing_held() {
 #[test]
 fn nothing_fires_after_lost_events_until_every_modifier_is_up() {
     let mut matcher = Matcher::new(Bindings::default());
-    let held = |codes: &'static [u16]| move |code| codes.contains(&code);
-    let resync = matcher.resync(A, held(&[RIGHTCTRL, F6]));
+    let lost = feed(&mut matcher, &[Step::Lost]);
+    matcher.resync(A, |code| [RIGHTCTRL, F6].contains(&code));
     // F7 queued before the read, though the read already saw Ctrl.
     let queued = feed(&mut matcher, &[down(B, F7), down(B, LEFTCTRL), down(B, F7)]);
     let after = feed(
@@ -375,68 +379,69 @@ fn nothing_fires_after_lost_events_until_every_modifier_is_up() {
         ],
     );
     assert_eq!(
-        (resync, queued, after),
-        (
-            Reaction::default(),
-            vec![],
-            vec![Fired(Action::ToggleRecording)]
-        )
+        (lost, queued, after),
+        (vec![], vec![], vec![Fired(Action::ToggleRecording)])
     );
 }
 
 #[test]
-fn a_resync_holding_nothing_suspends_nothing() {
+fn a_resync_holding_nothing_ends_the_suspension() {
     let mut matcher = Matcher::new(Bindings::default());
+    feed(&mut matcher, &[Step::Lost]);
     matcher.resync(A, |_| false);
     let sent = feed(&mut matcher, &[down(A, LEFTCTRL), down(A, F6)]);
     assert_eq!(sent, [Fired(Action::ToggleClicking)]);
 }
 
 #[test]
-fn a_device_failing_with_nothing_held_ends_no_suspension() {
+fn the_suspension_lasts_while_another_device_holds_a_modifier() {
     let mut matcher = Matcher::new(Bindings::default());
-    matcher.resync(A, |code| code == LEFTCTRL);
-    matcher.device_failed(B);
-    let sent = feed(&mut matcher, &[down(B, LEFTCTRL), down(B, F6)]);
+    feed(&mut matcher, &[down(A, LEFTSHIFT), Step::Lost]);
+    matcher.resync(B, |_| false);
+    let sent = feed(
+        &mut matcher,
+        &[Step::Gone(B), down(B, LEFTCTRL), down(B, F6)],
+    );
     assert_eq!(sent, []);
+}
+
+#[test]
+fn lost_events_lose_an_awaited_release_and_a_resync_never_claims_one() {
+    let mut matcher = Matcher::new(Bindings::default());
+    let sent = feed(&mut matcher, &[down(A, LEFTCTRL), down(A, F6), Step::Lost]);
+    matcher.resync(A, |_| false);
+    let after = feed(&mut matcher, &[down(B, LEFTSHIFT), up(B, LEFTSHIFT)]);
+    assert_eq!(
+        (sent, after),
+        (vec![Fired(Action::ToggleClicking), ReleaseLost], vec![])
+    );
 }
 
 #[test]
 fn a_resync_replaces_what_the_device_held() {
     let mut matcher = Matcher::new(Bindings::default());
-    let fired = feed(
-        &mut matcher,
-        &[
-            down(A, LEFTCTRL),
-            down(B, LEFTSHIFT),
-            up(B, LEFTSHIFT),
-            down(A, F6),
-        ],
-    );
-    let released = matcher.resync(A, |_| false);
-    let sent = feed(&mut matcher, &[down(B, F6)]);
-    assert_eq!(
-        (fired, released.events().collect::<Vec<_>>(), sent),
-        (
-            vec![Fired(Action::ToggleClicking)],
-            vec![ModifiersReleased],
-            vec![]
-        )
-    );
+    feed(&mut matcher, &[down(A, LEFTCTRL)]);
+    matcher.resync(A, |code| code == LEFTSHIFT);
+    let shift = [Modifier::Shift].into_iter().collect();
+    assert_eq!(matcher.modifiers(), shift);
 }
 
 #[test]
-fn a_failed_device_holding_a_modifier_loses_the_release() {
+fn a_device_lost_holding_a_modifier_loses_the_release() {
     let mut matcher = Matcher::new(Bindings::default());
-    let fired = feed(&mut matcher, &[down(A, LEFTCTRL), down(A, F6)]);
-    let failed = matcher.device_failed(A).events().collect::<Vec<_>>();
+    let sent = feed(
+        &mut matcher,
+        &[down(A, LEFTCTRL), down(A, F6), Step::Gone(A)],
+    );
     // Another keyboard's modifiers cannot complete it any more.
-    let after = feed(&mut matcher, &[down(B, LEFTSHIFT), up(B, LEFTSHIFT)]);
+    let after = feed(
+        &mut matcher,
+        &[down(B, LEFTSHIFT), up(B, LEFTSHIFT), down(B, F6)],
+    );
     assert_eq!(
-        (fired, failed, matcher.modifiers(), after),
+        (sent, matcher.modifiers(), after),
         (
-            vec![Fired(Action::ToggleClicking)],
-            vec![ReleaseLost],
+            vec![Fired(Action::ToggleClicking), ReleaseLost],
             Modifiers::NONE,
             vec![]
         )
@@ -444,57 +449,25 @@ fn a_failed_device_holding_a_modifier_loses_the_release() {
 }
 
 #[test]
-fn a_failed_device_holding_nothing_keeps_the_wait() {
-    let mut matcher = Matcher::new(Bindings::default());
-    let fired = feed(&mut matcher, &[down(A, LEFTCTRL), down(A, F6)]);
-    let failed = matcher.device_failed(B);
-    let released = feed(&mut matcher, &[up(A, LEFTCTRL)]);
-    assert_eq!(
-        (fired, failed, released),
-        (
-            vec![Fired(Action::ToggleClicking)],
-            Reaction::default(),
-            vec![ModifiersReleased]
-        )
-    );
+fn a_device_lost_holding_nothing_keeps_the_wait() {
+    let sent = run(&[
+        down(A, LEFTCTRL),
+        down(A, F6),
+        Step::Gone(B),
+        up(A, LEFTCTRL),
+    ]);
+    assert_eq!(sent, [Fired(Action::ToggleClicking), ModifiersReleased]);
 }
 
 #[test]
-fn a_failure_without_a_wait_loses_nothing() {
-    let mut matcher = Matcher::new(Bindings::default());
-    feed(&mut matcher, &[down(A, LEFTCTRL)]);
-    assert_eq!(matcher.device_failed(A), Reaction::default());
+fn nothing_is_lost_without_a_wait() {
+    let sent = run(&[down(A, LEFTCTRL), Step::Gone(A), Step::Lost]);
+    assert_eq!(sent, []);
 }
 
 #[test]
 fn no_release_without_a_fire() {
     assert_eq!(run(&[down(A, LEFTCTRL), up(A, LEFTCTRL)]), []);
-}
-
-#[test]
-fn a_device_that_goes_away_lets_go_of_its_keys() {
-    let mut matcher = Matcher::new(Bindings::default());
-    let sent = feed(
-        &mut matcher,
-        &[down(A, LEFTCTRL), down(B, F6), Step::Gone(A), down(B, F6)],
-    );
-    let expected = [Fired(Action::ToggleClicking), ModifiersReleased];
-    assert_eq!(
-        (sent, matcher.modifiers()),
-        (expected.to_vec(), Modifiers::NONE)
-    );
-}
-
-#[test]
-fn another_device_going_away_keeps_the_wait() {
-    let mut matcher = Matcher::new(Bindings::default());
-    let sent = feed(
-        &mut matcher,
-        &[down(A, LEFTCTRL), down(A, F6), Step::Gone(B)],
-    );
-    let ctrl = [Modifier::Ctrl].into_iter().collect();
-    let expected = vec![Fired(Action::ToggleClicking)];
-    assert_eq!((sent, matcher.modifiers()), (expected, ctrl));
 }
 
 #[test]

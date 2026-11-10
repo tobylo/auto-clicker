@@ -28,7 +28,7 @@ use evdev::{InputEvent, KeyCode};
 use crate::DeviceIdentity;
 use events::Step;
 use node::{Node, Paths};
-use registry::{Cause, Opened, Registry};
+use registry::{Opened, Registry};
 use watch::{Change, Watch};
 
 /// Reads every keyboard for hotkeys until `shutdown` resolves, and hands
@@ -94,8 +94,10 @@ async fn run<S: FnMut(HotkeyEvent)>(mut reader: Reader<S>, shutdown: impl Future
 
 /// The next event from any keyboard, and which one sent it: of the events
 /// waiting, the earliest by kernel timestamp, so Ctrl on one device and F6
-/// on another keep their order however late the reader looks. An error is
-/// returned at once. Never resolves while no event waits.
+/// on another keep their order however late the reader looks. A report of
+/// lost events comes before any other, since events lost before it may be
+/// older than the others waiting; an error is returned at once. Never
+/// resolves while no event waits.
 fn next_event(
     devices: &mut [Reading],
 ) -> impl Future<Output = (usize, io::Result<InputEvent>)> + '_ {
@@ -113,9 +115,14 @@ fn next_event(
         let earliest = devices
             .iter()
             .enumerate()
-            .filter_map(|(index, device)| device.ahead.map(|event| (event.timestamp(), index)))
+            .filter_map(|(index, device)| {
+                let event = device.ahead?;
+                Some((!events::is_loss(&event), event.timestamp(), index))
+            })
             .min();
-        match earliest.and_then(|(_, index)| Some((index, devices.get_mut(index)?.ahead.take()?))) {
+        match earliest
+            .and_then(|(_, _, index)| Some((index, devices.get_mut(index)?.ahead.take()?)))
+        {
             Some((index, event)) => Poll::Ready((index, Ok(event))),
             None => Poll::Pending,
         }
@@ -162,7 +169,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
     /// Opens every node not open yet.
     fn scan(&mut self) -> io::Result<()> {
         for entry in std::fs::read_dir(&self.paths.dev)? {
-            self.try_open(&entry?.file_name(), Cause::Scan);
+            self.try_open(&entry?.file_name());
         }
         Ok(())
     }
@@ -170,8 +177,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
     fn changed(&mut self, changes: Vec<Change>) -> io::Result<()> {
         for change in changes {
             match change {
-                Change::Created(name) => self.try_open(&name, Cause::Created),
-                Change::Attrib(name) => self.try_open(&name, Cause::Attrib),
+                Change::Created(name) | Change::Attrib(name) => self.try_open(&name),
                 Change::Deleted(name) => {
                     if let Some(id) = self.registry.deleted(&name) {
                         self.unplugged(id);
@@ -186,7 +192,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
         Ok(())
     }
 
-    fn try_open(&mut self, name: &OsStr, cause: Cause) {
+    fn try_open(&mut self, name: &OsStr) {
         if !self.registry.wants_open(name) {
             return;
         }
@@ -196,10 +202,10 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
             Node::Ours => Opened::Ours,
             Node::NotKeyboard => Opened::NotKeyboard,
             Node::Gone => Opened::Gone,
-            Node::Denied { udev_done } => Opened::Denied { udev_done },
+            Node::Denied => Opened::Denied,
             Node::Failed(why) => Opened::Failed(why),
         };
-        self.registry.record(name, opened, cause);
+        self.registry.record(name, opened);
     }
 
     fn add(&mut self, name: &OsStr, stream: Box<EventStream>) -> Opened {
@@ -232,48 +238,46 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
                 let reaction = self.matcher.key(id, key);
                 self.send_reaction(reaction);
             }
+            Step::Lost => {
+                let reaction = self.matcher.events_lost();
+                self.send_reaction(reaction);
+            }
             Step::Resync => match device.stream.device().get_key_state() {
-                Ok(keys) => {
-                    let reaction = self.matcher.resync(id, |code| keys.contains(KeyCode(code)));
-                    self.send_reaction(reaction);
-                }
+                Ok(keys) => self.matcher.resync(id, |code| keys.contains(KeyCode(code))),
                 Err(err) => self.read_failed(id, &err),
             },
             Step::Nothing => {}
         }
     }
 
-    /// Reading a device failed. An unplugged device lets go of its keys and
-    /// its node is looked at again, since it may already be a new device's.
-    /// Any other failure forgets its keys without a release, and the node
-    /// waits for its attributes to change.
+    /// Reading a device failed. An unplugged device's node is looked at
+    /// again, since it may already be a new device's; any other failure
+    /// waits for the node's attributes to change.
     fn read_failed(&mut self, id: DeviceId, err: &io::Error) {
         let Some(name) = self.remove(id) else {
             return;
         };
         if node::is_gone(err) {
-            let reaction = self.matcher.device_gone(id);
-            self.send_reaction(reaction);
             self.registry.read_failed(&name, None);
-            self.try_open(&name, Cause::Scan);
+            self.try_open(&name);
         } else {
-            let reaction = self.matcher.device_failed(id);
-            self.send_reaction(reaction);
             self.registry.read_failed(&name, Some(err.to_string()));
         }
     }
 
-    /// Stops reading an unplugged device and lets go of the keys it held.
+    /// Stops reading an unplugged device.
     fn unplugged(&mut self, id: DeviceId) {
         self.remove(id);
-        let reaction = self.matcher.device_gone(id);
-        self.send_reaction(reaction);
     }
 
-    /// Stops reading a device; returns its node's name.
+    /// Stops reading a device, and forgets the keys it held; returns its
+    /// node's name.
     fn remove(&mut self, id: DeviceId) -> Option<OsString> {
         let index = self.devices.iter().position(|device| device.id == id)?;
-        Some(self.devices.swap_remove(index).name)
+        let name = self.devices.swap_remove(index).name;
+        let reaction = self.matcher.device_lost(id);
+        self.send_reaction(reaction);
+        Some(name)
     }
 
     fn send_reaction(&mut self, reaction: Reaction) {

@@ -194,14 +194,15 @@ async fn a_keyboard_that_comes_back_fires_again() {
     with_reader(|mut reader, _input| async move {
         let mut keyboard = Keyboard::full("auto-clicker test keyboard");
         reader.fires_from(&mut keyboard).await;
-        // Unplugged while Ctrl+F24 holds Ctrl: the hold ends with it.
+        // Unplugged while Ctrl+F24 holds Ctrl: whether Ctrl came up is not
+        // seen, so the release is lost rather than claimed.
         keyboard.key(LEFTCTRL, 1);
         keyboard.key(F24, 1);
         let fired = reader.next_hotkey(DEVICE_TIMEOUT).await;
         assert_eq!(fired, Some(HotkeyEvent::Fired(Action::ToggleClicking)));
         drop(keyboard);
-        let released = reader.next_hotkey(DEVICE_TIMEOUT).await;
-        assert_eq!(released, Some(HotkeyEvent::ModifiersReleased));
+        let lost = reader.next_hotkey(DEVICE_TIMEOUT).await;
+        assert_eq!(lost, Some(HotkeyEvent::ReleaseLost));
         let mut again = Keyboard::full("auto-clicker test keyboard");
         reader.fires_from(&mut again).await;
     })

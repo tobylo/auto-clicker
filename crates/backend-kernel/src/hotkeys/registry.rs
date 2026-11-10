@@ -7,17 +7,6 @@ use std::ffi::{OsStr, OsString};
 
 use auto_clicker_core::hotkeys::{DeviceId, HotkeyStatus, Unavailable};
 
-/// Why a node is being opened.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Cause {
-    /// The first look at the directory, or a rescan after events were lost.
-    Scan,
-    /// The node appeared.
-    Created,
-    /// The node's attributes changed: udev set its owner or mode.
-    Attrib,
-}
-
 /// What opening a node found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Opened {
@@ -29,9 +18,9 @@ pub(crate) enum Opened {
     NotKeyboard,
     /// The node or its device went away first.
     Gone,
-    /// Permission denied. `udev_done` when udev has finished setting the
-    /// node up, so its permissions are final.
-    Denied { udev_done: bool },
+    /// Permission denied. Retried when the node's attributes change, as
+    /// udev sets them up after the node appears.
+    Denied,
     /// Anything else, and why; retried when the node's attributes change.
     Failed(String),
 }
@@ -41,11 +30,7 @@ enum State {
     Reading(DeviceId),
     Ours,
     NotKeyboard,
-    /// `permanent` once udev is done with the node and it still cannot be
-    /// opened.
-    Denied {
-        permanent: bool,
-    },
+    Denied,
     Failed(String),
 }
 
@@ -68,12 +53,12 @@ impl Registry {
     pub(crate) fn wants_open(&self, name: &OsStr) -> bool {
         is_event_node(name)
             && match self.nodes.get(name) {
-                None | Some(State::Denied { .. } | State::Failed(_)) => true,
+                None | Some(State::Denied | State::Failed(_)) => true,
                 Some(State::Reading(_) | State::Ours | State::NotKeyboard) => false,
             }
     }
 
-    pub(crate) fn record(&mut self, name: &OsStr, opened: Opened, cause: Cause) {
+    pub(crate) fn record(&mut self, name: &OsStr, opened: Opened) {
         let state = match opened {
             Opened::Keyboard(id) => State::Reading(id),
             Opened::Ours => State::Ours,
@@ -82,9 +67,7 @@ impl Registry {
                 self.nodes.remove(name);
                 return;
             }
-            Opened::Denied { udev_done } => State::Denied {
-                permanent: udev_done || cause == Cause::Attrib,
-            },
+            Opened::Denied => State::Denied,
             Opened::Failed(why) => State::Failed(why),
         };
         self.nodes.insert(name.to_owned(), state);
@@ -121,7 +104,7 @@ impl Registry {
         if states().any(|state| matches!(state, State::Reading(_))) {
             return HotkeyStatus::Available;
         }
-        let why = if states().any(|state| *state == State::Denied { permanent: true }) {
+        let why = if states().any(|state| *state == State::Denied) {
             Unavailable::NoPermission
         } else if let Some(failure) = self.first_failure() {
             Unavailable::ReadFailed(failure.to_owned())
@@ -175,7 +158,7 @@ mod tests {
     #[test]
     fn a_node_is_opened_once_until_it_goes() {
         let mut registry = Registry::default();
-        registry.record(name("event3"), Opened::Keyboard(ID), Cause::Created);
+        registry.record(name("event3"), Opened::Keyboard(ID));
         let on_attrib = registry.wants_open(name("event3"));
         let deleted = registry.deleted(name("event3"));
         let on_create = registry.wants_open(name("event3"));
@@ -189,8 +172,8 @@ mod tests {
     #[test]
     fn ours_and_keyless_nodes_are_not_reopened() {
         let mut registry = Registry::default();
-        registry.record(name("event1"), Opened::Ours, Cause::Scan);
-        registry.record(name("event2"), Opened::NotKeyboard, Cause::Scan);
+        registry.record(name("event1"), Opened::Ours);
+        registry.record(name("event2"), Opened::NotKeyboard);
         let reopened = [name("event1"), name("event2")].map(|node| registry.wants_open(node));
         let deleted = registry.deleted(name("event1"));
         let after_delete = registry.wants_open(name("event1"));
@@ -203,12 +186,8 @@ mod tests {
     #[test]
     fn denied_and_failed_nodes_are_retried() {
         let mut registry = Registry::default();
-        registry.record(
-            name("event1"),
-            Opened::Denied { udev_done: true },
-            Cause::Scan,
-        );
-        registry.record(name("event2"), Opened::Failed("EIO".into()), Cause::Scan);
+        registry.record(name("event1"), Opened::Denied);
+        registry.record(name("event2"), Opened::Failed("EIO".into()));
         assert!(registry.wants_open(name("event1")));
         assert!(registry.wants_open(name("event2")));
     }
@@ -216,46 +195,26 @@ mod tests {
     #[test]
     fn a_gone_node_is_forgotten() {
         let mut registry = Registry::default();
-        registry.record(name("event1"), Opened::Failed("EIO".into()), Cause::Scan);
-        registry.record(name("event1"), Opened::Gone, Cause::Attrib);
+        registry.record(name("event1"), Opened::Failed("EIO".into()));
+        registry.record(name("event1"), Opened::Gone);
         assert_eq!(registry.status(), unavailable(Unavailable::NoKeyboard));
         assert!(registry.wants_open(name("event1")));
     }
 
     #[test]
-    fn denial_is_final_once_udev_is_done_or_after_an_attrib_change() {
-        let denied = |udev_done, cause| {
-            let mut registry = Registry::default();
-            registry.record(name("event1"), Opened::Denied { udev_done }, cause);
-            registry.status()
-        };
-        let final_ = unavailable(Unavailable::NoPermission);
-        let not_yet = unavailable(Unavailable::NoKeyboard);
-        let cases = [
-            (true, Cause::Scan, &final_),
-            (true, Cause::Created, &final_),
-            (true, Cause::Attrib, &final_),
-            (false, Cause::Attrib, &final_),
-            (false, Cause::Created, &not_yet),
-            (false, Cause::Scan, &not_yet),
-        ];
-        for (udev_done, cause, expected) in cases {
-            let status = denied(udev_done, cause);
-            assert_eq!(&status, expected, "udev done {udev_done}, {cause:?}");
-        }
+    fn a_denied_node_means_no_permission() {
+        let mut registry = Registry::default();
+        registry.record(name("event1"), Opened::Denied);
+        assert_eq!(registry.status(), unavailable(Unavailable::NoPermission));
     }
 
     #[test]
     fn one_keyboard_makes_hotkeys_available() {
         let mut registry = Registry::default();
         assert_eq!(registry.status(), unavailable(Unavailable::NoKeyboard));
-        registry.record(
-            name("event1"),
-            Opened::Denied { udev_done: true },
-            Cause::Scan,
-        );
-        registry.record(name("event2"), Opened::Ours, Cause::Scan);
-        registry.record(name("event3"), Opened::Keyboard(ID), Cause::Scan);
+        registry.record(name("event1"), Opened::Denied);
+        registry.record(name("event2"), Opened::Ours);
+        registry.record(name("event3"), Opened::Keyboard(ID));
         assert_eq!(registry.status(), HotkeyStatus::Available);
         registry.deleted(name("event3"));
         assert_eq!(registry.status(), unavailable(Unavailable::NoPermission));
@@ -264,8 +223,8 @@ mod tests {
     #[test]
     fn a_failed_read_keeps_the_node_and_why_only_if_it_is_still_there() {
         let mut registry = Registry::default();
-        registry.record(name("event1"), Opened::Keyboard(ID), Cause::Scan);
-        registry.record(name("event2"), Opened::Keyboard(DeviceId(8)), Cause::Scan);
+        registry.record(name("event1"), Opened::Keyboard(ID));
+        registry.record(name("event2"), Opened::Keyboard(DeviceId(8)));
         registry.read_failed(name("event1"), None);
         registry.read_failed(name("event2"), Some("I/O error".into()));
         let failed = unavailable(Unavailable::ReadFailed("I/O error".into()));
@@ -283,7 +242,7 @@ mod tests {
     fn the_first_failure_by_name_is_reported() {
         let mut registry = Registry::default();
         for (node, why) in [("event9", "nine"), ("event1", "one"), ("event5", "five")] {
-            registry.record(name(node), Opened::Failed(why.into()), Cause::Scan);
+            registry.record(name(node), Opened::Failed(why.into()));
         }
         let first = unavailable(Unavailable::ReadFailed("one".into()));
         assert_eq!(registry.status(), first);
@@ -292,12 +251,8 @@ mod tests {
     #[test]
     fn permission_is_reported_before_a_failure() {
         let mut registry = Registry::default();
-        registry.record(name("event1"), Opened::Failed("EIO".into()), Cause::Scan);
-        registry.record(
-            name("event2"),
-            Opened::Denied { udev_done: true },
-            Cause::Scan,
-        );
+        registry.record(name("event1"), Opened::Failed("EIO".into()));
+        registry.record(name("event2"), Opened::Denied);
         assert_eq!(registry.status(), unavailable(Unavailable::NoPermission));
     }
 
@@ -307,13 +262,13 @@ mod tests {
         let unread = [
             Opened::Ours,
             Opened::NotKeyboard,
-            Opened::Denied { udev_done: true },
+            Opened::Denied,
             Opened::Failed("EIO".into()),
         ];
         for (index, opened) in unread.into_iter().enumerate() {
-            registry.record(name(&format!("event{index}")), opened, Cause::Scan);
+            registry.record(name(&format!("event{index}")), opened);
         }
-        registry.record(name("event9"), Opened::Keyboard(ID), Cause::Scan);
+        registry.record(name("event9"), Opened::Keyboard(ID));
         registry.forget_unread();
         let reopened = ["event0", "event1", "event2", "event3", "event9"]
             .map(|node| registry.wants_open(name(node)));

@@ -20,9 +20,6 @@ use evdev::raw_stream::{EventStream, RawDevice};
 pub(crate) struct Paths {
     /// The evdev nodes, `/dev/input`.
     pub(crate) dev: PathBuf,
-    /// udev's database, `/run/udev/data`: `c<major>:<minor>` exists once udev
-    /// has set the node up.
-    pub(crate) udev_data: PathBuf,
     /// Character devices by number, `/sys/dev/char`.
     pub(crate) sys_char: PathBuf,
 }
@@ -31,7 +28,6 @@ impl Paths {
     pub(crate) fn system() -> Paths {
         Paths {
             dev: PathBuf::from("/dev/input"),
-            udev_data: PathBuf::from("/run/udev/data"),
             sys_char: PathBuf::from("/sys/dev/char"),
         }
     }
@@ -43,7 +39,7 @@ pub(crate) enum Node {
     Ours,
     NotKeyboard,
     Gone,
-    Denied { udev_done: bool },
+    Denied,
     Failed(String),
 }
 
@@ -59,7 +55,7 @@ pub(crate) fn is_gone(err: &io::Error) -> bool {
 pub(crate) fn open(path: &Path, paths: &Paths, own: &[PathBuf], bindings: &Bindings) -> Node {
     match open_file(path) {
         Ok(file) => classify(file, paths, own, bindings).unwrap_or_else(|err| failed(&err)),
-        Err(err) => open_failed(&err, path, paths),
+        Err(err) => open_failed(&err),
     }
 }
 
@@ -119,25 +115,12 @@ fn failed(err: &io::Error) -> Node {
     }
 }
 
-fn open_failed(err: &io::Error, path: &Path, paths: &Paths) -> Node {
+fn open_failed(err: &io::Error) -> Node {
     if err.kind() == io::ErrorKind::PermissionDenied {
-        return Node::Denied {
-            udev_done: udev_done(path, paths),
-        };
+        Node::Denied
+    } else {
+        failed(err)
     }
-    failed(err)
-}
-
-/// Whether udev has finished with the node. The node's number comes from
-/// the path, which is all there is without an open descriptor; a node
-/// replaced meanwhile only makes the answer about the new one.
-fn udev_done(path: &Path, paths: &Paths) -> bool {
-    fs::metadata(path)
-        .map(|meta| {
-            let (major, minor) = (libc::major(meta.rdev()), libc::minor(meta.rdev()));
-            paths.udev_data.join(format!("c{major}:{minor}")).exists()
-        })
-        .unwrap_or(false)
 }
 
 /// The sysfs input device (`/sys/devices/.../input/inputN`) behind the
@@ -180,7 +163,6 @@ mod tests {
         std::os::unix::fs::symlink(&event_dir, root.join("char/13:71")).unwrap();
         let paths = Paths {
             dev: root.join("input"),
-            udev_data: root.join("udev"),
             sys_char: root.join("char"),
         };
         let found = input_device(&paths, libc::makedev(13, 71));
