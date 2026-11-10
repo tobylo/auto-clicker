@@ -30,13 +30,26 @@ impl Remote {
             .await
             .map_err(dbus("CreateSession"))?;
         let remote = Remote { proxy, session };
+        // A failed step closes the session rather than leaving it open.
+        match remote.establish(token_file).await {
+            Ok(fd) => Ok((remote, fd)),
+            Err(err) => {
+                let closed = remote.close().await;
+                line(&format!("closed session after a failed start: {closed:?}"));
+                Err(err)
+            }
+        }
+    }
+
+    /// Selects devices, starts (the permission), saves the token and
+    /// connects to EIS.
+    async fn establish(&self, token_file: &Path) -> Result<OwnedFd, String> {
         let old_token = read_token(token_file);
-        remote.select(old_token.as_deref()).await?;
-        let new_token = remote.start().await?;
+        self.select(old_token.as_deref()).await?;
+        let new_token = self.start().await?;
         report_token(old_token.as_deref(), new_token.as_deref());
         save_token(token_file, new_token.as_deref())?;
-        let fd = remote.connect().await?;
-        Ok((remote, fd))
+        self.connect().await
     }
 
     async fn select(&self, token: Option<&str>) -> Result<(), String> {

@@ -34,7 +34,14 @@ const BINDINGS: [(&str, &str, &str, &str); 3] = [
     ),
 ];
 
+const MODES: [&str; 4] = ["list", "bind", "rebind", "configure"];
+
 pub async fn run(mode: &str, secs: u64) -> Result<(), String> {
+    if !MODES.contains(&mode) {
+        return Err(format!(
+            "shortcuts mode must be one of {MODES:?}, not {mode:?}"
+        ));
+    }
     let portal = GlobalShortcuts::new()
         .await
         .map_err(err("GlobalShortcuts"))?;
@@ -43,20 +50,32 @@ pub async fn run(mode: &str, secs: u64) -> Result<(), String> {
         .create_session(CreateSessionOptions::default())
         .await
         .map_err(err("CreateSession"))?;
-    list(&portal, &session, "before bind").await?;
+    // Every step after CreateSession runs in `use_session`, so the session is
+    // closed whichever step fails.
+    let used = use_session(&portal, &session, mode, Duration::from_secs(secs)).await;
+    let closed = session.close().await.map_err(err("Session.Close"));
+    used.and(closed)
+}
+
+/// Lists, binds as `mode` asks, then prints activations for `duration`.
+async fn use_session(
+    portal: &GlobalShortcuts,
+    session: &Session<GlobalShortcuts>,
+    mode: &str,
+    duration: Duration,
+) -> Result<(), String> {
+    list(portal, session, "before bind").await?;
     if mode != "list" {
-        bind(&portal, &session, mode == "rebind").await?;
-        list(&portal, &session, "after bind").await?;
+        bind(portal, session, mode == "rebind").await?;
+        list(portal, session, "after bind").await?;
     }
     if mode == "configure" {
         let shown = portal
-            .configure_shortcuts(&session, None, ConfigureShortcutsOptions::default())
+            .configure_shortcuts(session, None, ConfigureShortcutsOptions::default())
             .await;
         line(&format!("ConfigureShortcuts: {shown:?}"));
     }
-    let listened = listen(&portal, Duration::from_secs(secs)).await;
-    let closed = session.close().await.map_err(err("Session.Close"));
-    listened.and(closed)
+    listen(portal, duration).await
 }
 
 fn err(call: &'static str) -> impl Fn(ashpd::Error) -> String {

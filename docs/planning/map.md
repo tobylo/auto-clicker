@@ -48,7 +48,7 @@ An auto clicker with macro record and playback for a CachyOS machine running KDE
 | M1 Auto clicker | Tray auto clicker with hotkeys on the kernel backend, installable |
 | M2 Record and playback | Record and replay routines, with absolute positions if X01 succeeds |
 | M3 Settings window | Clicker options, hotkey rebinding and a recordings list |
-| M4 Portal backend | libei output, GlobalShortcuts hotkeys, backend auto-selection; recording on this backend only if X02 finds a way |
+| M4 Portal backend | libei output, GlobalShortcuts hotkeys, backend auto-selection; recording stays on the kernel backend (X02: InputCapture takes the input from the game) |
 
 The issues, their codes and blockers are on [the Project](https://github.com/users/tobylo/projects/4); [github-map.json](github-map.json) maps codes to issue numbers.
 

@@ -34,11 +34,29 @@ pub async fn run(secs: u64) -> Result<(), String> {
         .await
         .map_err(err("CreateSession"))?;
     line(&format!("session capabilities {caps:?}"));
+    // Every step after CreateSession runs in `capture`, so the session is
+    // closed whichever step fails.
+    let result = capture(&portal, &session, Duration::from_secs(secs)).await;
+    let closed = match tokio::time::timeout(CALL_LIMIT, session.close()).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(format!("Session.Close: {e}")),
+        Err(_) => Err(format!("Session.Close: no answer within {CALL_LIMIT:?}")),
+    };
+    // The run's own failure comes first; a failed close is reported otherwise.
+    result.and(closed)
+}
+
+/// Connects, sets the barriers, enables capture and watches it.
+async fn capture(
+    portal: &InputCapture,
+    session: &Session<InputCapture>,
+    duration: Duration,
+) -> Result<(), String> {
     let fd = portal
-        .connect_to_eis(&session, ConnectToEISOptions::default())
+        .connect_to_eis(session, ConnectToEISOptions::default())
         .await
         .map_err(err("ConnectToEIS"))?;
-    barriers(&portal, &session).await?;
+    barriers(portal, session).await?;
     let context = ei::Context::new(UnixStream::from(fd)).map_err(|e| format!("ei: {e}"))?;
     let (connection, events) = context
         .handshake_tokio(
@@ -48,9 +66,9 @@ pub async fn run(secs: u64) -> Result<(), String> {
         .await
         .map_err(|e| format!("ei handshake: {e}"))?;
     // Subscribe before enabling, so an activation during Enable is not lost.
-    let signals = Signals::subscribe(&portal).await?;
+    let signals = Signals::subscribe(portal).await?;
     portal
-        .enable(&session, EnableOptions::default())
+        .enable(session, EnableOptions::default())
         .await
         .map_err(err("Enable"))?;
     line("enabled: push the pointer against the top edge");
@@ -59,14 +77,7 @@ pub async fn run(secs: u64) -> Result<(), String> {
         events,
         signals,
     };
-    let result = watch(&portal, &session, receiver, Duration::from_secs(secs)).await;
-    let closed = match tokio::time::timeout(CALL_LIMIT, session.close()).await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(format!("Session.Close: {e}")),
-        Err(_) => Err(format!("Session.Close: no answer within {CALL_LIMIT:?}")),
-    };
-    // The run's own failure comes first; a failed close is reported otherwise.
-    result.and(closed)
+    watch(portal, session, receiver, duration).await
 }
 
 /// How long a call that hands input back may take.
