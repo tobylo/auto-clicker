@@ -2,7 +2,7 @@
 //! file per recording, named after the time it was made.
 
 use std::ffi::OsString;
-use std::fs::{DirBuilder, File, OpenOptions, Permissions};
+use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -47,13 +47,19 @@ fn recordings_dir_from(xdg_data_home: Option<OsString>, home: Option<OsString>) 
 /// the file cannot be written; or every name tried is taken.
 pub fn save(dir: &Path, recording: &Recording) -> io::Result<PathBuf> {
     let checked = private_dir(dir)?;
-    let name = save_in(&checked, recording).map_err(|err| {
-        // An error names the folder as the user knows it, not the handle.
-        let held = held_path(&checked).display().to_string();
-        let message = err.to_string().replace(&held, &dir.display().to_string());
-        io::Error::new(err.kind(), message)
-    })?;
+    let name = save_in(&checked, recording).map_err(|err| named(&checked, dir, &err))?;
     Ok(dir.join(name))
+}
+
+/// `err`, naming the folder where it is now, as the kernel sees the open
+/// directory `checked`, rather than by its handle; as `dir` if that fails.
+fn named(checked: &File, dir: &Path, err: &io::Error) -> io::Error {
+    let held = held_path(checked);
+    let now_at = fs::read_link(&held).unwrap_or_else(|_| dir.to_path_buf());
+    let message = err
+        .to_string()
+        .replace(&held.display().to_string(), &now_at.display().to_string());
+    io::Error::new(err.kind(), message)
 }
 
 /// A path the kernel resolves through the open directory `checked`, not
@@ -263,6 +269,22 @@ mod tests {
         let saved = fs::read(moved.join(&name)).unwrap();
         assert_eq!(Recording::from_json(&saved).unwrap(), sample());
         assert_eq!(fs::read_dir(&moved).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn an_error_names_the_checked_folder_where_it_is_now() {
+        let root = TempDir::new();
+        let dir = root.path().join("recordings");
+        let checked = private_dir(&dir).unwrap();
+        let moved = root.path().join("moved");
+        fs::rename(&dir, &moved).unwrap();
+        let held = held_path(&checked).join("x.json");
+        let err = io::Error::other(format!("{} is taken", held.display()));
+
+        let shown = named(&checked, &dir, &err).to_string();
+
+        let expected = fs::canonicalize(&moved).unwrap().join("x.json");
+        assert_eq!(shown, format!("{} is taken", expected.display()));
     }
 
     #[test]
