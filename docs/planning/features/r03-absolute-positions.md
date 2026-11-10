@@ -39,7 +39,7 @@ These hold everywhere below and are stated once.
 - Otherwise the whole run uses relative motion, as R02 does. When the recording holds positions that cannot be used, the tray tooltip says why while it plays; a recording without positions plays with nothing new shown.
 - When positions are used, each is sent as an absolute move to `clamp(round(x * 65536 / W), 0, 65535)` (likewise y with H), W and H being the size of the current layout's bounding box (decision 0001's formula).
 - A relative move is covered when a position follows it within 5 ms in the recording. A covered move is not sent. Every other relative move is sent (a locked pointer, KWin restarting, the pointer pushed against an edge).
-- A press, a release or a turn of the wheel is never played between a covered move and the position covering it: that position is sent first, at that event's time. A scroll acts on the window under the pointer, as a click does. A click on a pointer that has rested longer than the delivery delay (about 1 ms) therefore lands on its recorded pixel; a click made while the pointer still moves lands within what the pointer travels in about a millisecond.
+- A press, a release or a turn of the wheel is never played between a covered move and the position covering it: that position is sent first, at that event's time, provided it follows the event within the delivery delay. A position that comes later than that belongs to motion after the event and stays where it is, and the move before the event is then sent as relative motion. A scroll acts on the window under the pointer, as a click does. A click on a pointer that has rested longer than the delivery delay (about 1 ms) therefore lands on its recorded pixel; a click made while the pointer still moves lands within what the pointer travels in that delay: which move a report belongs to cannot be known more closely.
 - If the current layout changes or becomes unknown while a playback that uses positions runs, the controller stops it and says why. A relative-only playback carries on.
 
 **KWin scripts.**
@@ -98,6 +98,7 @@ R03b:
 
 R03a:
 - How I3's size bound is met: the recorder stops and saves before its file would pass `MAX_FILE_BYTES`, as it does at its time limit, or the cap moves. An hour of moves and positions at one each per millisecond is about 245 MB against 256 MiB; the size notes in `library.rs` and `controller/playback.rs` change with it.
+- The delivery delay within which a position after a press, release or wheel turn is taken to belong before it: about 1.2 ms measured on synthetic input (decision 0001), to be fixed with a margin and checked against a real mouse in R03b. Fixtures: a move that produces no report (the pointer against an edge), then a press, then a move away with its position, inside and outside the delay.
 - Where a late input event is inserted among positions already written, and how that meets the motion bucket (a bucket's move is written before a position stamped after it).
 - Whether `Change` gains a variant or positions get a type of their own; find every place that matches on moves by search (`trim.rs` compiles either way).
 - The stored number type of a rectangle (KWin's logical sizes, 2293 where KScreen says 2294), and checked arithmetic in the formula.
