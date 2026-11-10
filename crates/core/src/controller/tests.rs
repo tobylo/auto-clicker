@@ -865,6 +865,19 @@ async fn lost_devices_are_opened_again_after_the_old_reader_is_dropped() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn kept_devices_stay_open_between_runs() {
+    local(async {
+        let d = daemon(Mode::HoldButton).await;
+        d.start_by_hotkey().await;
+        d.send(Message::Stop).await;
+        d.start_by_hotkey().await;
+        assert_eq!(d.shared.calls_to(0), [LEFT_DOWN, LEFT_UP, LEFT_DOWN]);
+        assert_eq!(d.shared.steps(), [Step::ReaderStarted(Some(0))]);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn when_opening_again_fails_the_next_start_tries_again() {
     local(async {
         let shared = Shared::default();

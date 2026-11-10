@@ -191,6 +191,10 @@ async fn a_start_waits_for_the_open_then_clicks_and_closes_the_devices_after() {
         d.send(Message::Stop).await;
         d.assert_idle_after(&[LEFT_DOWN, LEFT_UP]);
         assert_eq!(gates.gates(|g| g.closed), 1, "closed after the run");
+        assert!(
+            !gates.open_in_flight(),
+            "nothing opens until the next start"
+        );
 
         // The next start opens again.
         d.send(Message::Start).await;

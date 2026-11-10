@@ -16,6 +16,8 @@ mod layout;
 mod session;
 mod token;
 
+use std::cell::RefCell;
+use std::ffi::OsString;
 use std::future::Future;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -27,13 +29,12 @@ use auto_clicker_core::input::{
 };
 use reis::ei;
 use reis::event::DeviceCapability;
-use tokio::sync::OnceCell;
 
 pub use session::APP_ID;
 pub use token::token_path;
 
 use eis::Eis;
-use session::{Portal, SessionGuard};
+use session::{Portal, SessionGuard, Tokens};
 
 /// libei's discrete scroll units per wheel notch.
 const UNITS_PER_NOTCH: i32 = 120;
@@ -52,28 +53,26 @@ impl std::fmt::Debug for PortalBackend {
     }
 }
 
-/// Opens portal sessions. The registered bus connection is made once and
-/// kept: the portal binds the app id to it.
+/// Opens portal sessions, one per run, each on a connection of its own.
 #[derive(Clone, Debug, Default)]
 pub struct PortalOutput {
-    portal: Rc<OnceCell<Portal>>,
-    token_path: Option<PathBuf>,
+    tokens: Rc<RefCell<Tokens>>,
 }
 
 impl PortalOutput {
-    /// Sessions that keep their restore token at `token_path` (`None`: the
-    /// desktop asks on every start).
+    /// Sessions that keep their restore token at `token_path` (`None`: only
+    /// in memory, so the desktop asks again after a restart).
     pub fn new(token_path: Option<PathBuf>) -> PortalOutput {
         PortalOutput {
-            portal: Rc::default(),
-            token_path,
+            tokens: Rc::new(RefCell::new(Tokens::new(token_path))),
         }
     }
 
     /// Registers the app id and checks that the portal can serve the
     /// program, without a dialog.
     pub async fn probe(&self) -> Result<(), InputError> {
-        self.portal().await?.probe().await
+        no_protocol_log(std::env::var_os(PROTOCOL_LOG))?;
+        Portal::connect().await?.probe().await
     }
 
     /// Starts a session and connects to its devices. The future owns what
@@ -87,10 +86,10 @@ impl PortalOutput {
     /// serve the program, [`InputError::Portal`] when a call failed or did
     /// not answer.
     pub fn open(&self) -> impl Future<Output = Result<Input<PortalBackend>, InputError>> + 'static {
-        let output = self.clone();
+        let tokens = self.tokens.clone();
         async move {
-            let portal = output.portal().await?;
-            let started = portal.start(output.token_path.as_deref()).await?;
+            no_protocol_log(std::env::var_os(PROTOCOL_LOG))?;
+            let started = Portal::connect().await?.start(&tokens).await?;
             let eis = Eis::connect(started.socket, &capabilities(started.devices)).await?;
             Ok(Input::new(PortalBackend {
                 eis,
@@ -99,14 +98,27 @@ impl PortalOutput {
         }
     }
 
-    /// Resolves when `input`'s session is lost: the desktop ended it or
-    /// paused its devices.
+    /// Resolves when `input`'s session is lost: the desktop ended it,
+    /// paused its devices or removed one in use.
     pub fn lost(input: &Input<PortalBackend>) -> impl Future<Output = InputError> + 'static {
         input.backend().eis.lost()
     }
+}
 
-    async fn portal(&self) -> Result<&Portal, InputError> {
-        self.portal.get_or_try_init(Portal::connect).await
+/// The variable that makes reis print every message it sends to stderr,
+/// key codes included, which the user service would keep in the journal.
+const PROTOCOL_LOG: &str = "REIS_DEBUG";
+
+/// Refuses to open while reis would log every key: the program never logs
+/// keystrokes outside a recording. reis reads the variable when it sets up
+/// a connection, and the program never sets it, so a check before each open
+/// holds for that connection.
+fn no_protocol_log(value: Option<OsString>) -> Result<(), InputError> {
+    match value {
+        Some(value) if !value.is_empty() => Err(InputError::PortalUnavailable(format!(
+            "{PROTOCOL_LOG} is set, which would log every key sent; unset it"
+        ))),
+        _ => Ok(()),
     }
 }
 

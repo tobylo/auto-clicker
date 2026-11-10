@@ -415,3 +415,36 @@ fn press_states_map_to_libei() {
     assert_eq!(key_state(PressState::Down), ei::keyboard::KeyState::Press);
     assert_eq!(key_state(PressState::Up), ei::keyboard::KeyState::Released);
 }
+
+#[test]
+fn reis_protocol_logging_is_refused() {
+    use std::ffi::OsString;
+    assert!(no_protocol_log(None).is_ok());
+    assert!(no_protocol_log(Some(OsString::new())).is_ok());
+    for value in ["1", "0"] {
+        let refused = no_protocol_log(Some(OsString::from(value)));
+        assert!(
+            matches!(&refused, Err(InputError::PortalUnavailable(why)) if why.contains("REIS_DEBUG")),
+            "{value}: {refused:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn removing_a_device_in_use_is_a_loss() {
+    local(async {
+        let (mut input, fake) = connect(&TWO_MONITORS).await;
+        let lost = PortalOutput::lost(&input);
+        input
+            .move_absolute(AbsolutePosition { x: 0, y: 0 })
+            .unwrap();
+        arrived(&fake, 1).await;
+        fake.command(Command::RemoveAbsolute);
+        let err = timeout(BOUND, lost).await.expect("the loss in time");
+        assert!(
+            matches!(&err, InputError::SessionLost(why) if why.contains("removed")),
+            "{err:?}"
+        );
+    })
+    .await;
+}
