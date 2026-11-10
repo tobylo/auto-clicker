@@ -46,7 +46,9 @@ include-dev = true
 unused-allowed-license = "allow"
 
 [licenses.private]
-# The workspace's own crates set `publish = false` and carry no licence field.
+# The workspace's own crates set `publish = false` and carry no licence field
+# yet. cargo-deny skips any crate with an empty `publish` list, so drop this
+# once #38 gives them a licence.
 ignore = true
 
 [bans]
