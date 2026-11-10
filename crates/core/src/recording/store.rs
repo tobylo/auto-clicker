@@ -4,6 +4,7 @@
 use std::ffi::OsString;
 use std::fs::{DirBuilder, File, OpenOptions, Permissions};
 use std::io;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -35,24 +36,41 @@ fn recordings_dir_from(xdg_data_home: Option<OsString>, home: Option<OsString>) 
 
 /// Saves `recording` in `dir`, creating the directory (mode 0700) if
 /// needed, as a new file (mode 0600) named after its creation time. Never
-/// replaces a file. Returns the file's path.
+/// replaces a file. Returns the file's path, as `dir` named it.
+///
+/// The directory is opened and checked once, and the file is written,
+/// renamed into place and flushed through that open directory, so a
+/// directory renamed or replaced meanwhile never receives it.
 ///
 /// # Errors
 /// `dir` is relative, is a symlink, cannot be created or made private;
 /// the file cannot be written; or every name tried is taken.
 pub fn save(dir: &Path, recording: &Recording) -> io::Result<PathBuf> {
-    private_dir(dir)?;
+    let checked = private_dir(dir)?;
+    let name = save_in(&checked, recording)?;
+    Ok(dir.join(name))
+}
+
+/// Saves `recording` in the open directory `checked`; the file's name.
+fn save_in(checked: &File, recording: &Recording) -> io::Result<OsString> {
+    // The kernel resolves this through the open directory, not its name.
+    let held = PathBuf::from(format!("/proc/self/fd/{}", checked.as_raw_fd()));
     let stem = recording.created().file_stem();
     let paths: Vec<PathBuf> = (0..NAMES_TRIED)
         .map(|n| match n {
-            0 => dir.join(format!("{stem}.json")),
-            n => dir.join(format!("{stem}-{n}.json")),
+            0 => held.join(format!("{stem}.json")),
+            n => held.join(format!("{stem}-{n}.json")),
         })
         .collect();
-    atomic_create(&paths, |out| recording.write_json(out))
+    let written = atomic_create(&paths, |out| recording.write_json(out))?;
+    written
+        .file_name()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| io::Error::other("the saved file has no name"))
 }
 
-/// Makes `dir` (absolute) exist and be readable by its owner only. An
+/// Makes `dir` (absolute) exist and be readable by its owner only, and
+/// returns it open. An
 /// existing one that others may read is closed to them; one this user does
 /// not own, or a symlink in its place, fails. Its ancestors are flushed every
 /// time, up to the first this user may not read, so the directory survives a
@@ -60,7 +78,7 @@ pub fn save(dir: &Path, recording: &Recording) -> io::Result<PathBuf> {
 /// A directory the user may not list (`/home` at mode 0711, say) is none
 /// their saves made; flushing one with nothing new in it costs next to
 /// nothing.
-fn private_dir(dir: &Path) -> io::Result<()> {
+fn private_dir(dir: &Path) -> io::Result<File> {
     if !dir.is_absolute() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -82,7 +100,7 @@ fn private_dir(dir: &Path) -> io::Result<()> {
             Err(err) => return Err(err),
         }
     }
-    Ok(())
+    Ok(handle)
 }
 
 /// Opens a directory to flush it; anything else in its place (a FIFO,
@@ -215,6 +233,26 @@ mod tests {
         // O_NOFOLLOW with O_DIRECTORY: a symlink is "not a directory".
         assert_eq!(linked.raw_os_error(), Some(libc::ENOTDIR), "{linked}");
         assert_eq!(relative.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn a_directory_replaced_after_its_check_never_receives_the_file() {
+        let root = TempDir::new();
+        let dir = root.path().join("recordings");
+        let checked = private_dir(&dir).unwrap();
+        // Moved away and replaced by a symlink to somewhere else.
+        let moved = root.path().join("moved");
+        let elsewhere = root.path().join("elsewhere");
+        fs::rename(&dir, &moved).unwrap();
+        fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &dir).unwrap();
+
+        let name = save_in(&checked, &sample()).unwrap();
+
+        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+        let saved = fs::read(moved.join(&name)).unwrap();
+        assert_eq!(Recording::from_json(&saved).unwrap(), sample());
+        assert_eq!(fs::read_dir(&moved).unwrap().count(), 1);
     }
 
     #[test]
