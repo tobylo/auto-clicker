@@ -129,19 +129,33 @@ async fn the_tray_counts_down_then_records_and_trims_its_own_trip() {
         d.key(KEYBOARD, W, true);
         sleep(secs(1)).await;
         d.key(KEYBOARD, W, false);
-        // The trip: to the icon, click, the menu opens, click Stop.
+        d.key(MOUSE, BTN_LEFT, true);
+        sleep(Duration::from_millis(100)).await;
+        d.key(MOUSE, BTN_LEFT, false);
+        // The trip: to the icon, press there (the menu opens), drag to
+        // Stop recording and let go: one click, which only the menu's
+        // opening tells apart from the game's.
+        sleep(Duration::from_millis(500)).await;
         d.motion(300, -200);
         sleep(Duration::from_millis(300)).await;
         d.key(MOUSE, BTN_LEFT, true);
-        d.key(MOUSE, BTN_LEFT, false);
         d.send(Message::MenuOpened).await;
         sleep(Duration::from_millis(500)).await;
-        d.key(MOUSE, BTN_LEFT, true);
+        d.motion(0, -40);
+        d.key(MOUSE, BTN_LEFT, false);
         d.send(Message::StopRecording).await;
 
         assert_eq!(d.notice(), SAVED);
-        assert_eq!(d.saved_changes(), [(0, press(W)), (1000, release(W))]);
-        assert_eq!(d.saved()[0].duration_us(), 1_000_000);
+        assert_eq!(
+            d.saved_changes(),
+            [
+                (0, press(W)),
+                (1000, release(W)),
+                (1000, press(BTN_LEFT)),
+                (1100, release(BTN_LEFT))
+            ]
+        );
+        assert_eq!(d.saved()[0].duration(), Duration::from_millis(1600));
     })
     .await;
 }

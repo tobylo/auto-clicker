@@ -220,6 +220,7 @@ mod tests {
             "2026-11-09 18:04:05.123+01:00",
             "2026-11-09T18:04:05.123+0100",
             "2026-02-29T18:04:05.123+01:00",
+            "2026-04-31T18:04:05.123+01:00",
             "2026-13-09T18:04:05.123+01:00",
             "2026-11-09T24:04:05.123+01:00",
             "2026-11-09T18:60:05.123+01:00",
@@ -253,6 +254,8 @@ mod tests {
     #[test]
     fn a_day_long_offset_is_refused_and_seconds_are_cut() {
         assert_eq!(Created::new(local(24 * 3600)), None);
+        let widest = Created::new(local(-(23 * 3600 + 59 * 60))).unwrap();
+        assert_eq!(widest.to_string(), "2026-11-09T18:04:05.123-23:59");
         let odd = Created::new(local(3600 + 59)).unwrap();
         assert_eq!(odd.to_string(), "2026-11-09T18:04:05.123+01:00");
     }
