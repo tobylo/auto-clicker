@@ -2,7 +2,7 @@
 
 ## Purpose
 
-An auto clicker with macro record and playback for a CachyOS machine running KDE Plasma, used by a child for games. It should match what common auto clickers offer, live in the system tray, and cost next to nothing while idle.
+An auto clicker with macro record and playback for KDE Plasma on CachyOS, made for playing games. It should match what common auto clickers offer, live in the system tray, and cost next to nothing while idle.
 
 ## Users and use cases
 
@@ -26,11 +26,11 @@ An auto clicker with macro record and playback for a CachyOS machine running KDE
 | D2 | Both input backends in v1, behind one backend trait: kernel first (M1–M2), portal in M4, chosen automatically with a manual override. On the portal backend, recording is unavailable: X02 found no mechanism that leaves input with the game ([0002](../decisions/0002-portal-backend.md)) | Kernel works today with no prompts; the portal avoids the `input` group; InputCapture takes input away from the focused app by design |
 | D3 | Recording captures clicks, keys, timing and mouse movement, including absolute cursor positions. X01 settled how ([decision 0001](../decisions/0001-cursor-position.md)): while recording, the daemon loads a KWin script that reports `workspace.cursorPos` (whole logical px) over D-Bus, and unloads it at stop. Playback moves the absolute axes to `round(x * 65536 / W)`, with W and H the size of KWin's layout, landing within 0.65 physical px per axis of where the real pointer was on one and two monitors at scales 1 to 1.5 (the bound grows with the scale; see the decision's limitations) | Under Wayland only the compositor knows the cursor position; KWin scripts read it with no consent, about 1 ms behind at most, and cost nothing while idle |
 | D4 | Movement is recorded both as relative motion and, when available, absolute positions; playback uses relative motion while a game has locked the pointer | Minecraft-style games lock the pointer |
-| D5 | Settings window in Slint, opened from the tray and loaded only while open; everyday use is tray plus hotkeys | Kid-friendly settings without raising idle cost |
+| D5 | Settings window in Slint, opened from the tray and loaded only while open; everyday use is tray plus hotkeys | Settings without editing a file, and without raising idle cost |
 | D6 | Hotkeys default to Ctrl+F6 (clicking on/off), Ctrl+F7 (record on/off), Ctrl+F8 (play/stop), rebindable | Ctrl combinations avoid clashing with game bindings |
 | D7 | Recordings and config are TOML/JSON files under XDG paths (`~/.config/auto-clicker/`, `~/.local/share/auto-clicker/`) written atomically. Recordings (R01) are JSON, version 1, one file each in `recordings/`, held in memory while recording and written once at the stop, renamed into place without replacing (`RENAME_NOREPLACE`). One reader of `/dev/input` serves hotkeys and recording; it opens mice only while recording | Simple, inspectable, survives crashes; idle stays free |
 | D8 | Install through a PKGBUILD with a udev rule and a systemd user service | CachyOS is Arch-based |
-| D10 | Code reaches the machine only from this repository: v1 installs by the owner building a reviewed commit and has no network access; a later updater may fetch only signed releases of `tobylo/auto-clicker`, verified against the owner's pinned key. Dependencies from crates.io only, locked, and checked for advisories in CI | The program runs on a child's machine with access to input devices; nobody but the owner may be able to push code to it |
+| D10 | Code reaches the machine only from this repository: v1 installs by the owner building a reviewed commit and has no network access; a later updater may fetch only signed releases of `tobylo/auto-clicker`, verified against the owner's pinned key. Dependencies from crates.io only, locked, and checked for advisories in CI | The program has access to input devices; nobody but the owner may be able to push code to a machine that runs it |
 | D9 | Review services: Codex and CodeRabbit GitHub bots, CodeScene Code Health. No Entire | Owner's choice |
 | D11 | The daemon runs on tokio's single-thread (`current_thread`) runtime. Timers sleep until absolute deadlines (`sleep_until`), and every wait selects on its deadline, the stop signal and shutdown. Tests use tokio's paused clock | One thread is enough for a tray program and costs nothing while idle; absolute deadlines keep delays from adding up; the paused clock checks schedules and "stops at once" exactly, without real waiting (#10) |
 
@@ -60,5 +60,5 @@ The issues, their codes and blockers are on [the Project](https://github.com/use
 ## Open questions
 
 - D6's Ctrl+F7 (record on/off) is a stock KWin shortcut, "Toggle Present Windows (Window class)" (X02). Through the portal it never reaches the program. On the kernel backend, which does not grab, it would also open Present Windows. Ctrl+F9 and Ctrl+F10 are taken too. Which key replaces it?
-- Does the son's machine also run Plasma 6.8? Assumed yes (CachyOS is rolling).
+- Does the next machine the program is installed on also run Plasma 6.8? Assumed yes (CachyOS is rolling).
 - Do the target games accept uinput clicks? Minecraft Java does as a native Wayland window: on the target laptop (Plasma 6.8.2), 10 of 10 slow right clicks and 1000 of 1000 at the 10 ms floor registered (Statistics, snowballs "Times Used"; C02, 2026-11-09). The XWayland run is #32: the launcher does not start without Wayland, so the game could not be forced onto XWayland.

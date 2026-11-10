@@ -4,6 +4,7 @@ description = "Kernel input backend of auto-clicker: uinput virtual devices thro
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]
