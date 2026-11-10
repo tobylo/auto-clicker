@@ -2,7 +2,7 @@
 Type=Application
 Name=Auto Clicker
 Comment=Start the auto clicker in the system tray
-Icon=auto-clicker-idle
+Icon=auto-clicker-clicking
 Exec=systemctl --user start auto-clicker.service
 Terminal=false
 Categories=Utility;
