@@ -1,46 +1,16 @@
 //! The clicking run: actions on absolute deadlines until the run finishes,
 //! is stopped or the program shuts down.
 
-use std::future::{Future, pending};
-use std::pin::{Pin, pin};
+use std::future::Future;
+use std::pin::pin;
 use std::time::Duration;
 
-use tokio::time::{Instant, sleep_until};
+use tokio::time::Instant;
 
 use super::timing::{self, Shape};
 use super::{ClickerSettings, Mode, Position, Repeat};
 use crate::input::{Held, Input, InputBackend, InputError};
-
-/// Why a run ended. Whatever the reason, nothing it pressed is still held.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Ended {
-    /// It made the configured number of actions.
-    Finished,
-    /// The stop signal fired.
-    Stopped,
-    /// The shutdown signal fired.
-    ShutDown,
-}
-
-/// The two signals that end a run early. Each is a future that completes when
-/// its signal fires; the controller decides what they wait on.
-pub struct Signals<S, D> {
-    /// The user stopped clicking.
-    pub stop: S,
-    /// The program is shutting down.
-    pub shutdown: D,
-}
-
-/// How a run ended, and the input back when it is safe to reuse.
-#[derive(Debug)]
-pub struct RunEnd<B: InputBackend> {
-    /// Why the run ended, or the first write error.
-    pub result: Result<Ended, InputError>,
-    /// The input, with nothing held. `None` when a release failed: the run
-    /// then dropped the input, which closes its devices, and the kernel
-    /// releases what they held. The caller opens the backend again.
-    pub input: Option<Input<B>>,
-}
+use crate::run::{Ended, Interrupted, RunEnd, Signals, Waiter, finish};
 
 /// Runs the clicker with `settings` until it finishes, a signal fires, or a
 /// write fails.
@@ -73,16 +43,13 @@ where
         input: &mut input,
         settings,
         rng,
-        stop: pin!(signals.stop),
-        shutdown: pin!(signals.shutdown),
+        waiter: Waiter {
+            stop: pin!(signals.stop),
+            shutdown: pin!(signals.shutdown),
+        },
     };
     let outcome = session.drive().await;
-    let released = input.release_all();
-    let clean = released.is_ok();
-    RunEnd {
-        result: outcome.and_then(|ended| released.map(|()| ended)),
-        input: clean.then_some(input),
-    }
+    finish(input, outcome)
 }
 
 /// One run's state. It borrows the input that `run` owns, so whatever ends
@@ -91,8 +58,7 @@ struct Session<'a, B: InputBackend, S, D> {
     input: &'a mut Input<B>,
     settings: &'a ClickerSettings,
     rng: fastrand::Rng,
-    stop: Pin<&'a mut S>,
-    shutdown: Pin<&'a mut D>,
+    waiter: Waiter<'a, S, D>,
 }
 
 /// The deadline after the action that was due at `due` and started at
@@ -115,9 +81,6 @@ fn next_deadline(
         .map(|rebased| rebased.max(now))
 }
 
-/// `Some(reason)` when a signal ended a wait, `None` when the wait ran out.
-type Interrupted = Option<Ended>;
-
 impl<B, S, D> Session<'_, B, S, D>
 where
     B: InputBackend,
@@ -136,12 +99,12 @@ where
 
     /// Presses `item` once and holds it until a signal.
     async fn hold(&mut self, item: Held) -> Result<Ended, InputError> {
-        if let Some(ended) = self.wait_until(Some(Instant::now())).await {
+        if let Some(ended) = self.waiter.wait_until(Some(Instant::now())).await {
             return Ok(ended);
         }
         self.aim(item)?;
         self.press(item)?;
-        Ok(self.until_signal().await)
+        Ok(self.waiter.until_signal().await)
     }
 
     /// One action per interval, until the repeat count or a signal.
@@ -149,7 +112,7 @@ where
         let mut deadline = Some(Instant::now());
         let mut actions: u32 = 0;
         loop {
-            if let Some(ended) = self.wait_until(deadline).await {
+            if let Some(ended) = self.waiter.wait_until(deadline).await {
                 return Ok(ended);
             }
             let started = Instant::now();
@@ -179,7 +142,7 @@ where
         let Some(gap) = shape.second_press else {
             return Ok(None);
         };
-        if let Some(ended) = self.wait_until(first.checked_add(gap)).await {
+        if let Some(ended) = self.waiter.wait_until(first.checked_add(gap)).await {
             return Ok(Some(ended));
         }
         self.tap(item, shape).await
@@ -188,10 +151,8 @@ where
     /// Presses `item`, holds it for the shape's hold and releases it.
     async fn tap(&mut self, item: Held, shape: Shape) -> Result<Interrupted, InputError> {
         self.press(item)?;
-        if let Some(ended) = self
-            .wait_until(Instant::now().checked_add(shape.hold))
-            .await
-        {
+        let held_until = Instant::now().checked_add(shape.hold);
+        if let Some(ended) = self.waiter.wait_until(held_until).await {
             return Ok(Some(ended));
         }
         self.release(item)?;
@@ -218,33 +179,6 @@ where
         match item {
             Held::Button(button) => self.input.release_button(button),
             Held::Key(key) => self.input.release_key(key),
-        }
-    }
-
-    /// Waits until `deadline`, or forever when there is none (a deadline too
-    /// far away to represent). Shutdown wins over stop, and both over a
-    /// deadline that is due at the same moment.
-    async fn wait_until(&mut self, deadline: Option<Instant>) -> Interrupted {
-        let due = async {
-            match deadline {
-                Some(deadline) => sleep_until(deadline).await,
-                None => pending().await,
-            }
-        };
-        tokio::select! {
-            biased;
-            () = &mut self.shutdown => Some(Ended::ShutDown),
-            () = &mut self.stop => Some(Ended::Stopped),
-            () = due => None,
-        }
-    }
-
-    /// Waits for stop or shutdown.
-    async fn until_signal(&mut self) -> Ended {
-        tokio::select! {
-            biased;
-            () = &mut self.shutdown => Ended::ShutDown,
-            () = &mut self.stop => Ended::Stopped,
         }
     }
 }

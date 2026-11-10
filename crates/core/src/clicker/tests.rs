@@ -2,69 +2,23 @@
 //! stamped with the virtual time since the run started, so schedules and
 //! "stops at once" are checked exactly and without real waiting.
 
-use std::future::{Future, pending};
+use std::future::pending;
 use std::num::NonZeroU32;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::time::{Instant, sleep, timeout};
 
 use super::*;
-use crate::input::fake::{Call, FakeBackend, FakeLog};
-use crate::input::{
-    AbsolutePosition, Button, Held, Input, InputBackend, InputError, Key, PressState,
+use crate::input::fake::Call;
+use crate::input::{AbsolutePosition, Button, Held, Input, InputError, Key, PressState};
+use crate::run::Ended;
+use crate::test_support::{
+    AnySignals, CallLog, RUNAWAY, Stamped, Timed, never, shutdown_after, signals, stop_after,
+    timed_input as open,
 };
 
 fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
-}
-
-/// A call and when it was made, relative to the run's start.
-type Stamped = (Duration, Call);
-
-type CallLog = Arc<Mutex<Vec<Stamped>>>;
-
-/// The fake backend, with every call stamped with virtual time.
-struct Timed {
-    inner: FakeBackend,
-    start: Instant,
-    calls: CallLog,
-}
-
-impl Timed {
-    fn note(&self, call: Call) {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((self.start.elapsed(), call));
-    }
-}
-
-impl InputBackend for Timed {
-    fn button(&mut self, button: Button, state: PressState) -> Result<(), InputError> {
-        self.note(Call::Button(button, state));
-        self.inner.button(button, state)
-    }
-
-    fn key(&mut self, key: Key, state: PressState) -> Result<(), InputError> {
-        self.note(Call::Key(key, state));
-        self.inner.key(key, state)
-    }
-
-    fn move_relative(&mut self, dx: i32, dy: i32) -> Result<(), InputError> {
-        self.note(Call::MoveRelative(dx, dy));
-        self.inner.move_relative(dx, dy)
-    }
-
-    fn move_absolute(&mut self, position: AbsolutePosition) -> Result<(), InputError> {
-        self.note(Call::MoveAbsolute(position));
-        self.inner.move_absolute(position)
-    }
-
-    fn scroll(&mut self, notches: i32) -> Result<(), InputError> {
-        self.note(Call::Scroll(notches));
-        self.inner.scroll(notches)
-    }
 }
 
 /// What a run did.
@@ -117,50 +71,6 @@ impl Outcome {
             held: self.held.clone(),
         }
     }
-}
-
-fn open() -> (Input<Timed>, CallLog, FakeLog) {
-    let (inner, log) = FakeBackend::new();
-    let calls = CallLog::default();
-    let backend = Timed {
-        inner,
-        start: Instant::now(),
-        calls: Arc::clone(&calls),
-    };
-    (Input::new(backend), calls, log)
-}
-
-/// Far longer than any run in these tests, in virtual time.
-const RUNAWAY: Duration = Duration::from_secs(60 * 60);
-
-type AnySignals = Signals<
-    std::pin::Pin<Box<dyn Future<Output = ()>>>,
-    std::pin::Pin<Box<dyn Future<Output = ()>>>,
->;
-
-/// Neither signal ever fires.
-fn never() -> AnySignals {
-    signals(pending(), pending())
-}
-
-fn signals(
-    stop: impl Future<Output = ()> + 'static,
-    shutdown: impl Future<Output = ()> + 'static,
-) -> AnySignals {
-    Signals {
-        stop: Box::pin(stop),
-        shutdown: Box::pin(shutdown),
-    }
-}
-
-/// Stop fires `after` the start.
-fn stop_after(after: Duration) -> AnySignals {
-    signals(sleep(after), pending())
-}
-
-/// Shutdown fires `after` the start.
-fn shutdown_after(after: Duration) -> AnySignals {
-    signals(pending(), sleep(after))
 }
 
 async fn run_with(settings: ClickerSettings, signals: AnySignals) -> Outcome {

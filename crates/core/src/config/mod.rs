@@ -26,6 +26,10 @@
 //! [input]
 //! output = "kernel"             # kernel (/dev/uinput) or portal (the desktop's
 //!                               # remote input portal, which asks once)
+//!
+//! [playback]
+//! speed = 1.0                   # 0.25 to 4 times the recorded speed
+//! repeat = 1                    # a number of plays, or "until_stopped"
 //! ```
 
 mod error;
@@ -42,6 +46,7 @@ pub use error::{ConfigError, Problem};
 
 use crate::clicker::ClickerSettings;
 use crate::hotkeys::Bindings;
+use crate::playback::PlaybackSettings;
 
 /// The longest countdown before a start from the tray: an hour.
 pub const MAX_TRAY_START_DELAY: Duration = Duration::from_secs(60 * 60);
@@ -55,6 +60,7 @@ pub struct Config {
     pub clicker: ClickerSettings,
     pub hotkeys: Bindings,
     pub input: InputSettings,
+    pub playback: PlaybackSettings,
 }
 
 /// `[input]`: how the program reaches the input devices.
@@ -82,6 +88,7 @@ impl Default for Config {
             clicker: ClickerSettings::default(),
             hotkeys: Bindings::default(),
             input: InputSettings::default(),
+            playback: PlaybackSettings::default(),
         }
     }
 }
@@ -148,5 +155,7 @@ fn config_path_from(xdg_config_home: Option<OsString>, home: Option<OsString>) -
 
 #[cfg(test)]
 mod hotkey_tests;
+#[cfg(test)]
+mod playback_tests;
 #[cfg(test)]
 mod tests;
