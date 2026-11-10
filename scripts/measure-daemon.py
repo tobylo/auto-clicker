@@ -63,7 +63,10 @@ def terminate(daemon):
         return daemon.wait(timeout=EXIT_TIMEOUT)
     except subprocess.TimeoutExpired:
         daemon.kill()
-        daemon.wait()
+        try:
+            daemon.wait(timeout=EXIT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            sys.exit(f"the daemon (pid {daemon.pid}) survived SIGKILL")
         sys.exit("the daemon did not exit after SIGTERM")
 
 

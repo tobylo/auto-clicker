@@ -88,26 +88,43 @@ impl Daemon {
         let mut child = self.0.take().unwrap();
         let pid = child.id().to_string();
         Command::new("kill").args(["-TERM", &pid]).status().unwrap();
-        let deadline = Instant::now() + START_TIMEOUT;
-        loop {
-            if let Some(status) = child.try_wait().unwrap() {
-                return status.code();
-            }
-            if Instant::now() > deadline {
-                let _ = child.kill();
-                let _ = child.wait();
+        match exit_within(&mut child, START_TIMEOUT) {
+            Some(code) => code,
+            None => {
+                kill(child);
                 panic!("the daemon did not exit after SIGTERM");
             }
-            sleep(Duration::from_millis(50));
         }
+    }
+}
+
+/// The exit code once `child` has exited, or `None` if it is still running
+/// after `limit`.
+fn exit_within(child: &mut Child, limit: Duration) -> Option<Option<i32>> {
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return Some(status.code());
+        }
+        if Instant::now() > deadline {
+            return None;
+        }
+        sleep(Duration::from_millis(50));
+    }
+}
+
+/// Kills `child` and reaps it, waiting at most `START_TIMEOUT`.
+fn kill(mut child: Child) {
+    let _ = child.kill();
+    if exit_within(&mut child, START_TIMEOUT).is_none() {
+        eprintln!("daemon {} survived SIGKILL", child.id());
     }
 }
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some(child) = self.0.take() {
+            kill(child);
         }
     }
 }
