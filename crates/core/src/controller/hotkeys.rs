@@ -56,8 +56,15 @@ impl HotkeySource {
 
     /// The next event. Drives the reader while it runs; once it has returned
     /// and its last events are read, never resolves.
+    ///
+    /// Events already sent come first: a reader kept busy by a flood of key
+    /// events can spend the task's budget, after which the channel reports
+    /// nothing, and a stop hotkey it sent would wait behind the flood.
     pub(super) fn next(&mut self) -> impl Future<Output = HotkeyEvent> + '_ {
         poll_fn(|cx| {
+            if let Poll::Ready(Some(event)) = self.events.poll_recv(cx) {
+                return Poll::Ready(event);
+            }
             if let Some(reader) = &mut self.reader
                 && reader.as_mut().poll(cx).is_ready()
             {
@@ -70,5 +77,38 @@ impl HotkeySource {
                 Poll::Ready(None) | Poll::Pending => Poll::Pending,
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hotkeys::Action;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_reader_kept_busy_cannot_hide_what_it_sent() {
+        let fired = HotkeyEvent::Fired(Action::ToggleClicking);
+        let sent = fired.clone();
+        let mut source = HotkeySource::start(|send| {
+            Box::pin(async move {
+                send.send(sent);
+                // Always more to read: spends the budget on every poll.
+                loop {
+                    tokio::task::consume_budget().await;
+                }
+            })
+        });
+        // Bounded by polls, not time: a busy task never lets the paused
+        // clock move.
+        let polls = async {
+            for _ in 0..100 {
+                tokio::task::yield_now().await;
+            }
+        };
+        tokio::select! {
+            biased;
+            got = source.next() => assert_eq!(got, fired),
+            () = polls => panic!("the sent event never came out"),
+        }
     }
 }

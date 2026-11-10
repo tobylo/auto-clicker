@@ -109,10 +109,13 @@ enum End {
 /// refused with the reason until logind next changes owner, and then it is
 /// followed afresh. Nothing is retried on a timer.
 async fn watch_logind(send: &mpsc::UnboundedSender<Message>) -> zbus::Result<()> {
-    let bus = connection::Builder::address(SYSTEM_BUS)?
+    let connect = connection::Builder::address(SYSTEM_BUS)?
         .method_timeout(CALL_TIMEOUT)
-        .build()
-        .await?;
+        .build();
+    // The method timeout bounds calls, not connecting.
+    let bus = tokio::time::timeout(CALL_TIMEOUT, connect)
+        .await
+        .map_err(|_| zbus::Error::Failure("the system bus did not answer".to_owned()))??;
     // Subscribed before anything is read, so no restart goes unseen.
     let mut owners = DBusProxy::new(&bus)
         .await?

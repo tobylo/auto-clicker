@@ -55,6 +55,18 @@ def resident_kib(pid):
     sys.exit("VmRSS missing from /proc status")
 
 
+def terminate(daemon):
+    """Sends SIGTERM and returns the exit status; kills a daemon that does
+    not exit in time, so none is left behind."""
+    daemon.send_signal(signal.SIGTERM)
+    try:
+        return daemon.wait(timeout=EXIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        daemon.kill()
+        daemon.wait()
+        sys.exit("the daemon did not exit after SIGTERM")
+
+
 def main(argv):
     seconds = int(argv[1]) if len(argv) > 1 else 60
     if not DAEMON.exists():
@@ -73,8 +85,7 @@ def main(argv):
         if daemon.poll() is not None:
             sys.exit(f"the daemon exited while sampling ({daemon.returncode})")
     finally:
-        daemon.send_signal(signal.SIGTERM)
-        status = daemon.wait(timeout=EXIT_TIMEOUT)
+        status = terminate(daemon)
     hz = os.sysconf("SC_CLK_TCK")
     print(
         f"idle {seconds} s: {ticks1 - ticks0} CPU ticks ({(ticks1 - ticks0) / hz * 1000:.0f} ms), "

@@ -54,9 +54,10 @@ async fn daemon() -> ExitCode {
 
 /// Everything before the controller runs; the exit status when it fails.
 async fn start() -> Result<Controller<Kernel>, ExitCode> {
-    let (config, config_error) = load_config();
-    // Claimed first: a second daemon opens no device and reads no keyboard.
+    // Claimed first: a second daemon reads no config, opens no device and
+    // reads no keyboard.
     let name = claim_name().await?;
+    let (config, config_error) = load_config();
     let input = KernelBackend::open().map_err(|err| {
         eprintln!("auto-clicker: {err}");
         ExitCode::from(open_failure(&err))
