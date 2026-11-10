@@ -452,6 +452,33 @@ async fn a_hotkey_set_off_by_the_programs_own_keys_as_the_desktop_returns_does_n
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_hotkey_right_after_a_trigger_moved_onto_the_runs_key_does_nothing() {
+    local(async {
+        // The run repeats F9 while the user makes F9 the playback hotkey:
+        // its next F9 is that hotkey, on its way before the change is heard.
+        let d = desktop_daemon(pressing(Mode::KeyRepeat, "f9")).await;
+        d.hotkey(defaults()).await;
+        d.send(Message::Start).await;
+        assert_eq!(d.activity(), Activity::Clicking);
+        d.hotkey(reported("Ctrl+Shift+F6", "Ctrl+Shift+F7", "F9"))
+            .await;
+        assert_eq!(d.activity(), Activity::Idle);
+        let stopped = d.notice();
+        for action in Action::ALL {
+            d.hotkey(HotkeyEvent::Fired(action)).await;
+            assert_eq!(d.activity(), Activity::Idle, "{action:?}");
+        }
+        assert_eq!(d.notice(), stopped);
+        // A change that stops nothing opens no window.
+        sleep(secs(2)).await;
+        d.hotkey(reported("Ctrl+Shift+F6", "Meta+F7", "F9")).await;
+        d.hotkey(HotkeyEvent::Fired(Action::ToggleRecording)).await;
+        assert!(d.notice().starts_with("Not recording"), "{}", d.notice());
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_trigger_report_during_the_echo_window_leaves_it_open() {
     local(async {
         let d = desktop_daemon(ClickerSettings::default()).await;
@@ -617,7 +644,8 @@ async fn a_trigger_moved_onto_a_key_of_the_recording_stops_playback_at_once() {
                 Call::Key(f9, PressState::Up)
             ]
         );
-        // And while it only waits to start.
+        // And while it only waits to start, once the echo window is over.
+        sleep(secs(2)).await;
         d.hotkey(defaults()).await;
         d.hotkey(PLAY).await;
         assert_eq!(d.activity(), Activity::PlayWaitingForRelease);
