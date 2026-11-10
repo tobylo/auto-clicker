@@ -104,6 +104,38 @@ mod tests {
     }
 
     #[test]
+    fn only_a_dropped_report_is_a_loss() {
+        let losses = [
+            sync(SynchronizationCode::SYN_DROPPED),
+            sync(SynchronizationCode::SYN_REPORT),
+            event(EventType::KEY, SynchronizationCode::SYN_DROPPED.0, 1),
+        ]
+        .map(|event| is_loss(&event));
+        assert_eq!(losses, [true, false, false]);
+    }
+
+    #[test]
+    fn an_events_time_is_its_kernel_stamp() {
+        let stamped = InputEvent::from(libc::input_event {
+            time: libc::timeval {
+                tv_sec: 12,
+                tv_usec: 345_000,
+            },
+            type_: EventType::KEY.0,
+            code: 64,
+            value: 1,
+        });
+        assert_eq!(time(&stamped), Duration::from_millis(12_345));
+    }
+
+    #[test]
+    fn the_clock_moves_on() {
+        let first = now();
+        assert!(first > Duration::ZERO);
+        assert!(now() >= first);
+    }
+
+    #[test]
     fn only_key_events_are_matched() {
         let is_key = [
             key(1),

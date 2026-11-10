@@ -85,10 +85,6 @@ impl Modifiers {
         self.0 & modifier.bit() != 0
     }
 
-    pub fn is_empty(self) -> bool {
-        self.0 == 0
-    }
-
     /// The modifiers in the set, in display order.
     pub fn iter(self) -> impl Iterator<Item = Modifier> {
         Modifier::ALL
