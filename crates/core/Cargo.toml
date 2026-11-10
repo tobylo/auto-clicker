@@ -17,7 +17,7 @@ workspace = true
 fastrand = "2.5.0"
 libc = "0.2.191"
 serde = { version = "1.0.229", features = ["derive"] }
-tokio = { version = "1.54.1", default-features = false, features = ["time", "macros"] }
+tokio = { version = "1.54.1", default-features = false, features = ["time", "macros", "sync"] }
 toml = { version = "1.2.1", default-features = false, features = ["parse", "serde", "std"] }
 
 [dev-dependencies]
