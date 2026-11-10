@@ -45,34 +45,53 @@ impl Tray {
     }
 }
 
-/// One menu item: its label, the message it sends (`None`: disabled), and
-/// whether it shows.
+/// One menu item: its label, the message it sends (`None`: never enabled),
+/// and whether it is enabled and shows.
 #[derive(Debug, PartialEq, Eq)]
 struct Entry {
     label: &'static str,
     sends: Option<Message>,
+    enabled: bool,
     visible: bool,
 }
 
 /// The menu for `view`. The items are always the same, in the same places,
-/// each with one fixed message; only which of Start and Stop shows changes.
-/// The host clicks an item by its place, so a click on a menu opened before
-/// the state changed still sends what that item said.
-fn entries(view: &View) -> [Entry; 6] {
-    let idle = view.activity == Activity::Idle;
-    let item = |label, sends, visible| Entry {
+/// each with one fixed message; only which shows and which is enabled
+/// changes. The host clicks an item by its place, so a click on a menu
+/// opened before the state changed still sends what that item said.
+fn entries(view: &View) -> [Entry; 7] {
+    let activity = view.activity;
+    let idle = activity == Activity::Idle;
+    let item = |label, sends: Option<Message>, enabled: bool, visible| Entry {
         label,
+        enabled: enabled && sends.is_some(),
         sends,
         visible,
     };
     [
-        item("Start clicking", Some(Message::Start), idle),
-        item("Stop clicking", Some(Message::Stop), !idle),
-        // Recording and playback come with M2, settings with M3.
-        item("Record", None, true),
-        item("Play", None, true),
-        item("Settings", None, true),
-        item("Quit", Some(Message::Quit), true),
+        item(
+            "Start clicking",
+            Some(Message::Start),
+            idle,
+            !activity.clicking(),
+        ),
+        item(
+            "Stop clicking",
+            Some(Message::Stop),
+            true,
+            activity.clicking(),
+        ),
+        item("Record", Some(Message::Record), idle, !activity.recording()),
+        item(
+            "Stop recording",
+            Some(Message::StopRecording),
+            true,
+            activity.recording(),
+        ),
+        // Playback comes with R02, settings with M3.
+        item("Play", None, false, true),
+        item("Settings", None, false, true),
+        item("Quit", Some(Message::Quit), true, true),
     ]
 }
 
@@ -80,9 +99,11 @@ fn entries(view: &View) -> [Entry; 6] {
 fn icon_name(activity: Activity) -> &'static str {
     match activity {
         Activity::Clicking => "auto-clicker-clicking",
-        Activity::Idle | Activity::StartingIn(_) | Activity::WaitingForRelease => {
-            "auto-clicker-idle"
-        }
+        Activity::Recording => "auto-clicker-recording",
+        Activity::Idle
+        | Activity::StartingIn(_)
+        | Activity::WaitingForRelease
+        | Activity::RecordingIn(_) => "auto-clicker-idle",
     }
 }
 
@@ -145,10 +166,9 @@ impl ksni::Tray for Tray {
         let mut items: Vec<MenuItem<Self>> = entries(&self.view)
             .into_iter()
             .map(|entry| {
-                let enabled = entry.sends.is_some();
                 StandardItem {
                     label: entry.label.to_owned(),
-                    enabled,
+                    enabled: entry.enabled,
                     visible: entry.visible,
                     activate: Box::new(move |tray: &mut Self| {
                         if let Some(message) = entry.sends.clone() {
@@ -163,6 +183,12 @@ impl ksni::Tray for Tray {
         // Quit sits apart from the rest.
         items.insert(items.len().saturating_sub(1), MenuItem::Separator);
         items
+    }
+
+    /// Tells the controller the menu opened: a stop from it trims the trip
+    /// to the tray from the click that opened it.
+    fn menu_about_to_show(&mut self) {
+        self.send(Message::MenuOpened);
     }
 
     /// Keeps running when the tray host goes away; the icon registers again
@@ -184,51 +210,67 @@ mod tests {
             activity,
             settings: config.clicker,
             hotkey: config.hotkeys.toggle_clicking,
+            record_hotkey: config.hotkeys.toggle_recording,
             notice: Some("a <b> & c".to_owned()),
             problems: Vec::new(),
         }
     }
 
-    /// The visible items' labels and messages.
-    fn shown(activity: Activity) -> Vec<(&'static str, Option<Message>)> {
+    /// The visible items: label, and whether enabled.
+    fn shown(activity: Activity) -> Vec<(&'static str, bool)> {
         entries(&view(activity))
             .into_iter()
             .filter(|entry| entry.visible)
-            .map(|entry| (entry.label, entry.sends))
+            .map(|entry| (entry.label, entry.enabled))
             .collect()
     }
 
     #[test]
-    fn the_menu_shows_start_when_idle_and_stop_otherwise() {
-        let rest = [
-            ("Record", None),
-            ("Play", None),
-            ("Settings", None),
-            ("Quit", Some(Message::Quit)),
-        ];
-        let start = [("Start clicking", Some(Message::Start))];
-        assert_eq!(shown(Activity::Idle), [&start[..], &rest[..]].concat());
-        let stop = [("Stop clicking", Some(Message::Stop))];
-        for busy in [
-            Activity::StartingIn(3),
-            Activity::WaitingForRelease,
-            Activity::Clicking,
-        ] {
-            assert_eq!(shown(busy), [&stop[..], &rest[..]].concat(), "{busy:?}");
+    fn the_menu_offers_what_each_state_allows() {
+        use Activity::*;
+        let rest = [("Play", false), ("Settings", false), ("Quit", true)];
+        let idle = [("Start clicking", true), ("Record", true)];
+        assert_eq!(shown(Idle), [&idle[..], &rest[..]].concat());
+        let clicking = [("Stop clicking", true), ("Record", false)];
+        for busy in [StartingIn(3), WaitingForRelease, Clicking] {
+            assert_eq!(shown(busy), [&clicking[..], &rest[..]].concat(), "{busy:?}");
+        }
+        let recording = [("Start clicking", false), ("Stop recording", true)];
+        for busy in [RecordingIn(2), Recording] {
+            assert_eq!(
+                shown(busy),
+                [&recording[..], &rest[..]].concat(),
+                "{busy:?}"
+            );
         }
     }
 
     #[test]
     fn every_item_keeps_its_place_and_message() {
+        use Activity::*;
         let messages = |activity| entries(&view(activity)).map(|entry| entry.sends);
-        assert_eq!(messages(Activity::Idle), messages(Activity::Clicking));
+        let expected = [
+            Some(Message::Start),
+            Some(Message::Stop),
+            Some(Message::Record),
+            Some(Message::StopRecording),
+            None,
+            None,
+            Some(Message::Quit),
+        ];
+        for activity in [Idle, Clicking, Recording, RecordingIn(1)] {
+            assert_eq!(messages(activity), expected, "{activity:?}");
+        }
     }
 
     #[test]
-    fn only_clicking_shows_the_clicking_icon() {
-        assert_eq!(icon_name(Activity::Clicking), "auto-clicker-clicking");
-        assert_eq!(icon_name(Activity::StartingIn(1)), "auto-clicker-idle");
-        assert_eq!(icon_name(Activity::WaitingForRelease), "auto-clicker-idle");
+    fn the_icon_shows_clicking_and_recording() {
+        use Activity::*;
+        assert_eq!(icon_name(Clicking), "auto-clicker-clicking");
+        assert_eq!(icon_name(Recording), "auto-clicker-recording");
+        for waiting in [Idle, StartingIn(1), WaitingForRelease, RecordingIn(1)] {
+            assert_eq!(icon_name(waiting), "auto-clicker-idle", "{waiting:?}");
+        }
     }
 
     #[test]
@@ -261,9 +303,10 @@ mod tests {
             })
             .collect();
         let expected = [
-            ("Start clicking", true, false),
+            ("Start clicking", false, false),
             ("Stop clicking", true, true),
             ("Record", false, true),
+            ("Stop recording", true, false),
             ("Play", false, true),
             ("Settings", false, true),
             ("-", false, true),
@@ -271,14 +314,24 @@ mod tests {
         ];
         let expected = expected.map(|(label, on, shows)| (label.to_owned(), on, shows));
         assert_eq!(shown, expected);
-        for index in [0, 1, 6] {
+        for index in [0, 1, 2, 3, 7] {
             if let MenuItem::Standard(item) = &items[index] {
                 (item.activate)(&mut tray);
             }
         }
-        assert_eq!(received.try_recv(), Ok(Message::Start));
-        assert_eq!(received.try_recv(), Ok(Message::Stop));
-        assert_eq!(received.try_recv(), Ok(Message::Quit));
+        tray.menu_about_to_show();
+        let sent: Vec<Message> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+        assert_eq!(
+            sent,
+            [
+                Message::Start,
+                Message::Stop,
+                Message::Record,
+                Message::StopRecording,
+                Message::Quit,
+                Message::MenuOpened
+            ]
+        );
     }
 
     #[test]

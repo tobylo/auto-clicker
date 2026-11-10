@@ -8,6 +8,7 @@ use std::time::Duration;
 use crate::clicker::{ClickerSettings, Mode, Position, Repeat};
 use crate::hotkeys::Binding;
 use crate::input::{Button, Key};
+use crate::recording::MAX_DURATION;
 
 /// What the controller is doing, as the tray shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +19,25 @@ pub enum Activity {
     /// A start from the hotkey waits for its modifiers to come up.
     WaitingForRelease,
     Clicking,
+    /// A recording from the tray counts down; whole seconds left, rounded
+    /// up.
+    RecordingIn(u64),
+    Recording,
+}
+
+impl Activity {
+    /// Clicking, or about to.
+    pub fn clicking(self) -> bool {
+        matches!(
+            self,
+            Activity::StartingIn(_) | Activity::WaitingForRelease | Activity::Clicking
+        )
+    }
+
+    /// Recording, or about to.
+    pub fn recording(self) -> bool {
+        matches!(self, Activity::RecordingIn(_) | Activity::Recording)
+    }
 }
 
 /// Everything the tray shows.
@@ -27,6 +47,8 @@ pub struct View {
     pub settings: ClickerSettings,
     /// The hotkey that starts and stops clicking.
     pub hotkey: Binding,
+    /// The hotkey that starts and stops recording.
+    pub record_hotkey: Binding,
     /// What last happened that the user should know: why a start was
     /// refused or cancelled, or why a run stopped.
     pub notice: Option<String>,
@@ -48,16 +70,28 @@ impl View {
                 )
             }
             Activity::Clicking => "Auto clicker: clicking".to_owned(),
+            Activity::RecordingIn(seconds) => format!("Auto clicker: records in {seconds} s"),
+            Activity::Recording => "Auto clicker: recording".to_owned(),
         }
     }
 
-    /// The tooltip's lines: what a run does, the hotkey, the last notice and
-    /// every problem.
+    /// The tooltip's lines: what a run does, the hotkeys, the recording's
+    /// time limit while one runs, the last notice and every problem.
     pub fn details(&self) -> Vec<String> {
         let mut lines = vec![
             describe(&self.settings),
             format!("{} starts and stops clicking", self.hotkey),
+            format!(
+                "{} starts recording, and stops and saves it",
+                self.record_hotkey
+            ),
         ];
+        if self.activity.recording() {
+            let minutes = MAX_DURATION.as_secs() / 60;
+            lines.push(format!(
+                "A recording stops by itself after {minutes} minutes"
+            ));
+        }
         lines.extend(self.notice.iter().cloned());
         lines.extend(self.problems.iter().cloned());
         lines
@@ -202,6 +236,7 @@ mod tests {
             activity,
             settings: ClickerSettings::default(),
             hotkey: Binding::parse(hotkey).unwrap(),
+            record_hotkey: Binding::parse("Ctrl+F7").unwrap(),
             notice: None,
             problems: Vec::new(),
         }
@@ -232,6 +267,12 @@ mod tests {
                 "Auto clicker: starts when you let go of the hotkey",
             ),
             (Activity::Clicking, "Ctrl+F6", "Auto clicker: clicking"),
+            (
+                Activity::RecordingIn(2),
+                "Ctrl+F6",
+                "Auto clicker: records in 2 s",
+            ),
+            (Activity::Recording, "Ctrl+F6", "Auto clicker: recording"),
         ];
         for (activity, hotkey, title) in cases {
             assert_eq!(view(activity, hotkey).title(), title);
@@ -249,10 +290,41 @@ mod tests {
             [
                 "Clicks the left button every 100 ms",
                 "Ctrl+F6 starts and stops clicking",
+                "Ctrl+F7 starts recording, and stops and saves it",
                 "notice",
                 "one",
                 "two",
             ]
         );
+    }
+
+    #[test]
+    fn a_recording_shows_its_time_limit() {
+        for (activity, shown) in [
+            (Activity::Recording, true),
+            (Activity::RecordingIn(3), true),
+            (Activity::Clicking, false),
+            (Activity::Idle, false),
+        ] {
+            let lines = view(activity, "Ctrl+F6").details();
+            let limit = "A recording stops by itself after 60 minutes".to_owned();
+            assert_eq!(lines.contains(&limit), shown, "{activity:?}");
+        }
+    }
+
+    #[test]
+    fn activities_are_clicking_or_recording_or_neither() {
+        use Activity::*;
+        let kinds = [
+            Idle,
+            StartingIn(1),
+            WaitingForRelease,
+            Clicking,
+            RecordingIn(1),
+            Recording,
+        ]
+        .map(|activity| (activity.clicking(), activity.recording()));
+        let (no, click, record) = ((false, false), (true, false), (false, true));
+        assert_eq!(kinds, [no, click, click, click, record, record]);
     }
 }

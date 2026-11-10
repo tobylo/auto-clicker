@@ -1,9 +1,15 @@
-//! Opening one `/dev/input` node for hotkeys.
+//! Opening one `/dev/input` node for hotkeys or a recording.
 //!
 //! The node is opened read-only, and every check runs on that open file: its
 //! device number gives the sysfs device that tells this program's own
-//! devices apart, and the same descriptor becomes the event stream. Nothing
-//! is looked up again by path after the open.
+//! devices apart, its capabilities say what it is, and the same descriptor
+//! becomes the event stream. Nothing is looked up again by path after the
+//! open.
+//!
+//! Keyboards with a bound key or a modifier are always read, for hotkeys.
+//! While recording, mice and every other keyboard are read too. Touchpads
+//! never are: their taps and clicks are not a mouse's, and cannot be played
+//! back as one.
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -12,8 +18,9 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use auto_clicker_core::hotkeys::Bindings;
-use evdev::KeyCode;
+use auto_clicker_core::input::Key;
 use evdev::raw_stream::{EventStream, RawDevice};
+use evdev::{KeyCode, RelativeAxisCode};
 
 /// Where the reader looks; tests point these at a temporary directory.
 #[derive(Clone, Debug)]
@@ -33,14 +40,60 @@ impl Paths {
     }
 }
 
-/// What opening a node gave. `Keyboard` holds the stream to read.
+/// What opening a node gave. `Device` holds the stream to read.
 pub(crate) enum Node {
-    Keyboard(Box<EventStream>),
+    Device(Box<EventStream>, Role),
     Ours,
-    NotKeyboard,
+    NotWanted,
     Gone,
     Denied,
     Failed(String),
+}
+
+/// Why a device is read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Role {
+    /// It has a bound key or a modifier: read for hotkeys, always.
+    pub(crate) hotkeys: bool,
+    /// It is a mouse or a keyboard and no touchpad: what it does is
+    /// recorded.
+    pub(crate) record: bool,
+}
+
+/// What the reader wants opened now.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Wanted<'a> {
+    pub(crate) bindings: &'a Bindings,
+    /// A recording runs: recordable devices are wanted too.
+    pub(crate) recording: bool,
+}
+
+/// What a device can do, as far as reading it goes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Capabilities {
+    /// A bound key or a modifier key.
+    pub(crate) hotkey_keys: bool,
+    /// Any key a recording can hold.
+    pub(crate) keys: bool,
+    /// Relative X and Y and a left button.
+    pub(crate) mouse: bool,
+    /// Reports fingers (`BTN_TOOL_FINGER`): a touchpad.
+    pub(crate) touchpad: bool,
+}
+
+/// `BTN_TOOL_FINGER`, which touchpads have and mice do not.
+const BTN_TOOL_FINGER: u16 = 0x145;
+/// `BTN_LEFT`.
+const BTN_LEFT: u16 = 0x110;
+
+/// Whether to read a device that can do `caps`, and why; `None` to leave it
+/// alone.
+pub(crate) fn decide(caps: Capabilities, recording: bool) -> Option<Role> {
+    let role = Role {
+        hotkeys: caps.hotkey_keys,
+        record: !caps.touchpad && (caps.mouse || caps.keys),
+    };
+    (role.hotkeys || (recording && role.record)).then_some(role)
 }
 
 /// Whether an error means the device went away (no node, or `ENODEV` and
@@ -52,9 +105,9 @@ pub(crate) fn is_gone(err: &io::Error) -> bool {
 
 /// Opens the node at `path` and decides what it is. `own` holds the sysfs
 /// paths of this program's virtual devices.
-pub(crate) fn open(path: &Path, paths: &Paths, own: &[PathBuf], bindings: &Bindings) -> Node {
+pub(crate) fn open(path: &Path, paths: &Paths, own: &[PathBuf], wanted: Wanted<'_>) -> Node {
     match open_file(path) {
-        Ok(file) => classify(file, paths, own, bindings).unwrap_or_else(|err| failed(&err)),
+        Ok(file) => classify(file, paths, own, wanted).unwrap_or_else(|err| failed(&err)),
         Err(err) => open_failed(&err),
     }
 }
@@ -68,24 +121,38 @@ fn open_file(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
-fn classify(file: File, paths: &Paths, own: &[PathBuf], bindings: &Bindings) -> io::Result<Node> {
+fn classify(file: File, paths: &Paths, own: &[PathBuf], wanted: Wanted<'_>) -> io::Result<Node> {
     let meta = file.metadata()?;
     if !meta.file_type().is_char_device() {
-        return Ok(Node::NotKeyboard);
+        return Ok(Node::NotWanted);
     }
     // A failed lookup skips the device: it never counts as "not ours".
     if own.contains(&input_device(paths, meta.rdev())?) {
         return Ok(Node::Ours);
     }
     let device = RawDevice::from_fd(file.into())?;
-    let wanted = device
-        .supported_keys()
-        .is_some_and(|keys| bindings.wants_device(|code| keys.contains(KeyCode(code))));
-    if !wanted {
-        return Ok(Node::NotKeyboard);
-    }
+    let Some(role) = decide(capabilities(&device, wanted.bindings), wanted.recording) else {
+        return Ok(Node::NotWanted);
+    };
     use_monotonic_clock(device.as_fd())?;
-    Ok(Node::Keyboard(Box::new(device.into_event_stream()?)))
+    Ok(Node::Device(Box::new(device.into_event_stream()?), role))
+}
+
+fn capabilities(device: &RawDevice, bindings: &Bindings) -> Capabilities {
+    let Some(keys) = device.supported_keys() else {
+        return Capabilities::default();
+    };
+    let has = |code| keys.contains(KeyCode(code));
+    let relative = device.supported_relative_axes();
+    let has_axis = |axis| relative.is_some_and(|axes| axes.contains(axis));
+    Capabilities {
+        hotkey_keys: bindings.wants_device(has),
+        keys: Key::CODES.into_iter().any(has),
+        mouse: has(BTN_LEFT)
+            && has_axis(RelativeAxisCode::REL_X)
+            && has_axis(RelativeAxisCode::REL_Y),
+        touchpad: has(BTN_TOOL_FINGER),
+    }
 }
 
 /// `EVIOCSCLOCKID`: `_IOW('E', 0xa0, int)`.
@@ -199,6 +266,42 @@ mod tests {
         let result = opened.recv_timeout(std::time::Duration::from_secs(5));
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(result, Ok(true), "the open blocked or failed");
+    }
+
+    #[test]
+    fn hotkey_keyboards_are_always_read_and_the_rest_only_while_recording() {
+        let caps = |hotkey_keys, keys, mouse, touchpad| Capabilities {
+            hotkey_keys,
+            keys,
+            mouse,
+            touchpad,
+        };
+        let role = |hotkeys, record| Some(Role { hotkeys, record });
+        let cases = [
+            // (capabilities, idle, recording)
+            (
+                caps(true, true, false, false),
+                role(true, true),
+                role(true, true),
+            ),
+            (caps(false, false, true, false), None, role(false, true)),
+            (caps(false, true, false, false), None, role(false, true)),
+            (caps(false, true, true, false), None, role(false, true)),
+            // A touchpad: never recorded, its keys read only for hotkeys.
+            (caps(false, false, false, true), None, None),
+            (caps(false, true, true, true), None, None),
+            (
+                caps(true, true, false, true),
+                role(true, false),
+                role(true, false),
+            ),
+            // A tablet, a joystick: nothing to read.
+            (caps(false, false, false, false), None, None),
+        ];
+        for (caps, idle, recording) in cases {
+            assert_eq!(decide(caps, false), idle, "{caps:?} idle");
+            assert_eq!(decide(caps, true), recording, "{caps:?} recording");
+        }
     }
 
     #[test]

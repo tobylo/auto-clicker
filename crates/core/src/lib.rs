@@ -7,6 +7,7 @@ pub mod controller;
 pub mod fs;
 pub mod hotkeys;
 pub mod input;
+pub mod recording;
 
 #[cfg(test)]
 mod test_support;
