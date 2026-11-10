@@ -13,6 +13,7 @@ import subprocess
 
 from gi.repository import GLib
 
+from children import stop, wait_ready
 from bus import HERE, Receiver, loaded_script, pump_for, pump_until, query_pointer, session_bus
 from inject import Injector, Session, to_absolute, wait_for_pointer
 from stats import summary
@@ -23,8 +24,10 @@ PROBE = os.path.join(HERE, "harness", "probe.py")
 def run(monitors, jiggle):
     bus = session_bus()
     receiver = Receiver(bus)
-    probes = [start_probe(i) for i in range(monitors)]
+    probes = []
     try:
+        for index in range(monitors):
+            probes.append(start_probe(index))
         with loaded_script(bus), Injector() as injector:
             layout = receiver_layout(receiver)
             wait_for_pointer(injector, receiver, layout)
@@ -46,8 +49,7 @@ class Probe:
 
     def __init__(self, index):
         self.proc = subprocess.Popen(["python3", PROBE, str(index)], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        if self.proc.stdout.readline().strip() != b"ready":
-            raise RuntimeError(f"probe {index} did not start")
+        wait_ready(self.proc)
         self.pid = self.proc.pid
         self.motion = None
         self._buffer = b""
@@ -70,11 +72,7 @@ def start_probe(index):
 
 
 def stop_probe(probe):
-    probe.proc.stdin.close()
-    try:
-        probe.proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        probe.proc.kill()
+    stop(probe.proc)
 
 
 def receiver_layout(receiver):

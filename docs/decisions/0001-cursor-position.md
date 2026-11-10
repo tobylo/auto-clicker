@@ -27,20 +27,20 @@ v = clamp(round(x * 65536 / W), 0, 65535)      and likewise y with H
 
 ## Measurements
 
-Every number below came from the commands under "Commands", run on the committed spike code on 2026-11-10 between 01:01 and 01:08. An earlier run of the same checks gave the same results. The laptop was otherwise idle and its mouse and keyboard untouched, and all input was synthetic, from C01's virtual mouse, except under "Real mouse".
+Every number below came from the commands under "Commands", run on the committed spike code on 2026-11-10: latency, pointer lock, lifecycle and the dual-output mapping between 02:49 and 02:54 (after the laptop had restarted), CPU and the other layouts between 01:01 and 01:08. Earlier runs of the same checks gave the same results. The laptop was otherwise idle and its mouse and keyboard untouched, and all input was synthetic, from C01's virtual mouse, except under "Real mouse".
 
 ### Latency: uinput write to receipt
 
-Absolute moves went to distinct positions, paced on absolute deadlines. Each call was matched to its move. Three sweeps of 900 moves were run per rate, 2700 moves in all.
+Absolute moves went to distinct positions, paced on absolute deadlines. The time is taken just before each move is written, so every figure is an upper bound. Each call was matched to its move. Three sweeps of 900 moves were run per rate, 2700 moves in all.
 
 | Rate | Moves | Callbacks | Received | p50 | p90 | p99 | max |
 |---|---|---|---|---|---|---|---|
-| 125 Hz | 2700 | 2700 | 2700 | 0.39 ms | 0.52 ms | 0.65 ms | 1.01 ms |
-| 500 Hz | 2700 | 2700 | 2700 | 0.19 ms | 0.29 ms | 0.43 ms | 0.88 ms |
-| 1000 Hz | 2700 | 2700 | 2700 | 0.15 ms | 0.23 ms | 0.31 ms | 0.92 ms |
-| 2000 Hz | 2700 | 2700 | 2700 | 0.14 ms | 0.21 ms | 0.28 ms | 0.89 ms |
+| 125 Hz | 2700 | 2700 | 2700 | 0.55 ms | 0.71 ms | 0.81 ms | 1.07 ms |
+| 500 Hz | 2700 | 2700 | 2700 | 0.42 ms | 0.58 ms | 0.69 ms | 0.97 ms |
+| 1000 Hz | 2700 | 2701 | 2701 | 0.26 ms | 0.38 ms | 0.54 ms | 1.19 ms |
+| 2000 Hz | 2700 | 2700 | 2700 | 0.20 ms | 0.28 ms | 0.38 ms | 1.04 ms |
 
-- **Nothing coalesces or drops.** KWin calls the script once per pointer move, and every call arrives.
+- **Nothing coalesces or drops.** KWin calls the script once per pointer move, and every call arrives. The extra callback at 1000 Hz is the move onto the sweep's start row.
 - **The script's own time is too coarse to use.** It has only `Date.now()`, wall-clock time in whole milliseconds. Script-to-receipt read between −0.33 and +0.54 ms at p50 across runs, an error of up to a millisecond either way. The end-to-end figure above is measured on one µs clock and bounds it.
 - **The 1000 and 2000 Hz rows are synthetic.** "Real mouse" below checks the rate a physical mouse produces.
 
@@ -67,10 +67,10 @@ The owner moved a Razer Viper V3 Pro in fast circles over the desktop during fou
 
 | Script | Positions reported | KWin | dbus-broker | Receiver |
 |---|---|---|---|---|
-| on | 10408, 10834 (about 1040–1080 per second) | 18.7%, 17.9% | 1.9%, 2.2% | 5.1%, 6.9% |
+| on | 10408, 10834 (about 900–1080 per second) | 18.7%, 17.9% | 1.9%, 2.2% | 5.1%, 6.9% |
 | off | – | 12.1%, 11.7% | 0.0% | 0.0% |
 
-- **A physical high-rate mouse behaves like the synthetic 1000 Hz stream.** About one position per poll, every one delivered, and about 6% of a core added to KWin.
+- **A physical high-rate mouse behaves like the synthetic 1000 Hz stream.** Every position was delivered, and KWin used about 6% more of a core. These counts include the second before and the half second after each 10 s run (the harness has since counted only the timed window), so the rate lies between count / 11.5 s and count / 10 s. A later attempt to re-measure it within the window did not cover the movement and is not used.
 - **Latency was not measured here.** It needs the evdev event time, and the user is not in the `input` group.
 
 ### Playback: where a replayed position lands
@@ -132,11 +132,11 @@ The locked pointer stands still in KWin (`PointerInputRedirection::updatePositio
 
 ## Limitations
 
-- **Precision is whole logical px.** `workspace.cursorPos` is `Cursor::pos().toPoint()` (`src/scripting/workspace_wrapper.cpp:148`). The error is up to 0.5 logical px: 0.625 physical px at scale 1.25, 1 physical px at scale 2.
+- **Precision is whole logical px.** `workspace.cursorPos` is `Cursor::pos().toPoint()` (`src/scripting/workspace_wrapper.cpp:148`). With the axis rounding, a replay can be off by up to `(0.5 + W / 131072) * scale` physical px per axis: 0.68 px at scale 1.25 with W = 5488 (0.65 measured), but just over 1 px at scale 2. "Within 1 px" therefore holds up to about scale 1.8 to 1.9, depending on the layout width; at scale 2 and above it needs the sub-pixel position upstream report 3 asks for.
 - **The script cannot tell which device moved the pointer.** It also reports moves made by the program's own virtual mouse. Recording is refused while clicking or playing (R01), so the two never overlap.
 - **Anyone in the session can load KWin scripts.** Any session process can also call the receiver's D-Bus name, so the receiver must accept calls only from the current owner of `org.kde.KWin`.
 - **Pointer lock gives no positions.** While a game locks the pointer, recordings fall back to relative motion.
-- **The layout must match at playback.** A position is only meaningful against the layout it was recorded on, so recordings must carry the layout size.
+- **The layout must match at playback.** A position is only meaningful against the layout it was recorded on. The size alone cannot tell: DP-1 left of the panel and DP-1 right of it are both 5488x1440, yet (5000, 1350) is on DP-1 in one and below the panel (clamped) in the other. Recordings must carry every output's rectangle and scale, and playback must compare them.
 - **Latency was measured on synthetic input only.** A physical mouse was checked for rate, delivery and CPU ("Real mouse").
 - **Shake-to-find is irrelevant.** KDE's "shake cursor to find it" effect enlarges the drawn cursor during fast moves. It does not change the position.
 
@@ -151,7 +151,7 @@ The locked pointer stands still in KWin (`PointerInputRedirection::updatePositio
      - KDE Bugzilla quicksearch for "PointerLocator", "QueryPointer" and "PointerPositionChanged" found nothing.
      - KWin's GitLab issues and merge requests, searched for "PointerLocator" and "QueryPointer" through the API, show only the merge request that added the interface (!9825, commit 23b0427864, first released in 6.7.90) and draft !8883, which adds an accessibility bus address and does not touch this.
 2. **KWin: `QueryPointer` has no permission check, while its sibling `KeyboardMonitor` is limited to Orca.** Any session client can learn the pointer position and the pid of the window under it. This is worth raising as a question rather than a bug.
-3. **Wishlist: a sub-pixel `cursorPos` for KWin scripts.** `workspace.cursorPos` drops the sub-pixel part. A `QPointF` property would remove this program's only rounding error. Low priority: the current error stays under 1 physical px at scales up to 2.
+3. **Wishlist: a sub-pixel `cursorPos` for KWin scripts.** `workspace.cursorPos` drops the sub-pixel part. A `QPointF` property would remove this program's only rounding error. Low priority on this laptop, where the error stays under 0.7 physical px; it matters at scale 2 and above.
 
 ## Commands
 

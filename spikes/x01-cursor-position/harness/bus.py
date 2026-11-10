@@ -49,16 +49,31 @@ class Receiver(dbus.service.Object):
     def __init__(self, bus):
         self.samples = []
         self.layouts = []
+        self.rejected = 0
+        self._kwin = str(bus.get_name_owner("org.kde.KWin"))
         super().__init__(dbus.service.BusName(SERVICE, bus, do_not_queue=True), "/")
 
-    @dbus.service.method(SERVICE)
-    def Position(self, x, y, callbacks, script_ms):  # noqa: N802 (D-Bus name)
+    def _from_kwin(self, sender):
+        """Only KWin's current connection may report; anyone can call us."""
+        if sender == self._kwin:
+            return True
+        self.rejected += 1
+        return False
+
+    @dbus.service.method(SERVICE, sender_keyword="sender")
+    def Position(self, x, y, stamp, sender=None):  # noqa: N802 (D-Bus name)
+        """stamp: "<the script's callback count> <its wall clock in ms>"."""
         now = time.monotonic_ns()
+        if not self._from_kwin(sender):
+            return
+        callbacks, script_ms = str(stamp).split()
         wall = time.time_ns() / 1e6
         self.samples.append(Sample(now, wall, int(x), int(y), int(callbacks), float(script_ms)))
 
-    @dbus.service.method(SERVICE)
-    def Layout(self, box, outputs):  # noqa: N802 (D-Bus name)
+    @dbus.service.method(SERVICE, sender_keyword="sender")
+    def Layout(self, box, outputs, sender=None):  # noqa: N802 (D-Bus name)
+        if not self._from_kwin(sender):
+            return
         x, y, width, height = (int(v) for v in str(box).split())
         self.layouts.append(Layout(width, height, (x, y), parse_outputs(outputs)))
 
@@ -104,11 +119,10 @@ def load_script(bus):
 @contextmanager
 def loaded_script(bus):
     """Loads the script for the block and always unloads it afterwards."""
-    stale = unload_stale(bus)
-    if stale:
+    if unload_stale(bus):
         print("unloaded a stale script left by an earlier run")
-    load_script(bus)
     try:
+        load_script(bus)
         yield
     finally:
         scripting(bus).unloadScript(PLUGIN)

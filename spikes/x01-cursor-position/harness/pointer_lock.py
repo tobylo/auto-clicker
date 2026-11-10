@@ -9,6 +9,7 @@ import os
 import subprocess
 import threading
 
+from children import stop, wait_ready
 from bus import HERE, Receiver, loaded_script, pump_for, session_bus
 from inject import Injector, to_absolute, wait_for_pointer
 
@@ -27,12 +28,13 @@ def run():
         phase(receiver, injector, "before lock")
         injector.run(centre)
         window = start_window()
-        injector.run("rel 1 1")
-        phase(receiver, injector, "locked")
-        print("window:", window.lines[-1] if window.lines else "no output")
-        mark = len(receiver.samples)
-        window.proc.stdin.close()
-        window.proc.wait(timeout=5)
+        try:
+            injector.run("rel 1 1")
+            phase(receiver, injector, "locked")
+            print("window:", window.lines[-1] if window.lines else "no output")
+            mark = len(receiver.samples)
+        finally:
+            stop(window.proc)
         pump_for(1.0)
         print(f"after unlock, with no input: {positions(receiver, mark)}")
         phase(receiver, injector, "after unlock")
@@ -53,7 +55,7 @@ class Window:
     def __init__(self):
         self.proc = subprocess.Popen(["python3", LOCKWIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         self.lines = []
-        self.ready = self.proc.stdout.readline().strip()
+        self.ready = wait_ready(self.proc)
         threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self):

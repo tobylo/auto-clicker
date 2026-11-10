@@ -9,7 +9,7 @@ or loaded with no receiver; CPU of KWin, the bus and the receiver.
 import os
 import time
 
-from bus import Receiver, loaded_script, pump_for, pump_until, session_bus
+from bus import Receiver, loaded_script, pump_for, pump_until, session_bus, unload_stale
 from inject import Injector, Session, to_absolute, wait_for_pointer
 from stats import TICK, cpu_ticks, pids, summary
 
@@ -73,6 +73,8 @@ def cpu(hz, seconds, mode):
     bus = session_bus()
     receiver = Receiver(bus) if mode == "on" else None
     if mode == "off":
+        if unload_stale(bus):
+            print("unloaded a stale script before measuring without one")
         return measure_cpu(hz, seconds, mode, receiver)
     with loaded_script(bus):
         return measure_cpu(hz, seconds, mode, receiver)
@@ -83,22 +85,25 @@ def measure_cpu(hz, seconds, mode, receiver):
     with Injector() as injector:
         pump_for(1.0)
         before = snapshot(targets)
-        start = time.monotonic()
+        start, start_ns = time.monotonic(), time.monotonic_ns()
         if hz:
             injector.run(f"stream-rel {hz} {hz * seconds} 2", timeout=seconds + 30)
         else:
             pump_for(seconds)
-        elapsed = time.monotonic() - start
+        elapsed, end_ns = time.monotonic() - start, time.monotonic_ns()
         after = snapshot(targets)
         pump_for(0.5)
-    print(f"cpu rate {hz} Hz, script {mode}, {elapsed:.1f} s, moves {hz * seconds}, {delivery(receiver)}: " + usage(elapsed, before, after))
+    window = (start_ns, end_ns)
+    print(f"cpu rate {hz} Hz, script {mode}, {elapsed:.1f} s, moves {hz * seconds}, {delivery(receiver, window)}: " + usage(elapsed, before, after))
 
 
-def delivery(receiver):
-    """Callbacks the script counted against calls that arrived."""
-    if not receiver or not receiver.samples:
+def delivery(receiver, window):
+    """Callbacks the script counted against calls that arrived, for the calls
+    that arrived inside the measured window (a moving real mouse also reports
+    during the warm-up and the drain)."""
+    samples = [s for s in receiver.samples if window[0] <= s.recv_ns <= window[1]] if receiver else []
+    if not samples:
         return "callbacks 0, received 0"
-    samples = receiver.samples
     callbacks = samples[-1].callbacks - samples[0].callbacks + 1
     return f"callbacks {callbacks}, received {len(samples)}"
 

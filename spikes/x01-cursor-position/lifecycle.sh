@@ -29,13 +29,20 @@ dbus-run-session -- bash -c '
         echo "nested KWin did not start"; exit 1
     }
     owner() { qdbus6 org.freedesktop.DBus / org.freedesktop.DBus.GetNameOwner org.kde.KWin 2>/dev/null; }
+    stop() {
+        kill $kwin 2>/dev/null
+        for _ in $(seq 50); do kill -0 $kwin 2>/dev/null || break; sleep 0.1; done
+        kill -9 $kwin 2>/dev/null
+        wait $kwin 2>/dev/null
+    }
+    trap stop EXIT
     start
     id=$(qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript "$PWD/kwin/x01-cursor.js" x01-cursor)
     qdbus6 org.kde.KWin /Scripting/Script$id org.kde.kwin.Script.run
     echo "nested KWin $(owner): script loaded: $(qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.isScriptLoaded x01-cursor)"
-    kill $kwin; wait $kwin 2>/dev/null
+    stop
     echo "after KWin exit, org.kde.KWin owner: $(owner || true)"
     start
     echo "restarted KWin $(owner): script loaded: $(qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.isScriptLoaded x01-cursor)"
-    kill $kwin; wait $kwin 2>/dev/null
+    stop
 '

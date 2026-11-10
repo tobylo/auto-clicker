@@ -3,7 +3,8 @@
 // KWin calls `report` on every pointer move (`Cursor::posChanged`). The
 // position is whole logical pixels (`workspace.cursorPos` is a QPoint). Each
 // call carries a running count of callbacks, so the receiver can tell
-// callbacks from deliveries, and the script's wall-clock time in ms.
+// callbacks from deliveries, and the script's wall-clock time in ms, as one
+// string "<count> <ms>".
 
 const SERVICE = "io.github.tobylo.AutoClickerX01";
 const PATH = "/";
@@ -13,7 +14,7 @@ let callbacks = 0;
 function report() {
     callbacks += 1;
     const p = workspace.cursorPos;
-    callDBus(SERVICE, PATH, SERVICE, "Position", p.x, p.y, callbacks, Date.now());
+    callDBus(SERVICE, PATH, SERVICE, "Position", p.x, p.y, callbacks + " " + Date.now());
 }
 
 function describeOutput(output) {

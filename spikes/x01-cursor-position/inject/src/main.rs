@@ -5,6 +5,8 @@
 //! Commands on stdin, one per line; every reply ends with a line `done`:
 //!
 //! - `abs X Y`: one absolute move (0..=65535 per axis); replies `t 0 NS`.
+//!
+//! Every time is taken just before the move is written.
 //! - `rel DX DY`: one relative move; replies `t 0 NS`.
 //! - `stream-abs HZ N X0 Y STEP`: N absolute moves to `X0 + i*STEP, Y`, paced
 //!   at HZ on absolute deadlines; replies `t I NS` for each, after the run.
@@ -47,11 +49,11 @@ fn run(mouse: &mut Mouse, words: &[&str]) -> Result<Vec<i64>> {
     match words {
         ["abs", x, y] => {
             let target = position(x.parse()?, y.parse()?);
-            stamped(mouse.move_absolute(target))
+            paced(1, 1, |_| Ok(mouse.move_absolute(target)?))
         }
         ["rel", dx, dy] => {
             let (dx, dy) = (dx.parse()?, dy.parse()?);
-            stamped(mouse.move_relative(dx, dy))
+            paced(1, 1, |_| Ok(mouse.move_relative(dx, dy)?))
         }
         ["stream-abs", hz, n, x0, y, step] => {
             let (x0, y, step): (u32, u16, u32) = (x0.parse()?, y.parse()?, step.parse()?);
@@ -75,13 +77,9 @@ fn position(x: u16, y: u16) -> AbsolutePosition {
     AbsolutePosition { x, y }
 }
 
-fn stamped<E: Into<Box<dyn Error>>>(moved: std::result::Result<(), E>) -> Result<Vec<i64>> {
-    moved.map_err(Into::into)?;
-    Ok(vec![monotonic_ns()?])
-}
-
 /// Runs `step` n times at `hz`, each on its own absolute deadline, and
-/// returns the time just after each step.
+/// returns the time just before each step, so that a latency measured from
+/// it is an upper bound even if the thread is descheduled after the write.
 fn paced(hz: u64, n: u64, mut step: impl FnMut(u64) -> Result<()>) -> Result<Vec<i64>> {
     let period = Duration::from_secs(1)
         .checked_div(u32::try_from(hz)?)
@@ -91,8 +89,8 @@ fn paced(hz: u64, n: u64, mut step: impl FnMut(u64) -> Result<()>) -> Result<Vec
     for i in 0..n {
         let deadline = start + period.checked_mul(u32::try_from(i)?).ok_or("too long")?;
         thread::sleep(deadline.saturating_duration_since(Instant::now()));
-        step(i)?;
         stamps.push(monotonic_ns()?);
+        step(i)?;
     }
     Ok(stamps)
 }
