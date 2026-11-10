@@ -1,7 +1,8 @@
 //! The hotkey reader as the controller holds it: the reader's future and the
 //! channel it sends on, replaced together.
 
-use std::future::{Future, poll_fn};
+use std::convert::Infallible;
+use std::future::{Future, pending, poll_fn};
 use std::pin::Pin;
 use std::task::Poll;
 
@@ -31,8 +32,8 @@ impl HotkeySender {
 /// Dropping it stops the reader and discards those events.
 pub(super) struct HotkeySource {
     /// `None` once the reader returned (watching for keyboards failed).
-    reader: Option<HotkeyReader>,
-    events: mpsc::UnboundedReceiver<HotkeyEvent>,
+    pub(super) reader: Option<HotkeyReader>,
+    pub(super) events: mpsc::UnboundedReceiver<HotkeyEvent>,
 }
 
 impl HotkeySource {
@@ -53,62 +54,28 @@ impl HotkeySource {
             events,
         }
     }
+}
 
-    /// The next event. Drives the reader while it runs; once it has returned
-    /// and its last events are read, never resolves.
-    ///
-    /// Events already sent come first: a reader kept busy by a flood of key
-    /// events can spend the task's budget, after which the channel reports
-    /// nothing, and a stop hotkey it sent would wait behind the flood.
-    pub(super) fn next(&mut self) -> impl Future<Output = HotkeyEvent> + '_ {
-        poll_fn(|cx| {
-            if let Poll::Ready(Some(event)) = self.events.poll_recv(cx) {
-                return Poll::Ready(event);
-            }
-            if let Some(reader) = &mut self.reader
-                && reader.as_mut().poll(cx).is_ready()
-            {
-                // A finished future must not be polled again. Dropping it
-                // drops its sender, so the channel ends after its events.
-                self.reader = None;
-            }
-            match self.events.poll_recv(cx) {
-                Poll::Ready(Some(event)) => Poll::Ready(event),
-                Poll::Ready(None) | Poll::Pending => Poll::Pending,
-            }
-        })
+/// The next event a reader sent. Once the reader has returned and its last
+/// events are read, never resolves.
+pub(super) async fn received(events: &mut mpsc::UnboundedReceiver<HotkeyEvent>) -> HotkeyEvent {
+    match events.recv().await {
+        Some(event) => event,
+        None => pending().await,
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::hotkeys::Action;
-
-    #[tokio::test(start_paused = true)]
-    async fn a_reader_kept_busy_cannot_hide_what_it_sent() {
-        let fired = HotkeyEvent::Fired(Action::ToggleClicking);
-        let sent = fired.clone();
-        let mut source = HotkeySource::start(|send| {
-            Box::pin(async move {
-                send.send(sent);
-                // Always more to read: spends the budget on every poll.
-                loop {
-                    tokio::task::consume_budget().await;
-                }
-            })
-        });
-        // Bounded by polls, not time: a busy task never lets the paused
-        // clock move.
-        let polls = async {
-            for _ in 0..100 {
-                tokio::task::yield_now().await;
-            }
-        };
-        tokio::select! {
-            biased;
-            got = source.next() => assert_eq!(got, fired),
-            () = polls => panic!("the sent event never came out"),
+/// Drives the reader, which reads keyboards and sends what it finds; never
+/// resolves. A reader that returned is dropped: a finished future must not
+/// be polled again, and dropping it drops its sender, so its channel ends
+/// after its last events.
+pub(super) fn drive(reader: &mut Option<HotkeyReader>) -> impl Future<Output = Infallible> + '_ {
+    poll_fn(move |cx| {
+        if let Some(running) = reader
+            && running.as_mut().poll(cx).is_ready()
+        {
+            *reader = None;
         }
-    }
+        Poll::Pending
+    })
 }

@@ -99,6 +99,11 @@ impl<B: InputBackend> Running<B> {
         fire(&mut self.stop);
     }
 
+    /// Whether the run was told to stop.
+    fn stopping(&self) -> bool {
+        self.stop.is_none()
+    }
+
     /// Ends the run with the shutdown signal and waits for it to hand back
     /// what it held, released. The engine ends at once on the signal.
     async fn shut_down(mut self) -> RunEnd<B> {
@@ -201,12 +206,22 @@ impl<P: Platform> Controller<P> {
             if !self.handle(wake) {
                 break;
             }
+            self.finish_stopped_run().await;
         }
         if let State::Clicking(running) = mem::replace(&mut self.state, State::Idle) {
             drop(running.shut_down().await);
         }
     }
 
+    /// The next thing to handle. Branches are tried in order, so what was
+    /// asked for comes before what it would prevent: a queued Stop or lock
+    /// before the hotkey events, the run's next action and the deadlines;
+    /// hotkey events (a stop) before the run. The reader goes last: kept busy
+    /// by a flood of key events, it spends tokio's budget, and anything
+    /// polled after it would wait. Everything else is cheap to poll. (A due
+    /// timer and a queued message cannot be made ready in one poll on the
+    /// paused clock, so the tests pin the reader's place and the outcomes,
+    /// not every tie.)
     async fn next_wake(&mut self) -> Wake<P::Backend> {
         let deadline = self.next_deadline();
         let Controller {
@@ -215,17 +230,25 @@ impl<P: Platform> Controller<P> {
             hotkeys,
             ..
         } = self;
-        // Unbiased: each wake starts at a random branch, so a source that is
-        // always ready (a flood of tray requests, a reader kept busy by key
-        // events) spends tokio's budget on some polls only, and every other
-        // branch still gets its turn. No branch needs to win a tie: a release
-        // checks the deadline itself, and the rest commute.
         tokio::select! {
+            biased;
             message = inbox.recv() => Wake::Message(message.unwrap_or(Message::Quit)),
+            event = hotkeys::received(&mut hotkeys.events) => Wake::Hotkey(event),
             end = run_end(state) => Wake::RunEnded(end),
-            event = hotkeys.next() => Wake::Hotkey(event),
             () = sleep_until_some(deadline) => Wake::Deadline,
+            never = hotkeys::drive(&mut hotkeys.reader) => match never {},
         }
+    }
+
+    /// A run told to stop ends at once (the engine's contract), so it is
+    /// waited for right here: a stopped run never waits behind other work,
+    /// and no other state sees a run that is still stopping.
+    async fn finish_stopped_run(&mut self) {
+        let end = match &mut self.state {
+            State::Clicking(running) if running.stopping() => (&mut running.run).await,
+            _ => return,
+        };
+        self.run_ended(end);
     }
 
     /// Handles one wake; `false` when the controller should end.

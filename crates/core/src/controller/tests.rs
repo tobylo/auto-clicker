@@ -854,17 +854,40 @@ async fn a_busy_reader_starves_neither_deadlines_nor_stops() {
         tokio::time::advance(RELEASE_WAIT).await;
         d.settle_until(|d| d.activity() == Activity::Idle).await;
         assert_eq!(d.activity(), Activity::Idle);
-        // The countdown still ends, and a Stop still ends the run.
+        // The countdown still ends.
         d.send(Message::Start).await;
         tokio::time::advance(secs(5)).await;
         d.settle_until(|d| d.shared.calls() == [LEFT_DOWN]).await;
         assert_eq!(d.activity(), Activity::Clicking);
         assert_eq!(d.shared.calls(), [LEFT_DOWN]);
-        d.inbox.send(Message::Stop).unwrap();
+        // The hotkey still stops it: what the reader sent comes first.
+        d.shared.hotkey(HotkeyEvent::Fired(Action::ToggleClicking));
         d.settle_until(|d| d.activity() == Activity::Idle).await;
         d.assert_idle_after(&[LEFT_DOWN, LEFT_UP]);
     })
     .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lock_queued_with_a_release_or_a_due_countdown_starts_nothing() {
+    for by_tray in [false, true] {
+        local(async {
+            let d = daemon(Mode::HoldButton).await;
+            if by_tray {
+                d.send(Message::Start).await;
+            } else {
+                d.press_hotkey().await;
+                d.shared.hotkey(HotkeyEvent::ModifiersReleased);
+            }
+            d.inbox
+                .send(Message::Session(Some(Blocked::Locked)))
+                .unwrap();
+            tokio::time::advance(secs(5)).await;
+            d.settle().await;
+            d.assert_idle_after(&[]);
+        })
+        .await;
+    }
 }
 
 #[tokio::test(start_paused = true)]
