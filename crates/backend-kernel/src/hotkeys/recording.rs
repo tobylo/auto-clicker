@@ -4,6 +4,7 @@
 use std::io;
 
 use auto_clicker_core::hotkeys::{DeviceId, HotkeyEvent};
+use auto_clicker_core::recording::Recorder;
 
 use super::Reader;
 
@@ -31,7 +32,9 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
         }
         self.registry.forget_not_wanted();
         // Devices it opens are read as they are added.
-        self.scan()
+        self.scan()?;
+        self.feed.with(Recorder::start_read);
+        Ok(())
     }
 
     fn close_recording_devices(&mut self) {

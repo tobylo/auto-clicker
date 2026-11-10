@@ -120,7 +120,9 @@ pub struct Recorder {
     start: Duration,
     created: Created,
     /// The keys of the hotkey that started the recording: on a device's
-    /// first read, those it holds are left out.
+    /// first read at the start, those it holds are left out. Emptied once
+    /// the reader has read every device at the start, so a device added
+    /// later records what it holds.
     start_chord: Vec<u16>,
     /// Keys held on a device that are left out until that device lets go
     /// of them: the start hotkey's, and each hotkey's pressed during the
@@ -268,6 +270,12 @@ impl Recorder {
         for item in pressed {
             self.press(device, item, at);
         }
+    }
+
+    /// The reader has read what every device held at the start: devices
+    /// read from now on were not part of the start hotkey.
+    pub fn start_read(&mut self) {
+        self.start_chord.clear();
     }
 
     /// Ends the recording: trims the trip to the tray after a tray stop,
