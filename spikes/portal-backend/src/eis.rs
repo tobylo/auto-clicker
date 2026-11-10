@@ -63,7 +63,12 @@ impl Output {
         line("ei handshake done");
         let state = Rc::new(RefCell::new(Devices::default()));
         let changed = Rc::new(Notify::new());
-        tokio::task::spawn_local(drain(events, state.clone(), changed.clone()));
+        tokio::task::spawn_local(drain(
+            events,
+            connection.clone(),
+            state.clone(),
+            changed.clone(),
+        ));
         Ok(Output {
             connection,
             state,
@@ -243,11 +248,23 @@ fn interface<T: ei::Interface>(device: &Device) -> Option<T> {
     device.interface::<T>()
 }
 
-/// Reads events until the connection ends, keeping `state` current.
-async fn drain(mut events: EiConvertEventStream, state: Rc<RefCell<Devices>>, changed: Rc<Notify>) {
+/// Reads events until the connection ends, keeping `state` current. Replies
+/// the converter queues (pings) and seat binds are only buffered, so the task
+/// flushes after every event.
+async fn drain(
+    mut events: EiConvertEventStream,
+    connection: Connection,
+    state: Rc<RefCell<Devices>>,
+    changed: Rc<Notify>,
+) {
     while let Some(event) = events.next().await {
         match event {
-            Ok(event) => apply(&mut state.borrow_mut(), event),
+            Ok(event) => {
+                apply(&mut state.borrow_mut(), event);
+                if let Err(err) = connection.flush() {
+                    line(&format!("ei: flush after event failed: {err}"));
+                }
+            }
             Err(err) => {
                 state.borrow_mut().disconnected = Some(format!("stream error: {err}"));
                 break;

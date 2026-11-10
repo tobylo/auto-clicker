@@ -14,7 +14,7 @@ BUTTON = re.compile(r"wl_pointer[#@]\d+\.button\(\d+, (\d+), (\d+), (\d+)\)")
 KEY = re.compile(r"wl_keyboard[#@]\d+\.key\(\d+, (\d+), \d+, (\d+)\)")
 OTHER = re.compile(r"wl_pointer[#@]\d+\.(enter|leave|axis_value120|axis_discrete)\(")
 BTN_LEFT = 272
-STATES = {"0": "up", "1": "down"}
+STATES = {"0": "up", "1": "down", "2": "repeat"}
 
 
 def events(path):
@@ -39,9 +39,12 @@ def periods(lines):
 
 def main(path):
     lines = list(events(path))
+    repeats = sum(1 for _, what in lines if what == "key repeat")
     for time, what in lines:
-        if len(lines) <= 200 or not what.startswith("button"):
+        if what != "key repeat" and (len(lines) <= 200 or not what.startswith("button")):
             print(time, what)
+    if repeats:
+        print(f"key repeats sent by the compositor: {repeats}")
     presses, gaps = periods(lines)
     print(f"left presses: {len(presses)}")
     if gaps:

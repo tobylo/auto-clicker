@@ -34,6 +34,7 @@ pub async fn run(token_file: &Path, args: &[String]) -> Result<(), String> {
         [name, what, how] if name == "hold" => hold(&mut out, &remote, what, how).await,
         [name] if name == "combo" => combo(&mut out).await,
         [name] if name == "locked" => locked(&mut out).await,
+        [name] if name == "park" => park(&mut out).await,
         _ => Err(format!("unknown output scenario {args:?}")),
     }
 }
@@ -87,6 +88,18 @@ async fn absolute_demo(out: &mut Output) -> Result<(), String> {
         out.move_absolute(x + w / 2.0, y + h / 2.0),
     )
     .await
+}
+
+/// Moves the pointer to the centre of the first region, so a window opened
+/// next opens on that output.
+async fn park(out: &mut Output) -> Result<(), String> {
+    let regions = out.absolute_regions();
+    let &(x, y, width, height) = regions.first().ok_or("no absolute region")?;
+    let centre = (
+        x as f32 + width as f32 / 2.0,
+        y as f32 + height as f32 / 2.0,
+    );
+    step("park at centre", out.move_absolute(centre.0, centre.1)).await
 }
 
 /// `count` left clicks on absolute deadlines, each held for half the interval.

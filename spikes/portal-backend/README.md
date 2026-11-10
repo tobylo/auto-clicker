@@ -32,7 +32,7 @@ Wrap anything that injects input or opens a portal session in `flock /tmp/auto-c
 | `output TOKEN combo` | Ctrl+F6 through libei, to test whether GlobalShortcuts reacts to the program's own input. |
 | `output TOKEN locked` | Relative motion and clicks for a game that has locked the pointer. |
 | `output TOKEN grant` | Starts a session and closes it: the permission prompt alone. |
-| `shortcuts list\|bind\|rebind SECS` | Lists the session's shortcuts, binds Ctrl+F6/F7/F8 (`rebind`: Ctrl+F9/F10/F11), then prints activations for SECS. |
+| `shortcuts list\|bind\|rebind\|configure SECS` | Lists the session's shortcuts, binds Ctrl+F6/F7/F8 (`rebind`: asks for Ctrl+Shift+F6/F7/F8 instead; `configure`: binds, then calls ConfigureShortcuts), then prints activations and changes for SECS. |
 | `capture SECS` | InputCapture with a pointer barrier along the top edge. It prints event kinds and counts, never key codes, and hands input back 3 s after each activation. |
 
 `run-probe.sh PREFIX COMMAND…` opens the probe window with `WAYLAND_DEBUG=1` and runs the command while the window has focus. `wayland_events.py PREFIX.wayland` reads the raw `wl_pointer.button` and `wl_keyboard.key` events from that log: these show what the window received, including releases sent by the compositor.

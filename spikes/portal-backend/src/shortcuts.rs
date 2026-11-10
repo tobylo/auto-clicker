@@ -5,7 +5,8 @@ use std::time::Duration;
 use ashpd::desktop::CreateSessionOptions;
 use ashpd::desktop::Session;
 use ashpd::desktop::global_shortcuts::{
-    BindShortcutsOptions, GlobalShortcuts, ListShortcutsOptions, NewShortcut, Shortcut,
+    BindShortcutsOptions, ConfigureShortcutsOptions, GlobalShortcuts, ListShortcutsOptions,
+    NewShortcut, Shortcut,
 };
 use futures_util::StreamExt;
 
@@ -13,7 +14,12 @@ use crate::log::line;
 
 /// The defaults (map D6), and the triggers a rebind asks for instead.
 const BINDINGS: [(&str, &str, &str, &str); 3] = [
-    ("clicking", "Start or stop clicking", "CTRL+F6", "CTRL+F9"),
+    (
+        "clicking",
+        "Start or stop clicking",
+        "CTRL+F6",
+        "CTRL+SHIFT+F6",
+    ),
     (
         "recording",
         "Start or stop recording",
@@ -41,6 +47,12 @@ pub async fn run(mode: &str, secs: u64) -> Result<(), String> {
     if mode != "list" {
         bind(&portal, &session, mode == "rebind").await?;
         list(&portal, &session, "after bind").await?;
+    }
+    if mode == "configure" {
+        let shown = portal
+            .configure_shortcuts(&session, None, ConfigureShortcutsOptions::default())
+            .await;
+        line(&format!("ConfigureShortcuts: {shown:?}"));
     }
     listen(&portal, Duration::from_secs(secs)).await?;
     session.close().await.map_err(err("Session.Close"))

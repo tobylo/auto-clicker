@@ -38,7 +38,7 @@ pub async fn run(secs: u64) -> Result<(), String> {
         .map_err(err("ConnectToEIS"))?;
     barriers(&portal, &session).await?;
     let context = ei::Context::new(UnixStream::from(fd)).map_err(|e| format!("ei: {e}"))?;
-    let (_connection, events) = context
+    let (connection, events) = context
         .handshake_tokio(
             "auto-clicker-x02-capture",
             ei::handshake::ContextType::Receiver,
@@ -50,7 +50,8 @@ pub async fn run(secs: u64) -> Result<(), String> {
         .await
         .map_err(err("Enable"))?;
     line("enabled: push the pointer against the top edge");
-    let result = watch(&portal, &session, events, Duration::from_secs(secs)).await;
+    let receiver = Receiver { connection, events };
+    let result = watch(&portal, &session, receiver, Duration::from_secs(secs)).await;
     session.close().await.map_err(err("Session.Close"))?;
     result
 }
@@ -93,12 +94,18 @@ fn top_edge((region, id): (&ashpd::desktop::input_capture::Region, u32)) -> Barr
     Barrier::new(id, (x, y, right, y))
 }
 
+/// The receiving end of the capture's EIS connection.
+struct Receiver {
+    connection: reis::event::Connection,
+    events: reis::tokio::EiConvertEventStream,
+}
+
 /// Counts what arrives, and hands input back [`HAND_BACK`] after each
 /// activation, until `duration` ends.
 async fn watch(
     portal: &InputCapture,
     session: &Session<InputCapture>,
-    mut events: reis::tokio::EiConvertEventStream,
+    mut receiver: Receiver,
     duration: Duration,
 ) -> Result<(), String> {
     let mut activated = portal.receive_activated().await.map_err(err("Activated"))?;
@@ -115,6 +122,7 @@ async fn watch(
         tokio::select! {
             () = &mut end => break,
             () = &mut release => {
+                line(&format!("received so far: {counts:?}"));
                 hand_back(portal, session).await;
                 release.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(86_400));
             }
@@ -124,7 +132,13 @@ async fn watch(
             }
             Some(_) = deactivated.next() => line("deactivated"),
             Some(_) = disabled.next() => line("disabled"),
-            Some(event) = events.next() => count(&mut counts, event),
+            Some(event) = receiver.events.next() => {
+                count(&mut counts, event);
+                // The seat bind is only buffered until flushed.
+                if let Err(err) = receiver.connection.flush() {
+                    line(&format!("ei: flush failed: {err}"));
+                }
+            }
         }
     }
     line(&format!("received events: {counts:?}"));

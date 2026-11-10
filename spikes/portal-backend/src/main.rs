@@ -24,8 +24,11 @@ commands:
                                       (kill|close|eis|stop|exit)
   output TOKEN_FILE combo             press and release Ctrl+F6 through libei
   output TOKEN_FILE locked            clicks and relative motion for a game
+  output TOKEN_FILE park              pointer to the centre of the first output
   output TOKEN_FILE grant             start a session only (the permission)
-  shortcuts list|bind|rebind SECS     list, register Ctrl+F6/F7/F8 (rebind: F9/F10/F11),
+  shortcuts list|bind|rebind|configure SECS
+                                      list, register Ctrl+F6/F7/F8 (rebind: Ctrl+Shift+F6/F7/F8),
+                                      configure: open the settings UI,
                                       then print activations
   capture SECS                        InputCapture: barrier at the top edge";
 
