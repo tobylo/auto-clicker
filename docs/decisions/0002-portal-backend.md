@@ -15,7 +15,7 @@ GlobalShortcuts needs an **app id**, and RemoteDesktop scopes its stored grant b
 
 ## Setup
 
-- Laptop `asus-m16` (i9-13900H), CachyOS, kernel 7.3.3-1-cachyos. Plasma 6.8.2 on Wayland: KWin 6.8.2, plasma-workspace 6.8.2, xdg-desktop-portal 1.22.1, xdg-desktop-portal-kde 6.8.2, libei 1.6.0. Two outputs during the runs: eDP-1 2048x1280 logical at scale 1.25, and DP-1 3440x1440 at scale 1.
+- The target laptop (ASUS M16, i9-13900H), CachyOS, kernel 7.3.3-1-cachyos. Plasma 6.8.2 on Wayland: KWin 6.8.2, plasma-workspace 6.8.2, xdg-desktop-portal 1.22.1, xdg-desktop-portal-kde 6.8.2, libei 1.6.0. Two outputs during the runs: eDP-1 2048x1280 logical at scale 1.25, and DP-1 3440x1440 at scale 1.
 - Portal versions as reported on D-Bus: RemoteDesktop 2 (`AvailableDeviceTypes` 7), GlobalShortcuts 2, InputCapture 2 (`SupportedCapabilities` 7).
 - The spike: [spikes/portal-backend](../../spikes/portal-backend/README.md), on `ashpd` 0.14.0 (zbus 6, tokio) and `reis` 0.7.1 (tokio), on tokio's single-thread runtime (D11). It was run from the dev box over SSH, as a systemd user service named `app-io.github.tobylo.AutoClickerX02.service` (`run-unit.sh`), with a spike-only id so that its grants never pre-authorise the real program.
 - What a window received was read from the probe window's `WAYLAND_DEBUG=1` log (`run-probe.sh`, `wayland_events.py`): raw `wl_pointer.button` and `wl_keyboard.key` events with the compositor's millisecond times. These include releases the compositor sends on its own.
