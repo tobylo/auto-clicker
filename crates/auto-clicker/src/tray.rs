@@ -242,7 +242,14 @@ mod tests {
         assert_eq!(tray.id(), "auto-clicker");
         assert_eq!(tray.title(), "Auto clicker: clicking");
         assert_eq!(tray.icon_name(), "auto-clicker-clicking");
-        assert!(tray.icon_theme_path().ends_with("/data/icons"));
+        // The source tree's icons in a development build, the theme's
+        // otherwise.
+        let path = tray.icon_theme_path();
+        if cfg!(debug_assertions) {
+            assert!(path.ends_with("/data/icons"), "{path}");
+        } else {
+            assert_eq!(path, "");
+        }
         assert_eq!(tray.tool_tip().title, "Auto clicker: clicking");
         assert!(tray.watcher_offline(ksni::OfflineReason::No));
         let items = tray.menu();
