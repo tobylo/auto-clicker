@@ -9,7 +9,7 @@
 
 **Recordings can carry absolute positions that replay to within a pixel of where the real pointer was**, on each axis, at the scales tested (1 to 1.5), and up to about scale 1.8 (see "Limitations"). Map D3 takes its first branch.
 
-- **Reading the position.** While a recording runs, the daemon loads a small KWin script through `org.kde.KWin /Scripting`. On every `workspace.cursorPosChanged` the script sends `workspace.cursorPos` to a D-Bus name the daemon owns, and it reports the layout size whenever the layout changes. The daemon unloads the script when the recording stops.
+- **Reading the position.** While a recording runs, the daemon loads a small KWin script through `org.kde.KWin /Scripting`. On every `workspace.cursorPosChanged` the script sends `workspace.cursorPos` to a D-Bus name the daemon owns, and it reports the layout size whenever the layout changes. The daemon unloads the script when the recording stops. (R03's refinement split this in two: the script above reports positions only, and a second one that reports the layout alone stays loaded while the daemon runs. See the [feature brief](../planning/features/r03-absolute-positions.md).)
 - **Replaying it.** Playback moves C01's absolute axes to the recorded position with the formula below. On every layout tested (scales 1, 1.25 and 1.5) it landed within 0.65 physical px of where the real pointer was, on each axis. Almost all of that is the script's rounding to whole logical px; the formula itself adds under 0.05 px.
 
 ### The mapping formula
@@ -55,7 +55,7 @@ Each run is 10 s of relative moves at the given rate. Figures are % of one core,
 | 1000 Hz | 13.7 / 16.7 | 20.2 / 24.1 | 2.1–2.6 | 6.1–6.3 | 19.3 / 22.5 |
 | 2000 Hz | 19.1 / 19.4 | 29.5 / 34.4 | 4.9–5.2 | 11.4–11.8 | 29.8 / 35.0 |
 
-- **Idle.** A loaded script costs nothing while the pointer is still. The daemon still loads it only while recording, so a daemon that is not recording has no script in KWin.
+- **Idle.** A loaded script costs nothing while the pointer is still. The daemon still loads it only while recording. (The layout script R03's refinement added stays loaded while the daemon runs; it is never called on pointer motion.)
 - **While moving.** The script adds about 7% of a core to KWin at 1000 Hz and 10–15% at 2000 Hz.
 - **Delivery.** In the CPU runs, 9999 of 10000 moves at 1000 Hz and 19992 and 19972 of 20000 at 2000 Hz produced a delivered call. Within each run the script's callback counter had no gaps, so no call was lost in between; the harness cannot tell a call lost at the very start or end of a run from a move that left the pointer where it was, which fires no `Cursor::posChanged` (`src/cursor.cpp:191`). The latency runs, which match each move to its call, delivered every one.
 - **A dead receiver costs as much as a live one.** With the script loaded and nobody owning the name, every call still leaves KWin and fails at the bus.
@@ -137,7 +137,7 @@ The locked pointer stands still in KWin (`PointerInputRedirection::updatePositio
 - **The script cannot tell which device moved the pointer.** It also reports moves made by the program's own virtual mouse. Recording is refused while clicking or playing (R01), so the two never overlap.
 - **Anyone in the session can load KWin scripts.** Any session process can also call the receiver's D-Bus name, so the receiver must accept calls only from the current owner of `org.kde.KWin`.
 - **Pointer lock gives no positions.** While a game locks the pointer, recordings fall back to relative motion.
-- **The layout must match at playback.** A position is only meaningful against the layout it was recorded on. The size alone cannot tell: DP-1 left of the panel and DP-1 right of it are both 5488x1440, yet (5000, 1350) is on DP-1 in one and below the panel (clamped) in the other. Recordings must carry every output's rectangle and scale, and playback must compare them.
+- **The layout must match at playback.** A position is only meaningful against the layout it was recorded on. The size alone cannot tell: DP-1 left of the panel and DP-1 right of it are both 5488x1440, yet (5000, 1350) is on DP-1 in one and below the panel (clamped) in the other. Recordings must carry every output's rectangle and scale, and playback must compare them. (R03's refinement narrowed the comparison: playback compares the rectangles of the outputs the recorded positions lie on, and stores the scale without comparing it. See the [feature brief](../planning/features/r03-absolute-positions.md).)
 - **Latency was measured on synthetic input only.** A physical mouse was checked for rate, delivery and CPU ("Real mouse").
 - **Shake-to-find is irrelevant.** KDE's "shake cursor to find it" effect enlarges the drawn cursor during fast moves. It does not change the position.
 
