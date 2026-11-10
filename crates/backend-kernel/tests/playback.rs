@@ -257,16 +257,23 @@ fn sweep(steps: u64, gap_ms: u64) -> Recording {
     recording(steps * gap_ms, &moves)
 }
 
-/// Puts the pointer near the window's left edge, in its middle row, and
-/// returns its x there.
-fn to_the_left(input: &mut Input<KernelBackend>, window: &Window) -> i64 {
-    // The compositor adds a new device a moment after it appears, so move
-    // until the window sees it; two points make every attempt a real move.
-    let points = [(6000, 32768), (5000, 32768)];
-    for (x, y) in points.into_iter().cycle().take(40) {
-        input.move_absolute(AbsolutePosition { x, y }).unwrap();
-        if let Some(x) = window.settled_x() {
-            return x;
+/// Puts the pointer near the window's left edge, in the layout's middle
+/// row, and returns its x there. The window is on one output of maybe
+/// several, so this sweeps the layout from the left until the window sees
+/// the pointer; `nudge` shifts the sweep, so that a second call moves the
+/// pointer even when it ends where the first one did.
+fn to_the_left(input: &mut Input<KernelBackend>, window: &Window, nudge: u16) -> i64 {
+    // The compositor adds a new device a moment after it appears, hence
+    // more than one sweep.
+    for _ in 0..4 {
+        for step in 0..32u16 {
+            let x = 500 + nudge + step * 2000;
+            input
+                .move_absolute(AbsolutePosition { x, y: 32768 })
+                .unwrap();
+            if let Some(x) = window.settled_x() {
+                return x;
+            }
         }
     }
     panic!("the compositor never moved the pointer in the window");
@@ -278,10 +285,12 @@ async fn replayed_motion_moves_the_pointer_and_its_distance_is_measured() {
     let window = Window::open();
     let mut input = KernelBackend::open().unwrap();
     println!("400 units of relative motion to the right, in window pixels:");
+    let mut nudge = 0;
     // Slow and fast hand movement, each at three playing speeds.
     for (steps, gap_ms, what) in [(100, 8, "500 units/s"), (20, 2, "10000 units/s")] {
         for speed in [0.25, 1.0, 4.0] {
-            let from = to_the_left(&mut input, &window);
+            nudge = 300 - nudge;
+            let from = to_the_left(&mut input, &window, nudge);
             input = play_through(input, &playback(sweep(steps, gap_ms), speed, 1)).await;
             let to = window.settled_x().expect("the pointer never moved");
             let moved = to - from;
