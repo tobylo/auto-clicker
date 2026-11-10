@@ -172,6 +172,23 @@ async fn a_service_that_dies_on_every_bind_is_not_started_for_ever() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn the_fifth_failure_ends_the_reader_without_waiting_for_another_change() {
+    local(async {
+        let r = Reader::start(vec![Plan::Fails("no"); 8]).await;
+        // Four changes open sessions two to five; the fifth fails too.
+        for _ in 0..4 {
+            r.owner(true).await;
+        }
+        assert_eq!(r.sessions(), 5);
+        assert!(
+            r.task.is_finished(),
+            "it waits for a change it will not act on"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn sessions_cut_short_by_a_service_change_count_as_failed_too() {
     local(async {
         // Sessions that never get as far as binding, each ended by the
