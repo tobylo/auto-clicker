@@ -40,6 +40,8 @@ exceptions = [
     # the public domain, with no conditions at all.
     { crate = "ksni", allow = ["Unlicense"] },
 ]
+# Crates used only by tests are built on the machine too.
+include-dev = true
 # The allowlist names licences no crate uses yet.
 unused-allowed-license = "allow"
 
