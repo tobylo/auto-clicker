@@ -14,6 +14,7 @@ fake = []
 workspace = true
 
 [dependencies]
+itoa = { git = "https://github.com/dtolnay/itoa", tag = "1.0.15" }
 fastrand = "2.5.0"
 libc = "0.2.191"
 serde = { version = "1.0.229", features = ["derive"] }
