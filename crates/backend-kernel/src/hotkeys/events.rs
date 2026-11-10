@@ -1,13 +1,24 @@
-//! What each input event from a keyboard means for the matcher.
+//! What each input event from a device means for the matcher and the
+//! recorder.
 
 use std::time::{Duration, UNIX_EPOCH};
 
 use auto_clicker_core::hotkeys::KeyEvent;
-use evdev::{EventType, InputEvent, SynchronizationCode};
+use evdev::{EventType, InputEvent, RelativeAxisCode, SynchronizationCode};
 
 /// What to do with one event.
 pub(crate) enum Step {
-    Key(KeyEvent),
+    /// A key or button event for the matcher, and for a recording its code
+    /// and whether it went down; `None` for autorepeat, never recorded.
+    Key(KeyEvent, Option<(u16, bool)>),
+    /// Relative pointer motion.
+    Motion {
+        dx: i32,
+        dy: i32,
+    },
+    /// Classic wheel notches. The high-resolution wheel is not read: a
+    /// mouse that has it sends these too, and playback turns only these.
+    Wheel(i32),
     /// Events were lost: what the device holds is unknown until the frame
     /// ends.
     Lost,
@@ -33,8 +44,30 @@ pub(crate) fn step(dropped: &mut bool, event: &InputEvent) -> Step {
         }
         return Step::Nothing;
     }
-    match key_event(event) {
-        Some(key) if !*dropped => Step::Key(key),
+    if *dropped {
+        return Step::Nothing;
+    }
+    match (event.event_type(), key_event(event)) {
+        (_, Some(key)) => Step::Key(key, key_change(event)),
+        (EventType::RELATIVE, None) => relative(event.code(), event.value()),
+        _ => Step::Nothing,
+    }
+}
+
+/// A key's code and whether it went down; `None` for autorepeat.
+fn key_change(event: &InputEvent) -> Option<(u16, bool)> {
+    match event.value() {
+        0 => Some((event.code(), false)),
+        1 => Some((event.code(), true)),
+        _ => None,
+    }
+}
+
+fn relative(axis: u16, value: i32) -> Step {
+    match RelativeAxisCode(axis) {
+        RelativeAxisCode::REL_X => Step::Motion { dx: value, dy: 0 },
+        RelativeAxisCode::REL_Y => Step::Motion { dx: 0, dy: value },
+        RelativeAxisCode::REL_WHEEL => Step::Wheel(value),
         _ => Step::Nothing,
     }
 }
@@ -55,27 +88,11 @@ fn key_event(event: &InputEvent) -> Option<KeyEvent> {
 /// When the event happened, on the monotonic clock every device read is set
 /// to. A time that cannot be read is the earliest, so the event cannot fire
 /// after a change it might predate.
-fn time(event: &InputEvent) -> Duration {
+pub(crate) fn time(event: &InputEvent) -> Duration {
     event
         .timestamp()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
-}
-
-/// The monotonic clock now, as event times count it.
-#[allow(unsafe_code)]
-pub(crate) fn now() -> Duration {
-    let mut now = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // SAFETY: `now` is a live, writable `timespec` for the call to fill.
-    // `CLOCK_MONOTONIC` always exists, so the call cannot fail; were it to,
-    // `now` stays zero, which suppresses nothing.
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
-    let seconds = u64::try_from(now.tv_sec).unwrap_or(0);
-    let nanos = u32::try_from(now.tv_nsec).unwrap_or(0);
-    Duration::new(seconds, nanos)
 }
 
 #[cfg(test)]
@@ -96,7 +113,11 @@ mod tests {
 
     fn name(step: Step) -> &'static str {
         match step {
-            Step::Key(_) => "key",
+            Step::Key(_, Some((_, true))) => "down",
+            Step::Key(_, Some((_, false))) => "up",
+            Step::Key(_, None) => "repeat",
+            Step::Motion { .. } => "motion",
+            Step::Wheel(_) => "wheel",
             Step::Lost => "lost",
             Step::Resync => "resync",
             Step::Nothing => "nothing",
@@ -129,13 +150,6 @@ mod tests {
     }
 
     #[test]
-    fn the_clock_moves_on() {
-        let first = now();
-        assert!(first > Duration::ZERO);
-        assert!(now() >= first);
-    }
-
-    #[test]
     fn only_key_events_are_matched() {
         let is_key = [
             key(1),
@@ -158,6 +172,7 @@ mod tests {
             sync(SynchronizationCode::SYN_REPORT),
             sync(SynchronizationCode::SYN_DROPPED),
             key(1),
+            rel(RelativeAxisCode::REL_X, 3),
             event(EventType::MISC, 4, 1),
             sync(SynchronizationCode::SYN_REPORT),
             key(0),
@@ -167,7 +182,49 @@ mod tests {
         assert_eq!(
             steps,
             [
-                "key", "nothing", "lost", "nothing", "nothing", "resync", "key", "nothing"
+                "down", "nothing", "lost", "nothing", "nothing", "nothing", "resync", "up",
+                "nothing"
+            ]
+        );
+    }
+
+    fn rel(axis: RelativeAxisCode, value: i32) -> InputEvent {
+        event(EventType::RELATIVE, axis.0, value)
+    }
+
+    #[test]
+    fn keys_motion_and_the_classic_wheel_are_told_apart() {
+        let mut dropped = false;
+        let mut read = |event: InputEvent| match step(&mut dropped, &event) {
+            Step::Key(_, change) => format!("key {change:?}"),
+            Step::Motion { dx, dy } => format!("motion {dx} {dy}"),
+            Step::Wheel(notches) => format!("wheel {notches}"),
+            Step::Lost | Step::Resync | Step::Nothing => "nothing".to_owned(),
+        };
+        let steps = [
+            key(1),
+            key(2),
+            key(0),
+            rel(RelativeAxisCode::REL_X, -4),
+            rel(RelativeAxisCode::REL_Y, 7),
+            rel(RelativeAxisCode::REL_WHEEL, -1),
+            rel(RelativeAxisCode::REL_WHEEL_HI_RES, -120),
+            rel(RelativeAxisCode::REL_HWHEEL, 1),
+            event(EventType::ABSOLUTE, 0, 500),
+        ]
+        .map(&mut read);
+        assert_eq!(
+            steps,
+            [
+                "key Some((64, true))",
+                "key None",
+                "key Some((64, false))",
+                "motion -4 0",
+                "motion 0 7",
+                "wheel -1",
+                "nothing",
+                "nothing",
+                "nothing",
             ]
         );
     }

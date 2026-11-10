@@ -41,6 +41,11 @@ impl Button {
             Button::Extra => 0x114,
         }
     }
+
+    /// The button with this Linux input event code, if the program has it.
+    pub fn from_code(code: u16) -> Option<Button> {
+        Button::ALL.into_iter().find(|button| button.code() == code)
+    }
 }
 
 /// A keyboard key, by its Linux input event code (`KEY_*`).
@@ -101,5 +106,9 @@ mod tests {
     fn button_codes_match_linux_input_event_codes() {
         let codes: Vec<u16> = Button::ALL.iter().map(|b| b.code()).collect();
         assert_eq!(codes, [0x110, 0x111, 0x112, 0x113, 0x114]);
+        for button in Button::ALL {
+            assert_eq!(Button::from_code(button.code()), Some(button));
+        }
+        assert_eq!(Button::from_code(0x115), None);
     }
 }
