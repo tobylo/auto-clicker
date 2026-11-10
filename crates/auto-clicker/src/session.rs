@@ -88,14 +88,20 @@ enum Change {
     Active(bool),
     LockRequested,
     Display(OwnedObjectPath),
-    /// logind left the bus, or another process took its name.
-    LogindGone,
+    /// logind's name changed owner: it left the bus, or another process
+    /// took the name; `back` when a new owner already has it.
+    LogindGone {
+        back: bool,
+    },
 }
 
 /// How following one logind instance ended without an error.
 enum End {
     ControllerGone,
-    LogindGone,
+    /// `back` when a new logind already owns the name.
+    LogindGone {
+        back: bool,
+    },
 }
 
 /// Follows logind, again after each restart, until the controller is gone
@@ -114,12 +120,14 @@ async fn watch_logind(send: &mpsc::UnboundedSender<Message>) -> zbus::Result<()>
         let mut logind = Logind::subscribe(&bus, send).await?;
         match logind.follow(&mut owners).await? {
             End::ControllerGone => return Ok(()),
-            End::LogindGone => {
+            End::LogindGone { back } => {
                 let gone = Blocked::Unknown("logind is restarting".to_owned());
                 if send.send(Message::Session(Some(gone))).is_err() {
                     return Ok(());
                 }
-                wait_for_owner(&mut owners).await?;
+                if !back {
+                    wait_for_owner(&mut owners).await?;
+                }
             }
         }
     }
@@ -233,7 +241,7 @@ impl<'a> Logind<'a> {
                 let told = match step(&mut self.facts, &path, change) {
                     Step::Tell(message) => self.tell(message),
                     Step::Switch(path) => self.switch_to(path).await?,
-                    Step::LogindGone => return Ok(End::LogindGone),
+                    Step::LogindGone { back } => return Ok(End::LogindGone { back }),
                     Step::Ignore => true,
                 };
                 if !told {
@@ -254,8 +262,9 @@ impl<'a> Logind<'a> {
         };
         tokio::select! {
             owner = owners.next() => {
-                owner.ok_or_else(|| ended("logind's name changes"))?;
-                Ok(vec![Change::LogindGone])
+                let owner = owner.ok_or_else(|| ended("logind's name changes"))?;
+                let back = owner.args()?.new_owner().is_some();
+                Ok(vec![Change::LogindGone { back }])
             }
             sleep = self.sleeps.next() => {
                 let sleep = sleep.ok_or_else(|| ended("sleep signals"))?;
@@ -359,7 +368,9 @@ enum Step {
     Tell(Message),
     /// The user's display session is another one now: follow it instead.
     Switch(OwnedObjectPath),
-    LogindGone,
+    LogindGone {
+        back: bool,
+    },
     Ignore,
 }
 
@@ -368,7 +379,7 @@ fn step(facts: &mut SessionFacts, path: &OwnedObjectPath, change: Change) -> Ste
     match change {
         Change::Display(new) if new == *path => return Step::Ignore,
         Change::Display(new) => return Step::Switch(new),
-        Change::LogindGone => return Step::LogindGone,
+        Change::LogindGone { back } => return Step::LogindGone { back },
         Change::LockRequested => return Step::Tell(Message::LockRequested),
         Change::Sleep(sleeping) => facts.sleeping = sleeping,
         Change::Locked(locked) => facts.locked = locked,
@@ -415,7 +426,8 @@ mod tests {
             tell(Change::LockRequested),
             Step::Tell(Message::LockRequested)
         );
-        assert_eq!(tell(Change::LogindGone), Step::LogindGone);
+        let gone = Change::LogindGone { back: true };
+        assert_eq!(tell(gone), Step::LogindGone { back: true });
     }
 
     #[test]
