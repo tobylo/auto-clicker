@@ -11,7 +11,8 @@
 //! (a portal service leaving the bus, the session closed, a call that
 //! fails) is reported as hotkeys being unavailable. The reader binds anew
 //! when a portal service's bus name changes hands, never on a timer, so
-//! waiting costs nothing.
+//! waiting costs nothing; after five sessions in a row that never bound, it
+//! gives up until the daemon restarts.
 //!
 //! An activation says which shortcut fired and nothing else: no device and
 //! no time. So this reader cannot leave out the program's own key output;
@@ -21,6 +22,7 @@
 mod portal;
 mod reactor;
 
+use std::cell::Cell;
 use std::future::Future;
 use std::pin::pin;
 
@@ -59,6 +61,12 @@ enum End {
     Owner(Option<bool>),
 }
 
+/// How many sessions in a row may end without having bound the shortcuts
+/// before the reader gives up. Opening a session starts a portal service
+/// that is not running, so a service that crashes on every bind would
+/// otherwise be started again for ever.
+pub(crate) const MAX_FAILED_IN_A_ROW: u32 = 5;
+
 /// Serves one session after another. `owners` yields whether a portal
 /// service has an owner, each time that changes for one of them.
 ///
@@ -67,44 +75,60 @@ enum End {
 /// not by themselves (KDE's is not restarted after a crash), so waiting for
 /// one to return could wait for ever. A session that ended otherwise (a
 /// declined dialog, a failed call) is opened again only after the next such
-/// change, so nothing is retried in a loop.
+/// change. Nothing is tried on a timer, and after
+/// [`MAX_FAILED_IN_A_ROW`] sessions that never bound, nothing is tried at
+/// all.
 pub(crate) async fn run(
     desktop: &mut impl Desktop,
     owners: impl Stream<Item = bool>,
     mut send: impl FnMut(HotkeyEvent),
 ) {
     let mut owners = pin!(owners);
+    let mut failed_in_a_row = 0u32;
     loop {
+        let bound = Cell::new(false);
+        let mut pass = |event: HotkeyEvent| {
+            // A session reports that hotkeys work once it has bound them.
+            if event == HotkeyEvent::Status(HotkeyStatus::Available) {
+                bound.set(true);
+            }
+            send(event);
+        };
         // An owner change comes first: the session it ends is already dead.
         let end = tokio::select! {
             biased;
             change = owners.next() => End::Owner(change),
-            why = desktop.session(&mut send) => End::Session(why),
+            why = desktop.session(&mut pass) => End::Session(why),
+        };
+        failed_in_a_row = if bound.get() {
+            0
+        } else {
+            failed_in_a_row.saturating_add(1)
         };
         let why = match end {
-            End::Session(why) => {
+            End::Session(why) if failed_in_a_row < MAX_FAILED_IN_A_ROW => {
                 send(unavailable(why));
                 End::Owner(owners.next().await)
             }
-            changed @ End::Owner(_) => changed,
+            other => other,
         };
-        match why {
-            End::Owner(Some(true)) => {
-                send(unavailable(
-                    "a portal service of the desktop restarted".to_owned(),
-                ));
-            }
-            End::Owner(Some(false)) => {
-                send(unavailable(
-                    "a portal service of the desktop stopped".to_owned(),
-                ));
-            }
-            End::Owner(None) | End::Session(_) => {
+        let why = match why {
+            End::Owner(Some(true)) => "a portal service of the desktop restarted".to_owned(),
+            End::Owner(Some(false)) => "a portal service of the desktop stopped".to_owned(),
+            End::Owner(None) => {
                 return send(unavailable(
                     "the session bus can no longer be watched; restart auto-clicker".to_owned(),
                 ));
             }
+            End::Session(why) => why,
+        };
+        if failed_in_a_row >= MAX_FAILED_IN_A_ROW {
+            return send(unavailable(format!(
+                "the desktop's shortcuts could not be bound in {MAX_FAILED_IN_A_ROW} tries \
+                 (the last: {why}); restart auto-clicker to try again"
+            )));
         }
+        send(unavailable(why));
     }
 }
 
