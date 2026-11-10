@@ -1,9 +1,9 @@
 //! The daemon's controller: the one owner of what the program is doing.
 //!
 //! The tray, the session watcher and signal handlers send it [`Message`]s; the
-//! hotkey reader sends it hotkey events. Nothing else starts or stops a run,
-//! opens the input devices or changes the mode. After every change the
-//! controller publishes a [`View`] for the tray to show.
+//! input reader sends it hotkey events. Nothing else starts or stops a run or
+//! a recording, opens the input devices or changes the mode. After every
+//! change the controller publishes a [`View`] for the tray to show.
 //!
 //! The controller runs as one future on the daemon's single thread. The
 //! clicking run, the hotkey reader and an open of the input devices are
@@ -14,11 +14,13 @@
 //! message, so a stop or a shutdown ends it at once.
 
 mod hotkeys;
+mod recording;
 mod session;
 mod view;
 
 use std::future::{Future, pending, poll_fn};
 use std::mem;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::Poll;
 use std::time::Duration;
@@ -32,8 +34,9 @@ pub use view::{Activity, View, describe};
 
 use crate::clicker::{Ended, RunEnd, Signals, run};
 use crate::config::Config;
-use crate::hotkeys::{Action, HotkeyEvent, HotkeyStatus};
+use crate::hotkeys::{Action, HotkeyEvent, HotkeyStatus, Unavailable};
 use crate::input::{Input, InputBackend, InputError};
+use crate::recording::{LocalTime, RecordingFeed, RecordingSlot};
 use hotkeys::HotkeySource;
 
 /// How long a start from the hotkey waits for the hotkey's modifiers to come
@@ -45,13 +48,22 @@ pub const RELEASE_WAIT: Duration = Duration::from_secs(30);
 pub enum Message {
     /// Start clicking after the tray countdown. Ignored unless idle.
     Start,
-    /// Stop clicking, or cancel a start that has not begun. Ignored when idle.
+    /// Stop clicking, or cancel a start that has not begun. Ignored unless
+    /// clicking or about to.
     Stop,
+    /// Start recording after the tray countdown. Ignored unless idle.
+    Record,
+    /// Stop and save the recording, trimming the trip to the tray, or cancel
+    /// a recording that has not begun.
+    StopRecording,
+    /// The tray menu opened: a stop from it is on its way.
+    MenuOpened,
     /// Stop everything and end the controller: the tray's Quit, SIGTERM or
     /// SIGINT.
     Quit,
-    /// The session's state changed: why clicking may not run, or `None` when
-    /// it may. Anything but `None` stops clicking.
+    /// The session's state changed: why clicking and recording may not run,
+    /// or `None` when they may. Anything but `None` stops clicking, and
+    /// stops and saves a recording.
     Session(Option<Blocked>),
     /// logind asked the session to lock: stop now. The lock itself arrives
     /// as [`Message::Session`].
@@ -98,8 +110,8 @@ pub enum InputLifetime {
     PerRun,
 }
 
-/// What the controller needs from the platform: its input devices and a
-/// hotkey reader that ignores them.
+/// What the controller needs from the platform: its input devices, an input
+/// reader that ignores them, and the clocks and directory recordings need.
 pub trait Platform {
     type Backend: InputBackend + 'static;
 
@@ -117,15 +129,32 @@ pub trait Platform {
         Box::pin(pending())
     }
 
-    /// Starts reading hotkeys, ignoring the devices of `own` (none when it is
-    /// `None`), and sending to `send`. The controller drops the reader before
-    /// it opens devices again, so no reader runs while devices it does not
-    /// know about exist.
-    fn read_hotkeys(
+    /// Starts reading input, ignoring the devices of `own` (none when it is
+    /// `None`): hotkeys go to `send`, and while a recording runs, what the
+    /// devices do goes to `feed`. The controller drops the reader before it
+    /// opens devices again, so no reader runs while devices it does not know
+    /// about exist.
+    ///
+    /// When a recording starts, the reader reads what every device holds
+    /// and tells the recorder, so a key pressed while the recording was
+    /// being started counts as held from the start.
+    fn read_input(
         &mut self,
         own: Option<&Input<Self::Backend>>,
         send: HotkeySender,
+        feed: RecordingFeed,
     ) -> HotkeyReader;
+
+    /// Now, on the clock input events are stamped with (the monotonic
+    /// clock).
+    fn event_clock(&self) -> Duration;
+
+    /// The local date and time now, which names a new recording; `None`
+    /// when it cannot be read.
+    fn local_time(&self) -> Option<LocalTime>;
+
+    /// Where recordings are saved; `None` when there is no data directory.
+    fn recordings_dir(&self) -> Option<PathBuf>;
 }
 
 /// The controller's mode. Only the controller changes it.
@@ -139,6 +168,10 @@ enum State<B: InputBackend> {
     /// A start waiting for the devices to open.
     Opening,
     Clicking(Running<B>),
+    /// A recording from the tray starts at this deadline.
+    RecordCountdown(Instant),
+    /// Recording; it stops at its time limit, this deadline.
+    Recording(Instant),
 }
 
 /// A clicking run and the signals that end it.
@@ -219,6 +252,11 @@ pub struct Controller<P: Platform> {
     sleep_notice: Option<u64>,
     released_for_sleep: watch::Sender<u64>,
     rng: fastrand::Rng,
+    /// The recording in progress, shared with the input reader.
+    recording: RecordingSlot,
+    /// When the tray menu last opened during the recording, on the event
+    /// clock.
+    menu_opened: Option<Duration>,
 }
 
 impl<P: Platform> Controller<P> {
@@ -236,6 +274,7 @@ impl<P: Platform> Controller<P> {
             activity: Activity::Idle,
             settings: config.clicker,
             hotkey: config.hotkeys.toggle_clicking,
+            record_hotkey: config.hotkeys.toggle_recording,
             notice: None,
             problems: Vec::new(),
         });
@@ -256,6 +295,8 @@ impl<P: Platform> Controller<P> {
             sleep_notice: None,
             released_for_sleep,
             rng: fastrand::Rng::new(),
+            recording: RecordingSlot::new(),
+            menu_opened: None,
         };
         let links = Links {
             send,
@@ -273,7 +314,8 @@ impl<P: Platform> Controller<P> {
 
     /// Runs until [`Message::Quit`], or until every sender of the inbox is
     /// gone. A run still going then ends with the shutdown signal and is
-    /// waited for, so nothing stays pressed.
+    /// waited for, so nothing stays pressed; a recording is stopped and
+    /// saved.
     pub async fn run(mut self) {
         self.start_reader();
         loop {
@@ -285,6 +327,7 @@ impl<P: Platform> Controller<P> {
             self.finish_stopped_run().await;
             self.report_sleep();
         }
+        self.stop_recording(None);
         if let State::Clicking(running) = mem::replace(&mut self.state, State::Idle) {
             drop(running.shut_down().await);
         }
@@ -345,7 +388,7 @@ impl<P: Platform> Controller<P> {
         match wake {
             Wake::Message(message) => return self.message(message),
             Wake::RunEnded(end) => self.run_ended(end, None),
-            Wake::InputLost(err) => self.input_lost(err),
+            Wake::InputLost(err) => self.devices_lost(err),
             Wake::Opened(opened) => self.opened(opened),
             Wake::Hotkey(event) => self.hotkey(event),
             Wake::Deadline => self.deadline(),
@@ -357,7 +400,10 @@ impl<P: Platform> Controller<P> {
     fn message(&mut self, message: Message) -> bool {
         match message {
             Message::Start => self.start_from_tray(),
-            Message::Stop => self.stop(None),
+            Message::Stop => self.stop_clicking(),
+            Message::Record => self.record_from_tray(),
+            Message::StopRecording => self.stop_recording_from_tray(),
+            Message::MenuOpened => self.menu_opened(),
             Message::Session(blocked) => self.session(blocked),
             Message::LockRequested => self.stop(Some(format!("Stopped: {}", Blocked::Locked))),
             Message::Sleep(notice) => {
@@ -372,8 +418,9 @@ impl<P: Platform> Controller<P> {
     fn hotkey(&mut self, event: HotkeyEvent) {
         match event {
             HotkeyEvent::Fired(Action::ToggleClicking) => self.toggle(),
-            // Recording and playback come with M2.
-            HotkeyEvent::Fired(Action::ToggleRecording | Action::TogglePlayback) => {}
+            HotkeyEvent::Fired(Action::ToggleRecording) => self.toggle_recording(),
+            // Playback comes with R02.
+            HotkeyEvent::Fired(Action::TogglePlayback) => {}
             HotkeyEvent::ModifiersReleased => self.released(),
             HotkeyEvent::ReleaseLost => self.cancel_release(format!(
                 "Not started: could not tell when the hotkey was let go; press {} again",
@@ -407,6 +454,9 @@ impl<P: Platform> Controller<P> {
 
     fn hotkey_status_changed(&mut self, status: HotkeyStatus) {
         let unavailable = matches!(status, HotkeyStatus::Unavailable(_));
+        if let HotkeyStatus::Unavailable(why @ Unavailable::WatchFailed(_)) = &status {
+            self.input_lost(why.to_string());
+        }
         self.hotkey_status = Some(status);
         if unavailable {
             self.cancel_release("Not started: hotkeys stopped working".to_owned());
@@ -426,6 +476,8 @@ impl<P: Platform> Controller<P> {
             }
             State::Countdown(_) | State::Release(_) | State::Opening => self.cancel_start(),
             State::Clicking(running) => running.stop(),
+            // Other hotkeys do nothing while recording.
+            State::RecordCountdown(_) | State::Recording(_) => {}
         }
     }
 
@@ -442,12 +494,26 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    /// Stops a run or cancels a start, and says why when `notice` is given.
+    /// The tray's Stop clicking: stops a run or cancels its start; nothing
+    /// else.
+    fn stop_clicking(&mut self) {
+        if matches!(
+            self.state,
+            State::Countdown(_) | State::Release(_) | State::Opening | State::Clicking(_)
+        ) {
+            self.stop(None);
+        }
+    }
+
+    /// Stops a run, a recording (saving it) or a start, and says why when
+    /// `notice` is given.
     fn stop(&mut self, notice: Option<String>) {
         match &mut self.state {
             State::Idle => return,
             State::Countdown(_) | State::Release(_) | State::Opening => self.cancel_start(),
+            State::RecordCountdown(_) => self.state = State::Idle,
             State::Clicking(running) => running.stop(),
+            State::Recording(_) => return self.stop_recording(notice),
         }
         if notice.is_some() {
             self.notice = notice;
@@ -480,9 +546,15 @@ impl<P: Platform> Controller<P> {
 
     /// Whether a start may begin; says why not when it may not.
     fn may_start(&mut self) -> bool {
+        self.session_allows("Not started")
+    }
+
+    /// Whether the session lets anything start; when it does not, the
+    /// notice says why, after `refused`.
+    fn session_allows(&mut self, refused: &str) -> bool {
         match &self.blocked {
             Some(reason) => {
-                self.notice = Some(format!("Not started: {reason}"));
+                self.notice = Some(format!("{refused}: {reason}"));
                 false
             }
             None => true,
@@ -490,21 +562,26 @@ impl<P: Platform> Controller<P> {
     }
 
     fn deadline(&mut self) {
+        let now = Instant::now();
         match self.state {
-            State::Countdown(deadline) if Instant::now() >= deadline => self.begin_run(),
+            State::Countdown(deadline) if now >= deadline => self.begin_run(),
             // Its deadline is the only time a release wait wakes by itself.
             State::Release(_) => self.release_expired(),
-            // A second of the countdown passed; the view shows it.
+            State::RecordCountdown(deadline) if now >= deadline => self.begin_recording(None),
+            State::Recording(limit) if now >= limit => self.recording_limit_reached(),
+            // A second of a countdown passed; the view shows it.
             _ => {}
         }
     }
 
     /// The next time the controller must wake by itself: the end of a wait,
-    /// or the next whole second of the countdown.
+    /// the next whole second of a countdown, or a recording's time limit.
     fn next_deadline(&self) -> Option<Instant> {
         match self.state {
-            State::Countdown(deadline) => Some(next_second(deadline, Instant::now())),
-            State::Release(deadline) => Some(deadline),
+            State::Countdown(deadline) | State::RecordCountdown(deadline) => {
+                Some(next_second(deadline, Instant::now()))
+            }
+            State::Release(deadline) | State::Recording(deadline) => Some(deadline),
             State::Idle | State::Opening | State::Clicking(_) => None,
         }
     }
@@ -545,7 +622,7 @@ impl<P: Platform> Controller<P> {
 
     /// The devices stopped working under a run: it stops at once, and its
     /// end reports why.
-    fn input_lost(&mut self, err: InputError) {
+    fn devices_lost(&mut self, err: InputError) {
         if let State::Clicking(running) = &mut self.state {
             running.lost = Some(err);
             running.stop();
@@ -624,9 +701,13 @@ impl<P: Platform> Controller<P> {
 
     fn start_reader(&mut self) {
         let Controller {
-            platform, input, ..
+            platform,
+            input,
+            recording,
+            ..
         } = self;
-        self.hotkeys = HotkeySource::start(|send| platform.read_hotkeys(input.as_ref(), send));
+        let feed = recording.feed();
+        self.hotkeys = HotkeySource::start(|send| platform.read_input(input.as_ref(), send, feed));
         self.hotkey_status = None;
     }
 
@@ -635,6 +716,7 @@ impl<P: Platform> Controller<P> {
             activity: self.activity(),
             settings: self.config.clicker,
             hotkey: self.config.hotkeys.toggle_clicking,
+            record_hotkey: self.config.hotkeys.toggle_recording,
             notice: self.notice.clone(),
             problems: self.problems(),
         };
@@ -656,6 +738,10 @@ impl<P: Platform> Controller<P> {
             State::Release(_) => Activity::WaitingForRelease,
             State::Opening => Activity::Opening,
             State::Clicking(_) => Activity::Clicking,
+            State::RecordCountdown(deadline) => Activity::RecordingIn(whole_seconds(
+                deadline.saturating_duration_since(Instant::now()),
+            )),
+            State::Recording(_) => Activity::Recording,
         }
     }
 

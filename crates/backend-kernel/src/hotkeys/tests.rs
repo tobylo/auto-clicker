@@ -8,11 +8,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use auto_clicker_core::hotkeys::{Bindings, HotkeyEvent, HotkeyStatus, Unavailable};
+use auto_clicker_core::recording::RecordingSlot;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
 use super::node::Paths;
-use super::{Reader, run};
+use super::{Reader, Setup, run};
 
 /// Far beyond what any step here takes, and far below the wait it bounds,
 /// which never ends by itself.
@@ -96,7 +97,13 @@ where
     let send = move |event| {
         let _ = events.send(event);
     };
-    let reader = Reader::new(fixture.paths.clone(), Bindings::default(), Vec::new(), send);
+    let feed = RecordingSlot::new().feed();
+    let setup = Setup {
+        bindings: Bindings::default(),
+        own: Vec::new(),
+        feed,
+    };
+    let reader = Reader::new(fixture.paths.clone(), setup, send);
     let reader = run(reader, async move {
         let _ = stopped.await;
     });

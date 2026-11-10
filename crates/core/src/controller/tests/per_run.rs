@@ -141,12 +141,36 @@ impl Platform for PerRunPlatform {
         })
     }
 
-    fn read_hotkeys(&mut self, own: Option<&Input<Closing>>, send: HotkeySender) -> HotkeyReader {
+    fn read_input(
+        &mut self,
+        own: Option<&Input<Closing>>,
+        send: HotkeySender,
+        feed: RecordingFeed,
+    ) -> HotkeyReader {
         assert!(
             own.is_none(),
             "per-run devices are never shown to the reader"
         );
-        FakePlatform(self.0.devices.clone()).read_hotkeys(None, send)
+        self.fake().read_input(None, send, feed)
+    }
+
+    fn event_clock(&self) -> Duration {
+        self.fake().event_clock()
+    }
+
+    fn local_time(&self) -> Option<LocalTime> {
+        self.fake().local_time()
+    }
+
+    fn recordings_dir(&self) -> Option<PathBuf> {
+        self.fake().recordings_dir()
+    }
+}
+
+impl PerRunPlatform {
+    /// The kernel-style fake, for everything but the devices.
+    fn fake(&self) -> FakePlatform {
+        FakePlatform(self.0.devices.clone())
     }
 }
 
@@ -338,6 +362,24 @@ async fn a_loss_after_the_run_stopped_changes_nothing() {
         assert!(gates.gates(|g| g.loss.as_ref().is_some_and(oneshot::Sender::is_closed)));
         d.assert_idle_after(&[LEFT_DOWN, LEFT_UP]);
         assert_eq!(d.notice(), "");
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn recording_waits_while_a_start_waits_for_its_devices() {
+    local(async {
+        let (d, gates) = per_run_daemon(Mode::HoldButton).await;
+        d.send(Message::Start).await;
+        d.hotkey(HotkeyEvent::Fired(Action::ToggleRecording)).await;
+        d.send(Message::Record).await;
+        assert_eq!(d.activity(), Activity::Opening);
+        assert!(
+            d.notice().starts_with("Not recording: clicking is on"),
+            "{}",
+            d.notice()
+        );
+        assert!(gates.open_in_flight(), "the start still waits");
     })
     .await;
 }

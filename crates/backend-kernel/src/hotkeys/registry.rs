@@ -1,21 +1,24 @@
-//! What the hotkey reader knows about each node in `/dev/input`, without
-//! touching any: which are being read, which are ours, which cannot be
-//! opened and whether that will change.
+//! What the input reader knows about each node in `/dev/input`, without
+//! touching any: which are being read and why, which are ours, which cannot
+//! be opened and whether that will change.
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 
 use auto_clicker_core::hotkeys::{DeviceId, HotkeyStatus, Unavailable};
 
+use super::node::Role;
+
 /// What opening a node found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Opened {
-    /// A keyboard, now read under this id.
-    Keyboard(DeviceId),
+    /// A device now read under this id, in this role.
+    Reading(DeviceId, Role),
     /// One of this program's own virtual devices.
     Ours,
-    /// An input device without a bound key or a modifier key.
-    NotKeyboard,
+    /// An input device not wanted now: no keyboard with a bound key or a
+    /// modifier, and no recording, or nothing a recording reads.
+    NotWanted,
     /// The node or its device went away first.
     Gone,
     /// Permission denied. Retried when the node's attributes change, as
@@ -27,9 +30,9 @@ pub(crate) enum Opened {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum State {
-    Reading(DeviceId),
+    Reading(DeviceId, Role),
     Ours,
-    NotKeyboard,
+    NotWanted,
     Denied,
     Failed(String),
 }
@@ -48,21 +51,21 @@ pub(crate) fn is_event_node(name: &OsStr) -> bool {
 
 impl Registry {
     /// Whether the node should be opened now. A node already read, ours or
-    /// known to have no keys we want is left alone: reading one node twice
-    /// would fire every hotkey twice.
+    /// known not to be wanted is left alone: reading one node twice would
+    /// fire every hotkey twice.
     pub(crate) fn wants_open(&self, name: &OsStr) -> bool {
         is_event_node(name)
             && match self.nodes.get(name) {
                 None | Some(State::Denied | State::Failed(_)) => true,
-                Some(State::Reading(_) | State::Ours | State::NotKeyboard) => false,
+                Some(State::Reading(..) | State::Ours | State::NotWanted) => false,
             }
     }
 
     pub(crate) fn record(&mut self, name: &OsStr, opened: Opened) {
         let state = match opened {
-            Opened::Keyboard(id) => State::Reading(id),
+            Opened::Reading(id, role) => State::Reading(id, role),
             Opened::Ours => State::Ours,
-            Opened::NotKeyboard => State::NotKeyboard,
+            Opened::NotWanted => State::NotWanted,
             Opened::Gone => {
                 self.nodes.remove(name);
                 return;
@@ -76,9 +79,20 @@ impl Registry {
     /// The node was removed; returns the device read from it, if any.
     pub(crate) fn deleted(&mut self, name: &OsStr) -> Option<DeviceId> {
         match self.nodes.remove(name) {
-            Some(State::Reading(id)) => Some(id),
+            Some(State::Reading(id, _)) => Some(id),
             _ => None,
         }
+    }
+
+    /// Forgets a node whose device was closed, so it is looked at afresh.
+    pub(crate) fn forget(&mut self, name: &OsStr) {
+        self.nodes.remove(name);
+    }
+
+    /// Forgets every node that was not wanted, before a recording looks at
+    /// every node again.
+    pub(crate) fn forget_not_wanted(&mut self) {
+        self.nodes.retain(|_, state| *state != State::NotWanted);
     }
 
     /// Reading from the node failed: its device is gone (`None`), and the
@@ -96,12 +110,14 @@ impl Registry {
     /// that went away ends its stream, which forgets it too.
     pub(crate) fn forget_unread(&mut self) {
         self.nodes
-            .retain(|_, state| matches!(state, State::Reading(_)));
+            .retain(|_, state| matches!(state, State::Reading(..)));
     }
 
+    /// Whether hotkeys work: a keyboard is read for them.
     pub(crate) fn status(&self) -> HotkeyStatus {
         let states = || self.nodes.values();
-        if states().any(|state| matches!(state, State::Reading(_))) {
+        let for_hotkeys = |state: &State| matches!(state, State::Reading(_, role) if role.hotkeys);
+        if states().any(for_hotkeys) {
             return HotkeyStatus::Available;
         }
         let why = if states().any(|state| *state == State::Denied) {
@@ -137,6 +153,14 @@ mod tests {
     }
 
     const ID: DeviceId = DeviceId(7);
+    const KEYBOARD: Role = Role {
+        hotkeys: true,
+        record: true,
+    };
+    const MOUSE: Role = Role {
+        hotkeys: false,
+        record: true,
+    };
 
     fn unavailable(why: Unavailable) -> HotkeyStatus {
         HotkeyStatus::Unavailable(why)
@@ -158,7 +182,7 @@ mod tests {
     #[test]
     fn a_node_is_opened_once_until_it_goes() {
         let mut registry = Registry::default();
-        registry.record(name("event3"), Opened::Keyboard(ID));
+        registry.record(name("event3"), Opened::Reading(ID, KEYBOARD));
         let on_attrib = registry.wants_open(name("event3"));
         let deleted = registry.deleted(name("event3"));
         let on_create = registry.wants_open(name("event3"));
@@ -173,7 +197,7 @@ mod tests {
     fn ours_and_keyless_nodes_are_not_reopened() {
         let mut registry = Registry::default();
         registry.record(name("event1"), Opened::Ours);
-        registry.record(name("event2"), Opened::NotKeyboard);
+        registry.record(name("event2"), Opened::NotWanted);
         let reopened = [name("event1"), name("event2")].map(|node| registry.wants_open(node));
         let deleted = registry.deleted(name("event1"));
         let after_delete = registry.wants_open(name("event1"));
@@ -214,7 +238,7 @@ mod tests {
         assert_eq!(registry.status(), unavailable(Unavailable::NoKeyboard));
         registry.record(name("event1"), Opened::Denied);
         registry.record(name("event2"), Opened::Ours);
-        registry.record(name("event3"), Opened::Keyboard(ID));
+        registry.record(name("event3"), Opened::Reading(ID, KEYBOARD));
         assert_eq!(registry.status(), HotkeyStatus::Available);
         registry.deleted(name("event3"));
         assert_eq!(registry.status(), unavailable(Unavailable::NoPermission));
@@ -223,8 +247,8 @@ mod tests {
     #[test]
     fn a_failed_read_keeps_the_node_and_why_only_if_it_is_still_there() {
         let mut registry = Registry::default();
-        registry.record(name("event1"), Opened::Keyboard(ID));
-        registry.record(name("event2"), Opened::Keyboard(DeviceId(8)));
+        registry.record(name("event1"), Opened::Reading(ID, KEYBOARD));
+        registry.record(name("event2"), Opened::Reading(DeviceId(8), KEYBOARD));
         registry.read_failed(name("event1"), None);
         registry.read_failed(name("event2"), Some("I/O error".into()));
         let failed = unavailable(Unavailable::ReadFailed("I/O error".into()));
@@ -261,17 +285,40 @@ mod tests {
         let mut registry = Registry::default();
         let unread = [
             Opened::Ours,
-            Opened::NotKeyboard,
+            Opened::NotWanted,
             Opened::Denied,
             Opened::Failed("EIO".into()),
         ];
         for (index, opened) in unread.into_iter().enumerate() {
             registry.record(name(&format!("event{index}")), opened);
         }
-        registry.record(name("event9"), Opened::Keyboard(ID));
+        registry.record(name("event9"), Opened::Reading(ID, KEYBOARD));
         registry.forget_unread();
         let reopened = ["event0", "event1", "event2", "event3", "event9"]
             .map(|node| registry.wants_open(name(node)));
         assert_eq!(reopened, [true, true, true, true, false]);
+    }
+
+    #[test]
+    fn a_mouse_read_for_a_recording_does_not_make_hotkeys_available() {
+        let mut registry = Registry::default();
+        registry.record(name("event1"), Opened::Reading(ID, MOUSE));
+        assert_eq!(registry.status(), unavailable(Unavailable::NoKeyboard));
+        registry.record(name("event2"), Opened::Reading(DeviceId(8), KEYBOARD));
+        assert_eq!(registry.status(), HotkeyStatus::Available);
+    }
+
+    #[test]
+    fn a_recording_looks_again_at_nodes_not_wanted_and_closed_ones() {
+        let mut registry = Registry::default();
+        registry.record(name("event1"), Opened::NotWanted);
+        registry.record(name("event2"), Opened::Ours);
+        registry.record(name("event3"), Opened::Reading(ID, MOUSE));
+        registry.forget_not_wanted();
+        let after_start =
+            ["event1", "event2", "event3"].map(|node| registry.wants_open(name(node)));
+        registry.forget(name("event3"));
+        assert_eq!(after_start, [true, false, false]);
+        assert!(registry.wants_open(name("event3")));
     }
 }

@@ -6,7 +6,7 @@ use super::{Action, Bindings, HotkeyEvent, Modifier, Modifiers};
 
 /// One device the backend reads, as long as it is open. The backend never
 /// reuses an id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DeviceId(pub u64);
 
 /// One key going down, coming up or repeating.
