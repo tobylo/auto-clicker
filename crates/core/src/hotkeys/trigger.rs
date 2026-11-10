@@ -300,6 +300,11 @@ mod tests {
         let endless = vec!["F24"; 1000].join(", ");
         assert!(endless.len() > MAX_DESCRIPTION);
         assert_eq!(Trigger::reported(&endless).keys, None);
+        // Exactly the longest that is read, and one byte more.
+        let longest = format!("{}+F6", "A".repeat(MAX_DESCRIPTION - 3));
+        assert_eq!(longest.len(), MAX_DESCRIPTION);
+        assert_eq!(Trigger::reported(&longest).keys, Some(vec![key("f6")]));
+        assert_eq!(Trigger::reported(&format!("A{longest}")).keys, None);
         let fits = vec!["Ctrl+Shift+F24"; 60].join(", ");
         assert!(fits.len() <= MAX_DESCRIPTION);
         assert_eq!(

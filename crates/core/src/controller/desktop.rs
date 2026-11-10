@@ -62,6 +62,11 @@ pub(super) struct DesktopHotkeys {
 /// way when the triggers arrive and stop the run. It follows them within
 /// milliseconds, and nothing the program runs is left to stop by then, so a
 /// hotkey this soon after is not the user's.
+///
+/// The desktop stamps no time on an activation (always 0 on Plasma), so the
+/// window is measured from when the program hears of the return. An echo
+/// the program gets to more than a second late, because the whole process
+/// stood still that long in that very moment, counts as the user's.
 pub(super) const ECHO_WINDOW: Duration = Duration::from_secs(1);
 
 impl<P: Platform> Controller<P> {
@@ -88,10 +93,12 @@ impl<P: Platform> Controller<P> {
     pub(super) fn triggers_changed(&mut self, triggers: Triggers) {
         // Back after being away: what the program pressed meanwhile may
         // have set off a hotkey of the new session.
-        let back = self.desktop.as_ref().is_some_and(|desktop| !desktop.live);
-        let echo_until = back
-            .then(|| Instant::now().checked_add(ECHO_WINDOW))
-            .flatten();
+        // A later report (a trigger changed in the desktop's settings)
+        // leaves a window that is open as it is.
+        let echo_until = match &self.desktop {
+            Some(desktop) if desktop.live => desktop.echo_until,
+            _ => Instant::now().checked_add(ECHO_WINDOW),
+        };
         self.desktop = Some(DesktopHotkeys {
             triggers,
             live: true,

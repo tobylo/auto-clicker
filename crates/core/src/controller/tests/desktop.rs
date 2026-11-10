@@ -452,6 +452,29 @@ async fn a_hotkey_set_off_by_the_programs_own_keys_as_the_desktop_returns_does_n
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_trigger_report_during_the_echo_window_leaves_it_open() {
+    local(async {
+        let d = desktop_daemon(ClickerSettings::default()).await;
+        d.hotkey(defaults()).await;
+        d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(
+            Unavailable::Desktop("a portal service of the desktop stopped".to_owned()),
+        )))
+        .await;
+        d.hotkey(defaults()).await;
+        sleep(Duration::from_millis(400)).await;
+        // A second report of the same session, before the echo.
+        d.hotkey(reported("Ctrl+Shift+F6", "Meta+F7", "")).await;
+        d.press_hotkey().await;
+        assert_eq!(d.activity(), Activity::Idle);
+        // The window still ends a second after the return, not later.
+        sleep(Duration::from_millis(600)).await;
+        d.press_hotkey().await;
+        assert_eq!(d.activity(), Activity::WaitingForRelease);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_first_triggers_and_a_change_of_them_open_no_echo_window() {
     local(async {
         // Nothing could be pressed before the first report, and a change in
