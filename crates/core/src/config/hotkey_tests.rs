@@ -64,13 +64,13 @@ fn two_actions_on_one_hotkey_are_rejected_where_written() {
         "{}",
         both.1
     );
-    // The playback default, Ctrl+F8, taken by the action before it.
-    let earlier = invalid_hotkeys("", "toggle_clicking = \"Ctrl+F8\"");
+    // The playback default, Ctrl+Shift+F8, taken by the action before it.
+    let earlier = invalid_hotkeys("", "toggle_clicking = \"Ctrl+Shift+F8\"");
     assert_eq!(earlier.0, Some(5), "{}", earlier.1);
-    // The clicking default, Ctrl+F6, taken by an action after it.
-    let later = invalid_hotkeys("", "\ntoggle_playback = \"ctrl+f6\"");
+    // The clicking default, Ctrl+Shift+F6, taken by an action after it.
+    let later = invalid_hotkeys("", "\ntoggle_playback = \"ctrl+shift+f6\"");
     assert_eq!(later.0, Some(6), "{}", later.1);
-    assert!(later.1.contains("Ctrl+F6"), "{}", later.1);
+    assert!(later.1.contains("Ctrl+Shift+F6"), "{}", later.1);
 }
 
 #[test]

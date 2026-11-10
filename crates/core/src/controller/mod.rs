@@ -13,6 +13,7 @@
 //! permission dialog) is a branch of that loop's one `select!`, beside every
 //! message, so a stop or a shutdown ends it at once.
 
+mod desktop;
 mod hotkeys;
 mod recording;
 mod session;
@@ -30,11 +31,11 @@ use tokio::time::{Instant, sleep_until};
 
 pub use hotkeys::{HotkeyReader, HotkeySender};
 pub use session::{Blocked, SessionFacts};
-pub use view::{Activity, View, describe};
+pub use view::{Activity, Hotkey, View, describe};
 
 use crate::clicker::{Ended, RunEnd, Signals, run};
 use crate::config::Config;
-use crate::hotkeys::{Action, HotkeyEvent, HotkeyStatus, Unavailable};
+use crate::hotkeys::{Action, HotkeyEvent, HotkeyStatus, Triggers, Unavailable};
 use crate::input::{Input, InputBackend, InputError};
 use crate::recording::{LocalTime, RecordingFeed, RecordingSlot};
 use hotkeys::HotkeySource;
@@ -110,6 +111,18 @@ pub enum InputLifetime {
     PerRun,
 }
 
+/// Where a platform's input reader gets its hotkeys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputReader {
+    /// From the keyboards: it reads device nodes, tells the program's own
+    /// devices from the user's, and can feed a recording.
+    Devices,
+    /// From the desktop's shortcuts: it reads no device, so it runs through
+    /// every open, cannot feed a recording, and cannot tell the program's
+    /// own key output from the user's. It reports the desktop's triggers.
+    Desktop,
+}
+
 /// What the controller needs from the platform: its input devices, an input
 /// reader that ignores them, and the clocks and directory recordings need.
 pub trait Platform {
@@ -129,11 +142,16 @@ pub trait Platform {
         Box::pin(pending())
     }
 
+    /// Where the input reader gets its hotkeys.
+    fn input_reader(&self) -> InputReader {
+        InputReader::Devices
+    }
+
     /// Starts reading input, ignoring the devices of `own` (none when it is
     /// `None`): hotkeys go to `send`, and while a recording runs, what the
-    /// devices do goes to `feed`. The controller drops the reader before it
-    /// opens devices again, so no reader runs while devices it does not know
-    /// about exist.
+    /// devices do goes to `feed`. The controller drops a reader of devices
+    /// before it opens kept devices again, so no such reader runs while
+    /// devices it does not know about exist.
     ///
     /// When a recording starts, the reader reads what every device holds
     /// and tells the recorder, so a key pressed while the recording was
@@ -245,6 +263,8 @@ pub struct Controller<P: Platform> {
     input_error: Option<String>,
     hotkeys: HotkeySource,
     hotkey_status: Option<HotkeyStatus>,
+    /// The triggers the desktop reports, when it delivers the hotkeys.
+    triggers: Option<Triggers>,
     /// Starts out unknown: a state not yet read is not "unlocked".
     blocked: Option<Blocked>,
     notice: Option<String>,
@@ -270,11 +290,20 @@ impl<P: Platform> Controller<P> {
     ) -> (Controller<P>, Links) {
         let (send, inbox) = mpsc::unbounded_channel();
         let (released_for_sleep, sleep_reports) = watch::channel(0);
+        let triggers = Self::first_triggers(&platform);
         let (view, shown) = watch::channel(View {
             activity: Activity::Idle,
             settings: config.clicker,
-            hotkey: config.hotkeys.toggle_clicking,
-            record_hotkey: config.hotkeys.toggle_recording,
+            hotkey: desktop::shown_hotkey(
+                config.hotkeys,
+                triggers.as_ref(),
+                Action::ToggleClicking,
+            ),
+            record_hotkey: desktop::shown_hotkey(
+                config.hotkeys,
+                triggers.as_ref(),
+                Action::ToggleRecording,
+            ),
             notice: None,
             problems: Vec::new(),
         });
@@ -290,6 +319,7 @@ impl<P: Platform> Controller<P> {
             input_error: None,
             hotkeys: HotkeySource::none(),
             hotkey_status: None,
+            triggers,
             blocked: Some(Blocked::Unknown("not read yet".to_owned())),
             notice: None,
             sleep_notice: None,
@@ -427,6 +457,7 @@ impl<P: Platform> Controller<P> {
                 self.config.hotkeys.toggle_clicking
             )),
             HotkeyEvent::Status(status) => self.hotkey_status_changed(status),
+            HotkeyEvent::Triggers(triggers) => self.triggers_changed(triggers),
         }
     }
 
@@ -546,7 +577,7 @@ impl<P: Platform> Controller<P> {
 
     /// Whether a start may begin; says why not when it may not.
     fn may_start(&mut self) -> bool {
-        self.session_allows("Not started")
+        self.session_allows("Not started") && self.keys_allow()
     }
 
     /// Whether the session lets anything start; when it does not, the
@@ -651,11 +682,11 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    /// Starts opening the devices. Kept devices are visible to the hotkey
-    /// reader, so it stops first (it would read them as keyboards) and
+    /// Starts opening the devices. Kept devices are visible to a reader of
+    /// devices, so it stops first (it would read them as keyboards) and
     /// starts again once the open has ended.
     fn open(&mut self) {
-        if P::LIFETIME == InputLifetime::Kept {
+        if self.reader_restarts() {
             self.hotkeys = HotkeySource::none();
         }
         self.opening = Some(self.platform.open_input());
@@ -669,7 +700,7 @@ impl<P: Platform> Controller<P> {
             self.state = State::Idle;
         }
         self.keep_opened(opened, waiting);
-        if P::LIFETIME == InputLifetime::Kept {
+        if self.reader_restarts() {
             self.start_reader();
         }
         if waiting && let Some(input) = self.input.take() {
@@ -715,8 +746,8 @@ impl<P: Platform> Controller<P> {
         let view = View {
             activity: self.activity(),
             settings: self.config.clicker,
-            hotkey: self.config.hotkeys.toggle_clicking,
-            record_hotkey: self.config.hotkeys.toggle_recording,
+            hotkey: self.shown_hotkey(Action::ToggleClicking),
+            record_hotkey: self.shown_hotkey(Action::ToggleRecording),
             notice: self.notice.clone(),
             problems: self.problems(),
         };

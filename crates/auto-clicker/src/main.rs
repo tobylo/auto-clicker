@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use instance::ClaimError;
-use platform::{Kernel, Portal};
+use platform::{Hotkeys, Kernel, Portal};
 
 /// Another daemon is running in this session. The user service does not
 /// restart on it.
@@ -51,7 +51,10 @@ async fn daemon() -> ExitCode {
         Err(status) => return status,
     };
     let (config, config_error) = load_config();
-    let bindings = config.hotkeys;
+    let hotkeys = Hotkeys {
+        route: config.input.hotkeys,
+        bindings: config.hotkeys,
+    };
     match config.input.output {
         OutputRoute::Kernel => {
             let input = match KernelBackend::open() {
@@ -67,7 +70,7 @@ async fn daemon() -> ExitCode {
                 config,
                 config_error,
             };
-            serve(Kernel { bindings }, start, name).await
+            serve(Kernel { hotkeys }, start, name).await
         }
         OutputRoute::Portal => {
             let output = PortalOutput::new(token_path());
@@ -83,7 +86,7 @@ async fn daemon() -> ExitCode {
                 config,
                 config_error,
             };
-            serve(Portal { output, bindings }, start, name).await
+            serve(Portal { output, hotkeys }, start, name).await
         }
     }
 }
