@@ -347,9 +347,14 @@ fn apply(table: &mut Table, event: EiEvent) -> Option<String> {
                 return Some("the desktop paused its input devices".to_owned());
             }
         }
-        // A removal alone is not a loss: the compositor may add the device
-        // again, as when a monitor is plugged in.
+        // Removing a device the run uses ends it: a hold run writes nothing
+        // more, and the compositor released what the device held. Any other
+        // removal is not a loss: the compositor may add the device again,
+        // as when a monitor is plugged in.
         EiEvent::DeviceRemoved(removed) => {
+            if find(table, &removed.device).is_some_and(|tracked| tracked.emulating) {
+                return Some("the desktop removed an input device in use".to_owned());
+            }
             table
                 .devices
                 .retain(|tracked| tracked.device != removed.device);

@@ -197,6 +197,18 @@ mod tests {
     }
 
     #[test]
+    fn a_point_right_of_an_output_moves_onto_its_last_column() {
+        // A narrow output above a wide one; the box's top right is on neither.
+        let layout = Layout::new([region(0, 0, 100, 100), region(0, 200, 300, 100)]).unwrap();
+        let near =
+            |(x, y): (f32, f32), (ex, ey): (f32, f32)| (x - ex).abs() < 0.1 && (y - ey).abs() < 0.1;
+        let top_right = layout.point(layout.position_of(250.0, 20.0));
+        assert!(near(top_right, (99.0, 20.0)), "{top_right:?}");
+        let below_left = layout.point(layout.position_of(10.0, 140.0));
+        assert!(near(below_left, (10.0, 99.0)), "{below_left:?}");
+    }
+
+    #[test]
     fn outputs_need_not_start_at_the_origin() {
         let layout = Layout::new([region(100, 50, 200, 100)]).unwrap();
         assert_eq!(layout.point(at(0, 0)), (100.0, 50.0));

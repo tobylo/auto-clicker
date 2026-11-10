@@ -5,11 +5,19 @@
 //! portal call on its connection (X02). [`Portal::connect`] therefore opens
 //! a connection of its own and registers on it first; nothing else uses a
 //! connection that is not registered.
+//!
+//! Each open gets a new connection, owned by the open and then by the run.
+//! Dropping it ends the session: the portal closes every session of a
+//! client that leaves the bus. So a cancelled open, a failed step and the
+//! end of a run all close the session without a `Close` call that could
+//! fail or hang, and a portal service that restarted meets a connection
+//! that registers again.
 
+use std::cell::RefCell;
 use std::future::Future;
 use std::os::fd::OwnedFd;
-use std::path::Path;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use ashpd::desktop::remote_desktop::{
     ConnectToEISOptions, DeviceType, RemoteDesktop, SelectDevicesOptions, StartOptions,
@@ -29,8 +37,9 @@ pub const APP_ID: &str = "io.github.tobylo.AutoClicker";
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long the permission dialog may stay open before the start gives up.
 const DIALOG_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-/// How long closing a session may take.
-const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+/// A `Start` that took this long waited on a person: the dialog showed.
+/// Restoring from a token takes 7 to 70 ms (X02, P01).
+const SLOW_START: Duration = Duration::from_secs(1);
 /// The first RemoteDesktop version with `ConnectToEIS`.
 const MIN_VERSION: u32 = 2;
 
@@ -40,7 +49,7 @@ fn wanted() -> BitFlags<DeviceType> {
 }
 
 /// A session-bus connection registered under [`APP_ID`].
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct Portal {
     connection: zbus::Connection,
 }
@@ -102,12 +111,13 @@ impl Portal {
     }
 
     /// Starts a session for a keyboard and a pointer, restoring the grant
-    /// with the token at `token_path` and saving the token the portal hands
-    /// back. Fails with [`InputError::AllowedNow`] when the dialog was
-    /// shown, after saving the new token: the run waits for the next start.
+    /// with the token from `tokens` and keeping the token the portal hands
+    /// back. Fails with [`InputError::AllowedNow`] when the dialog showed:
+    /// the run waits for the next start.
     ///
-    /// Dropping the future part way closes the session it created.
-    pub(crate) async fn start(&self, token_path: Option<&Path>) -> Result<Started, InputError> {
+    /// The session lives on this connection: dropping the future part way,
+    /// or the result, closes it.
+    pub(crate) async fn start(self, tokens: &RefCell<Tokens>) -> Result<Started, InputError> {
         let proxy = self.remote_desktop().await?;
         let session = call(
             "CreateSession",
@@ -115,23 +125,20 @@ impl Portal {
         )
         .await?
         .map_err(|err| portal_error("CreateSession", err))?;
-        let session = SessionGuard(Some(session));
-        let sent = token_path.and_then(read_token);
+        let sent = tokens.borrow_mut().token_to_send();
         let options = SelectDevicesOptions::default()
             .set_devices(wanted())
             .set_persist_mode(PersistMode::ExplicitlyRevoked)
             .set_restore_token(sent.as_ref().map(RestoreToken::as_str));
         call("SelectDevices", async {
-            proxy
-                .select_devices(session.get()?, options)
-                .await?
-                .response()
+            proxy.select_devices(&session, options).await?.response()
         })
         .await?
         .map_err(|err| portal_error("SelectDevices", err))?;
+        let asked = Instant::now();
         let started = timeout(DIALOG_TIMEOUT, async {
             proxy
-                .start(session.get()?, None, StartOptions::default())
+                .start(&session, None, StartOptions::default())
                 .await?
                 .response()
         })
@@ -141,38 +148,79 @@ impl Portal {
         })?
         .map_err(|err| portal_error("Start", err))?;
         let returned = started.restore_token().and_then(RestoreToken::parse);
-        let saved = match (token_path, &returned) {
-            (Some(path), Some(token)) => save_token(path, token),
-            _ => false,
-        };
-        if wait_for_next_start(sent.as_ref(), saved) {
+        if tokens
+            .borrow_mut()
+            .started(sent.is_some(), asked.elapsed(), returned)
+        {
             return Err(InputError::AllowedNow);
         }
-        let socket = call("ConnectToEIS", async {
-            proxy
-                .connect_to_eis(session.get()?, ConnectToEISOptions::default())
-                .await
-        })
+        let socket = call(
+            "ConnectToEIS",
+            proxy.connect_to_eis(&session, ConnectToEISOptions::default()),
+        )
         .await?
         .map_err(|err| portal_error("ConnectToEIS", err))?;
         Ok(Started {
-            session,
+            session: SessionGuard {
+                _held: Some((session, self.connection)),
+            },
             socket,
             devices: started.devices(),
         })
     }
 }
 
+/// The restore tokens: the file, and the last token the portal handed out,
+/// which is kept even when saving it failed, so a start after a failed save
+/// does not show the dialog again.
+#[derive(Debug, Default)]
+pub(crate) struct Tokens {
+    path: Option<PathBuf>,
+    last: Option<RestoreToken>,
+    /// The last start showed the dialog, so the run waited for this one.
+    just_allowed: bool,
+}
+
+impl Tokens {
+    pub(crate) fn new(path: Option<PathBuf>) -> Tokens {
+        Tokens {
+            path,
+            last: None,
+            just_allowed: false,
+        }
+    }
+
+    /// The token to restore with: the last one handed out, else the file's.
+    fn token_to_send(&mut self) -> Option<RestoreToken> {
+        self.last
+            .clone()
+            .or_else(|| self.path.as_deref().and_then(read_token))
+    }
+
+    /// Notes a started session, keeping and saving the token it returned;
+    /// `true` when the run waits for the next start.
+    fn started(&mut self, sent: bool, took: Duration, returned: Option<RestoreToken>) -> bool {
+        if let Some(token) = returned {
+            if let Some(path) = &self.path {
+                save_token(path, &token);
+            }
+            self.last = Some(token);
+        }
+        let wait = wait_for_next_start(sent, took, self.just_allowed);
+        self.just_allowed = wait;
+        wait
+    }
+}
+
 /// Whether the run waits for the next start because the dialog took the
-/// focus from the game: when no token was sent, so the dialog showed, and
-/// the token it gave was saved, so the next start goes ahead without it.
-/// Without a saved token every start would show the dialog and none would
-/// click, so the run goes ahead then. A token the portal rejected shows the
-/// dialog too, but that is not told apart: portals may hand back a new token
-/// on every start, so "a different token came back" would hold every time
-/// on some, and the clicker would never start.
-fn wait_for_next_start(sent: Option<&RestoreToken>, saved: bool) -> bool {
-    sent.is_none() && saved
+/// focus from the game. The dialog showed when no token was sent, or when
+/// `Start` waited on a person (a token the portal rejected). The returned
+/// token says nothing either way: portals may hand back a new one on every
+/// start. Never twice in a row: the start after a dialog goes ahead, so a
+/// portal that keeps no tokens, or a slow one, cannot keep the clicker from
+/// ever starting.
+fn wait_for_next_start(sent: bool, took: Duration, just_allowed: bool) -> bool {
+    !just_allowed && (!sent || took >= SLOW_START)
 }
 
 fn read_token(path: &Path) -> Option<RestoreToken> {
@@ -185,17 +233,13 @@ fn read_token(path: &Path) -> Option<RestoreToken> {
     })
 }
 
-/// Saves the token; `false`, after saying why, when it could not.
-fn save_token(path: &Path, token: &RestoreToken) -> bool {
-    match token::save(path, token) {
-        Ok(()) => true,
-        Err(err) => {
-            eprintln!(
-                "auto-clicker: could not save the portal token {}: {err}; the desktop asks again",
-                path.display()
-            );
-            false
-        }
+fn save_token(path: &Path, token: &RestoreToken) {
+    if let Err(err) = token::save(path, token) {
+        eprintln!(
+            "auto-clicker: could not save the portal token {}: {err}; the desktop asks again \
+             after a restart",
+            path.display()
+        );
     }
 }
 
@@ -234,36 +278,17 @@ fn portal_error(call: &str, err: ashpd::Error) -> InputError {
     }
 }
 
-/// A portal session that closes when dropped, wherever that happens: a
-/// failed step, a cancelled start, the end of a run.
-pub(crate) struct SessionGuard(Option<Session<RemoteDesktop>>);
+/// A started session and the connection it lives on. Dropping it closes
+/// the connection, which ends the session.
+pub(crate) struct SessionGuard {
+    _held: Option<(Session<RemoteDesktop>, zbus::Connection)>,
+}
 
 impl SessionGuard {
     /// No session: for tests that connect to a fake compositor directly.
     #[cfg(test)]
     pub(crate) fn none() -> SessionGuard {
-        SessionGuard(None)
-    }
-
-    fn get(&self) -> Result<&Session<RemoteDesktop>, ashpd::Error> {
-        // Only `drop` takes the session out.
-        self.0.as_ref().ok_or(ashpd::Error::NoResponse)
-    }
-}
-
-impl Drop for SessionGuard {
-    /// Closes the session in a task of its own, bounded by
-    /// [`CLOSE_TIMEOUT`]. Outside a runtime (the daemon is ending) there is
-    /// nothing to run it on; closing the bus connection ends the session.
-    fn drop(&mut self) {
-        let Some(session) = self.0.take() else {
-            return;
-        };
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                let _ = timeout(CLOSE_TIMEOUT, session.close()).await;
-            });
-        }
+        SessionGuard { _held: None }
     }
 }
 
@@ -271,14 +296,63 @@ impl Drop for SessionGuard {
 mod tests {
     use super::*;
 
+    const FAST: Duration = Duration::from_millis(70);
+    const SLOW: Duration = Duration::from_secs(3);
+
     #[test]
-    fn a_run_waits_for_the_next_start_only_after_a_first_dialog_whose_token_was_kept() {
-        let token = RestoreToken::parse("t").unwrap();
-        assert!(wait_for_next_start(None, true));
-        assert!(!wait_for_next_start(Some(&token), true));
-        assert!(!wait_for_next_start(Some(&token), false));
-        // Without a saved token the next start would ask again: go ahead.
-        assert!(!wait_for_next_start(None, false));
+    fn a_run_waits_for_the_next_start_after_a_dialog_but_never_twice_in_a_row() {
+        // The first start: no token, so the dialog showed.
+        assert!(wait_for_next_start(false, FAST, false));
+        // A restore from a token goes ahead.
+        assert!(!wait_for_next_start(true, FAST, false));
+        // A rejected token: the dialog showed, and Start waited on it.
+        assert!(wait_for_next_start(true, SLOW, false));
+        // Right after a dialog, the next start goes ahead whatever happens.
+        assert!(!wait_for_next_start(false, SLOW, true));
+        assert!(!wait_for_next_start(true, SLOW, true));
+        assert!(wait_for_next_start(true, SLOW_START, false));
+    }
+
+    fn token(text: &str) -> Option<RestoreToken> {
+        RestoreToken::parse(text)
+    }
+
+    #[test]
+    fn a_token_that_could_not_be_saved_is_still_used() {
+        // A path whose directory cannot be created.
+        let mut tokens = Tokens::new(Some(PathBuf::from("/proc/auto-clicker/portal-token")));
+        assert_eq!(tokens.token_to_send(), None);
+        assert!(tokens.started(false, FAST, token("granted")));
+        assert_eq!(tokens.token_to_send(), token("granted"));
+        assert!(!tokens.started(true, FAST, token("granted")));
+    }
+
+    #[test]
+    fn without_a_token_path_the_portal_never_locks_the_clicker_out() {
+        // No token path and a portal that returns none: every start asks,
+        // but only every other one waits.
+        let mut tokens = Tokens::new(None);
+        let waits: Vec<bool> = (0..4).map(|_| tokens.started(false, SLOW, None)).collect();
+        assert_eq!(waits, [true, false, true, false]);
+    }
+
+    #[test]
+    fn the_last_token_handed_out_wins_over_the_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "auto-clicker-tokens-{}-{:016x}",
+            std::process::id(),
+            fastrand::u64(..)
+        ));
+        let path = dir.join("portal-token");
+        let mut tokens = Tokens::new(Some(path.clone()));
+        tokens.started(true, FAST, token("first"));
+        assert_eq!(token::read(&path).unwrap(), token("first"));
+        // The file changes under the daemon: the token in memory is newer.
+        token::save(&path, &RestoreToken::parse("other").unwrap()).unwrap();
+        assert_eq!(tokens.token_to_send(), token("first"));
+        // A fresh daemon reads the file.
+        assert_eq!(Tokens::new(Some(path)).token_to_send(), token("other"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
