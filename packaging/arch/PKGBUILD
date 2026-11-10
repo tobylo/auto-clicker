@@ -1,7 +1,7 @@
 # Builds auto-clicker from the checkout this file sits in: run makepkg in
-# packaging/arch. It downloads nothing but the crates Cargo.lock pins, and
-# refuses to build a checkout with uncommitted changes, so the package is
-# always a commit of this repository.
+# packaging/arch. It downloads nothing but the crates Cargo.lock pins,
+# refuses a checkout with uncommitted changes, and builds a fresh copy of the
+# checked-out commit, so the package is always a commit of this repository.
 
 pkgname=tobylo-auto-clicker
 pkgver=0.1.0
@@ -18,7 +18,7 @@ _root=$(realpath "$startdir/../..")
 
 prepare() {
   cd "$_root"
-  local top changes
+  local top changes commit
   # A failed git command is never read as "nothing changed".
   if ! top=$(git rev-parse --show-toplevel) || [[ $top != "$_root" ]]; then
     error "$_root is not the top of a git checkout of this repository."
@@ -32,6 +32,17 @@ prepare() {
     error 'The checkout has uncommitted changes: commit or discard them first.'
     return 1
   fi
+  commit=$(git rev-parse --verify 'HEAD^{commit}')
+  # Everything below reads a fresh copy of that commit, never the live
+  # checkout, and no earlier build's output is reused.
+  rm -rf "$srcdir/auto-clicker" "$srcdir/auto-clicker.tar"
+  git archive --format=tar --output="$srcdir/auto-clicker.tar" "$commit"
+  mkdir "$srcdir/auto-clicker"
+  tar -xf "$srcdir/auto-clicker.tar" -C "$srcdir/auto-clicker"
+  rm "$srcdir/auto-clicker.tar"
+  msg2 "Building commit $commit"
+
+  cd "$srcdir/auto-clicker"
   local id
   id=$(cargo pkgid --locked -p auto-clicker)
   if [[ ${id##*[@#]} != "$pkgver" ]]; then
@@ -42,14 +53,14 @@ prepare() {
 }
 
 build() {
-  cd "$_root"
-  export CARGO_TARGET_DIR="$srcdir/target"
+  cd "$srcdir/auto-clicker"
+  export CARGO_TARGET_DIR="$srcdir/auto-clicker/target"
   cargo build --release --frozen -p auto-clicker
 }
 
 package() {
-  cd "$_root"
-  install -Dm755 "$srcdir/target/release/auto-clicker" -t "$pkgdir/usr/bin"
+  cd "$srcdir/auto-clicker"
+  install -Dm755 target/release/auto-clicker -t "$pkgdir/usr/bin"
   install -Dm644 data/systemd/auto-clicker.service -t "$pkgdir/usr/lib/systemd/user"
   install -Dm644 data/udev/70-auto-clicker-uinput.rules -t "$pkgdir/usr/lib/udev/rules.d"
   install -Dm644 data/applications/io.github.tobylo.AutoClicker.desktop \

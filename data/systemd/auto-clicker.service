@@ -21,6 +21,11 @@ RestartPreventExitStatus=3 77
 # IPAddressDeny= would be ignored here: a user manager cannot set up the
 # firewall it needs.
 RestrictAddressFamilies=AF_UNIX
+# The two ways around that filter: the 32-bit socketcall() ABI, and sockets
+# made through io_uring.
+SystemCallArchitectures=native
+SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register
+SystemCallErrorNumber=EPERM
 NoNewPrivileges=yes
 
 [Install]

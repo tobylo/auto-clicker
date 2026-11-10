@@ -39,7 +39,7 @@ The icon then appears in the system tray. After **Quit**, start it again from "A
 
 - **`/dev/uinput`** lets the program create a virtual mouse and keyboard, which is how it clicks. The rule gives this only to the person logged in at the screen, and only while they are.
 - **The `input` group** lets a program read every keyboard and mouse directly, so the hotkey works inside fullscreen games. auto-clicker only looks for its hotkeys, and records keys only while you record a macro. But the group applies to every program that person runs, not just this one: only add people whose programs you trust.
-- The background service may use local Unix sockets only, so the program cannot reach the network even by mistake.
+- The background service may use local Unix sockets only, so the program cannot reach the network even by mistake. The program itself opens no network connection.
 
 ### Updating
 
@@ -61,7 +61,7 @@ The build refuses to run if the downloaded copy has been changed by hand (`git s
    `systemctl --user disable --now auto-clicker`
 2. Remove the package:
    `sudo pacman -Rns tobylo-auto-clicker`
-3. Take each person out of the `input` group, unless something else needs it:
+3. Take each person out of the `input` group, unless something else needs it, then restart the computer: programs already running keep the group until then.
    `sudo gpasswd -d NAME input`
 4. Optionally, from the account that installed it, delete the downloaded copy and Rust, which the build installed:
    `rm -rf ~/auto-clicker; sudo pacman -Rns rust`
