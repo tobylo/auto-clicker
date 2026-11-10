@@ -1,5 +1,5 @@
 //! Checks on `[hotkeys]`: each binding parses, no two actions share one, and
-//! none can be fired by the clicker's own key.
+//! none uses the key the clicker presses.
 
 use toml::Spanned;
 
@@ -73,14 +73,15 @@ fn no_duplicates(placed: &[Placed<'_>]) -> Result<(), Invalid> {
     Ok(())
 }
 
-/// A key the clicker repeats or holds could fire a binding of that key alone:
-/// a remapper such as keyd re-sends the clicker's keys from its own device.
+/// A hotkey on the key the clicker repeats or holds could fire from the
+/// clicker itself: a remapper such as keyd re-sends the clicker's keys from
+/// its own device, and with a modifier the user happens to hold, they match
+/// a binding with modifiers too.
 fn not_the_clicker_key(placed: &Placed<'_>, clicker: &ClickerSettings) -> Result<(), Invalid> {
     let binding = placed.binding;
-    let alone = binding.modifiers().is_empty().then_some(binding.key());
-    if alone.is_some() && alone == pressed_key(clicker) {
+    if Some(binding.key()) == pressed_key(clicker) {
         return Err(placed.invalid(format!(
-            "hotkey {binding} is the key the clicker presses; add a modifier, as in \"Ctrl+{binding}\""
+            "hotkey {binding} uses the key the clicker presses; choose another key"
         )));
     }
     Ok(())

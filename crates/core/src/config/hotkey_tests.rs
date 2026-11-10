@@ -74,11 +74,11 @@ fn two_actions_on_one_hotkey_are_rejected_where_written() {
 }
 
 #[test]
-fn a_hotkey_the_clicker_presses_alone_is_rejected() {
-    for mode in ["key_repeat", "hold_key"] {
+fn a_hotkey_on_the_key_the_clicker_presses_is_rejected() {
+    for (mode, hotkey) in [("key_repeat", "F9"), ("hold_key", "Ctrl+f9")] {
         let (line, reason) = invalid_hotkeys(
             &format!("mode = \"{mode}\"\nkey = \"f9\""),
-            "toggle_recording = \"F9\"",
+            &format!("toggle_recording = \"{hotkey}\""),
         );
         assert_eq!(line, Some(6), "{mode}: {reason}");
         assert!(reason.contains("the key the clicker presses"), "{reason}");
@@ -86,25 +86,15 @@ fn a_hotkey_the_clicker_presses_alone_is_rejected() {
 }
 
 #[test]
-fn a_hotkey_on_the_clicker_key_is_fine_with_a_modifier_or_a_mouse_mode() {
-    let parsed = |clicker: &str, hotkeys: &str| {
-        Config::parse(&format!(
-            "version = 1\n[clicker]\n{clicker}\n[hotkeys]\n{hotkeys}\n"
-        ))
+fn a_hotkey_on_the_clicker_key_is_fine_in_a_mouse_mode_or_on_another_key() {
+    let parsed = |clicker: &str| {
+        let text =
+            format!("version = 1\n[clicker]\n{clicker}\n[hotkeys]\ntoggle_clicking = \"F9\"\n");
+        Config::parse(&text).is_ok()
     };
-    assert!(
-        parsed(
-            "mode = \"key_repeat\"\nkey = \"f9\"",
-            "toggle_clicking = \"Ctrl+F9\""
-        )
-        .is_ok()
-    );
-    assert!(parsed("mode = \"click\"\nkey = \"f9\"", "toggle_clicking = \"F9\"").is_ok());
-    assert!(
-        parsed(
-            "mode = \"hold_key\"\nkey = \"f10\"",
-            "toggle_clicking = \"F9\""
-        )
-        .is_ok()
-    );
+    let fine = [
+        parsed("mode = \"click\"\nkey = \"f9\""),
+        parsed("mode = \"hold_key\"\nkey = \"f10\""),
+    ];
+    assert_eq!(fine, [true, true]);
 }
