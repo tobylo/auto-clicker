@@ -8,12 +8,18 @@ publish.workspace = true
 
 [dependencies]
 auto-clicker-core = { path = "../core" }
-# The only crate that touches /dev/uinput and evdev. Default features: no tokio.
-evdev = "0.13.2"
+# The only crate that touches /dev/uinput and evdev. `tokio`: the hotkey
+# reader's event streams.
+evdev = { version = "0.13.2", features = ["tokio"] }
+# Watches /dev/input for keyboards coming and going. No default features: the
+# reader waits on the descriptor through tokio itself.
+inotify = { version = "0.11.5", default-features = false }
+libc = "0.2.191"
+tokio = { version = "1.54.1", default-features = false, features = ["net", "macros", "rt"] }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 fastrand = "2.5.0"
-tokio = { version = "1.54.1", features = ["rt", "time", "signal", "macros"] }
+tokio = { version = "1.54.1", features = ["rt", "time", "signal", "macros", "sync"] }

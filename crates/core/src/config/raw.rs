@@ -23,6 +23,18 @@ pub(super) struct RawConfig {
     pub(super) tray_start_delay: Option<Spanned<i64>>,
     #[serde(default)]
     pub(super) clicker: RawClicker,
+    #[serde(default)]
+    pub(super) hotkeys: RawHotkeys,
+}
+
+/// `[hotkeys]`: each action's binding, such as "Ctrl+F6", parsed after the
+/// file so a bad one is reported at its line.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RawHotkeys {
+    pub(super) toggle_clicking: Option<Spanned<String>>,
+    pub(super) toggle_recording: Option<Spanned<String>>,
+    pub(super) toggle_playback: Option<Spanned<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]

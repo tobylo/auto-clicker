@@ -17,9 +17,15 @@
 //! key = "space"                 # a key name, or a Linux key code
 //! position = "cursor"           # or { x = 32768, y = 32768 } on 0..65535
 //! repeat = "until_stopped"      # or a number of actions
+//!
+//! [hotkeys]                     # modifiers Ctrl, Shift, Alt, Meta; any case
+//! toggle_clicking = "Ctrl+F6"
+//! toggle_recording = "Ctrl+F7"
+//! toggle_playback = "Ctrl+F8"
 //! ```
 
 mod error;
+mod hotkeys;
 mod raw;
 mod read;
 mod validate;
@@ -31,6 +37,7 @@ use std::time::Duration;
 pub use error::{ConfigError, Problem};
 
 use crate::clicker::ClickerSettings;
+use crate::hotkeys::Bindings;
 
 /// The longest countdown before a start from the tray: an hour.
 pub const MAX_TRAY_START_DELAY: Duration = Duration::from_secs(60 * 60);
@@ -42,6 +49,7 @@ pub struct Config {
     /// clicks, so the user can switch to the game. The hotkey starts at once.
     pub tray_start_delay: Duration,
     pub clicker: ClickerSettings,
+    pub hotkeys: Bindings,
 }
 
 impl Default for Config {
@@ -49,6 +57,7 @@ impl Default for Config {
         Config {
             tray_start_delay: Duration::from_secs(5),
             clicker: ClickerSettings::default(),
+            hotkeys: Bindings::default(),
         }
     }
 }
@@ -113,5 +122,7 @@ fn config_path_from(xdg_config_home: Option<OsString>, home: Option<OsString>) -
         .map(|dir| dir.join("auto-clicker").join("config.toml"))
 }
 
+#[cfg(test)]
+mod hotkey_tests;
 #[cfg(test)]
 mod tests;
