@@ -247,3 +247,53 @@ async fn keys_held_across_lost_events_never_fire() {
     })
     .await;
 }
+
+/// Long enough for a person to read the prompt and act.
+const PERSON_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Waits for a person to press Ctrl+F6 on a real keyboard.
+async fn person_presses_ctrl_f6(received: &mut mpsc::UnboundedReceiver<HotkeyEvent>, when: &str) {
+    eprintln!("\n>>> Press Ctrl+F6 on the keyboard {when}.");
+    let deadline = Instant::now() + PERSON_TIMEOUT;
+    loop {
+        let event = timeout_at(deadline, received.recv()).await;
+        match event.expect("no Ctrl+F6 within two minutes").unwrap() {
+            HotkeyEvent::Fired(action) => {
+                assert_eq!(action, Action::ToggleClicking);
+                eprintln!(">>> Ctrl+F6 seen.");
+                return;
+            }
+            other => eprintln!("    ({other:?})"),
+        }
+    }
+}
+
+/// Needs a person at the machine with a USB keyboard. Run it alone, with
+/// `--nocapture` to see the prompts:
+///
+/// ```text
+/// cargo test --locked -p auto-clicker-backend-kernel --test hotkeys -- --ignored --nocapture a_real_keyboard_works_after_a_replug
+/// ```
+#[tokio::test]
+#[ignore = "needs a person to unplug and replug a USB keyboard; run by hand"]
+async fn a_real_keyboard_works_after_a_replug() {
+    let (events, mut received) = mpsc::unbounded_channel();
+    let (stop, stopped) = oneshot::channel::<()>();
+    let reader = watch_hotkeys(
+        Bindings::default(),
+        &[],
+        move |event| {
+            let _ = events.send(event);
+        },
+        async move {
+            let _ = stopped.await;
+        },
+    );
+    let person = async move {
+        person_presses_ctrl_f6(&mut received, "you will unplug").await;
+        eprintln!("\n>>> Unplug that keyboard, wait two seconds, plug it back in.");
+        person_presses_ctrl_f6(&mut received, "you just plugged back in").await;
+        stop.send(()).unwrap();
+    };
+    tokio::join!(reader, person);
+}
