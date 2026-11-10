@@ -15,7 +15,7 @@ evdev = { version = "0.13.2", features = ["tokio"] }
 # reader waits on the descriptor through tokio itself.
 inotify = { version = "0.11.5", default-features = false }
 libc = "0.2.191"
-tokio = { version = "1.54.1", default-features = false, features = ["net", "macros"] }
+tokio = { version = "1.54.1", default-features = false, features = ["net", "macros", "rt"] }
 
 [lints]
 workspace = true

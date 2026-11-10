@@ -24,6 +24,7 @@ use auto_clicker_core::hotkeys::{
 };
 use evdev::raw_stream::EventStream;
 use evdev::{AttributeSet, InputEvent, KeyCode};
+use tokio::task::coop;
 
 use crate::DeviceIdentity;
 use events::Step;
@@ -111,6 +112,13 @@ fn next_event(
                 Poll::Ready(Err(err)) => return Poll::Ready((index, Err(err))),
                 Poll::Pending => {}
             }
+        }
+        // Once the task's budget is spent, a stream says Pending without
+        // looking at its events, and an earlier event there would lose its
+        // place. Yield and look again with a fresh budget.
+        if !coop::has_budget_remaining() {
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
         }
         let earliest = devices
             .iter()
