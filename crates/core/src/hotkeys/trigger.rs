@@ -27,6 +27,10 @@ pub const DESKTOP_RELEASE_PAUSE: Duration = Duration::from_secs(1);
 /// The longest trigger text kept, in characters.
 const MAX_TEXT: usize = 80;
 
+/// The longest description whose triggers are read, in bytes: room for a
+/// few dozen.
+const MAX_DESCRIPTION: usize = 1024;
+
 /// The trigger of one action, as the desktop reported it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Trigger {
@@ -74,6 +78,11 @@ impl Trigger {
 fn keys_of(description: &str) -> Option<Vec<Key>> {
     if description.is_empty() {
         return Some(Vec::new());
+    }
+    // A description far longer than any list of triggers is not worked
+    // through: its keys stay unknown.
+    if description.len() > MAX_DESCRIPTION {
+        return None;
     }
     description.split(", ").map(function_key).collect()
 }
@@ -286,6 +295,16 @@ mod tests {
         assert_eq!(
             cut.keys,
             Some(vec![key("f24"), key("f6"), key("f7"), key("f12")])
+        );
+        // A description too long to be a list of triggers is not read.
+        let endless = vec!["F24"; 1000].join(", ");
+        assert!(endless.len() > MAX_DESCRIPTION);
+        assert_eq!(Trigger::reported(&endless).keys, None);
+        let fits = vec!["Ctrl+Shift+F24"; 60].join(", ");
+        assert!(fits.len() <= MAX_DESCRIPTION);
+        assert_eq!(
+            Trigger::reported(&fits).keys.map(|keys| keys.len()),
+            Some(60)
         );
         let dropped =
             "Ctrl+Alt+Meta+F1, Ctrl+Shift+F10, Ctrl+Shift+F11, Ctrl+Shift+F12, Ctrl+Shift+F13, F9";

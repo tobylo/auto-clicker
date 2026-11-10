@@ -19,7 +19,8 @@ use tokio::time::{Instant, advance};
 use zbus::zvariant::{ObjectPath, Value};
 
 use super::portal::{
-    connect_failure, failed, has_owner, parse, preferred_trigger, session_namespace, within,
+    MAX_LISTED, closes_a_session, connect_failure, failed, has_owner, parse, preferred_trigger,
+    session_namespace, within,
 };
 use super::reactor::{Listed, Signal, bound_triggers, id_of, serve};
 use super::*;
@@ -336,11 +337,21 @@ async fn a_session_ends_when_closed_unreadable_or_cut_off_and_says_which() {
 
 // Sessions one after another
 
-/// A scripted desktop: each session notes that it started and says hotkeys
-/// work, then ends with its scripted reason, or never.
+/// What one scripted session does.
+#[derive(Clone, Copy)]
+enum Plan {
+    /// Ends with this reason before it has bound the shortcuts.
+    Fails(&'static str),
+    /// Binds, says hotkeys work, then ends with this reason.
+    BindsThenEnds(&'static str),
+    /// Binds, says hotkeys work, and runs until dropped.
+    Serves,
+}
+
+/// A scripted desktop: each session notes that it started and follows its
+/// plan; sessions past the end of the script serve.
 struct Script {
-    /// What each session does, in order; sessions past the end never end.
-    sessions: Vec<Option<&'static str>>,
+    sessions: Vec<Plan>,
     started: Rc<RefCell<usize>>,
 }
 
@@ -351,10 +362,16 @@ impl Desktop for Script {
             *started += 1;
             *started - 1
         };
-        send(HotkeyEvent::Status(HotkeyStatus::Available));
-        match self.sessions.get(n).copied().flatten() {
-            Some(why) => why.to_owned(),
-            None => pending().await,
+        match self.sessions.get(n).copied().unwrap_or(Plan::Serves) {
+            Plan::Fails(why) => why.to_owned(),
+            Plan::BindsThenEnds(why) => {
+                send(AVAILABLE);
+                why.to_owned()
+            }
+            Plan::Serves => {
+                send(AVAILABLE);
+                pending().await
+            }
         }
     }
 }
@@ -368,7 +385,7 @@ struct Reader {
 }
 
 impl Reader {
-    async fn start(sessions: Vec<Option<&'static str>>) -> Reader {
+    async fn start(sessions: Vec<Plan>) -> Reader {
         let (owners, changes) = mpsc::unbounded_channel();
         let events = Rc::new(RefCell::new(Vec::new()));
         let started = Rc::new(RefCell::new(0));
@@ -434,8 +451,9 @@ async fn a_portal_service_that_stops_or_restarts_is_reported_and_bound_again_at_
 #[tokio::test(start_paused = true)]
 async fn a_session_that_fails_is_tried_again_only_when_a_portal_service_changes() {
     local(async {
-        let r = Reader::start(vec![Some("declined"), Some("still declined")]).await;
-        assert_eq!(r.take(), [AVAILABLE, lost("declined")]);
+        let script = vec![Plan::Fails("declined"), Plan::BindsThenEnds("closed")];
+        let r = Reader::start(script).await;
+        assert_eq!(r.take(), [lost("declined")]);
         // No retry by itself, however long.
         advance(Duration::from_secs(24 * 3600)).await;
         settle().await;
@@ -447,7 +465,7 @@ async fn a_session_that_fails_is_tried_again_only_when_a_portal_service_changes(
             [
                 lost("a portal service of the desktop restarted"),
                 AVAILABLE,
-                lost("still declined")
+                lost("closed")
             ]
         );
         advance(Duration::from_secs(24 * 3600)).await;
@@ -460,10 +478,80 @@ async fn a_session_that_fails_is_tried_again_only_when_a_portal_service_changes(
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_service_that_dies_on_every_bind_is_not_started_for_ever() {
+    local(async {
+        // Each session starts the service, which dies before the bind is
+        // done: the reader hears it stop, and would start it again.
+        let r = Reader::start(vec![Plan::Fails("CreateSession: the service died"); 64]).await;
+        for _ in 0..64 {
+            if r.task.is_finished() {
+                break;
+            }
+            r.owner(false).await;
+        }
+        assert_eq!(r.sessions(), usize::try_from(MAX_FAILED_IN_A_ROW).unwrap());
+        assert!(r.task.is_finished());
+        let events = r.take();
+        let Some(HotkeyEvent::Status(HotkeyStatus::Unavailable(Unavailable::Desktop(last)))) =
+            events.last()
+        else {
+            panic!("{events:?}");
+        };
+        assert!(
+            last.contains("could not be bound in 5 tries") && last.contains("restart auto-clicker"),
+            "{last}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn sessions_cut_short_by_a_service_change_count_as_failed_too() {
+    local(async {
+        // Sessions that never get as far as binding, each ended by the
+        // service changing hands again.
+        struct NeverBinds(Rc<RefCell<usize>>);
+        impl Desktop for NeverBinds {
+            async fn session(&mut self, _send: &mut dyn FnMut(HotkeyEvent)) -> String {
+                *self.0.borrow_mut() += 1;
+                pending().await
+            }
+        }
+        let started = Rc::new(RefCell::new(0));
+        let mut desktop = NeverBinds(started.clone());
+        let changes = futures_util::stream::iter(std::iter::repeat_n(true, 64));
+        let mut events = Vec::new();
+        run(&mut desktop, changes, |event| events.push(event)).await;
+        assert_eq!(*started.borrow(), 0, "the changes were all queued first");
+        assert_eq!(events.len(), usize::try_from(MAX_FAILED_IN_A_ROW).unwrap());
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_session_that_bound_starts_the_count_again() {
+    local(async {
+        // Four failures, a session that binds, four more: never five in a
+        // row, so the reader keeps going.
+        let mut script = vec![Plan::Fails("no"); 4];
+        script.push(Plan::BindsThenEnds("closed"));
+        script.extend([Plan::Fails("no"); 4]);
+        let r = Reader::start(script).await;
+        for _ in 0..9 {
+            r.owner(true).await;
+        }
+        assert_eq!(r.sessions(), 10);
+        assert!(!r.task.is_finished());
+        assert_eq!(r.take().last(), Some(&AVAILABLE));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_reader_ends_when_the_bus_can_no_longer_be_watched() {
     local(async {
         // While a session runs, and while waiting for the portal.
-        for sessions in [Vec::new(), vec![Some("failed")]] {
+        for sessions in [Vec::new(), vec![Plan::Fails("failed")]] {
             let mut r = Reader::start(sessions).await;
             r.take();
             r.owners = None;
@@ -601,30 +689,98 @@ async fn a_portal_call_that_does_not_answer_times_out_and_names_the_call() {
     assert_eq!(within("CreateSession", async { 7 }).await, Ok(7));
 }
 
+/// A `NameOwnerChanged` signal about `name`, sent by `sender`.
+fn owner_change(sender: &str, name: &str, old: &str, new: &str) -> zbus::Message {
+    zbus::Message::signal(
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "NameOwnerChanged",
+    )
+    .unwrap()
+    .sender(sender)
+    .unwrap()
+    .build(&(name, old, new))
+    .unwrap()
+}
+
+const BUS: &str = "org.freedesktop.DBus";
+const KDE: &str = "org.freedesktop.impl.portal.desktop.kde";
+const PORTAL: &str = "org.freedesktop.portal.Desktop";
+
 #[test]
 fn an_owner_change_says_whether_the_name_has_an_owner_now() {
-    let change = |old: &str, new: &str| {
-        zbus::Message::signal(
-            "/org/freedesktop/DBus",
-            "org.freedesktop.DBus",
-            "NameOwnerChanged",
-        )
-        .unwrap()
-        .build(&("org.freedesktop.impl.portal.desktop.kde", old, new))
-        .unwrap()
-    };
-    assert_eq!(has_owner(&change(":1.5", "")), Some(false));
-    assert_eq!(has_owner(&change("", ":1.9")), Some(true));
-    assert_eq!(has_owner(&change(":1.5", ":1.9")), Some(true));
-    // Not an owner change at all: unreadable, never "no owner".
-    assert_eq!(has_owner(&signal("NameOwnerChanged", &(7u32,))), None);
+    assert_eq!(has_owner(&owner_change(BUS, KDE, ":1.5", "")), Some(false));
+    assert_eq!(has_owner(&owner_change(BUS, KDE, "", ":1.9")), Some(true));
+    assert_eq!(
+        has_owner(&owner_change(BUS, PORTAL, ":1.5", ":1.9")),
+        Some(true)
+    );
 }
 
 #[test]
-fn a_sessions_closed_signals_are_matched_under_the_callers_own_path() {
+fn an_owner_change_from_anyone_but_the_bus_or_about_another_name_is_not_one() {
+    // Another program sends the signal straight to this connection.
+    assert_eq!(has_owner(&owner_change(":1.77", KDE, ":1.5", "")), None);
+    // The bus, about names that are neither of the two portal services.
+    for name in [
+        "org.freedesktop.impl.portal.unrelated",
+        "org.freedesktop.impl.portal.desktop.gtk",
+        "org.freedesktop.portal.Desktop.evil",
+    ] {
+        let change = owner_change(BUS, name, ":1.5", "");
+        assert_eq!(has_owner(&change), None, "{name}");
+    }
+    // Not an owner change at all: unreadable, never "no owner".
+    let wrong = zbus::Message::signal("/org/freedesktop/DBus", BUS, "NameOwnerChanged")
+        .unwrap()
+        .sender(BUS)
+        .unwrap()
+        .build(&(7u32,))
+        .unwrap();
+    assert_eq!(has_owner(&wrong), None);
+}
+
+#[test]
+fn a_sessions_closed_signal_counts_only_from_the_portal_and_under_the_callers_path() {
+    let namespace = session_namespace(":1.42");
+    assert_eq!(namespace, "/org/freedesktop/portal/desktop/session/1_42");
+    let closed = |sender: &str, path: &str| {
+        let message = zbus::Message::signal(path, "org.freedesktop.portal.Session", "Closed")
+            .unwrap()
+            .sender(sender)
+            .unwrap()
+            .build(&(HashMap::<&str, Value<'_>>::new(),))
+            .unwrap();
+        closes_a_session(&message, ":1.7", &namespace)
+    };
+    let ours = "/org/freedesktop/portal/desktop/session/1_42/token";
+    assert!(closed(":1.7", ours));
+    // Another program, sending it straight to this connection.
+    assert!(!closed(":1.99", ours));
+    // The portal, about someone else's session.
+    for other in ["1_43/token", "1_421/token", "1_42"] {
+        let path = format!("/org/freedesktop/portal/desktop/session/{other}");
+        assert!(!closed(":1.7", &path), "{path}");
+    }
+}
+
+#[test]
+fn a_change_listing_far_more_shortcuts_than_the_program_has_is_malformed() {
+    let entry = |n: usize| {
+        let info: HashMap<&str, Value<'_>> = HashMap::from([
+            ("description", Value::from("x")),
+            ("trigger_description", Value::from("F1")),
+        ]);
+        (format!("shortcut{n}"), info)
+    };
+    let within: Vec<_> = (0..MAX_LISTED).map(entry).collect();
+    let fits = signal("ShortcutsChanged", &(session_path(), within));
+    assert!(matches!(parse(&fits), Some(Signal::Changed(listed)) if listed.len() == MAX_LISTED));
+    let over: Vec<_> = (0..=MAX_LISTED).map(entry).collect();
+    let too_many = signal("ShortcutsChanged", &(session_path(), over));
     assert_eq!(
-        session_namespace(":1.42"),
-        "/org/freedesktop/portal/desktop/session/1_42"
+        parse(&too_many),
+        Some(Signal::Malformed("ShortcutsChanged".to_owned()))
     );
 }
 
