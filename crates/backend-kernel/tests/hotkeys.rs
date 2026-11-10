@@ -15,9 +15,10 @@
 
 use std::time::Duration;
 
-use auto_clicker_backend_kernel::{KernelBackend, watch_hotkeys};
+use auto_clicker_backend_kernel::{InputSources, KernelBackend, read_input};
 use auto_clicker_core::hotkeys::{Action, Binding, Bindings, HotkeyEvent};
 use auto_clicker_core::input::Key;
+use auto_clicker_core::recording::RecordingSlot;
 use evdev::uinput::VirtualDevice;
 use evdev::{AttributeSet, EventType, InputEvent, KeyCode};
 use tokio::sync::{mpsc, oneshot};
@@ -126,9 +127,13 @@ where
     let own = input.backend().devices().to_vec();
     let (events, received) = mpsc::unbounded_channel();
     let (stop, stopped) = oneshot::channel::<()>();
-    let reader = watch_hotkeys(
-        bindings(),
-        &own,
+    // No recording runs: the slot goes, and the feed never sees one.
+    let reader = read_input(
+        InputSources {
+            bindings: bindings(),
+            own: &own,
+            feed: RecordingSlot::new().feed(),
+        },
         move |event| {
             let _ = events.send(event);
         },
@@ -279,9 +284,12 @@ async fn person_presses_ctrl_f6(received: &mut mpsc::UnboundedReceiver<HotkeyEve
 async fn a_real_keyboard_works_after_a_replug() {
     let (events, mut received) = mpsc::unbounded_channel();
     let (stop, stopped) = oneshot::channel::<()>();
-    let reader = watch_hotkeys(
-        Bindings::default(),
-        &[],
+    let reader = read_input(
+        InputSources {
+            bindings: Bindings::default(),
+            own: &[],
+            feed: RecordingSlot::new().feed(),
+        },
         move |event| {
             let _ = events.send(event);
         },

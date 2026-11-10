@@ -4,7 +4,7 @@
 
 An auto clicker with macro record and playback for KDE Plasma on Wayland, living in the system tray. Written in Rust to stay light while idle.
 
-Status: the auto clicker runs from the tray and the hotkey, and installs as a package on CachyOS and Arch; recording and playback are still to come. See [docs/planning/map.md](docs/planning/map.md) for what it will do and why, and [the Project](https://github.com/users/tobylo/projects/4) for the work.
+Status: the auto clicker runs from the tray and the hotkey, records macros, and installs as a package on CachyOS and Arch; playback is still to come. See [docs/planning/map.md](docs/planning/map.md) for what it will do and why, and [the Project](https://github.com/users/tobylo/projects/4) for the work.
 
 ## Install
 
@@ -77,16 +77,38 @@ The build refuses to run if the downloaded copy has been changed by hand (`git s
 Once installed and enabled, it starts at login and stays in the system tray (run `auto-clicker` to start it by hand). A left or right click on its icon opens the menu:
 
 - **Start clicking** counts down `tray_start_delay` seconds (5 by default), so you can switch to the game, then clicks. The icon's tooltip shows the seconds left. **Stop clicking** stops it, or cancels the countdown.
-- **Record**, **Play** and **Settings** come in later versions.
-- **Quit** stops clicking, lets go of everything it pressed and exits.
+- **Record** counts down the same way, then records what the mouse and keyboard do until **Stop recording**, and saves it. The icon turns red while recording.
+- **Play** and **Settings** come in later versions.
+- **Quit** stops clicking, lets go of everything it pressed, saves a recording in progress and exits.
 
 The hotkey (Ctrl+F6 by default) starts and stops clicking at once, without a countdown. A start waits until you let go of Ctrl, so the first click is a plain click and not Ctrl+click; if Ctrl is still held after 30 seconds, nothing starts and the tooltip says why.
 
-Clicking stops when the screen locks, another user's session comes to the front, or the computer goes to sleep, and it cannot start again until the session is back. Before sleep, the program holds the computer back (for 2 seconds at most) until it has let go of every button and key it pressed, so nothing stays pressed while asleep. The tooltip says what the clicker will do, and why it stopped or cannot start.
+Clicking stops when the screen locks, another user's session comes to the front, or the computer goes to sleep, and it cannot start again until the session is back. A recording stops and is saved at those moments too. Before sleep, the program holds the computer back (for 2 seconds at most) until it has let go of every button and key it pressed, so nothing stays pressed while asleep. The tooltip says what the clicker will do, and why it stopped or cannot start.
 
 Only one copy runs per session: a second one prints "auto-clicker is already running" and exits. A running copy quits if it loses the session bus. It talks to the session and system buses through their Unix sockets only, and refuses to start when `DBUS_SESSION_BUS_ADDRESS` names anything else.
 
 Exit statuses: 0 after Quit, SIGTERM or SIGINT; 3 when another copy is already running; 77 when `/dev/uinput` cannot be used (no permission, or the `uinput` module is not loaded), which restarting does not fix; 1 for any other failure at start.
+
+## Recording
+
+A recording keeps the clicks, keys, wheel and mouse movement, with their timing, from the moment it starts until it stops. Start and stop it with Ctrl+F7, or from the tray. Keys record with any keyboard; clicks and movement need a mouse, since a laptop's touchpad is not recorded: its taps and gestures cannot be played back as mouse input. Keyboards and mice plugged in while recording are recorded too.
+
+- **What is left out.** The hotkey that starts or stops the recording is not in it, nor is any other hotkey pressed while recording (they do nothing then). Ctrl held for a while before the stop, to sprint say, is kept. From the tray, the trip to the tray at the end (the moves and clicks to open the menu and choose Stop recording) is cut off. Key repeat is not recorded: a held key is one press and one release.
+- **What is added.** Keys and buttons held when recording starts (W, to walk on) count as pressed at the start; those of the Ctrl+F7 that started it do not. Anything still held when the recording stops, or on a mouse or keyboard unplugged while recording, gets a release at that moment, so a recording always ends with nothing pressed.
+- **Limits.** A recording stops and saves by itself after 60 minutes; the tooltip says so. A recording with nothing in it is not saved. Recording cannot start while clicking runs, and clicking cannot start while recording.
+- **Where.** Each recording is a file in `~/.local/share/auto-clicker/recordings/` (or under `$XDG_DATA_HOME`), named after the time it was made, such as `2026-11-09_18-04-05.123.json`; it shows as "Recording 2026-11-09 18:04". The folder and files are readable by you only. A recording is written once, whole, when it stops: if the computer crashes while recording, that recording is lost, but no half file is left, and saving never replaces an older recording.
+- **Privacy.** Keys are read for recording only while you record, and are written only to the recording. Nothing about them goes to the log or the tooltip.
+
+The files are JSON, one event per line: microseconds since the start, what happened, and the key, button or amount. Keys and buttons use the kernel's names (`KEY_W`, `BTN_LEFT`):
+
+```json
+{"version":1,"name":"Recording 2026-11-09 18:04","created":"2026-11-09T18:04:05.123+01:00","duration_us":2500000,"events":[
+[0,"press","KEY_W"],
+[1200,"move",3,-2],
+[480000,"wheel",-1],
+[2500000,"release","KEY_W"]
+]}
+```
 
 ## Configuration
 
@@ -107,7 +129,7 @@ repeat = "until_stopped"      # or a number of actions (a double click is one); 
 
 [hotkeys]
 toggle_clicking = "Ctrl+F6"   # start or stop clicking
-toggle_recording = "Ctrl+F7"  # start or stop recording a macro
+toggle_recording = "Ctrl+F7"  # start recording a macro, or stop and save it
 toggle_playback = "Ctrl+F8"   # play or stop the macro
 
 [input]
@@ -117,7 +139,7 @@ output = "kernel"             # how clicks and keys reach the desktop: kernel or
 - Keys are named by where they sit on the keyboard, not by the label printed on them, so a setting stays on the same physical key whatever keyboard layout is in use. The letter and symbol names are the labels of a US keyboard: on a German keyboard, "z" is the key labelled Y. The names, lowercase: "a" to "z", "0" to "9", "f1" to "f24", "space", "enter", "esc", "tab", "backspace", "capslock", "minus", "equal", "leftbrace", "rightbrace", "semicolon", "apostrophe", "grave", "backslash", "comma", "dot", "slash", left and right "shift", "ctrl", "alt" and "meta" (such as "leftshift"), "up", "down", "left", "right", "home", "end", "pageup", "pagedown", "insert", "delete", the keypad keys ("kp0" to "kp9", "kpplus", "kpminus", "kpasterisk", "kpslash", "kpdot", "kpenter"), "numlock", "scrolllock", "sysrq", "pause", "compose" and "102nd", the extra key beside the left Shift on ISO keyboards (most European ones). Any other key is given by its Linux key code, such as `key = 113` for the mute key.
 - On a Swedish or Finnish keyboard, the letters, the digits, "comma" and "dot" match their labels. The other keys: "grave" is §, "minus" is +, "equal" is ´, "leftbrace" is Å, "rightbrace" is ¨, "semicolon" is Ö, "apostrophe" is Ä, "backslash" is ', "102nd" is < and "slash" is -.
 - A fixed point runs from 0 to 65535 across all screens together, left to right and top to bottom. Games that lock the pointer (Minecraft while playing) ignore it; use the cursor position there.
-- `output = "portal"` clicks and types without `/dev/uinput`, through the desktop's remote input portal (see [Clicking through the portal](#clicking-through-the-portal)). `kernel`, the default, uses `/dev/uinput`. Hotkeys still read the keyboards directly either way.
+- `output = "portal"` clicks and types without `/dev/uinput`, through the desktop's remote input portal (see [Clicking through the portal](#clicking-through-the-portal)). `kernel`, the default, uses `/dev/uinput`. Hotkeys and recording still read the keyboards and mice directly either way.
 - A hotkey is any of Ctrl, Shift, Alt and Meta, then a key name from the list above, joined by `+`, in any letter case: "Ctrl+F6", "ctrl+shift+f9", "F13". It fires when the key is pressed while exactly those modifiers are held, left or right alike, on any keyboard. Two actions cannot share a hotkey, and no hotkey can use the key the clicker presses.
 
 ## Clicking through the portal
@@ -130,9 +152,9 @@ The portal needs the package's `io.github.tobylo.AutoClicker.desktop`: Plasma ke
 
 ## Hotkeys
 
-Hotkeys work in every window, fullscreen games included, because the program reads the keyboards directly. That needs read access to `/dev/input`: the user must be in the `input` group (see [Install](#install)). When no keyboard can be read, the program keeps running and the tray says why.
+Hotkeys work in every window, fullscreen games included, because the program reads the keyboards directly. Mice are read only while recording, so the program sleeps while you play. That needs read access to `/dev/input`: the user must be in the `input` group (see [Install](#install)). When no keyboard can be read, the program keeps running and the tray says why.
 
-The keyboards are only read, never taken over, so the game also gets the hotkey. In Minecraft, Ctrl is sprint: pressing Ctrl+F6 also starts sprinting for a moment. Pick a hotkey the game ignores if that gets in the way.
+The keyboards are only read, never taken over, so the game also gets the hotkey. On Plasma, Ctrl+F7 is also KWin's "Toggle Present Windows (Window class)" shortcut, so recording with it opens that overview too; change the binding in either place if it gets in the way. In Minecraft, Ctrl is sprint: pressing Ctrl+F6 also starts sprinting for a moment. Pick a hotkey the game ignores if that gets in the way.
 
 If a key remapper (keyd, kanata) takes over a keyboard while Ctrl or another modifier is held on it, the program never sees that key come up, and hotkeys stay blocked until the keyboard is unplugged or the program restarts.
 
