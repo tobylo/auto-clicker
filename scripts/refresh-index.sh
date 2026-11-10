@@ -8,11 +8,14 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-# Cargo.lock lists each package's name, then version, then source.
-spec="$(awk -F'"' '/^name = /{n=$2} /^version = /{v=$2}
-    /^source = "registry\+/{print n "@" v; exit}' Cargo.lock)"
+# Cargo resolves the locked graph itself, whatever Cargo.lock's formatting;
+# no registry package in it means there is nothing to refresh.
+export GIT_TERMINAL_PROMPT=0
+spec="$(timeout --kill-after=10 300 cargo metadata --locked --format-version 1 | jq -r '
+    [.packages[] | select((.source // "") | startswith("registry+"))
+        | "\(.name)@\(.version)"] | first // empty')"
 if [[ -z "$spec" ]]; then
     exit 0
 fi
-GIT_TERMINAL_PROMPT=0 timeout --kill-after=10 300 \
-    cargo --config net.offline=false update --dry-run --quiet -p "$spec"
+timeout --kill-after=10 300 cargo --config net.offline=false \
+    update --dry-run --quiet -p "$spec"
