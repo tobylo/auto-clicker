@@ -25,8 +25,15 @@ pub async fn run(token_file: &Path, args: &[String]) -> Result<(), String> {
         return remote.close().await;
     }
     let mut out = Output::connect(fd).await?;
-    out.wait_for(&[DeviceCapability::Button, DeviceCapability::Keyboard])
-        .await?;
+    // KWin announces all three devices at once; wait for every one a
+    // scenario may use.
+    out.wait_for(&[
+        DeviceCapability::Button,
+        DeviceCapability::Keyboard,
+        DeviceCapability::Pointer,
+        DeviceCapability::PointerAbsolute,
+    ])
+    .await?;
     out.describe();
     scenario(&mut out, &remote, args).await
 }

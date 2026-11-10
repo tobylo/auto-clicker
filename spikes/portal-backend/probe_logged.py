@@ -55,7 +55,17 @@ def main(prefix):
         text=True,
         errors="replace",
     )
-    signal.signal(signal.SIGTERM, lambda *_: window.terminate())
+    stopping = []
+
+    def stop(*_):
+        # Asked to close: SIGTERM, then SIGKILL if the window does not exit.
+        stopping.append(True)
+        window.terminate()
+        killer = threading.Timer(DRAIN_LIMIT, window.kill)
+        killer.daemon = True
+        killer.start()
+
+    signal.signal(signal.SIGTERM, stop)
     failures = []
     pumps = [
         threading.Thread(target=pump, args=(window.stdout, window_log, WINDOW_KEY, failures), daemon=True),
@@ -63,7 +73,9 @@ def main(prefix):
     ]
     for thread in pumps:
         thread.start()
-    window.wait()
+    status = window.wait()
+    if not stopping:
+        failures.append(f"the probe window exited on its own (status {status})")
     for thread in pumps:
         thread.join(timeout=DRAIN_LIMIT)
     if any(thread.is_alive() for thread in pumps):

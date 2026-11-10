@@ -145,6 +145,7 @@ recording: none
 The owner's own laptop is the mixed case: uinput through the uaccess rule, no `input` group. A single "kernel or portal" choice gets it wrong either way: kernel loses hotkeys, portal costs a prompt that uinput does not need. Detection therefore reports each capability. Whether the program mixes backends (uinput output with portal hotkeys) is P04's to decide.
 
 - Open the device node and keep the handle (the checked thing is the used thing), and tell `EACCES` from `ENOENT` and other errors.
+- The spike counts any readable event node. The daemon must count only nodes that can serve the capability: keyboards for hotkeys, keyboards and pointers for recording. Through uaccess a gamepad can be readable while the keyboard is not.
 - The portal side: the frontend's `version` properties (RemoteDesktop ≥ 2 for `ConnectToEIS`; ConfigureShortcuts needs GlobalShortcuts ≥ 2) and `AvailableDeviceTypes` containing keyboard and pointer. A missing app id is only found by calling: `CreateSession` fails with `NotAllowed`.
 - A denied prompt answers `Start` with response 1, which ashpd reports as "Portal request was cancelled". That is distinct from `NotAllowed` (no app id) and from a missing interface or version. The deny left the existing grant in place: the saved token still restored in 7 ms.
 

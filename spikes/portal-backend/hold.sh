@@ -13,5 +13,8 @@ if [ "$how" = kill ]; then
 		sleep 5
 		systemctl --user kill -s KILL app-io.github.tobylo.AutoClickerX02.service
 	) &
+	# A run that ends early must not leave the timer to kill a later one.
+	timer=$!
+	trap 'kill "$timer" 2>/dev/null; wait "$timer" 2>/dev/null' EXIT
 fi
 "$(dirname "$0")/run-unit.sh" --deadline 30 output "$PWD/rd.token" hold "$what" "$how"

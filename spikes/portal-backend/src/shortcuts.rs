@@ -54,8 +54,9 @@ pub async fn run(mode: &str, secs: u64) -> Result<(), String> {
             .await;
         line(&format!("ConfigureShortcuts: {shown:?}"));
     }
-    listen(&portal, Duration::from_secs(secs)).await?;
-    session.close().await.map_err(err("Session.Close"))
+    let listened = listen(&portal, Duration::from_secs(secs)).await;
+    let closed = session.close().await.map_err(err("Session.Close"));
+    listened.and(closed)
 }
 
 fn err(call: &'static str) -> impl Fn(ashpd::Error) -> String {
