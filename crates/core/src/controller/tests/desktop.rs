@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::hotkeys::{Trigger, Triggers};
+use crate::recording::{Change, recordable};
 
 const SPACE_DOWN: Call = Call::Key(space(), PressState::Down);
 
@@ -61,7 +62,7 @@ async fn a_run_that_would_press_a_hotkeys_key_never_starts() {
                 assert_eq!(d.activity(), Activity::Idle, "{mode:?} {key}");
                 let notice = d.notice();
                 assert!(
-                    notice.starts_with("Not started: the clicker's key") && notice.contains(key),
+                    notice.starts_with(&format!("Not started: {key} is the key of the hotkey")),
                     "{notice}"
                 );
                 d.press_hotkey().await;
@@ -118,7 +119,8 @@ async fn key_runs_are_allowed_while_the_desktop_delivers_no_hotkeys() {
         assert_eq!(d.activity(), Activity::Idle);
         assert_eq!(start.elapsed(), Duration::ZERO);
         assert!(
-            d.notice().starts_with("Stopped: the clicker's key"),
+            d.notice()
+                .starts_with("Stopped: f6 is the key of the hotkey"),
             "{}",
             d.notice()
         );
@@ -206,7 +208,8 @@ async fn a_trigger_moved_onto_the_runs_key_stops_the_run_at_once() {
         assert_eq!(d.activity(), Activity::Idle);
         assert_eq!(start.elapsed(), Duration::ZERO);
         assert!(
-            d.notice().starts_with("Stopped: the clicker's key"),
+            d.notice()
+                .starts_with("Stopped: f9 is the key of the hotkey"),
             "{}",
             d.notice()
         );
@@ -404,6 +407,168 @@ async fn recording_is_refused_while_the_desktop_delivers_the_hotkeys() {
                 "{notice}"
             );
         }
+    })
+    .await;
+}
+
+// Playback
+
+const PLAY: HotkeyEvent = HotkeyEvent::Fired(Action::TogglePlayback);
+
+/// A desktop daemon with one recording stored: `name` pressed at 10 ms and
+/// let go at 500 ms, in a recording of a second.
+async fn desktop_daemon_with_recording(names: &[&str]) -> Daemon {
+    let shared = Shared::default();
+    shared.with(|r| {
+        r.desktop_reader = true;
+        r.recordings = Some(Arc::new(TempDir::new()));
+    });
+    let held: Vec<_> = names
+        .iter()
+        .map(|name| recordable(Key::from_name(name).unwrap().code()).unwrap())
+        .collect();
+    let presses = (10..)
+        .zip(&held)
+        .map(|(at, held)| (at, Change::Press(*held)));
+    let releases = (500..)
+        .zip(&held)
+        .map(|(at, held)| (at, Change::Release(*held)));
+    let events: Vec<(u64, Change)> = presses.chain(releases).collect();
+    shared.store("18:00:00", 1000, &events);
+    let config = Config {
+        tray_start_delay: Duration::ZERO,
+        ..Config::default()
+    };
+    daemon_with(config, shared, true).await
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_recording_that_presses_a_hotkeys_key_is_not_played() {
+    // Played back, Ctrl+Shift+F6 would stop its own playback: any hotkey
+    // does. Neither the hotkey nor the tray plays it, and nothing is pressed.
+    local(async {
+        let d = desktop_daemon_with_recording(&["leftctrl", "leftshift", "f6"]).await;
+        d.hotkey(defaults()).await;
+        d.hotkey(PLAY).await;
+        d.hotkey(HotkeyEvent::ModifiersReleased).await;
+        assert_eq!(d.activity(), Activity::Idle);
+        let notice = d.notice();
+        assert!(
+            notice.starts_with("Not playing Recording 2026-11-09 18:00:00: it presses a hotkey's key: f6 is the key of the hotkey Ctrl+Shift+F6"),
+            "{notice}"
+        );
+        let file = d.view().recordings[0].file.clone();
+        d.send(Message::Play(file)).await;
+        assert_eq!(d.activity(), Activity::Idle);
+        sleep(secs(5)).await;
+        assert_eq!(d.shared.calls(), []);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_recording_is_not_played_before_the_triggers_are_known_or_readable() {
+    local(async {
+        let d = desktop_daemon_with_recording(&["w"]).await;
+        d.hotkey(PLAY).await;
+        assert_eq!(d.activity(), Activity::Idle);
+        assert!(d.notice().contains("has not said yet"), "{}", d.notice());
+        d.hotkey(reported("Ctrl+Shift+F6", "Ctrl+Space", "")).await;
+        d.hotkey(PLAY).await;
+        assert_eq!(d.activity(), Activity::Idle);
+        assert!(d.notice().contains("Ctrl+Space"), "{}", d.notice());
+        assert_eq!(d.shared.calls(), []);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_recording_that_holds_modifiers_and_other_keys_plays() {
+    local(async {
+        // Sprinting and sneaking are what the user recorded.
+        let d = desktop_daemon_with_recording(&["leftctrl", "leftshift", "w"]).await;
+        d.hotkey(defaults()).await;
+        d.hotkey(PLAY).await;
+        d.hotkey(HotkeyEvent::ModifiersReleased).await;
+        sleep(Duration::from_millis(20)).await;
+        d.settle().await;
+        assert_eq!(d.activity(), Activity::Playing);
+        assert_eq!(d.shared.calls().len(), 3);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_recording_without_keys_plays_whatever_the_triggers_are() {
+    local(async {
+        let d = desktop_daemon_with_recording(&[]).await;
+        // Nothing reported yet.
+        d.hotkey(PLAY).await;
+        assert_eq!(d.activity(), Activity::PlayWaitingForRelease);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_trigger_moved_onto_a_key_of_the_recording_stops_playback_at_once() {
+    local(async {
+        let d = desktop_daemon_with_recording(&["f9"]).await;
+        d.hotkey(defaults()).await;
+        d.hotkey(PLAY).await;
+        d.hotkey(HotkeyEvent::ModifiersReleased).await;
+        sleep(Duration::from_millis(20)).await;
+        d.settle().await;
+        assert_eq!(d.activity(), Activity::Playing);
+        let start = Instant::now();
+        d.hotkey(reported("Ctrl+Shift+F6", "Ctrl+F9", "")).await;
+        assert_eq!(d.activity(), Activity::Idle);
+        assert_eq!(start.elapsed(), Duration::ZERO);
+        assert!(
+            d.notice()
+                .starts_with("Stopped: f9 is the key of the hotkey Ctrl+F9"),
+            "{}",
+            d.notice()
+        );
+        let f9 = Key::from_name("f9").unwrap();
+        assert_eq!(
+            d.shared.calls(),
+            [
+                Call::Key(f9, PressState::Down),
+                Call::Key(f9, PressState::Up)
+            ]
+        );
+        // And while it only waits to start.
+        d.hotkey(defaults()).await;
+        d.hotkey(PLAY).await;
+        assert_eq!(d.activity(), Activity::PlayWaitingForRelease);
+        d.hotkey(reported("Ctrl+F9", "", "")).await;
+        assert_eq!(d.activity(), Activity::Idle);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_recording_with_a_hotkeys_key_plays_where_the_keyboards_are_read() {
+    local(async {
+        // The device reader leaves the program's own devices out.
+        let shared = Shared::default();
+        shared.with(|r| r.recordings = Some(Arc::new(TempDir::new())));
+        let f6 = recordable(64).unwrap();
+        shared.store(
+            "18:00:00",
+            1000,
+            &[(10, Change::Press(f6)), (500, Change::Release(f6))],
+        );
+        let config = Config {
+            tray_start_delay: Duration::ZERO,
+            ..Config::default()
+        };
+        let d = daemon_with(config, shared, true).await;
+        d.hotkey(PLAY).await;
+        d.hotkey(HotkeyEvent::ModifiersReleased).await;
+        sleep(Duration::from_millis(20)).await;
+        d.settle().await;
+        assert_eq!(d.activity(), Activity::Playing);
     })
     .await;
 }

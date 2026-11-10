@@ -8,6 +8,7 @@ use super::*;
 use crate::clicker::{INTERVAL_FLOOR, INTERVAL_MAX, Interval, Jitter, Mode, Position, Repeat};
 use crate::hotkeys::{Binding, Bindings};
 use crate::input::{AbsolutePosition, Button, Key};
+use crate::playback::{PlaybackSettings, Speed};
 use crate::test_support::{TempDir, permissions_apply};
 
 fn parse(text: &str) -> Config {
@@ -75,6 +76,10 @@ fn every_option_is_read() {
         [input]
         output = "portal"
         hotkeys = "portal"
+
+        [playback]
+        speed = 1.5
+        repeat = 3
         "#,
     );
     let expected = Config {
@@ -96,6 +101,10 @@ fn every_option_is_read() {
         input: InputSettings {
             output: OutputRoute::Portal,
             hotkeys: HotkeyRoute::Portal,
+        },
+        playback: PlaybackSettings {
+            speed: Speed::from_ratio(1.5).unwrap(),
+            repeat: Repeat::Times(NonZeroU32::new(3).unwrap()),
         },
     };
     assert_eq!(config, expected);
@@ -198,6 +207,7 @@ fn unknown_keys_are_rejected_in_every_table() {
             "version = 1\n[hotkeys]\ntoggle_clicks = \"Ctrl+F6\"\n",
             "toggle_clicks",
         ),
+        ("version = 1\n[playback]\nloops = 2\n", "loops"),
     ];
     for (text, key) in cases {
         let (line, reason) = invalid(text);

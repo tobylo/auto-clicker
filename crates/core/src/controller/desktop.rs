@@ -7,9 +7,36 @@
 //! that would is refused before it starts, and stopped when a trigger
 //! changes under it.
 
+use std::sync::Arc;
+
 use super::view::Hotkey;
-use super::{Controller, InputLifetime, InputReader, Platform};
+use super::{Controller, InputLifetime, InputReader, Job, Platform, State};
+use crate::config::Config;
 use crate::hotkeys::{Action, Bindings, HotkeyStatus, Triggers, Unavailable};
+use crate::input::Key;
+
+/// The keys a run presses by itself, which the desktop would take for the
+/// user's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum OwnKeys {
+    /// The key the clicker repeats or holds, in the modes that press one.
+    /// It may not be a modifier either: held by the program alone, it would
+    /// change which hotkey the user's own press sets off.
+    Clicker(Option<Key>),
+    /// Every key a recording presses. Modifiers among them are what the
+    /// user did, and stay.
+    Recording(Arc<[Key]>),
+}
+
+impl Job {
+    /// The keys this job presses.
+    pub(super) fn own_keys(&self, config: &Config) -> OwnKeys {
+        match self {
+            Job::Click => OwnKeys::Clicker(config.clicker.pressed_key()),
+            Job::Play(playing) => OwnKeys::Recording(playing.keys()),
+        }
+    }
+}
 
 /// The hotkeys of a desktop that delivers them.
 pub(super) struct DesktopHotkeys {
@@ -46,18 +73,29 @@ impl<P: Platform> Controller<P> {
             triggers,
             live: true,
         });
-        if !self.activity().clicking() {
+        let Some(keys) = self.job_keys() else {
             return;
-        }
-        if let Some(why) = self.own_key_refusal() {
+        };
+        if let Some(why) = self.own_key_refusal(&keys) {
             self.stop(Some(format!("Stopped: {why}")));
+        }
+    }
+
+    /// The keys of the run that is going or about to start, if one is.
+    fn job_keys(&self) -> Option<OwnKeys> {
+        match &self.state {
+            State::Countdown(_, job) | State::Release(_, job) | State::Opening(job) => {
+                Some(job.own_keys(&self.config))
+            }
+            State::Running(running) => Some(running.keys.clone()),
+            State::Idle | State::RecordCountdown(_) | State::Recording(_) => None,
         }
     }
 
     /// Whether the run the config asks for may press its key; says why not
     /// when it may not.
     pub(super) fn keys_allow(&mut self) -> bool {
-        match self.own_key_refusal() {
+        match self.own_key_refusal(&Job::Click.own_keys(&self.config)) {
             Some(why) => {
                 self.notice = Some(format!("Not started: {why}"));
                 false
@@ -76,13 +114,17 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    /// Why the configured run would set off a hotkey, if it would. Only a
-    /// run that presses a key can, and only while the desktop delivers the
-    /// hotkeys.
-    fn own_key_refusal(&self) -> Option<String> {
-        let key = self.config.clicker.pressed_key()?;
+    /// Why a run pressing `keys` would set off a hotkey, if it would. It
+    /// can only while the desktop delivers the hotkeys.
+    pub(super) fn own_key_refusal(&self, keys: &OwnKeys) -> Option<String> {
         let desktop = self.desktop.as_ref().filter(|desktop| desktop.live)?;
-        Some(desktop.triggers.refusal(key)?.to_string())
+        let refusal = match keys {
+            OwnKeys::Clicker(key) => desktop.triggers.refusal((*key)?),
+            OwnKeys::Recording(keys) => keys
+                .iter()
+                .find_map(|key| desktop.triggers.hotkey_refusal(*key)),
+        }?;
+        Some(refusal.to_string())
     }
 
     /// Why a recording cannot start on this platform, if it cannot.

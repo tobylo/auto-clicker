@@ -7,12 +7,11 @@ use std::future::{Future, pending};
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use auto_clicker_core::clicker::{
-    ClickerSettings, Ended, Interval, Mode, Position, Repeat, Signals, run,
-};
+use auto_clicker_core::clicker::{ClickerSettings, Interval, Mode, Position, Repeat, run};
 use auto_clicker_core::input::{
     AbsolutePosition, Button, Held, Input, InputError, Key, PressState,
 };
+use auto_clicker_core::run::{Ended, RunEnd, Signals};
 use tokio::task::LocalSet;
 use tokio::time::{sleep, timeout};
 
@@ -176,7 +175,7 @@ async fn run_engine(
     input: Input<PortalBackend>,
     settings: ClickerSettings,
     stop: impl Future<Output = ()>,
-) -> auto_clicker_core::clicker::RunEnd<PortalBackend> {
+) -> RunEnd<PortalBackend> {
     let signals = Signals {
         stop,
         shutdown: never(),
