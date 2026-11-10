@@ -4,7 +4,7 @@
 
 An auto clicker with macro record and playback for KDE Plasma on Wayland, living in the system tray. It is for anyone who plays games on a Plasma desktop and wants fast clicking, a held button or key, or a recorded routine, switched on and off by a hotkey that works inside fullscreen games. Written in Rust to stay light while idle.
 
-Status: the auto clicker runs from the tray and the hotkey, records macros, and installs as a package on CachyOS and Arch (see [Install](#install)); playback is still to come. See [docs/planning/map.md](docs/planning/map.md) for what it will do and why, and [the Project](https://github.com/users/tobylo/projects/4) for the work.
+Status: the auto clicker runs from the tray and the hotkey, records macros and plays them back, and installs as a package on CachyOS and Arch (see [Install](#install)). See [docs/planning/map.md](docs/planning/map.md) for what it will do and why, and [the Project](https://github.com/users/tobylo/projects/4) for the work.
 
 ## Install
 
@@ -82,12 +82,13 @@ Once installed and enabled, it starts at login and stays in the system tray (run
 
 - **Start clicking** counts down `tray_start_delay` seconds (5 by default), so you can switch to the game, then clicks. The icon's tooltip shows the seconds left. **Stop clicking** stops it, or cancels the countdown.
 - **Record** counts down the same way, then records what the mouse and keyboard do until **Stop recording**, and saves it. The icon turns red while recording.
-- **Play** and **Settings** come in later versions.
-- **Quit** stops clicking, lets go of everything it pressed, saves a recording in progress and exits.
+- **Play** lists the ten newest recordings, newest first. Choosing one counts down the same way, then plays it; **Stop playing** stops it, or cancels the countdown (see [Playing a recording](#playing-a-recording)).
+- **Settings** comes in a later version.
+- **Quit** stops clicking and playback, lets go of everything it pressed, saves a recording in progress and exits.
 
 The hotkey (Ctrl+F6 by default) starts and stops clicking at once, without a countdown. A start waits until you let go of Ctrl, so the first click is a plain click and not Ctrl+click; if Ctrl is still held after 30 seconds, nothing starts and the tooltip says why.
 
-Clicking stops when the screen locks, another user's session comes to the front, or the computer goes to sleep, and it cannot start again until the session is back. A recording stops and is saved at those moments too. Before sleep, the program holds the computer back (for 2 seconds at most) until it has let go of every button and key it pressed, so nothing stays pressed while asleep. The tooltip says what the clicker will do, and why it stopped or cannot start.
+Clicking and playback stop when the screen locks, another user's session comes to the front, or the computer goes to sleep, and they cannot start again until the session is back. A recording stops and is saved at those moments too. Before sleep, the program holds the computer back (for 2 seconds at most) until it has let go of every button and key it pressed, so nothing stays pressed while asleep. The tooltip says what the clicker will do, and why it stopped or cannot start.
 
 Only one copy runs per session: a second one prints "auto-clicker is already running" and exits. A running copy quits if it loses the session bus. It talks to the session and system buses through their Unix sockets only, and refuses to start when `DBUS_SESSION_BUS_ADDRESS` names anything else.
 
@@ -114,6 +115,20 @@ The files are JSON, one event per line: microseconds since the start, what happe
 ]}
 ```
 
+## Playing a recording
+
+Playback repeats what a recording holds, with its timing: each key, click, wheel turn and mouse movement happens as long after the start as it did when it was recorded. Start it with Ctrl+F8, or from the tray's Play menu.
+
+- **Which recording.** Ctrl+F8 plays the recording you last made or last chose from the tray; right after the program starts, that is the newest one. The tray lists the ten newest by the time in their file names, such as "Recording 2026-11-09 18:04:05". The tooltip names what is playing.
+- **Starting.** From the tray, playback counts down `tray_start_delay` seconds first. From Ctrl+F8 it starts as soon as you let go of Ctrl, so Ctrl does not mix into what plays. If Ctrl is still held after 2 seconds it starts anyway, and the tooltip says so.
+- **Stopping.** Any of the three hotkeys stops playback, and so does Stop playing in the tray. Whenever it stops, and however (a hotkey, the tray, a locked screen, sleep, Quit, an error), every key and button it was holding is let go at once.
+- **Your own input.** The mouse and keyboard keep working while a recording plays and do not stop it: what you do mixes with what plays. A key you hold while the recording presses the same key stays down on Plasma until both have let go of it: the game sees one press and one release (measured on Plasma 6.8.2).
+- **Speed and repeats.** `[playback]` in the [configuration](#configuration) sets the speed, from a quarter to four times the recorded one, and how many times the recording plays: a number, or until stopped. Each repeat starts a whole recording after the one before, the idle time at the recording's end included, so rounds do not run together; the last round is over with its last event. A recording shorter than a tenth of a second plays once only: repeated, it would spin faster than you could stop it.
+- **Timing.** Every event is scheduled from the moment playback started, so small delays never add up, however long the recording or however many rounds. An event lands within a millisecond or two of its time (measured: 1.3 ms off at worst, recording the replay of a 20-event routine on the kernel's own clock). If the computer stalls, the events that became due play in order as soon as it can, and the ones after them keep their own times.
+- **Mouse movement.** Movement plays back as the same mouse movement, not as positions on the screen. In a game that locks the pointer (Minecraft while playing) that turns the view exactly as recorded. On the desktop, the pointer can end somewhere else than it did: the desktop applies its pointer acceleration to the program's virtual mouse, with that mouse's own settings, and acceleration depends on how fast the movement is, so it also changes with the playback speed. Measured on Plasma 6.8.2 with its default acceleration, 400 units of movement moved the pointer 397 to 795 pixels, depending on how fast it was recorded and played (niri gave the same figures). Recordings that click on desktop targets will be exact once positions are recorded as well (a later version).
+- **Refusals.** Playback does not start while clicking or recording, and those do not start while a recording plays. A file that is missing, damaged or not a recording is not played: the tooltip says what is wrong with it, and nothing is pressed.
+- **Files.** Only files named the way the program names them appear in the Play menu. Recordings are never deleted by the program; a long one with much mouse movement can take tens of megabytes, so clear out the folder by hand now and then.
+
 ## Configuration
 
 Settings live in `~/.config/auto-clicker/config.toml` (or under `$XDG_CONFIG_HOME`). Without the file, the defaults below apply; the program never writes it. If the file is invalid, the program runs on the defaults, leaves the file alone and reports the line and reason in the tray's tooltip. The file is read at start only: after editing it, restart the program (`systemctl --user restart auto-clicker`).
@@ -134,10 +149,14 @@ repeat = "until_stopped"      # or a number of actions (a double click is one); 
 [hotkeys]
 toggle_clicking = "Ctrl+F6"   # start or stop clicking
 toggle_recording = "Ctrl+F7"  # start recording a macro, or stop and save it
-toggle_playback = "Ctrl+F8"   # play or stop the macro
+toggle_playback = "Ctrl+F8"   # play the current recording, or stop playback
 
 [input]
 output = "kernel"             # how clicks and keys reach the desktop: kernel or portal
+
+[playback]
+speed = 1.0                   # how fast a recording plays, 0.25 to 4 times the recorded speed
+repeat = 1                    # how many times it plays, or "until_stopped"
 ```
 
 - Keys are named by where they sit on the keyboard, not by the label printed on them, so a setting stays on the same physical key whatever keyboard layout is in use. The letter and symbol names are the labels of a US keyboard: on a German keyboard, "z" is the key labelled Y. The names, lowercase: "a" to "z", "0" to "9", "f1" to "f24", "space", "enter", "esc", "tab", "backspace", "capslock", "minus", "equal", "leftbrace", "rightbrace", "semicolon", "apostrophe", "grave", "backslash", "comma", "dot", "slash", left and right "shift", "ctrl", "alt" and "meta" (such as "leftshift"), "up", "down", "left", "right", "home", "end", "pageup", "pagedown", "insert", "delete", the keypad keys ("kp0" to "kp9", "kpplus", "kpminus", "kpasterisk", "kpslash", "kpdot", "kpenter"), "numlock", "scrolllock", "sysrq", "pause", "compose" and "102nd", the extra key beside the left Shift on ISO keyboards (most European ones). Any other key is given by its Linux key code, such as `key = 113` for the mute key.
@@ -150,7 +169,7 @@ output = "kernel"             # how clicks and keys reach the desktop: kernel or
 
 With `output = "portal"`, the program asks Plasma for remote input (the RemoteDesktop portal) instead of creating virtual devices, so it needs no access to `/dev/uinput`. The first time you start clicking, Plasma asks whether "Auto Clicker" may control the keyboard and pointer. After you allow it, clicking does not begin by itself, since the dialog took the focus from your game: switch back and start again. Plasma remembers the answer, so later starts go ahead without asking; the program keeps Plasma's token for it in `~/.local/state/auto-clicker/portal-token`. If you deny it, the tray says so and the next start asks again. Plasma lists the permission under System Settings, where it can be revoked.
 
-The program opens a remote input session for each run and closes it when the run stops, so Plasma shows that remote control is active only while clicking. If Plasma ends the session during a run (the permission was revoked, or the screen locked), clicking stops, Plasma lets go of every button and key, and the tray says why.
+The program opens a remote input session for each run and closes it when the run stops, so Plasma shows that remote control is active only while clicking. If Plasma ends the session during a run (the permission was revoked, or the screen locked), clicking stops, Plasma lets go of every button and key, and the tray says why. Playing a recording goes the same way: a session for each playback, closed when it ends.
 
 The portal needs the package's `io.github.tobylo.AutoClicker.desktop`: Plasma keeps the permission per app. If the portal cannot be used, the program keeps running and the tray says why.
 

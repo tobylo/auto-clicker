@@ -8,7 +8,7 @@ use super::*;
 use crate::hotkeys::DeviceId;
 use crate::recording::{Change, KeyInput, MAX_DURATION, Recording};
 
-const KEYBOARD: DeviceId = DeviceId(1);
+pub(super) const KEYBOARD: DeviceId = DeviceId(1);
 const MOUSE: DeviceId = DeviceId(2);
 const W: u16 = 17;
 const F7: u16 = 65;
@@ -17,7 +17,7 @@ const SAVED: &str = "Saved \u{201c}Recording 2026-11-09 18:04\u{201d}";
 
 impl Daemon {
     /// A key event from the reader, now.
-    fn key(&self, device: DeviceId, code: u16, pressed: bool) {
+    pub(super) fn key(&self, device: DeviceId, code: u16, pressed: bool) {
         let now = self.shared.clock();
         self.shared
             .feed(|recorder| recorder.key(device, KeyInput::new(code, pressed), now));
@@ -30,7 +30,7 @@ impl Daemon {
 
     /// Ctrl+F7 as the reader handles it: the recorder sees the press that
     /// fired, then the controller gets the hotkey.
-    async fn record_hotkey(&self) {
+    pub(super) async fn record_hotkey(&self) {
         let now = self.shared.clock();
         self.shared.feed(|recorder| {
             recorder.key(
