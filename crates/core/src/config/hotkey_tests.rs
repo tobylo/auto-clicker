@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::hotkeys::{Binding, Bindings};
+use crate::input::Key;
 
 fn parse(text: &str) -> Config {
     Config::parse(text).unwrap_or_else(|err| panic!("{text:?}: {err:?}"))
@@ -64,13 +65,13 @@ fn two_actions_on_one_hotkey_are_rejected_where_written() {
         "{}",
         both.1
     );
-    // The playback default, Ctrl+F8, taken by the action before it.
-    let earlier = invalid_hotkeys("", "toggle_clicking = \"Ctrl+F8\"");
+    // The playback default, Ctrl+Shift+F8, taken by the action before it.
+    let earlier = invalid_hotkeys("", "toggle_clicking = \"Ctrl+Shift+F8\"");
     assert_eq!(earlier.0, Some(5), "{}", earlier.1);
-    // The clicking default, Ctrl+F6, taken by an action after it.
-    let later = invalid_hotkeys("", "\ntoggle_playback = \"ctrl+f6\"");
+    // The clicking default, Ctrl+Shift+F6, taken by an action after it.
+    let later = invalid_hotkeys("", "\ntoggle_playback = \"ctrl+shift+f6\"");
     assert_eq!(later.0, Some(6), "{}", later.1);
-    assert!(later.1.contains("Ctrl+F6"), "{}", later.1);
+    assert!(later.1.contains("Ctrl+Shift+F6"), "{}", later.1);
 }
 
 #[test]
@@ -83,6 +84,28 @@ fn a_hotkey_on_the_key_the_clicker_presses_is_rejected() {
         assert_eq!(line, Some(6), "{mode}: {reason}");
         assert!(reason.contains("the key the clicker presses"), "{reason}");
     }
+}
+
+#[test]
+fn a_config_binding_on_the_clicker_key_is_fine_where_the_desktop_owns_the_hotkeys() {
+    // The desktop's triggers may differ from the config's bindings, the
+    // defaults included; the controller checks the real ones.
+    for hotkeys in ["", "[hotkeys]\ntoggle_recording = \"Ctrl+F9\"\n"] {
+        for key in ["f6", "f9"] {
+            let text = format!(
+                "version = 1\n[clicker]\nmode = \"hold_key\"\nkey = \"{key}\"\n{hotkeys}[input]\nhotkeys = \"portal\"\n"
+            );
+            let config = parse(&text);
+            assert_eq!(config.input.hotkeys, HotkeyRoute::Portal, "{text}");
+            assert_eq!(config.clicker.key, Key::from_name(key).unwrap());
+        }
+    }
+    // On the kernel route the same file is rejected: a default binding.
+    let (line, reason) = invalid(
+        "version = 1\n[clicker]\nmode = \"hold_key\"\nkey = \"f6\"\n[input]\nhotkeys = \"kernel\"\n",
+    );
+    assert_eq!(line, None, "{reason}");
+    assert!(reason.contains("the key the clicker presses"), "{reason}");
 }
 
 #[test]

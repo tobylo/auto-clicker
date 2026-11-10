@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::clicker::{ClickerSettings, Mode, Position, Repeat};
-use crate::hotkeys::Binding;
+use crate::hotkeys::{Binding, DESKTOP_RELEASE_PAUSE};
 use crate::input::{Button, Key};
 use crate::playback::{PlaybackSettings, Speed};
 use crate::recording::{FileName, MAX_DURATION};
@@ -75,17 +75,53 @@ pub struct Listed {
     pub label: String,
 }
 
+/// A hotkey as the tray names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Hotkey {
+    /// The config's binding, matched by the program itself.
+    Bound(Binding),
+    /// The trigger the desktop reports for a hotkey it delivers: `None`
+    /// until it reported one, empty when the action has none.
+    Desktop(Option<String>),
+}
+
+impl Hotkey {
+    /// "`<hotkey>` `does`", or what to do about a hotkey the desktop has
+    /// not set; nothing while the desktop has not reported it.
+    fn line(&self, does: &str) -> Option<String> {
+        match self {
+            Hotkey::Bound(binding) => Some(format!("{binding} {does}")),
+            Hotkey::Desktop(None) => None,
+            Hotkey::Desktop(Some(trigger)) if trigger.is_empty() => Some(format!(
+                "No hotkey {does}: set one in System Settings, under Shortcuts"
+            )),
+            Hotkey::Desktop(Some(trigger)) => Some(format!("{trigger} {does}")),
+        }
+    }
+
+    /// What a start from this hotkey waits for.
+    fn start_wait(&self) -> String {
+        match self {
+            Hotkey::Bound(binding) => format!("when you let go of {}", modifiers_of(*binding)),
+            Hotkey::Desktop(_) => format!(
+                "{} s after you let go of the hotkey",
+                DESKTOP_RELEASE_PAUSE.as_secs()
+            ),
+        }
+    }
+}
+
 /// Everything the tray shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
     pub activity: Activity,
     pub settings: ClickerSettings,
     /// The hotkey that starts and stops clicking.
-    pub hotkey: Binding,
+    pub hotkey: Hotkey,
     /// The hotkey that starts and stops recording.
-    pub record_hotkey: Binding,
+    pub record_hotkey: Hotkey,
     /// The hotkey that starts and stops playback.
-    pub play_hotkey: Binding,
+    pub play_hotkey: Hotkey,
     pub playback: PlaybackSettings,
     /// The newest recordings, newest first: what the tray offers to play.
     pub recordings: Arc<[Listed]>,
@@ -106,10 +142,7 @@ impl View {
             Activity::Idle => "Auto clicker: idle".to_owned(),
             Activity::StartingIn(seconds) => format!("Auto clicker: starts in {seconds} s"),
             Activity::WaitingForRelease => {
-                format!(
-                    "Auto clicker: starts when you let go of {}",
-                    modifiers_of(self.hotkey)
-                )
+                format!("Auto clicker: starts {}", self.hotkey.start_wait())
             }
             Activity::Opening => {
                 "Auto clicker: starting; allow input if the desktop asks".to_owned()
@@ -119,10 +152,7 @@ impl View {
             Activity::Recording => "Auto clicker: recording".to_owned(),
             Activity::PlayingIn(seconds) => format!("Auto clicker: plays in {seconds} s"),
             Activity::PlayWaitingForRelease => {
-                format!(
-                    "Auto clicker: plays when you let go of {}",
-                    modifiers_of(self.play_hotkey)
-                )
+                format!("Auto clicker: plays {}", self.play_hotkey.start_wait())
             }
             Activity::PlayOpening => {
                 "Auto clicker: starting playback; allow input if the desktop asks".to_owned()
@@ -135,19 +165,16 @@ impl View {
     /// plays, the recording's time limit while one runs, what plays, the
     /// last notice and every problem.
     pub fn details(&self) -> Vec<String> {
-        let mut lines = vec![
-            describe(&self.settings),
-            format!("{} starts and stops clicking", self.hotkey),
-            format!(
-                "{} starts recording, and stops and saves it",
-                self.record_hotkey
-            ),
-            format!(
-                "{} plays the last recording {}, and stops it",
-                self.play_hotkey,
-                describe_playback(&self.playback)
-            ),
-        ];
+        let mut lines = vec![describe(&self.settings)];
+        lines.extend(self.hotkey.line("starts and stops clicking"));
+        lines.extend(
+            self.record_hotkey
+                .line("starts recording, and stops and saves it"),
+        );
+        lines.extend(self.play_hotkey.line(&format!(
+            "plays the last recording {}, and stops it",
+            describe_playback(&self.playback)
+        )));
         if self.activity.recording() {
             let minutes = MAX_DURATION.as_secs() / 60;
             lines.push(format!(
@@ -247,7 +274,6 @@ mod tests {
 
     use super::*;
     use crate::clicker::{Interval, Jitter};
-    use crate::hotkeys::Bindings;
     use crate::input::AbsolutePosition;
 
     fn settings(mode: Mode) -> ClickerSettings {
@@ -313,9 +339,9 @@ mod tests {
         View {
             activity,
             settings: ClickerSettings::default(),
-            hotkey: Binding::parse(hotkey).unwrap(),
-            record_hotkey: Binding::parse("Ctrl+F7").unwrap(),
-            play_hotkey: Binding::parse("Ctrl+Alt+F8").unwrap(),
+            hotkey: Hotkey::Bound(Binding::parse(hotkey).unwrap()),
+            record_hotkey: Hotkey::Bound(Binding::parse("Ctrl+F7").unwrap()),
+            play_hotkey: Hotkey::Bound(Binding::parse("Ctrl+Alt+F8").unwrap()),
             playback: PlaybackSettings::default(),
             recordings: Arc::from([]),
             playing: None,
@@ -380,7 +406,7 @@ mod tests {
     #[test]
     fn details_list_settings_hotkey_notice_and_problems() {
         let mut shown = view(Activity::Idle, "Ctrl+F6");
-        shown.hotkey = Bindings::default().toggle_clicking;
+        shown.hotkey = Hotkey::Bound(Binding::parse("Ctrl+F6").unwrap());
         shown.notice = Some("notice".to_owned());
         shown.problems = vec!["one".to_owned(), "two".to_owned()];
         assert_eq!(

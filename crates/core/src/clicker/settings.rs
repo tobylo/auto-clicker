@@ -123,6 +123,13 @@ pub struct ClickerSettings {
     pub repeat: Repeat,
 }
 
+impl ClickerSettings {
+    /// The key a run presses, in the modes that press one.
+    pub fn pressed_key(&self) -> Option<Key> {
+        matches!(self.mode, Mode::KeyRepeat | Mode::HoldKey).then_some(self.key)
+    }
+}
+
 /// The key a new configuration repeats or holds. Evaluated at compile time,
 /// so the panic arm can only fail the build, never a run.
 const DEFAULT_KEY: Key = match Key::new(57) {

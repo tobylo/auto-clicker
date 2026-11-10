@@ -18,6 +18,7 @@
 //! it will run ([`Job`]), and a run of either kind is one [`Running`]: what
 //! stops one stops the other.
 
+mod desktop;
 mod hotkeys;
 mod playback;
 mod recording;
@@ -37,7 +38,7 @@ use tokio::time::{Instant, sleep_until};
 
 pub use hotkeys::{HotkeyReader, HotkeySender};
 pub use session::{Blocked, SessionFacts};
-pub use view::{Activity, Listed, View, describe};
+pub use view::{Activity, Hotkey, Listed, View, describe};
 
 use crate::clicker::run;
 use crate::config::Config;
@@ -128,6 +129,18 @@ pub enum InputLifetime {
     PerRun,
 }
 
+/// Where a platform's input reader gets its hotkeys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputReader {
+    /// From the keyboards: it reads device nodes, tells the program's own
+    /// devices from the user's, and can feed a recording.
+    Devices,
+    /// From the desktop's shortcuts: it reads no device, so it runs through
+    /// every open, cannot feed a recording, and cannot tell the program's
+    /// own key output from the user's. It reports the desktop's triggers.
+    Desktop,
+}
+
 /// What the controller needs from the platform: its input devices, an input
 /// reader that ignores them, and the clocks and directory recordings need.
 pub trait Platform {
@@ -147,11 +160,16 @@ pub trait Platform {
         Box::pin(pending())
     }
 
+    /// Where the input reader gets its hotkeys.
+    fn input_reader(&self) -> InputReader {
+        InputReader::Devices
+    }
+
     /// Starts reading input, ignoring the devices of `own` (none when it is
     /// `None`): hotkeys go to `send`, and while a recording runs, what the
-    /// devices do goes to `feed`. The controller drops the reader before it
-    /// opens devices again, so no reader runs while devices it does not know
-    /// about exist.
+    /// devices do goes to `feed`. The controller drops a reader of devices
+    /// before it opens kept devices again, so no such reader runs while
+    /// devices it does not know about exist.
     ///
     /// When a recording starts, the reader reads what every device holds
     /// and tells the recorder, so a key pressed while the recording was
@@ -233,6 +251,8 @@ type RunFuture<B> = Pin<Box<dyn Future<Output = RunEnd<B>>>>;
 struct Running<B: InputBackend> {
     /// The recording it plays, as the tray names it; `None` when clicking.
     playing: Option<String>,
+    /// The keys it presses by itself.
+    keys: desktop::OwnKeys,
     run: RunFuture<B>,
     stop: Option<oneshot::Sender<()>>,
     shutdown: Option<oneshot::Sender<()>>,
@@ -302,6 +322,8 @@ pub struct Controller<P: Platform> {
     input_error: Option<String>,
     hotkeys: HotkeySource,
     hotkey_status: Option<HotkeyStatus>,
+    /// The desktop's hotkeys, when it delivers them.
+    desktop: Option<desktop::DesktopHotkeys>,
     /// Starts out unknown: a state not yet read is not "unlocked".
     blocked: Option<Blocked>,
     notice: Option<String>,
@@ -334,12 +356,21 @@ impl<P: Platform> Controller<P> {
     ) -> (Controller<P>, Links) {
         let (send, inbox) = mpsc::unbounded_channel();
         let (released_for_sleep, sleep_reports) = watch::channel(0);
+        let desktop = Self::first_triggers(&platform);
         let (view, shown) = watch::channel(View {
             activity: Activity::Idle,
             settings: config.clicker,
-            hotkey: config.hotkeys.toggle_clicking,
-            record_hotkey: config.hotkeys.toggle_recording,
-            play_hotkey: config.hotkeys.toggle_playback,
+            hotkey: desktop::shown_hotkey(config.hotkeys, desktop.as_ref(), Action::ToggleClicking),
+            record_hotkey: desktop::shown_hotkey(
+                config.hotkeys,
+                desktop.as_ref(),
+                Action::ToggleRecording,
+            ),
+            play_hotkey: desktop::shown_hotkey(
+                config.hotkeys,
+                desktop.as_ref(),
+                Action::TogglePlayback,
+            ),
             playback: config.playback,
             recordings: Arc::from([]),
             playing: None,
@@ -358,6 +389,7 @@ impl<P: Platform> Controller<P> {
             input_error: None,
             hotkeys: HotkeySource::none(),
             hotkey_status: None,
+            desktop,
             blocked: Some(Blocked::Unknown("not read yet".to_owned())),
             notice: None,
             sleep_notice: None,
@@ -493,6 +525,9 @@ impl<P: Platform> Controller<P> {
 
     fn hotkey(&mut self, event: HotkeyEvent) {
         match event {
+            // Right after the desktop's shortcuts came back, a hotkey is the
+            // echo of the program's own keys.
+            HotkeyEvent::Fired(_) if self.in_echo_window() => {}
             // Any hotkey stops playback, or a start of it, and does nothing
             // else.
             HotkeyEvent::Fired(_) if self.playing().is_some() => self.stop(None),
@@ -502,6 +537,7 @@ impl<P: Platform> Controller<P> {
             HotkeyEvent::ModifiersReleased => self.released(),
             HotkeyEvent::ReleaseLost => self.release_lost(),
             HotkeyEvent::Status(status) => self.hotkey_status_changed(status),
+            HotkeyEvent::Triggers(triggers) => self.triggers_changed(triggers),
         }
     }
 
@@ -575,6 +611,7 @@ impl<P: Platform> Controller<P> {
 
     fn hotkey_status_changed(&mut self, status: HotkeyStatus) {
         let unavailable = matches!(status, HotkeyStatus::Unavailable(_));
+        self.desktop_status_changed(&status);
         if let HotkeyStatus::Unavailable(why @ Unavailable::WatchFailed(_)) = &status {
             self.input_lost(why.to_string());
         }
@@ -675,7 +712,7 @@ impl<P: Platform> Controller<P> {
 
     /// Whether a start may begin; says why not when it may not.
     fn may_start(&mut self) -> bool {
-        self.session_allows("Not started")
+        self.session_allows("Not started") && self.keys_allow()
     }
 
     /// Whether the session lets anything start; when it does not, the
@@ -746,6 +783,7 @@ impl<P: Platform> Controller<P> {
             Job::Play(playing) => playing.start_notice(),
         };
         let playing = job.playing().map(str::to_owned);
+        let keys = job.own_keys(&self.config);
         let run: RunFuture<P::Backend> = match job {
             Job::Click => {
                 let settings = self.config.clicker;
@@ -756,6 +794,7 @@ impl<P: Platform> Controller<P> {
         };
         self.state = State::Running(Running {
             playing,
+            keys,
             run,
             stop: Some(stop),
             shutdown: Some(shutdown),
@@ -804,11 +843,11 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    /// Starts opening the devices. Kept devices are visible to the hotkey
-    /// reader, so it stops first (it would read them as keyboards) and
+    /// Starts opening the devices. Kept devices are visible to a reader of
+    /// devices, so it stops first (it would read them as keyboards) and
     /// starts again once the open has ended.
     fn open(&mut self) {
-        if P::LIFETIME == InputLifetime::Kept {
+        if self.reader_restarts() {
             self.hotkeys = HotkeySource::none();
         }
         self.opening = Some(self.platform.open_input());
@@ -822,7 +861,7 @@ impl<P: Platform> Controller<P> {
             _ => None,
         };
         self.keep_opened(opened, waiting.as_ref());
-        if P::LIFETIME == InputLifetime::Kept {
+        if self.reader_restarts() {
             self.start_reader();
         }
         if let Some(job) = waiting
@@ -875,9 +914,9 @@ impl<P: Platform> Controller<P> {
         let view = View {
             activity: self.activity(),
             settings: self.config.clicker,
-            hotkey: self.config.hotkeys.toggle_clicking,
-            record_hotkey: self.config.hotkeys.toggle_recording,
-            play_hotkey: self.config.hotkeys.toggle_playback,
+            hotkey: self.shown_hotkey(Action::ToggleClicking),
+            record_hotkey: self.shown_hotkey(Action::ToggleRecording),
+            play_hotkey: self.shown_hotkey(Action::TogglePlayback),
             playback: self.config.playback,
             recordings: Arc::clone(&self.recordings),
             playing: self.playing().map(str::to_owned),

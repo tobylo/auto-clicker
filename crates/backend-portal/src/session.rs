@@ -1,4 +1,6 @@
 //! The RemoteDesktop portal: the app id, the permission and the EIS socket.
+//! The registered connection also serves the GlobalShortcuts portal
+//! ([`crate::shortcuts`]).
 //!
 //! The portal scopes its stored grant by the caller's app id, and a host
 //! program gets one only by calling `Registry.Register` before any other
@@ -34,9 +36,9 @@ use crate::token::{self, RestoreToken};
 pub const APP_ID: &str = "io.github.tobylo.AutoClicker";
 
 /// How long a portal call may take, apart from the dialog.
-const CALL_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long the permission dialog may stay open before the start gives up.
-const DIALOG_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+pub(crate) const DIALOG_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// A `Start` that took this long waited on a person: the dialog showed.
 /// Restoring from a token takes 7 to 70 ms (X02, P01).
 const SLOW_START: Duration = Duration::from_secs(1);
@@ -92,6 +94,12 @@ impl Portal {
             ))
         })?;
         Ok(Portal { connection })
+    }
+
+    /// The registered connection, for another portal interface. A session
+    /// made on it ends when the connection is dropped.
+    pub(crate) fn connection(&self) -> &zbus::Connection {
+        &self.connection
     }
 
     /// Checks, without a dialog, that the portal can serve the program.

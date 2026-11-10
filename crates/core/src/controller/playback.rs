@@ -11,24 +11,28 @@
 //! on a deadline. The largest recording there can be (an hour of movement
 //! at a thousand moves a second, 107 MB) loads in 0.22 s on the dev box.
 
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 
 use tokio::time::Instant;
 
+use super::desktop::OwnKeys;
 use super::{
     Controller, Job, LISTED_RECORDINGS, Listed, PLAY_RELEASE_WAIT, Platform, RunFuture, State,
 };
-use crate::input::{Input, InputBackend};
+use crate::input::{Held, Input, InputBackend, Key};
 use crate::playback::{MIN_LOOP_LENGTH, Playback, play};
-use crate::recording::{FileName, LoadError, Recording, list, load};
+use crate::recording::{Change, FileName, LoadError, Recording, list, load};
 use crate::run::Signals;
 
 /// A recording about to play: loaded, checked, and named for the tray.
 pub(super) struct Playing {
     playback: Playback,
     label: String,
+    /// Every key it presses.
+    keys: Arc<[Key]>,
     /// The hotkey's modifiers were still down when the wait for them ended.
     modifier_held: bool,
 }
@@ -37,6 +41,11 @@ impl Playing {
     /// The recording, as the tray names it.
     pub(super) fn label(&self) -> &str {
         &self.label
+    }
+
+    /// Every key the recording presses.
+    pub(super) fn keys(&self) -> Arc<[Key]> {
+        Arc::clone(&self.keys)
     }
 
     /// The same, started although a modifier of the hotkey was still held.
@@ -66,6 +75,19 @@ impl Playing {
     {
         Box::pin(async move { play(input, &self.playback, signals).await })
     }
+}
+
+/// Every key `recording` presses, each once.
+fn pressed_keys(recording: &Recording) -> Arc<[Key]> {
+    let keys: BTreeSet<Key> = recording
+        .events()
+        .iter()
+        .filter_map(|event| match event.change {
+            Change::Press(Held::Key(key)) => Some(key),
+            _ => None,
+        })
+        .collect();
+    keys.into_iter().collect()
 }
 
 impl<P: Platform> Controller<P> {
@@ -156,14 +178,24 @@ impl<P: Platform> Controller<P> {
                 )
             })
         });
-        match playback {
-            Ok(playback) => {
-                self.current = Some(file.clone());
-                Some(Job::Play(Playing {
+        // Where the desktop delivers the hotkeys, a recording that presses
+        // one of their keys would set it off by itself.
+        let playing = playback.and_then(|playback| {
+            let keys = pressed_keys(playback.recording());
+            match self.own_key_refusal(&OwnKeys::Recording(Arc::clone(&keys))) {
+                Some(why) => Err(format!("it presses a hotkey's key: {why}")),
+                None => Ok(Playing {
                     playback,
-                    label,
+                    label: label.clone(),
+                    keys,
                     modifier_held: false,
-                }))
+                }),
+            }
+        });
+        match playing {
+            Ok(playing) => {
+                self.current = Some(file.clone());
+                Some(Job::Play(playing))
             }
             Err(why) => {
                 self.notice = Some(format!("Not playing {label}: {why}"));

@@ -104,6 +104,10 @@ impl<P: Platform> Controller<P> {
         if !self.session_allows("Not recording") {
             return false;
         }
+        if let Some(why) = self.recording_refusal() {
+            self.notice = Some(format!("Not recording: {why}"));
+            return false;
+        }
         match &self.hotkey_status {
             Some(HotkeyStatus::Unavailable(
                 why @ (Unavailable::NoPermission | Unavailable::WatchFailed(_)),

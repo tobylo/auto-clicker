@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde::de::{self, MapAccess, Visitor};
 use toml::Spanned;
 
-use super::OutputRoute;
+use super::{HotkeyRoute, OutputRoute};
 use crate::clicker::{Mode, Position, Repeat};
 use crate::input::{AbsolutePosition, Button, Key};
 
@@ -40,25 +40,35 @@ pub(super) struct RawPlayback {
     pub(super) repeat: Option<PlaysSpec>,
 }
 
-/// `[input]`: which route synthetic input takes.
+/// `[input]`: which route synthetic input and hotkeys take.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RawInput {
-    pub(super) output: Option<OutputName>,
+    pub(super) output: Option<RouteName>,
+    pub(super) hotkeys: Option<RouteName>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum OutputName {
+pub(super) enum RouteName {
     Kernel,
     Portal,
 }
 
-impl From<OutputName> for OutputRoute {
-    fn from(name: OutputName) -> OutputRoute {
+impl From<RouteName> for OutputRoute {
+    fn from(name: RouteName) -> OutputRoute {
         match name {
-            OutputName::Kernel => OutputRoute::Kernel,
-            OutputName::Portal => OutputRoute::Portal,
+            RouteName::Kernel => OutputRoute::Kernel,
+            RouteName::Portal => OutputRoute::Portal,
+        }
+    }
+}
+
+impl From<RouteName> for HotkeyRoute {
+    fn from(name: RouteName) -> HotkeyRoute {
+        match name {
+            RouteName::Kernel => HotkeyRoute::Kernel,
+            RouteName::Portal => HotkeyRoute::Portal,
         }
     }
 }

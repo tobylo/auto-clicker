@@ -279,6 +279,7 @@ mod tests {
     use std::sync::Arc;
 
     use auto_clicker_core::config::Config;
+    use auto_clicker_core::controller::Hotkey;
     use auto_clicker_core::controller::Listed;
     use auto_clicker_core::recording::FileName;
 
@@ -300,9 +301,9 @@ mod tests {
         View {
             activity,
             settings: config.clicker,
-            hotkey: config.hotkeys.toggle_clicking,
-            record_hotkey: config.hotkeys.toggle_recording,
-            play_hotkey: config.hotkeys.toggle_playback,
+            hotkey: Hotkey::Bound(config.hotkeys.toggle_clicking),
+            record_hotkey: Hotkey::Bound(config.hotkeys.toggle_recording),
+            play_hotkey: Hotkey::Bound(config.hotkeys.toggle_playback),
             playback: config.playback,
             recordings: Arc::from(recordings),
             playing: None,
