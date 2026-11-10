@@ -140,10 +140,21 @@ def loaded_script(bus):
         load_script(bus, kwin)
         yield
     finally:
-        try:
-            scripting(bus, kwin).unloadScript(PLUGIN)
-        except dbus.DBusException as error:
-            print(f"could not unload the script (KWin gone?): {error.get_dbus_name()}")
+        unload_from(bus, kwin)
+
+
+# What D-Bus answers when the pinned KWin connection no longer exists; its
+# scripts went with it. Any other error means the script may still be there.
+GONE = {"org.freedesktop.DBus.Error.ServiceUnknown", "org.freedesktop.DBus.Error.NameHasNoOwner"}
+
+
+def unload_from(bus, kwin):
+    try:
+        scripting(bus, kwin).unloadScript(PLUGIN)
+    except dbus.DBusException as error:
+        if error.get_dbus_name() not in GONE:
+            raise
+        print("KWin that loaded the script has gone, and the script with it")
 
 
 def exit_on_sigterm():
