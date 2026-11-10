@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::clicker::{INTERVAL_FLOOR, INTERVAL_MAX, Interval, Jitter, Mode, Position, Repeat};
+use crate::hotkeys::{Binding, Bindings};
 use crate::input::{AbsolutePosition, Button, Key};
 use crate::test_support::{TempDir, permissions_apply};
 
@@ -65,10 +66,20 @@ fn every_option_is_read() {
         key = "f6"
         position = { x = 0, y = 65535 }
         repeat = 7
+
+        [hotkeys]
+        toggle_clicking = "Ctrl+Shift+F9"
+        toggle_recording = "alt+r"
+        toggle_playback = "F24"
         "#,
     );
     let expected = Config {
         tray_start_delay: Duration::ZERO,
+        hotkeys: Bindings {
+            toggle_clicking: Binding::parse("Ctrl+Shift+F9").unwrap(),
+            toggle_recording: Binding::parse("Alt+R").unwrap(),
+            toggle_playback: Binding::parse("F24").unwrap(),
+        },
         clicker: ClickerSettings {
             mode: Mode::DoubleClick,
             interval: ms(250),
@@ -172,6 +183,10 @@ fn unknown_keys_are_rejected_in_every_table() {
         (
             "version = 1\n[clicker]\nposition = { x = 1, y = 2, z = 3 }\n",
             "`z`",
+        ),
+        (
+            "version = 1\n[hotkeys]\ntoggle_clicks = \"Ctrl+F6\"\n",
+            "toggle_clicks",
         ),
     ];
     for (text, key) in cases {
@@ -435,7 +450,10 @@ fn an_unreadable_file_is_a_read_error_not_a_missing_one() {
 /// seconds: a load that blocks must fail the test, not hang it.
 fn load_within_bound(path: PathBuf) -> Loaded {
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || tx.send(Config::load(&path)));
+    std::thread::spawn(move || {
+        // The receiver is gone only after a timeout, which fails the test.
+        let _ = tx.send(Config::load(&path));
+    });
     rx.recv_timeout(Duration::from_secs(5))
         .expect("loading the config blocked")
 }

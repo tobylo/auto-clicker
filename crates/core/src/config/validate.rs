@@ -20,7 +20,7 @@ pub(super) struct Invalid {
     pub(super) reason: String,
 }
 
-fn at<T>(value: &Spanned<T>, reason: String) -> Invalid {
+pub(super) fn at<T>(value: &Spanned<T>, reason: String) -> Invalid {
     Invalid {
         span: Some(value.span()),
         reason,
@@ -40,9 +40,11 @@ pub(super) fn validate(raw: RawConfig) -> Result<Config, Invalid> {
         Some(delay) => tray_start_delay(delay)?,
         None => defaults.tray_start_delay,
     };
+    let clicker = clicker(raw.clicker, defaults.clicker)?;
     Ok(Config {
         tray_start_delay,
-        clicker: clicker(raw.clicker, defaults.clicker)?,
+        hotkeys: super::hotkeys::hotkeys(&raw.hotkeys, &clicker)?,
+        clicker,
     })
 }
 

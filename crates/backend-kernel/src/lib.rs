@@ -6,12 +6,15 @@
 
 mod devices;
 mod error;
+mod hotkeys;
 
 use auto_clicker_core::input::{
     AbsolutePosition, Button, Input, InputBackend, InputError, Key, PressState,
 };
 use evdev::uinput::VirtualDevice;
 use evdev::{AbsoluteAxisCode, EventType, InputEvent, RelativeAxisCode};
+
+pub use hotkeys::watch_hotkeys;
 
 pub use devices::{
     ABSOLUTE_MAX, DeviceIdentity, DeviceRole, KEYBOARD_NAME, MOUSE_NAME, PRODUCT_KEYBOARD,
