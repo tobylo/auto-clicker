@@ -1,0 +1,25 @@
+# cargo-deny configuration for the weekly advisory run in
+# .github/workflows/advisories.yml. It keeps the [advisories] section of
+# deny.toml with unmaintained and unsound advisories widened from the
+# workspace's direct dependencies to every crate in the graph. The run reports
+# without blocking pull requests.
+
+[graph]
+# Optional dependencies are checked too, whether or not a feature enables them.
+all-features = true
+
+[advisories]
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+maximum-db-staleness = "P7D"
+# zbus 6 absorbed these three crates; they reach us through zbus 5, which the
+# tray crate ksni 0.3.7 (the latest release) requires. Remove them when ksni
+# moves to zbus 6 and the tree with it. An ignore that no longer matches fails
+# the run, so they cannot outlive the crates they cover.
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5 via zbus 5, required by ksni 0.3.7" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 via zbus 5, required by ksni 0.3.7" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 via zbus 5, required by ksni 0.3.7" },
+]
+unused-ignored-advisory = "deny"

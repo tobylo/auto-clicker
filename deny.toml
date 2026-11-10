@@ -1,0 +1,61 @@
+# cargo-deny configuration for the `deny` gate in scripts/gates.sh (D10 in
+# docs/planning/map.md): dependencies come from crates.io only, have no known
+# advisories and carry a permissive licence.
+#
+# .github/deny-weekly.toml widens the advisory scope for the weekly run in
+# .github/workflows/advisories.yml; keep its [advisories] section in step with
+# this one.
+
+[graph]
+# Optional dependencies are checked too, whether or not a feature enables them.
+all-features = true
+
+[advisories]
+# Vulnerabilities always fail, whichever crate in the graph they are in;
+# cargo-deny has no scope for them. Unmaintained and unsound advisories fail for
+# the workspace's direct dependencies and are skipped for transitive ones: the
+# weekly run reports those.
+unmaintained = "workspace"
+unsound = "workspace"
+yanked = "deny"
+# Offline runs (scripts/gates.sh without network) use the cached database and
+# fail once its last fetch is older than this.
+maximum-db-staleness = "P7D"
+ignore = []
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+]
+# Each exception names its crate and the reason in a comment; cargo-deny's
+# exception entries take no reason field.
+exceptions = [
+    # The tray's StatusNotifierItem client. The Unlicense dedicates the code to
+    # the public domain, with no conditions at all.
+    { crate = "ksni", allow = ["Unlicense"] },
+]
+# Crates used only by tests are built on the machine too.
+include-dev = true
+# The allowlist names licences no crate uses yet.
+unused-allowed-license = "allow"
+
+[licenses.private]
+# The workspace's own crates set `publish = false` and carry no licence field
+# yet. cargo-deny skips any crate with an empty `publish` list, so drop this
+# once #38 gives them a licence.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
