@@ -52,16 +52,12 @@ pub fn save(dir: &Path, recording: &Recording) -> io::Result<PathBuf> {
     atomic_create(&paths, |out| recording.write_json(out))
 }
 
-/// How many of a recordings directory's ancestors a save flushes: its
-/// parent (`auto-clicker`) and that one's (the data directory), which an
-/// earlier save, failed or not, may have created.
-const ANCESTORS_SYNCED: usize = 2;
-
 /// Makes `dir` (absolute) exist and be readable by its owner only. An
 /// existing one that others may read is closed to them; one this user does
-/// not own, or a symlink in its place, fails. Its parent and grandparent are
-/// flushed every time, so the directory survives a power loss whichever save
-/// created it.
+/// not own, or a symlink in its place, fails. Every ancestor up to the root
+/// is flushed every time, so the directory survives a power loss whichever
+/// save, failed or not, created which part of the path; flushing a
+/// directory with nothing new in it costs next to nothing.
 fn private_dir(dir: &Path) -> io::Result<()> {
     if !dir.is_absolute() {
         return Err(io::Error::new(
@@ -77,10 +73,19 @@ fn private_dir(dir: &Path) -> io::Result<()> {
     if handle.metadata()?.permissions().mode() & 0o077 != 0 {
         handle.set_permissions(Permissions::from_mode(0o700))?;
     }
-    for ancestor in dir.ancestors().skip(1).take(ANCESTORS_SYNCED) {
-        File::open(ancestor)?.sync_all()?;
+    for ancestor in dir.ancestors().skip(1) {
+        open_dir(ancestor)?.sync_all()?;
     }
     Ok(())
+}
+
+/// Opens a directory to flush it; anything else in its place (a FIFO,
+/// which would block an ordinary open) fails at once.
+fn open_dir(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NONBLOCK)
+        .open(path)
 }
 
 #[cfg(test)]
@@ -146,6 +151,27 @@ mod tests {
 
         let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
+    }
+
+    #[test]
+    fn a_new_nested_data_directory_is_created_whole() {
+        let root = TempDir::new();
+        let dir = root.path().join("new/data/auto-clicker/recordings");
+        save(&dir, &sample()).unwrap();
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_fifo_in_place_of_a_directory_fails_at_once() {
+        let root = TempDir::new();
+        let fifo = root.path().join("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let err = open_dir(&fifo).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::ENOTDIR), "{err}");
     }
 
     #[test]
