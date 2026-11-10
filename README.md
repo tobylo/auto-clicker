@@ -47,7 +47,9 @@ The program does not update itself. To install a newer version, from the account
 
 1. Fetch the new commits and list them:
    `cd ~/auto-clicker && git fetch && git log --oneline HEAD..origin/main`
-2. Read what they change (`git log -p HEAD..origin/main`, or the same commits on GitHub). The program presses keys and reads keyboards: don't go on past a change you don't trust.
+2. Read what they change, all of it in one diff:
+   `git diff HEAD origin/main`
+   The program presses keys and reads keyboards: don't go on past a change you don't trust.
 3. Bring them in, then build and install:
    `cd ~/auto-clicker/packaging/arch && git merge --ff-only origin/main && makepkg -sif`
 
@@ -152,7 +154,7 @@ A run that holds a modifier itself (`hold_key` with `key = "leftshift"`, say) an
 
 ## Contributing
 
-Bug reports and ideas are welcome as [issues](https://github.com/tobylo/auto-clicker/issues). The maintainer reviews every change before it is merged, and the program installs only from this repository, so a pull request may wait a while or be turned down. Report a security problem privately, with "Report a vulnerability" under the repository's [Security tab](https://github.com/tobylo/auto-clicker/security), not in a public issue.
+Bug reports and ideas are welcome as [issues](https://github.com/tobylo/auto-clicker/issues). The program installs only from this repository, and a pull request from outside is merged only by the maintainer, so it may wait a while or be turned down. Report a security problem privately, with "Report a vulnerability" under the repository's [Security tab](https://github.com/tobylo/auto-clicker/security), not in a public issue.
 
 ## License
 
