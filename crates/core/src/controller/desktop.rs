@@ -54,14 +54,17 @@ pub(super) struct DesktopHotkeys {
     echo_until: Option<Instant>,
 }
 
-/// How long after the desktop's shortcuts come back a hotkey does nothing.
+/// How long a hotkey does nothing after the desktop's shortcuts come back,
+/// and after a trigger moved onto a key a run was pressing.
 ///
-/// While they were away, a run may press any key. The desktop binds the
+/// While the shortcuts were away, a run may press any key. The desktop binds the
 /// shortcuts a moment before the program hears of it, and a key the run
 /// pressed in that moment can set one off: the activation is already on its
 /// way when the triggers arrive and stop the run. It follows them within
 /// milliseconds, and nothing the program runs is left to stop by then, so a
-/// hotkey this soon after is not the user's.
+/// hotkey this soon after is not the user's. The same holds when the user
+/// moves a trigger onto the key of a run that is going: the run's next
+/// press is a hotkey before the program hears of the change.
 ///
 /// The desktop stamps no time on an activation (always 0 on Plasma), so the
 /// window is measured from when the program hears of the return. An echo
@@ -109,6 +112,17 @@ impl<P: Platform> Controller<P> {
         };
         if let Some(why) = self.own_key_refusal(&keys) {
             self.stop(Some(format!("Stopped: {why}")));
+            // The run pressed a key that is a trigger now: a press it made
+            // before this report may be on its way as a hotkey.
+            self.open_echo_window();
+        }
+    }
+
+    /// Opens the echo window, unless one is open: that one keeps its end.
+    fn open_echo_window(&mut self) {
+        let open = self.in_echo_window();
+        if let Some(desktop) = self.desktop.as_mut().filter(|_| !open) {
+            desktop.echo_until = Instant::now().checked_add(ECHO_WINDOW);
         }
     }
 
