@@ -11,6 +11,8 @@ position global: each probe's origin is its output's origin.
 import os
 import subprocess
 
+from gi.repository import GLib
+
 from bus import HERE, Receiver, loaded_script, pump_for, pump_until, query_pointer, session_bus
 from inject import Injector, Session, to_absolute, wait_for_pointer
 from stats import summary
@@ -26,30 +28,53 @@ def run(monitors, jiggle):
         with loaded_script(bus), Injector() as injector:
             layout = receiver_layout(receiver)
             wait_for_pointer(injector, receiver, layout)
-            check = Check(bus, Session(injector, receiver, layout), {p.pid for p in probes})
+            check = Check(bus, Session(injector, receiver, layout), {p.pid: p for p in probes})
             rows = [check.anchor(point, jiggle) for point in anchors(layout)]
             uncovered = [(point, check.landing(point)) for point in dead_zone(layout)]
+            offsets = check.surface_offsets
     finally:
         for probe in probes:
             stop_probe(probe)
     report(layout, rows)
+    print(f"  probe surface-local vs QueryPointer: {summary(offsets, 'px')}")
     for point, landed in uncovered:
         print(f"  outside every output: target {point} landed {landed}")
 
 
+class Probe:
+    """A probe window; keeps the last surface-local motion it printed."""
+
+    def __init__(self, index):
+        self.proc = subprocess.Popen(["python3", PROBE, str(index)], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        if self.proc.stdout.readline().strip() != b"ready":
+            raise RuntimeError(f"probe {index} did not start")
+        self.pid = self.proc.pid
+        self.motion = None
+        self._buffer = b""
+        os.set_blocking(self.proc.stdout.fileno(), False)
+        GLib.io_add_watch(self.proc.stdout.fileno(), GLib.IO_IN | GLib.IO_HUP, self._readable)
+
+    def _readable(self, fd, _condition):
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            return False
+        *lines, self._buffer = (self._buffer + chunk).split(b"\n")
+        for words in (line.split() for line in lines):
+            if words[:1] == [b"motion"]:
+                self.motion = (float(words[1]), float(words[2]))
+        return True
+
+
 def start_probe(index):
-    probe = subprocess.Popen(["python3", PROBE, str(index)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-    if probe.stdout.readline().strip() != "ready":
-        raise RuntimeError(f"probe {index} did not start")
-    return probe
+    return Probe(index)
 
 
 def stop_probe(probe):
-    probe.stdin.close()
+    probe.proc.stdin.close()
     try:
-        probe.wait(timeout=5)
+        probe.proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        probe.kill()
+        probe.proc.kill()
 
 
 def receiver_layout(receiver):
@@ -92,6 +117,7 @@ class Check:
     def __init__(self, bus, session, probe_pids):
         self.bus, self.receiver, self.injector = bus, session.receiver, session.injector
         self.layout, self.probe_pids = session.layout, probe_pids
+        self.surface_offsets = []
 
     def move(self, command):
         before = self.receiver.last()
@@ -115,6 +141,7 @@ class Check:
         out = output_at(self.layout, last.x, last.y)
         if pid not in self.probe_pids or out is None:
             return None
+        self.surface_offsets.append(surface_offset(self.probe_pids[pid].motion, rel_x, rel_y))
         return (out["x"] + rel_x, out["y"] + rel_y, out["scale"])
 
     def anchor(self, point, jiggle):
@@ -129,6 +156,13 @@ class Check:
         landed = self.global_position()
         script = (self.receiver.last().x, self.receiver.last().y)
         return {"anchor": point, "direct": direct, "original": original, "recorded": recorded, "landed": landed, "script": script}
+
+
+def surface_offset(motion, rel_x, rel_y):
+    """How far the probe's own surface-local position is from QueryPointer's."""
+    if motion is None:
+        return float("inf")
+    return max(abs(motion[0] - rel_x), abs(motion[1] - rel_y))
 
 
 def inward(value, out, axis):

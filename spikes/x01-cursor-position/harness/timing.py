@@ -90,8 +90,17 @@ def measure_cpu(hz, seconds, mode, receiver):
             pump_for(seconds)
         elapsed = time.monotonic() - start
         after = snapshot(targets)
-    received = len(receiver.samples) if receiver else 0
-    print(f"cpu rate {hz} Hz, script {mode}, {elapsed:.1f} s, received {received}: " + usage(elapsed, before, after))
+        pump_for(0.5)
+    print(f"cpu rate {hz} Hz, script {mode}, {elapsed:.1f} s, moves {hz * seconds}, {delivery(receiver)}: " + usage(elapsed, before, after))
+
+
+def delivery(receiver):
+    """Callbacks the script counted against calls that arrived."""
+    if not receiver or not receiver.samples:
+        return "callbacks 0, received 0"
+    samples = receiver.samples
+    callbacks = samples[-1].callbacks - samples[0].callbacks + 1
+    return f"callbacks {callbacks}, received {len(samples)}"
 
 
 def snapshot(targets):

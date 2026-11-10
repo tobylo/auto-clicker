@@ -2,7 +2,8 @@
 """A fullscreen GTK 4 window on one monitor, so that QueryPointer has a known
 window under the pointer whose origin is the output's origin.
 
-Usage: probe.py MONITOR_INDEX. Prints "ready" once shown; closes on stdin EOF.
+Usage: probe.py MONITOR_INDEX. Prints "ready" once shown, then "motion X Y"
+in surface-local logical px for each pointer move; closes on stdin EOF.
 """
 
 import sys
@@ -17,6 +18,9 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 def build(app, index):
     win = Gtk.ApplicationWindow(application=app, title=f"x01 probe {index}")
     win.set_child(Gtk.Label(label="auto-clicker X01 spike: leave the mouse alone"))
+    motion = Gtk.EventControllerMotion()
+    motion.connect("motion", lambda _c, x, y: print(f"motion {x!r} {y!r}", flush=True))
+    win.add_controller(motion)
     monitor = Gdk.Display.get_default().get_monitors().get_item(index)
     win.fullscreen_on_monitor(monitor)
     win.present()

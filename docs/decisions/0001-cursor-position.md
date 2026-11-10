@@ -7,10 +7,10 @@
 
 ## Decision
 
-**Recordings can carry exact absolute positions.** Map D3 takes its first branch.
+**Recordings can carry absolute positions that replay to within a pixel of where the real pointer was.** Map D3 takes its first branch.
 
 - **Reading the position.** While a recording runs, the daemon loads a small KWin script through `org.kde.KWin /Scripting`. On every `workspace.cursorPosChanged` the script sends `workspace.cursorPos` to a D-Bus name the daemon owns, and it reports the layout size whenever the layout changes. The daemon unloads the script when the recording stops.
-- **Replaying it.** Playback moves C01's absolute axes to the recorded position with the formula below. On every layout tested it lands within 0.05 physical px of the recorded position, and within 0.65 physical px of where the real pointer was.
+- **Replaying it.** Playback moves C01's absolute axes to the recorded position with the formula below. On every layout tested it lands within 0.65 physical px of where the real pointer was. Almost all of that is the script's rounding to whole logical px; the formula itself adds under 0.05 px.
 
 ### The mapping formula
 
@@ -27,7 +27,7 @@ v = clamp(round(x * 65536 / W), 0, 65535)      and likewise y with H
 
 ## Measurements
 
-Every number below came from the commands under "Commands". The laptop was otherwise idle, and its mouse and keyboard were untouched. All input was synthetic, from C01's virtual mouse.
+Every number below came from the commands under "Commands", run on the committed spike code on 2026-11-10 between 01:01 and 01:08. An earlier run of the same checks gave the same results. The laptop was otherwise idle and its mouse and keyboard untouched, and all input was synthetic, from C01's virtual mouse, except under "Real mouse".
 
 ### Latency: uinput write to receipt
 
@@ -35,14 +35,14 @@ Absolute moves went to distinct positions, paced on absolute deadlines. Each cal
 
 | Rate | Moves | Callbacks | Received | p50 | p90 | p99 | max |
 |---|---|---|---|---|---|---|---|
-| 125 Hz | 2700 | 2700 | 2700 | 0.40 ms | 0.51 ms | 0.62 ms | 0.88 ms |
-| 500 Hz | 2700 | 2700 | 2700 | 0.23 ms | 0.35 ms | 0.46 ms | 0.89 ms |
-| 1000 Hz | 2700 | 2700 | 2700 | 0.16 ms | 0.23 ms | 0.37 ms | 0.70 ms |
-| 2000 Hz | 2700 | 2700 | 2700 | 0.17 ms | 0.22 ms | 0.32 ms | 0.90 ms |
+| 125 Hz | 2700 | 2700 | 2700 | 0.39 ms | 0.52 ms | 0.65 ms | 1.01 ms |
+| 500 Hz | 2700 | 2700 | 2700 | 0.19 ms | 0.29 ms | 0.43 ms | 0.88 ms |
+| 1000 Hz | 2700 | 2700 | 2700 | 0.15 ms | 0.23 ms | 0.31 ms | 0.92 ms |
+| 2000 Hz | 2700 | 2700 | 2700 | 0.14 ms | 0.21 ms | 0.28 ms | 0.89 ms |
 
 - **Nothing coalesces or drops.** KWin calls the script once per pointer move, and every call arrives.
-- **The script's own time is too coarse to use.** It has only `Date.now()`, whole wall-clock milliseconds rounded down, so script-to-receipt reads 0.15–0.54 ms at p50 with a bias of up to +1 ms. The end-to-end figure above is measured on one µs clock and bounds it.
-- **The 1000 and 2000 Hz rows are synthetic.** A real 1000 Hz mouse was not tested.
+- **The script's own time is too coarse to use.** It has only `Date.now()`, wall-clock time in whole milliseconds. Script-to-receipt read between −0.33 and +0.54 ms at p50 across runs, an error of up to a millisecond either way. The end-to-end figure above is measured on one µs clock and bounds it.
+- **The 1000 and 2000 Hz rows are synthetic.** "Real mouse" below checks the rate a physical mouse produces.
 
 ### CPU
 
@@ -50,15 +50,28 @@ Each run is 10 s of relative moves at the given rate. Figures are % of one core,
 
 | Rate | Script off: KWin | Script on: KWin | dbus-broker | Receiver (Python) | Script loaded, receiver dead: KWin |
 |---|---|---|---|---|---|
-| idle | 0.0 / 0.3 | 0.0 / 0.0 | 0.0 | 0.0 | 0.1 / 0.1 |
-| 125 Hz | 5.8 / 5.8 | 7.1 / 6.8 | 0.4–0.5 | 1.2–1.8 | 7.7 / 7.0 |
-| 1000 Hz | 14.1 / 13.5 | 20.7 / 20.7 | 1.6–1.9 | 6.0–7.0 | 20.9 / 13.6 |
-| 2000 Hz | 20.2 / 19.2 | 30.3 / 29.8 | 3.8–3.9 | 12.0–13.2 | 31.5 / 32.8 |
+| idle | 0.0 / 0.2 | 0.1 / 0.1 | 0.0 | 0.0 | 0.0 / 0.0 |
+| 125 Hz | 5.0 / 7.1 | 6.4 / 9.2 | 0.4–0.6 | 1.2–1.3 | 6.1 / 8.8 |
+| 1000 Hz | 13.7 / 16.7 | 20.2 / 24.1 | 2.1–2.6 | 6.1–6.3 | 19.3 / 22.5 |
+| 2000 Hz | 19.1 / 19.4 | 29.5 / 34.4 | 4.9–5.2 | 11.4–11.8 | 29.8 / 35.0 |
 
 - **Idle.** A loaded script costs nothing while the pointer is still. The daemon still loads it only while recording, so a daemon that is not recording has no script in KWin.
-- **While moving.** The script adds about 7% of a core to KWin at 1000 Hz and 10% at 2000 Hz.
-- **A dead receiver costs as much as a live one.** With the script loaded and nobody owning the name, every call still leaves KWin and fails at the bus. One of the two 1000 Hz runs read like "off", so treat that cell as noisy.
+- **While moving.** The script adds about 7% of a core to KWin at 1000 Hz and 10–15% at 2000 Hz.
+- **Delivery.** Every call the script made arrived. The script was called slightly less often than moves were injected at the higher rates (9999 of 10000 at 1000 Hz, 19992 and 19972 of 20000 at 2000 Hz): a move that leaves the pointer where it was does not fire `Cursor::posChanged` (`src/cursor.cpp:191`). The loss is upstream of the script, not on the bus.
+- **A dead receiver costs as much as a live one.** With the script loaded and nobody owning the name, every call still leaves KWin and fails at the bus.
 - **The receiver will be cheaper in production.** Its figures are a Python receiver; a Rust one in the daemon will cost less.
+
+### Real mouse
+
+The owner moved a Razer Viper V3 Pro in fast circles over the desktop during four 10 s runs of `cpu --hz 0`, two with the script on and two off.
+
+| Script | Positions reported | KWin | dbus-broker | Receiver |
+|---|---|---|---|---|
+| on | 10408, 10834 (about 1040–1080 per second) | 18.7%, 17.9% | 1.9%, 2.2% | 5.1%, 6.9% |
+| off | – | 12.1%, 11.7% | 0.0% | 0.0% |
+
+- **A physical high-rate mouse behaves like the synthetic 1000 Hz stream.** About one position per poll, every one delivered, and about 6% of a core added to KWin.
+- **Latency was not measured here.** It needs the evdev event time, and the user is not in the `input` group.
 
 ### Playback: where a replayed position lands
 
@@ -69,7 +82,11 @@ Each run is 10 s of relative moves at the given rate. Figures are % of one core,
 3. reads that original position and the recorded one (the script's whole px);
 4. moves away, replays the recorded position through the formula, and reads where the pointer landed.
 
-Sub-pixel positions come from `org.freedesktop.a11y.PointerLocator.QueryPointer` over a fullscreen probe window on each output. On every point it agreed with the script within 0.5 px.
+Sub-pixel positions come from `org.freedesktop.a11y.PointerLocator.QueryPointer` over a fullscreen probe window on each output. It reads the same KWin cursor as the script, so it adds resolution, not an independent check; it agreed with the script within 0.5 px on every point.
+
+The independent check is the probe window itself. Each GTK 4 probe prints its own surface-local pointer position, which a client like U03's overlay would see.
+- **Panel alone:** across 57 reads it matched `QueryPointer` within 0.001 px.
+- **Two outputs:** the median was 0.001 px and p90 0.043 px. The remaining reads were taken before the probe had reported a motion event since the pointer entered it (no motion yet, or the last one stale), because the probe prints motion only, not enter events.
 
 Results in physical px, the largest over all points:
 
@@ -83,7 +100,7 @@ Results in physical px, the largest over all points:
 | DP-1 placed at x = -3440 (KScreen normalised it to the right) | 0.049 | 0.559 |
 
 - **"Within 1 px" holds in both senses.** The gap between the original and the replayed position is the script's rounding to whole logical px. It is at most 0.5 logical px, which is 0.625 physical px at scale 1.25. The formula itself adds less than 0.05 px.
-- **A move to the panel's top-left pixel lands 1 px inside it.** This happened in the four dual-output layouts. It is consistent with KWin pushing the cursor back from an active screen corner (`Edge::pushCursorBack`, `src/screenedge.cpp:522`; Plasma's default top-left corner opens Overview). A real mouse is pushed back the same way.
+- **A move to the panel's top-left pixel lands 1 px inside it.** This happened in the four dual-output layouts, not with the panel alone. It is consistent with KWin pushing the cursor back from an active screen corner (`Edge::pushCursorBack`, `src/screenedge.cpp:522`; Plasma's default top-left corner opens Overview). A real mouse would be pushed back the same way.
 - **Targets on no output are clamped.** Points inside the bounding box that no output covers (the strip under the shorter panel) land on the nearest output's edge. For example, (686, 1350) lands at (686, 1279).
 
 ### Pointer lock
@@ -91,21 +108,21 @@ Results in physical px, the largest over all points:
 `lock` opens a fullscreen SDL3 window in relative mouse mode, which locks the pointer through Wayland pointer constraints the way games do.
 
 - **While locked:** 200 relative moves gave no positions, and the window received all of them as relative motion.
-- **On unlock, with no input:** KWin moved the pointer to the client's cursor-position hint, and the script reported that position once.
+- **On unlock, with no input:** the pointer moved by (+1, +1), and the script reported that position once. The window had received a (+1, +1) nudge while locked, so this is consistent with KWin warping to the lock's cursor-position hint on unlock (`pointer_input.cpp:756-758`, `processWarp(focus()->mapFromLocal(*hint))`).
 - **After unlock:** every move was reported again.
 
 The locked pointer stands still in KWin (`PointerInputRedirection::updatePosition` returns early while `m_locked`), so there is no position to record. Recording relative motion covers it, as map D4 already says.
 
 ### Lifecycle
 
-- **Loading needs no consent and no setting.** `loadScript`, `run` and `unloadScript` worked from an unprivileged session client with no prompt. `~/.config/kwinrc` had the same checksum before and after.
+- **Loading needs no consent and no setting.** `loadScript`, `run` and `unloadScript` worked from an unprivileged session client with no prompt. `~/.config/kwinrc` had the same checksum before and after each load (`lifecycle.sh`).
 - **`run()` returns after the script has run.** Called over D-Bus, `Script::run` defers its reply until the script has been read and evaluated (`src/scripting/scripting.cpp:166`). The first Layout call arrived about 3 ms after `loadScript`.
 - **A crashed receiver leaves the script loaded.** After the receiver was killed with SIGKILL, `isScriptLoaded("x01-cursor")` was true and KWin kept paying for the calls (see CPU). The next start found the script by its plugin name and unloaded it before loading its own.
 - **KWin restarts drop the script.** On a nested, virtual KWin in a private D-Bus session, the script was gone after KWin was killed and started again, and `org.kde.KWin` had a new owner. A daemon recording across a KWin restart has to watch that name and load the script again. The live session's KWin was never restarted.
 
 ## Other routes
 
-- **KWin's own D-Bus interfaces.** Every object under `org.kde.KWin` was introspected for cursor, pointer, position and mouse members. The only position source is `org.freedesktop.a11y.PointerLocator.QueryPointer` on `/org/freedesktop/a11y/Manager`, new in Plasma 6.8.
+- **KWin's own D-Bus interfaces.** Every object under `org.kde.KWin` was introspected for cursor, pointer, position and mouse members. The only position source is `org.freedesktop.a11y.PointerLocator.QueryPointer` on `/org/freedesktop/a11y/Manager`, new in Plasma 6.8 (first tagged v6.7.90, the 6.8 beta).
   - It has no permission check, and it returns the pointer's sub-pixel position relative to the window under the pointer, with that window's pid.
   - It then sends a single `PointerPositionChanged` signal on the next move, as a throttle.
   - It needs no script, but the position is window-relative. Turning it into a layout position needs the window's geometry, which only a script can supply. It is an a11y interface whose keyboard half is limited to the Orca screen reader, so the same may happen to it.
@@ -120,7 +137,7 @@ The locked pointer stands still in KWin (`PointerInputRedirection::updatePositio
 - **Anyone in the session can load KWin scripts.** Any session process can also call the receiver's D-Bus name, so the receiver must accept calls only from the current owner of `org.kde.KWin`.
 - **Pointer lock gives no positions.** While a game locks the pointer, recordings fall back to relative motion.
 - **The layout must match at playback.** A position is only meaningful against the layout it was recorded on, so recordings must carry the layout size.
-- **Only synthetic input was measured.** Every number above comes from C01's virtual mouse; a physical 1000 Hz mouse was not tested.
+- **Latency was measured on synthetic input only.** A physical mouse was checked for rate, delivery and CPU ("Real mouse").
 - **Shake-to-find is irrelevant.** KDE's "shake cursor to find it" effect enlarges the drawn cursor during fast moves. It does not change the position.
 
 ## Upstream reports (for the owner)
@@ -130,7 +147,9 @@ The locked pointer stands still in KWin (`PointerInputRedirection::updatePositio
    - Observed: 100 calls without motion, then one move, gave 100 `PointerPositionChanged` signals. Expected one, since the interface documents the signal as a throttle.
    - Reproducer: `spikes/x01-cursor-position/harness/query_pointer_signals.py`, which calls `QueryPointer` N times, moves the pointer, and counts the signals.
    - Effect: a screen reader that polls while the pointer is still is flooded on the next move. It does not affect this program.
-   - Not found in KDE Bugzilla for "PointerLocator", "QueryPointer" or "PointerPositionChanged" (searched 2026-11-10). The interface arrived in commit 23b0427864.
+   - Not reported, as of 2026-11-10:
+     - KDE Bugzilla quicksearch for "PointerLocator", "QueryPointer" and "PointerPositionChanged" found nothing.
+     - KWin's GitLab issues and merge requests, searched for "PointerLocator" and "QueryPointer" through the API, show only the merge request that added the interface (!9825, commit 23b0427864, first released in 6.7.90) and draft !8883, which adds an accessibility bus address and does not touch this.
 2. **KWin: `QueryPointer` has no permission check, while its sibling `KeyboardMonitor` is limited to Orca.** Any session client can learn the pointer position and the pid of the window under it. This is worth raising as a question rather than a bug.
 3. **Wishlist: a sub-pixel `cursorPos` for KWin scripts.** `workspace.cursorPos` drops the sub-pixel part. A `QPointF` property would remove this program's only rounding error. Low priority: the current error stays under 1 physical px at scales up to 2.
 
@@ -142,6 +161,7 @@ On the laptop, from `spikes/x01-cursor-position` (after `(cd inject && cargo bui
 for hz in 125 500 1000 2000; do python3 harness/x01.py latency --hz $hz --sweeps 3 --count 900; done
 for rep in 1 2; do for hz in 0 125 1000 2000; do for mode in off on dead; do
   python3 harness/x01.py cpu --hz $hz --seconds 10 --mode $mode; done; done; done
+for mode in on off on off; do python3 harness/x01.py cpu --hz 0 --seconds 10 --mode $mode; done   # real mouse, moved by hand
 ./layouts.sh               # the playback table; restores eDP-1 0,0 @1.25 and DP-1 2048,0 @1
 python3 harness/x01.py lock
 ./lifecycle.sh
