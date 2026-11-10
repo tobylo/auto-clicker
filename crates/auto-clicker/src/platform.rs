@@ -59,3 +59,21 @@ impl Platform for Kernel {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn the_clocks_and_directory_are_the_backends_and_cores() {
+        let kernel = Kernel {
+            bindings: Bindings::default(),
+        };
+        let gap = kernel.event_clock().abs_diff(monotonic_now());
+        assert!(gap < Duration::from_secs(1), "{gap:?}");
+        assert!(kernel.local_time().is_some());
+        assert_eq!(kernel.recordings_dir(), recordings_dir());
+    }
+}

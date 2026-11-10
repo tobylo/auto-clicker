@@ -209,8 +209,9 @@ async fn records_stand_in_devices_but_never_the_programs_own() {
         sleep(SETTLE).await;
         assert!(!has_open(&mouse_node), "a mouse is read while idle");
 
-        // B is already held when recording starts.
+        // B and the left button are already held when recording starts.
         key(&mut keyboard, KEY_B, 1);
+        key(&mut mouse, BTN_LEFT, 1);
         sleep(SETTLE).await;
         let created = Created::new(local_time().unwrap()).unwrap();
         slot.start(Recorder::new(bindings(), monotonic_now(), created, None));
@@ -245,6 +246,7 @@ async fn play_routine(
     mouse: &mut VirtualDevice,
     mut unplugged: VirtualDevice,
 ) {
+    key(mouse, BTN_LEFT, 0);
     for _ in 0..3 {
         relative(mouse, RelativeAxisCode::REL_X, 5);
         sleep(Duration::from_millis(3)).await;
@@ -264,6 +266,12 @@ async fn play_routine(
     key(&mut unplugged, BTN_RIGHT, 1);
     sleep(SETTLE).await;
     drop(unplugged);
+    sleep(SETTLE).await;
+    // More than the kernel queues for a reader, sent without letting it
+    // read: the mouse loses events. That must not stop the hotkeys.
+    for _ in 0..5_000 {
+        relative(mouse, RelativeAxisCode::REL_Y, 1);
+    }
     sleep(SETTLE).await;
 }
 
@@ -287,6 +295,8 @@ fn check(recording: &Recording) {
             Change::Press(held(KEY_B)),
             Change::Press(held(BTN_LEFT)),
             Change::Release(held(BTN_LEFT)),
+            Change::Press(held(BTN_LEFT)),
+            Change::Release(held(BTN_LEFT)),
             Change::Wheel(-1),
             Change::Press(held(KEY_A)),
             Change::Release(held(KEY_A)),
@@ -295,7 +305,14 @@ fn check(recording: &Recording) {
             Change::Release(held(BTN_RIGHT)),
         ]
     );
-    assert_eq!(moved, (15, 0), "the program's own motion was recorded");
+    assert_eq!(moved.0, 15, "the program's own motion was recorded");
+    // Released when unplugged, well before the stop.
+    let unplugged = recording
+        .events()
+        .iter()
+        .find(|event| event.change == Change::Release(held(BTN_RIGHT)))
+        .unwrap();
+    assert!(unplugged.at + 100_000 <= recording.duration_us());
     let first = recording.events().first().unwrap();
     assert!(
         first.at < 50_000,

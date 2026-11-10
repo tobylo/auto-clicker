@@ -52,6 +52,14 @@ impl Daemon {
             .collect()
     }
 
+    /// Asserts the controller is idle again, says `notice`, and saved one
+    /// recording of `changes` (times in ms).
+    fn assert_saved(&self, notice: &str, changes: &[(u64, Change)]) {
+        let shown = (self.activity(), self.notice());
+        assert_eq!(shown, (Activity::Idle, notice.to_owned()));
+        assert_eq!(self.saved_changes(), changes);
+    }
+
     /// The one saved recording's changes, with their times in ms.
     fn saved_changes(&self) -> Vec<(u64, Change)> {
         let saved = self.saved();
@@ -86,16 +94,8 @@ async fn the_hotkey_records_at_once_and_saves_on_the_next_press() {
         sleep(Duration::from_millis(500)).await;
         d.record_hotkey().await;
 
-        assert_eq!(d.activity(), Activity::Idle);
-        assert_eq!(d.notice(), SAVED);
-        assert_eq!(
-            d.saved_changes(),
-            [
-                (100, press(W)),
-                (500, release(W)),
-                (500, Change::Move { dx: 3, dy: 4 })
-            ]
-        );
+        let moved = Change::Move { dx: 3, dy: 4 };
+        d.assert_saved(SAVED, &[(100, press(W)), (500, release(W)), (500, moved)]);
         assert_eq!(d.saved()[0].duration_us(), 1_000_000);
         // Recording pressed nothing.
         d.assert_idle_after(&[]);
@@ -202,9 +202,10 @@ async fn a_lock_inactive_session_or_sleep_stops_and_saves_at_once() {
             d.send(message.clone()).await;
             // At once: before any virtual time passed.
             assert_eq!(Instant::now(), before, "{message:?}");
-            assert_eq!(d.activity(), Activity::Idle, "{message:?}");
-            assert_eq!(d.notice(), format!("{why}. {SAVED}"));
-            assert_eq!(d.saved_changes(), [(0, press(W)), (2000, release(W))]);
+            d.assert_saved(
+                &format!("{why}. {SAVED}"),
+                &[(0, press(W)), (2000, release(W))],
+            );
             // Saved before sleep was let go.
             if message == Message::Sleep(1) {
                 assert_eq!(*d.released_for_sleep.borrow(), 1);
@@ -228,12 +229,10 @@ async fn a_recording_stops_and_saves_at_its_time_limit() {
         d.settle().await;
         // Stopped on the deadline itself, not later.
         assert_eq!(Instant::now() - start, MAX_DURATION);
-        assert_eq!(d.activity(), Activity::Idle);
-        assert_eq!(
-            d.notice(),
-            format!("Recording stopped at its 60-minute limit. {SAVED}")
+        d.assert_saved(
+            &format!("Recording stopped at its 60-minute limit. {SAVED}"),
+            &[(0, press(W)), (3_600_000, release(W))],
         );
-        assert_eq!(d.saved_changes(), [(0, press(W)), (3_600_000, release(W))]);
     })
     .await;
 }
@@ -402,9 +401,21 @@ async fn losing_the_input_reader_stops_and_saves_or_cancels_at_once() {
         let before = Instant::now();
         d.hotkey(lost()).await;
         assert_eq!(Instant::now(), before);
+        d.assert_saved(
+            &format!("Recording stopped: {why}. {SAVED}"),
+            &[(0, press(W)), (1000, release(W))],
+        );
+    })
+    .await;
+    local(async {
+        let d = daemon(Mode::Click).await;
+        d.hotkey(lost()).await;
+        for start in [Message::Record, Message::Record] {
+            d.send(start).await;
+            assert_eq!(d.notice(), format!("Not recording: {why}"));
+        }
+        d.record_hotkey().await;
         assert_eq!(d.activity(), Activity::Idle);
-        assert_eq!(d.notice(), format!("Recording stopped: {why}. {SAVED}"));
-        assert_eq!(d.saved_changes(), [(0, press(W)), (1000, release(W))]);
     })
     .await;
     local(async {

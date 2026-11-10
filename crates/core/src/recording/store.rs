@@ -2,9 +2,9 @@
 //! file per recording, named after the time it was made.
 
 use std::ffi::OsString;
-use std::fs::{DirBuilder, File, Permissions};
+use std::fs::{DirBuilder, File, OpenOptions, Permissions};
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use super::Recording;
@@ -38,8 +38,8 @@ fn recordings_dir_from(xdg_data_home: Option<OsString>, home: Option<OsString>) 
 /// replaces a file. Returns the file's path.
 ///
 /// # Errors
-/// The directory cannot be created or made private, the file cannot be
-/// written, or every name tried is taken.
+/// `dir` is relative, is a symlink, cannot be created or made private;
+/// the file cannot be written; or every name tried is taken.
 pub fn save(dir: &Path, recording: &Recording) -> io::Result<PathBuf> {
     private_dir(dir)?;
     let stem = recording.created().file_stem();
@@ -52,24 +52,33 @@ pub fn save(dir: &Path, recording: &Recording) -> io::Result<PathBuf> {
     atomic_create(&paths, |out| recording.write_json(out))
 }
 
-/// Makes `dir` exist and be readable by its owner only. An existing one
-/// that others may read is closed to them; one this user does not own
-/// cannot be, and fails. Directories it creates are flushed into their
-/// parents, so a recording saved in them survives a power loss.
+/// How many of a recordings directory's ancestors a save flushes: its
+/// parent (`auto-clicker`) and that one's (the data directory), which an
+/// earlier save, failed or not, may have created.
+const ANCESTORS_SYNCED: usize = 2;
+
+/// Makes `dir` (absolute) exist and be readable by its owner only. An
+/// existing one that others may read is closed to them; one this user does
+/// not own, or a symlink in its place, fails. Its parent and grandparent are
+/// flushed every time, so the directory survives a power loss whichever save
+/// created it.
 fn private_dir(dir: &Path) -> io::Result<()> {
-    let missing: Vec<&Path> = dir
-        .ancestors()
-        .take_while(|ancestor| !ancestor.as_os_str().is_empty() && !ancestor.exists())
-        .collect();
+    if !dir.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not an absolute path", dir.display()),
+        ));
+    }
     DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-    let handle = File::open(dir)?;
+    let handle = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(dir)?;
     if handle.metadata()?.permissions().mode() & 0o077 != 0 {
         handle.set_permissions(Permissions::from_mode(0o700))?;
     }
-    for created in missing {
-        if let Some(parent) = created.parent() {
-            File::open(parent)?.sync_all()?;
-        }
+    for ancestor in dir.ancestors().skip(1).take(ANCESTORS_SYNCED) {
+        File::open(ancestor)?.sync_all()?;
     }
     Ok(())
 }
@@ -137,6 +146,26 @@ mod tests {
 
         let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
+    }
+
+    #[test]
+    fn a_symlink_or_a_relative_path_is_refused_and_nothing_changes() {
+        let root = TempDir::new();
+        let elsewhere = root.path().join("project");
+        fs::create_dir(&elsewhere).unwrap();
+        fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o755)).unwrap();
+        let link = root.path().join("recordings");
+        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+
+        let linked = save(&link, &sample()).unwrap_err();
+        let relative = save(Path::new("recordings"), &sample()).unwrap_err();
+
+        let mode = fs::metadata(&elsewhere).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
+        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+        // O_NOFOLLOW with O_DIRECTORY: a symlink is "not a directory".
+        assert_eq!(linked.raw_os_error(), Some(libc::ENOTDIR), "{linked}");
+        assert_eq!(relative.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
