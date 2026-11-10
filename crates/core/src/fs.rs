@@ -1,9 +1,11 @@
 //! Writing files so that a crash never leaves half of one.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+
+use nix::fcntl::{RenameFlags, renameat2};
 
 /// Replaces the file at `path` with `contents`, atomically.
 ///
@@ -18,34 +20,126 @@ use std::path::{Path, PathBuf};
 /// recordings hold keystrokes.
 pub fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
     let dir = parent_dir(path)?;
-    let (temp, mut file) = create_temp(dir, path)?;
-    let written = file
-        .write_all(contents)
-        .and_then(|()| file.sync_all())
-        .and_then(|()| fs::rename(&temp, path));
-    drop(file);
-    if let Err(err) = written {
-        return Err(match fs::remove_file(&temp) {
-            Ok(()) => err,
-            // The write's error stays the one reported, with the file it left.
-            Err(cleanup) => io::Error::new(
-                err.kind(),
-                format!("{err}; removing {} failed too: {cleanup}", temp.display()),
-            ),
-        });
+    write_then_place(
+        dir,
+        path,
+        |out| out.write_all(contents),
+        |temp| fs::rename(temp, path).map(|()| path.to_path_buf()),
+    )
+    .map(drop)
+}
+
+/// Writes a new file, atomically, never replacing one: at the first of
+/// `paths` that does not exist yet. All of `paths` must be in one directory.
+/// Returns the path written.
+///
+/// Like [`atomic_write`], the contents go to a temporary file that is
+/// flushed to disk before it is renamed into place, and the directory is
+/// flushed after, so a crash leaves no half-written file. The rename uses
+/// `RENAME_NOREPLACE`: a file that appears at a path between the check and
+/// the rename is never overwritten. The new file has mode 0600.
+///
+/// # Errors
+/// `write`'s error, a write or flush error, or `AlreadyExists` when every
+/// path is taken. The temporary file is removed on any error before the
+/// rename.
+pub fn atomic_create(
+    paths: &[PathBuf],
+    write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
+) -> io::Result<PathBuf> {
+    let first = paths.first().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "no path to write the file at")
+    })?;
+    let dir = parent_dir(first)?;
+    if paths.iter().any(|path| parent_dir(path).ok() != Some(dir)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the paths are not in one directory",
+        ));
     }
+    write_then_place(dir, first, write, |temp| place_new(temp, paths))
+}
+
+/// Renames `temp` to the first of `paths` that is free.
+fn place_new(temp: &Path, paths: &[PathBuf]) -> io::Result<PathBuf> {
+    for path in paths {
+        match renameat2(
+            None,
+            temp,
+            None,
+            path.as_path(),
+            RenameFlags::RENAME_NOREPLACE,
+        ) {
+            Ok(()) => return Ok(path.clone()),
+            Err(nix::errno::Errno::EEXIST) => {}
+            Err(errno) => return Err(errno.into()),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "{} and every other name tried are taken",
+            display_first(paths)
+        ),
+    ))
+}
+
+fn display_first(paths: &[PathBuf]) -> String {
+    paths
+        .first()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default()
+}
+
+/// The steps both writers share: write a temporary file beside `path` with
+/// `write`, flush it to disk, `place` it, and flush `dir`. A failure before
+/// the file is placed removes the temporary file.
+fn write_then_place(
+    dir: &Path,
+    path: &Path,
+    write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
+    place: impl FnOnce(&Path) -> io::Result<PathBuf>,
+) -> io::Result<PathBuf> {
+    let (temp, file) = create_temp(dir, path)?;
+    let placed = fill(file, write).and_then(|()| place(&temp));
+    let placed = match placed {
+        Ok(placed) => placed,
+        Err(err) => return Err(remove_temp(&temp, err)),
+    };
     File::open(dir)
         .and_then(|dir| dir.sync_all())
         .map_err(|err| {
             io::Error::new(
                 err.kind(),
                 format!(
-                    "{} was replaced, but syncing its directory failed, so the change may not \
+                    "{} was written, but syncing its directory failed, so the change may not \
                  survive a power loss: {err}",
-                    path.display()
+                    placed.display()
                 ),
             )
-        })
+        })?;
+    Ok(placed)
+}
+
+/// Writes through a buffer and flushes the file to disk; the file is closed
+/// when this returns.
+fn fill(file: File, write: impl FnOnce(&mut dyn Write) -> io::Result<()>) -> io::Result<()> {
+    let mut out = BufWriter::new(file);
+    write(&mut out)?;
+    let file = out.into_inner().map_err(io::IntoInnerError::into_error)?;
+    file.sync_all()
+}
+
+/// Removes the temporary file after `err`; the write's error stays the one
+/// reported, with the file it left if removing fails too.
+fn remove_temp(temp: &Path, err: io::Error) -> io::Error {
+    match fs::remove_file(temp) {
+        Ok(()) => err,
+        Err(cleanup) => io::Error::new(
+            err.kind(),
+            format!("{err}; removing {} failed too: {cleanup}", temp.display()),
+        ),
+    }
 }
 
 /// The directory `path` is in; a bare file name is in the current directory.
@@ -160,7 +254,7 @@ mod tests {
         // Restored before any assertion, so the directory can be removed.
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
         let message = result.err().map(|err| err.to_string()).unwrap_or_default();
-        let replaced = message.contains("was replaced, but syncing its directory");
+        let replaced = message.contains("was written, but syncing its directory");
         let contents = fs::read(&path).unwrap();
         assert_eq!((replaced, contents), (true, b"new".to_vec()), "{message}");
     }
@@ -197,5 +291,53 @@ mod tests {
                 path.display()
             );
         }
+    }
+    #[test]
+    fn create_writes_the_first_free_path_and_never_replaces() {
+        let dir = TempDir::new();
+        let paths = ["a.json", "a-1.json", "a-2.json"].map(|name| dir.path().join(name));
+        fs::write(&paths[0], b"kept").unwrap();
+
+        let first = atomic_create(&paths, |out| out.write_all(b"one")).unwrap();
+        let second = atomic_create(&paths, |out| out.write_all(b"two")).unwrap();
+        let full = atomic_create(&paths, |out| out.write_all(b"three")).unwrap_err();
+
+        assert_eq!((first, second), (paths[1].clone(), paths[2].clone()));
+        assert_eq!(full.kind(), io::ErrorKind::AlreadyExists);
+        let contents = paths.clone().map(|path| fs::read(path).unwrap());
+        assert_eq!(
+            contents,
+            [b"kept".to_vec(), b"one".to_vec(), b"two".to_vec()]
+        );
+        assert_eq!(dir.entries(), ["a-1.json", "a-2.json", "a.json"]);
+        let mode = fs::metadata(&paths[1]).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn a_failed_write_leaves_no_file_behind() {
+        let dir = TempDir::new();
+        let path = dir.path().join("recording.json");
+
+        let err = atomic_create(std::slice::from_ref(&path), |out| {
+            out.write_all(b"half a reco")?;
+            Err(io::Error::other("crashed mid-write"))
+        })
+        .unwrap_err();
+
+        assert_eq!(err.to_string(), "crashed mid-write");
+        assert_eq!(dir.entries(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn create_refuses_paths_in_several_directories_or_none() {
+        let dir = TempDir::new();
+        let paths = [dir.path().join("a"), dir.path().join("sub").join("b")];
+        let kinds = [
+            atomic_create(&paths, |_| Ok(())).unwrap_err().kind(),
+            atomic_create(&[], |_| Ok(())).unwrap_err().kind(),
+        ];
+        assert_eq!(kinds, [io::ErrorKind::InvalidInput; 2]);
+        assert_eq!(dir.entries(), Vec::<String>::new());
     }
 }

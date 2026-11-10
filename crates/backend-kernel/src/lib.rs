@@ -4,6 +4,7 @@
 //! out an [`Input`] over its backend and never the bare backend, so every
 //! press goes through the pressed set that releases it.
 
+mod clock;
 mod devices;
 mod error;
 mod hotkeys;
@@ -14,7 +15,8 @@ use auto_clicker_core::input::{
 use evdev::uinput::VirtualDevice;
 use evdev::{AbsoluteAxisCode, EventType, InputEvent, RelativeAxisCode};
 
-pub use hotkeys::watch_hotkeys;
+pub use clock::{local_time, monotonic_now};
+pub use hotkeys::{InputSources, read_input};
 
 pub use devices::{
     ABSOLUTE_MAX, DeviceIdentity, DeviceRole, KEYBOARD_NAME, MOUSE_NAME, PRODUCT_KEYBOARD,
@@ -174,6 +176,34 @@ mod tests {
         let wheel = RelativeAxisCode::REL_WHEEL.0;
         assert_eq!(summary(&wheel_events(-2)), [(rel, wheel, -2)]);
         assert!(wheel_events(0).is_empty());
+    }
+
+    #[test]
+    fn recording_names_are_evdevs_names_for_the_same_codes() {
+        use std::str::FromStr;
+
+        use auto_clicker_core::input::Key;
+        use auto_clicker_core::recording::{code_name, parse_code, recordable};
+        use evdev::KeyCode;
+
+        let codes = Key::CODES.chain(Button::ALL.map(Button::code));
+        let mut named = 0;
+        for code in codes {
+            let Some(held) = recordable(code) else {
+                continue;
+            };
+            let name = code_name(held).unwrap();
+            // Newer kernel names than evdev 0.13 knows; it has their aliases.
+            let evdev_name = match name {
+                "KEY_ALL_APPLICATIONS" => "KEY_DASHBOARD",
+                name => name,
+            };
+            let evdev_code = KeyCode::from_str(evdev_name).ok();
+            assert_eq!(evdev_code, Some(KeyCode(code)), "{name}");
+            assert_eq!(parse_code(name), Some(held), "{name}");
+            named += 1;
+        }
+        assert_eq!(named, 247);
     }
 
     #[test]
