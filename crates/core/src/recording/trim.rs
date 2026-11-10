@@ -6,10 +6,10 @@
 //! The rule, over the recording's mouse-only tail (everything after its last
 //! key event):
 //!
-//! 1. When the tray said its menu opened at most [`MENU_FRESH`] before the
-//!    stop, the trip began with the last button press in the tail at or
-//!    before that moment: the click that opened the menu.
-//! 2. Otherwise the trip began with the second-to-last button press in the
+//! 1. When the tray said its menu opened during the recording, the trip
+//!    began with the last button press in the tail at or before the last
+//!    opening: the click that opened the menu, however long it stayed open.
+//! 2. Otherwise (a tray host that never says), the trip began with the second-to-last button press in the
 //!    tail (the click on the icon, then the click on the menu item), or the
 //!    only one.
 //!
@@ -21,15 +21,9 @@
 use super::{Change, Event};
 use crate::input::Held;
 
-/// How long before a stop the menu may have opened and still count as the
-/// opening that led to the stop. Older, it may have been opened and closed
-/// before, and the last opening went unreported.
-pub const MENU_FRESH_US: u64 = 10_000_000;
-
-/// Where the trip to the tray begins in `events`, for a recording ending at
-/// `end` whose tray menu last opened at `menu_opened`, both in microseconds
-/// since the start. `events.len()` when no trip is found.
-pub fn tray_cut(events: &[Event], menu_opened: Option<u64>, end: u64) -> usize {
+/// Where the trip to the tray begins in `events`, for a recording whose
+/// tray menu last opened at `menu_opened`, in microseconds since the start. `events.len()` when no trip is found.
+pub fn tray_cut(events: &[Event], menu_opened: Option<u64>) -> usize {
     let tail = events
         .iter()
         .rposition(|event| is_key(event.change))
@@ -41,8 +35,7 @@ pub fn tray_cut(events: &[Event], menu_opened: Option<u64>, end: u64) -> usize {
                 .is_some_and(|event| is_button_press(event.change))
         })
         .collect();
-    let opened = menu_opened.filter(|&opened| opened <= end && end - opened <= MENU_FRESH_US);
-    let marked = opened.and_then(|opened| {
+    let marked = menu_opened.and_then(|opened| {
         presses
             .iter()
             .rev()

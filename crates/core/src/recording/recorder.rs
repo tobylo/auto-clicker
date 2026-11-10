@@ -119,10 +119,13 @@ pub struct Recorder {
     /// When the recording started, on the event clock.
     start: Duration,
     created: Created,
-    /// Keys of the hotkey that started the recording, still down then:
-    /// left out until each comes up. Each is tied to the first device read
-    /// holding it, so only that device's state can say it came up.
-    ignored: Vec<(u16, Option<DeviceId>)>,
+    /// The keys of the hotkey that started the recording: on a device's
+    /// first read, those it holds are left out.
+    start_chord: Vec<u16>,
+    /// Keys held on a device that are left out until that device lets go
+    /// of them: the start hotkey's, and each hotkey's pressed during the
+    /// recording. A read after lost events keeps them out too.
+    excluded: BTreeSet<(DeviceId, u16)>,
     /// When the recording hotkey stopped the recording.
     stopped_at: Option<u64>,
     events: Vec<Event>,
@@ -145,17 +148,12 @@ impl Recorder {
         created: Created,
         started_by: Option<Binding>,
     ) -> Recorder {
-        let ignored = started_by
-            .map(chord_codes)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|code| (code, None))
-            .collect();
         Recorder {
             bindings,
             start,
             created,
-            ignored,
+            start_chord: started_by.map(chord_codes).unwrap_or_default(),
+            excluded: BTreeSet::new(),
             stopped_at: None,
             events: Vec::new(),
             bucket: None,
@@ -176,11 +174,12 @@ impl Recorder {
             fired,
         } = input;
         if let (true, Some(action)) = (pressed, fired) {
+            self.excluded.insert((device, code));
             return self.hotkey(action, at);
         }
-        if let Some(index) = self.ignored.iter().position(|&(known, _)| known == code) {
+        if self.excluded.contains(&(device, code)) {
             if !pressed {
-                self.ignored.swap_remove(index);
+                self.excluded.remove(&(device, code));
             }
             return;
         }
@@ -226,6 +225,7 @@ impl Recorder {
         let Some(at) = self.offset(now) else {
             return;
         };
+        self.excluded.retain(|&(holder, _)| holder != device);
         let held = self.devices.remove(&device).unwrap_or_default();
         for item in held {
             self.release_held(item, at);
@@ -240,37 +240,34 @@ impl Recorder {
         let Some(at) = self.offset(now) else {
             return;
         };
-        let known = self.devices.get(&device).cloned().unwrap_or_default();
+        let Some(known) = self.devices.get(&device).cloned() else {
+            // The device's first read: the start hotkey's keys it holds are
+            // left out.
+            let chord = self.start_chord.iter().filter(|&&code| held(code));
+            self.excluded.extend(chord.map(|&code| (device, code)));
+            self.devices.insert(device, BTreeSet::new());
+            return self.press_held(device, &held, at);
+        };
         for &item in &known {
             if !held(codes::code(item)) {
                 self.release(device, item, at);
             }
         }
-        self.note_start_hotkey(device, &held);
+        self.excluded
+            .retain(|&(holder, code)| holder != device || held(code));
+        self.press_held(device, &held, at);
+    }
+
+    /// Presses what `device` holds that is not left out.
+    fn press_held(&mut self, device: DeviceId, held: &impl Fn(u16) -> bool, at: u64) {
         let pressed: Vec<Held> = Key::CODES
             .chain(Button::ALL.map(Button::code))
-            .filter(|&code| held(code) && !self.is_ignored(code))
+            .filter(|&code| held(code) && !self.excluded.contains(&(device, code)))
             .filter_map(codes::recordable)
             .collect();
         for item in pressed {
             self.press(device, item, at);
         }
-    }
-
-    /// Ties each start hotkey key `device` holds to it, and lets go of
-    /// those tied to it that it no longer holds.
-    fn note_start_hotkey(&mut self, device: DeviceId, held: &impl Fn(u16) -> bool) {
-        for (code, holder) in &mut self.ignored {
-            if holder.is_none() && held(*code) {
-                *holder = Some(device);
-            }
-        }
-        self.ignored
-            .retain(|&(code, holder)| holder != Some(device) || held(code));
-    }
-
-    fn is_ignored(&self, code: u16) -> bool {
-        self.ignored.iter().any(|&(known, _)| known == code)
     }
 
     /// Ends the recording: trims the trip to the tray after a tray stop,
@@ -291,7 +288,7 @@ impl Recorder {
         let mut events = self.events;
         if let Some(opened) = menu_opened {
             let opened = opened.and_then(|time| offset_from(self.start, time));
-            let cut = tray_cut(&events, opened, end);
+            let cut = tray_cut(&events, opened);
             if let Some(first) = events.get(cut) {
                 end = first.at;
                 events.truncate(cut);
@@ -363,8 +360,10 @@ impl Recorder {
         for (index, held) in dropped {
             self.events.remove(index);
             self.down.remove(&held);
-            for keys in self.devices.values_mut() {
-                keys.remove(&held);
+            for (&device, keys) in &mut self.devices {
+                if keys.remove(&held) {
+                    self.excluded.insert((device, codes::code(held)));
+                }
             }
         }
     }

@@ -291,6 +291,62 @@ fn a_device_read_first_that_holds_none_of_the_start_hotkey_keeps_it_left_out() {
 }
 
 #[test]
+fn the_start_hotkeys_other_side_and_other_devices_are_recorded() {
+    let started_by = Bindings::default().toggle_recording;
+    let mut recorder = Recorder::new(Bindings::default(), START, created(), Some(started_by));
+    recorder.resync(KEYBOARD, |code| [CTRL, F7].contains(&code), t(0));
+    recorder.resync(OTHER_KEYBOARD, |_| false, t(0));
+    // Right Ctrl was never down; Ctrl on another keyboard is its own.
+    tap(&mut recorder, KEYBOARD, 97, [100, 200]);
+    tap(&mut recorder, OTHER_KEYBOARD, CTRL, [300, 400]);
+    recorder.key(KEYBOARD, KeyInput::release(CTRL), t(500));
+    assert_eq!(
+        events_at(recorder, t(600)),
+        [
+            (100, press(key(97))),
+            (200, release(key(97))),
+            (300, press(key(CTRL))),
+            (400, release(key(CTRL)))
+        ]
+    );
+}
+
+#[test]
+fn a_hotkey_still_held_after_lost_events_stays_out() {
+    let mut recorder = recorder();
+    recorder.resync(KEYBOARD, |_| false, t(0));
+    recorder.key(KEYBOARD, KeyInput::press(CTRL), t(100));
+    recorder.key(
+        KEYBOARD,
+        KeyInput::press(F6).firing(Action::ToggleClicking),
+        t(200),
+    );
+    // Events were lost with Ctrl+F6 still down, then they come up.
+    recorder.resync(KEYBOARD, |code| [CTRL, F6].contains(&code), t(300));
+    recorder.resync(KEYBOARD, |_| false, t(400));
+    tap(&mut recorder, KEYBOARD, W, [500, 600]);
+    assert_eq!(
+        events_at(recorder, t(700)),
+        [(500, press(key(W))), (600, release(key(W)))]
+    );
+}
+
+#[test]
+fn an_unplugged_device_takes_its_exclusions_with_it() {
+    let started_by = Bindings::default().toggle_recording;
+    let mut recorder = Recorder::new(Bindings::default(), START, created(), Some(started_by));
+    recorder.resync(KEYBOARD, |code| code == CTRL, t(0));
+    recorder.device_lost(KEYBOARD, t(100));
+    // Plugged in again under the same id: its Ctrl is the user's now.
+    recorder.resync(KEYBOARD, |_| false, t(200));
+    tap(&mut recorder, KEYBOARD, CTRL, [300, 400]);
+    assert_eq!(
+        events_at(recorder, t(500)),
+        [(300, press(key(CTRL))), (400, release(key(CTRL)))]
+    );
+}
+
+#[test]
 fn the_stop_hotkey_is_left_out_and_ends_the_recording_at_its_press() {
     let mut recorder = recorder();
     tap(&mut recorder, KEYBOARD, W, [0, 1_000]);
@@ -623,17 +679,22 @@ fn a_press_dragged_to_the_menu_item_is_one_click() {
 }
 
 #[test]
-fn a_stale_menu_opening_falls_back_to_the_last_two_clicks() {
+fn a_menu_held_open_long_still_marks_the_trip() {
     let mut recorder = recorder();
-    mining_then_tray_trip(&mut recorder);
-    // Stopped at 16 s, the menu last said it opened at 2 s, after the
-    // mining click: too long ago to be this trip's opening.
+    recorder.key(MOUSE, KeyInput::press(button_code(LEFT)), t(0));
+    recorder.key(MOUSE, KeyInput::release(button_code(LEFT)), t(100_000));
+    recorder.key(MOUSE, KeyInput::press(button_code(LEFT)), t(1_000_000));
+    // The menu stays open 30 s before the drag ends on Stop recording.
+    recorder.key(MOUSE, KeyInput::release(button_code(LEFT)), t(31_000_000));
     let ending = Ending::Tray {
-        at: t(16_000_000),
-        menu_opened: Some(t(2_000_000)),
+        at: t(31_100_000),
+        menu_opened: Some(t(1_050_000)),
     };
     let recording = recorder.finish(ending).unwrap().unwrap();
-    assert_eq!(changes(&recording), mining());
+    assert_eq!(
+        changes(&recording),
+        [(0, press(LEFT)), (100_000, release(LEFT))]
+    );
 }
 
 #[test]
