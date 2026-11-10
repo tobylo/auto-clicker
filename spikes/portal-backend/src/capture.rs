@@ -60,9 +60,13 @@ pub async fn run(secs: u64) -> Result<(), String> {
         signals,
     };
     let result = watch(&portal, &session, receiver, Duration::from_secs(secs)).await;
-    let closed = tokio::time::timeout(CALL_LIMIT, session.close()).await;
-    line(&format!("closed session: {closed:?}"));
-    result
+    let closed = match tokio::time::timeout(CALL_LIMIT, session.close()).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(format!("Session.Close: {e}")),
+        Err(_) => Err(format!("Session.Close: no answer within {CALL_LIMIT:?}")),
+    };
+    // The run's own failure comes first; a failed close is reported otherwise.
+    result.and(closed)
 }
 
 /// How long a call that hands input back may take.
