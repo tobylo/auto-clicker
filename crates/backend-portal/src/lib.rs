@@ -1,6 +1,9 @@
 //! The portal input backend: clicks and keys through the desktop's
 //! RemoteDesktop portal and libei, without `/dev/uinput`.
 //!
+//! Hotkeys come through the GlobalShortcuts portal, without reading a
+//! keyboard ([`read_shortcuts`]).
+//!
 //! This crate is the only one that touches the portals and libei. It hands
 //! out an [`Input`] over its backend and never the bare backend, so every
 //! press goes through the pressed set that releases it.
@@ -14,6 +17,7 @@
 mod eis;
 mod layout;
 mod session;
+mod shortcuts;
 mod token;
 
 use std::cell::RefCell;
@@ -31,6 +35,7 @@ use reis::ei;
 use reis::event::DeviceCapability;
 
 pub use session::APP_ID;
+pub use shortcuts::read_shortcuts;
 pub use token::token_path;
 
 use eis::Eis;

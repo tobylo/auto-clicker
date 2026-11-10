@@ -47,6 +47,7 @@ pub(super) fn validate(raw: RawConfig) -> Result<Config, Invalid> {
         clicker,
         input: InputSettings {
             output: raw.input.output.map_or(defaults.input.output, Into::into),
+            hotkeys: raw.input.hotkeys.map_or(defaults.input.hotkeys, Into::into),
         },
     })
 }

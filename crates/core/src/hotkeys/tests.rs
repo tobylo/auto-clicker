@@ -15,6 +15,15 @@ fn key(name: &str) -> Key {
     Key::from_name(name).unwrap()
 }
 
+/// Ctrl+F6, Ctrl+F7 and Ctrl+F8: one modifier, which keeps these cases short.
+fn ctrl_bindings() -> Bindings {
+    Bindings {
+        toggle_clicking: binding("Ctrl+F6"),
+        toggle_recording: binding("Ctrl+F7"),
+        toggle_playback: binding("Ctrl+F8"),
+    }
+}
+
 // Parsing
 
 #[test]
@@ -52,11 +61,11 @@ fn bindings_show_in_one_form() {
 }
 
 #[test]
-fn the_defaults_are_ctrl_f6_f7_f8() {
+fn the_defaults_are_ctrl_shift_f6_f7_f8() {
     let defaults = Bindings::default();
-    assert_eq!(defaults.toggle_clicking, binding("Ctrl+F6"));
-    assert_eq!(defaults.toggle_recording, binding("Ctrl+F7"));
-    assert_eq!(defaults.toggle_playback, binding("Ctrl+F8"));
+    assert_eq!(defaults.toggle_clicking, binding("Ctrl+Shift+F6"));
+    assert_eq!(defaults.toggle_recording, binding("Ctrl+Shift+F7"));
+    assert_eq!(defaults.toggle_playback, binding("Ctrl+Shift+F8"));
 }
 
 #[test]
@@ -195,7 +204,7 @@ fn run_with(bindings: Bindings, steps: &[Step]) -> Vec<HotkeyEvent> {
 }
 
 fn run(steps: &[Step]) -> Vec<HotkeyEvent> {
-    run_with(Bindings::default(), steps)
+    run_with(ctrl_bindings(), steps)
 }
 
 use HotkeyEvent::{Fired, ModifiersReleased, ReleaseLost};
@@ -300,7 +309,7 @@ fn every_modifier_key_counts_as_its_modifier() {
     for modifier in Modifier::ALL {
         let bindings = Bindings {
             toggle_clicking: binding(&format!("{}+F9", modifier.name())),
-            ..Bindings::default()
+            ..ctrl_bindings()
         };
         for code in modifier.codes() {
             let sent = run_with(bindings, &[down(A, code), down(A, F9)]);
@@ -367,7 +376,7 @@ fn fires_before_the_release_share_one() {
 fn a_binding_without_modifiers_is_released_at_once() {
     let bindings = Bindings {
         toggle_clicking: binding("F9"),
-        ..Bindings::default()
+        ..ctrl_bindings()
     };
     assert_eq!(
         run_with(bindings, &[down(A, F9), up(A, F9)]),
@@ -379,7 +388,7 @@ fn a_binding_without_modifiers_is_released_at_once() {
 fn a_release_never_seen_pressed_leaves_nothing_held() {
     let bindings = Bindings {
         toggle_clicking: binding("F9"),
-        ..Bindings::default()
+        ..ctrl_bindings()
     };
     assert_eq!(
         run_with(bindings, &[up(A, LEFTCTRL), down(A, F9)]),
@@ -443,7 +452,7 @@ fn queued_events_older_than_a_read_still_change_the_state() {
 
 #[test]
 fn a_read_replaces_what_the_device_held() {
-    let mut matcher = Matcher::new(Bindings::default());
+    let mut matcher = Matcher::new(ctrl_bindings());
     feed(
         &mut matcher,
         &[
@@ -471,7 +480,7 @@ fn lost_events_lose_an_awaited_release_and_a_read_never_claims_one() {
 
 #[test]
 fn a_device_lost_holding_a_modifier_loses_the_release() {
-    let mut matcher = Matcher::new(Bindings::default());
+    let mut matcher = Matcher::new(ctrl_bindings());
     let sent = feed(
         &mut matcher,
         &[down(A, LEFTCTRL), down(A, F6), Step::Gone(A, 500)],
@@ -601,7 +610,7 @@ fn key_events_cannot_be_printed() {
 
 #[test]
 fn what_the_controller_gets_names_no_key() {
-    let mut matcher = Matcher::new(Bindings::default());
+    let mut matcher = Matcher::new(ctrl_bindings());
     let mut shown = String::new();
     for code in 1..=248 {
         for value in [1, 2, 0] {

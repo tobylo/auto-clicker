@@ -74,6 +74,7 @@ fn every_option_is_read() {
 
         [input]
         output = "portal"
+        hotkeys = "portal"
         "#,
     );
     let expected = Config {
@@ -94,6 +95,7 @@ fn every_option_is_read() {
         },
         input: InputSettings {
             output: OutputRoute::Portal,
+            hotkeys: HotkeyRoute::Portal,
         },
     };
     assert_eq!(config, expected);
@@ -571,6 +573,46 @@ fn output_defaults_to_the_kernel_and_reads_portal() {
             OutputRoute::Portal
         ]
     );
+}
+
+#[test]
+fn hotkeys_default_to_the_kernel_and_read_portal() {
+    let routes = [
+        parse("version = 1\n").input.hotkeys,
+        parse("version = 1\n[input]\noutput = \"portal\"\n")
+            .input
+            .hotkeys,
+        parse("version = 1\n[input]\nhotkeys = \"kernel\"\n")
+            .input
+            .hotkeys,
+        parse("version = 1\n[input]\nhotkeys = \"portal\"\n")
+            .input
+            .hotkeys,
+    ];
+    assert_eq!(
+        routes,
+        [
+            HotkeyRoute::Kernel,
+            HotkeyRoute::Kernel,
+            HotkeyRoute::Kernel,
+            HotkeyRoute::Portal
+        ]
+    );
+    // The routes are chosen separately.
+    let mixed = parse("version = 1\n[input]\nhotkeys = \"portal\"\n").input;
+    assert_eq!(mixed.output, OutputRoute::Kernel);
+}
+
+#[test]
+fn an_unknown_hotkey_route_is_rejected_at_its_line() {
+    for value in ["evdev", "Portal", "auto"] {
+        let (line, reason) = invalid(&format!("version = 1\n[input]\nhotkeys = \"{value}\"\n"));
+        assert_eq!(line, Some(3), "{value}: {reason}");
+        assert!(
+            reason.contains("kernel") && reason.contains("portal"),
+            "{value}: {reason}"
+        );
+    }
 }
 
 #[test]

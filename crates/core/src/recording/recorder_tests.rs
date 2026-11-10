@@ -27,8 +27,18 @@ fn t(us: u64) -> Duration {
     START + Duration::from_micros(us)
 }
 
+/// Ctrl+F6, Ctrl+F7 and Ctrl+F8: one modifier, which keeps these cases short.
+fn bindings() -> Bindings {
+    let ctrl = |key: &str| Binding::parse(&format!("Ctrl+{key}")).unwrap();
+    Bindings {
+        toggle_clicking: ctrl("F6"),
+        toggle_recording: ctrl("F7"),
+        toggle_playback: ctrl("F8"),
+    }
+}
+
 fn recorder() -> Recorder {
-    Recorder::new(Bindings::default(), START, created(), None)
+    Recorder::new(bindings(), START, created(), None)
 }
 
 fn press(held: Held) -> Change {
@@ -241,8 +251,8 @@ fn keys_held_when_a_tray_start_begins_are_pressed_at_the_start() {
 
 #[test]
 fn the_start_hotkeys_own_keys_are_left_out_until_they_come_up() {
-    let started_by = Bindings::default().toggle_recording;
-    let mut recorder = Recorder::new(Bindings::default(), START, created(), Some(started_by));
+    let started_by = bindings().toggle_recording;
+    let mut recorder = Recorder::new(bindings(), START, created(), Some(started_by));
     // Ctrl+F7 is still down at the start, and W too.
     recorder.resync(KEYBOARD, |code| [CTRL, F7, W].contains(&code), t(0));
     recorder.key(KEYBOARD, KeyInput::release(F7), t(50));
@@ -262,8 +272,8 @@ fn the_start_hotkeys_own_keys_are_left_out_until_they_come_up() {
 
 #[test]
 fn a_start_hotkey_key_seen_up_by_a_resync_is_no_longer_left_out() {
-    let started_by = Bindings::default().toggle_recording;
-    let mut recorder = Recorder::new(Bindings::default(), START, created(), Some(started_by));
+    let started_by = bindings().toggle_recording;
+    let mut recorder = Recorder::new(bindings(), START, created(), Some(started_by));
     recorder.resync(KEYBOARD, |code| code == CTRL, t(0));
     // Events were lost while Ctrl came up and went down again.
     recorder.resync(KEYBOARD, |_| false, t(100));
@@ -276,8 +286,8 @@ fn a_start_hotkey_key_seen_up_by_a_resync_is_no_longer_left_out() {
 
 #[test]
 fn a_device_read_first_that_holds_none_of_the_start_hotkey_keeps_it_left_out() {
-    let started_by = Bindings::default().toggle_recording;
-    let mut recorder = Recorder::new(Bindings::default(), START, created(), Some(started_by));
+    let started_by = bindings().toggle_recording;
+    let mut recorder = Recorder::new(bindings(), START, created(), Some(started_by));
     // A mouse holding nothing is read before the keyboard holding Ctrl+F7.
     recorder.resync(MOUSE, |_| false, t(0));
     recorder.resync(KEYBOARD, |code| [CTRL, F7].contains(&code), t(0));
@@ -292,8 +302,8 @@ fn a_device_read_first_that_holds_none_of_the_start_hotkey_keeps_it_left_out() {
 
 #[test]
 fn the_start_hotkeys_other_side_and_other_devices_are_recorded() {
-    let started_by = Bindings::default().toggle_recording;
-    let mut recorder = Recorder::new(Bindings::default(), START, created(), Some(started_by));
+    let started_by = bindings().toggle_recording;
+    let mut recorder = Recorder::new(bindings(), START, created(), Some(started_by));
     recorder.resync(KEYBOARD, |code| [CTRL, F7].contains(&code), t(0));
     recorder.resync(OTHER_KEYBOARD, |_| false, t(0));
     // Right Ctrl was never down; Ctrl on another keyboard is its own.
@@ -333,8 +343,8 @@ fn a_hotkey_still_held_after_lost_events_stays_out() {
 
 #[test]
 fn an_unplugged_device_takes_its_exclusions_with_it() {
-    let started_by = Bindings::default().toggle_recording;
-    let mut recorder = Recorder::new(Bindings::default(), START, created(), Some(started_by));
+    let started_by = bindings().toggle_recording;
+    let mut recorder = Recorder::new(bindings(), START, created(), Some(started_by));
     recorder.resync(KEYBOARD, |code| code == CTRL, t(0));
     recorder.device_lost(KEYBOARD, t(100));
     // Plugged in again under the same id: its Ctrl is the user's now.
@@ -348,8 +358,8 @@ fn an_unplugged_device_takes_its_exclusions_with_it() {
 
 #[test]
 fn a_device_added_after_the_start_records_its_held_ctrl() {
-    let started_by = Bindings::default().toggle_recording;
-    let mut recorder = Recorder::new(Bindings::default(), START, created(), Some(started_by));
+    let started_by = bindings().toggle_recording;
+    let mut recorder = Recorder::new(bindings(), START, created(), Some(started_by));
     recorder.resync(KEYBOARD, |code| [CTRL, F7].contains(&code), t(0));
     recorder.start_read();
     // Plugged in later with Ctrl held: the user's own Ctrl.
@@ -498,7 +508,7 @@ fn other_hotkeys_during_a_recording_are_left_out_and_it_goes_on() {
 fn a_hotkey_with_a_custom_binding_is_matched_by_its_action() {
     let bindings = Bindings {
         toggle_recording: Binding::parse("Shift+F9").unwrap(),
-        ..Bindings::default()
+        ..bindings()
     };
     let mut recorder = Recorder::new(bindings, START, created(), None);
     recorder.key(KEYBOARD, KeyInput::press(CTRL), t(0));

@@ -15,7 +15,9 @@
 //! `clicks_through_the_portal_into_a_real_window` uses the daemon's own
 //! token file: answer Allow if the dialog shows; a second run shows none.
 //! `deny_in_the_dialog_is_not_allowed` keeps no token, so the dialog always
-//! shows: answer Deny.
+//! shows: answer Deny. `a_hotkey_pressed_by_a_person_arrives_through_the_portal`
+//! binds the daemon's own shortcuts: accept the dialog if it shows, then
+//! press the hotkey it names.
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -323,6 +325,46 @@ async fn deny_in_the_dialog_is_not_allowed() {
         "{:?}",
         opened.err()
     );
+}
+
+#[tokio::test]
+#[ignore = "needs Plasma 6.8, the installed desktop file and a person to accept the dialog and press the hotkey; run by hand"]
+async fn a_hotkey_pressed_by_a_person_arrives_through_the_portal() {
+    use auto_clicker_core::hotkeys::{Action, Bindings, HotkeyEvent, HotkeyStatus};
+    use tokio::sync::mpsc;
+    use tokio::time::timeout;
+
+    let (events, mut received) = mpsc::unbounded_channel();
+    let reader = crate::read_shortcuts(Bindings::default(), move |event| {
+        let _ = events.send(event);
+    });
+    let person = async {
+        eprintln!("\n>>> Accept the shortcuts dialog if Plasma shows one.");
+        let wait = Duration::from_secs(120);
+        let mut next = async || timeout(wait, received.recv()).await.unwrap().unwrap();
+        let HotkeyEvent::Triggers(triggers) = next().await else {
+            panic!("the triggers come first");
+        };
+        let trigger = triggers
+            .of(Action::ToggleClicking)
+            .text()
+            .unwrap()
+            .to_owned();
+        assert!(
+            !trigger.is_empty(),
+            "no trigger for clicking: set one in System Settings"
+        );
+        assert_eq!(next().await, HotkeyEvent::Status(HotkeyStatus::Available));
+        eprintln!(">>> Press {trigger} and let go.");
+        assert_eq!(next().await, HotkeyEvent::Fired(Action::ToggleClicking));
+        let fired = Instant::now();
+        assert_eq!(next().await, HotkeyEvent::ModifiersReleased);
+        eprintln!(">>> Released {:?} after the press.", fired.elapsed());
+    };
+    tokio::select! {
+        () = reader => panic!("the reader ended"),
+        () = person => {}
+    }
 }
 
 #[test]

@@ -202,6 +202,7 @@ impl ksni::Tray for Tray {
 #[cfg(test)]
 mod tests {
     use auto_clicker_core::config::Config;
+    use auto_clicker_core::controller::Hotkey;
 
     use super::*;
 
@@ -210,8 +211,8 @@ mod tests {
         View {
             activity,
             settings: config.clicker,
-            hotkey: config.hotkeys.toggle_clicking,
-            record_hotkey: config.hotkeys.toggle_recording,
+            hotkey: Hotkey::Bound(config.hotkeys.toggle_clicking),
+            record_hotkey: Hotkey::Bound(config.hotkeys.toggle_recording),
             notice: Some("a <b> & c".to_owned()),
             problems: Vec::new(),
         }

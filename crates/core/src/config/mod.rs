@@ -19,13 +19,15 @@
 //! repeat = "until_stopped"      # or a number of actions
 //!
 //! [hotkeys]                     # modifiers Ctrl, Shift, Alt, Meta; any case
-//! toggle_clicking = "Ctrl+F6"
-//! toggle_recording = "Ctrl+F7"
-//! toggle_playback = "Ctrl+F8"
+//! toggle_clicking = "Ctrl+Shift+F6"
+//! toggle_recording = "Ctrl+Shift+F7"
+//! toggle_playback = "Ctrl+Shift+F8"
 //!
 //! [input]
 //! output = "kernel"             # kernel (/dev/uinput) or portal (the desktop's
 //!                               # remote input portal, which asks once)
+//! hotkeys = "kernel"            # kernel (reads the keyboards) or portal (the
+//!                               # desktop's shortcuts, which asks once)
 //! ```
 
 mod error;
@@ -62,6 +64,19 @@ pub struct Config {
 pub struct InputSettings {
     /// Where clicks and keys go.
     pub output: OutputRoute,
+    /// Where hotkeys come from.
+    pub hotkeys: HotkeyRoute,
+}
+
+/// The route hotkeys take to the program.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HotkeyRoute {
+    /// The keyboards, read from `/dev/input`, which needs the `input` group.
+    #[default]
+    Kernel,
+    /// The desktop's GlobalShortcuts portal. The desktop asks the user once,
+    /// and its settings choose the keys from then on.
+    Portal,
 }
 
 /// The route clicks and keys take to the desktop.

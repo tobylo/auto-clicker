@@ -10,11 +10,13 @@
 
 mod binding;
 mod matcher;
+mod trigger;
 
 use std::fmt;
 
 pub use binding::{Binding, Modifier, Modifiers};
 pub use matcher::{DeviceId, KeyEvent, Matcher, Reaction};
+pub use trigger::{DESKTOP_RELEASE_PAUSE, Refusal, Trigger, Triggers};
 
 /// What a hotkey asks the controller to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +24,14 @@ pub enum Action {
     ToggleClicking,
     ToggleRecording,
     TogglePlayback,
+}
+
+impl Action {
+    pub const ALL: [Action; 3] = [
+        Action::ToggleClicking,
+        Action::ToggleRecording,
+        Action::TogglePlayback,
+    ];
 }
 
 /// The binding of every action.
@@ -33,12 +43,13 @@ pub struct Bindings {
 }
 
 impl Default for Bindings {
-    /// Ctrl+F6, Ctrl+F7 and Ctrl+F8.
+    /// Ctrl+Shift+F6, Ctrl+Shift+F7 and Ctrl+Shift+F8: free in stock Plasma,
+    /// whose own shortcuts take Ctrl+F7, and keys Minecraft does not use.
     fn default() -> Self {
         Bindings {
-            toggle_clicking: Binding::ctrl(64),
-            toggle_recording: Binding::ctrl(65),
-            toggle_playback: Binding::ctrl(66),
+            toggle_clicking: Binding::ctrl_shift(64),
+            toggle_recording: Binding::ctrl_shift(65),
+            toggle_playback: Binding::ctrl_shift(66),
         }
     }
 }
@@ -83,16 +94,19 @@ pub enum HotkeyEvent {
     /// Whether hotkeys work now. Sent once the devices were first looked at,
     /// and again whenever it changes.
     Status(HotkeyStatus),
+    /// The triggers the desktop reports, from a reader that gets its hotkeys
+    /// from the desktop: after it bound them, and whenever one changes.
+    Triggers(Triggers),
 }
 
-/// Whether any keyboard can be read for hotkeys.
+/// Whether hotkeys can be read: from a keyboard, or from the desktop.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HotkeyStatus {
     Available,
     Unavailable(Unavailable),
 }
 
-/// Why no keyboard can be read.
+/// Why hotkeys cannot be read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Unavailable {
     /// No input device has a bound key or a modifier key.
@@ -105,6 +119,9 @@ pub enum Unavailable {
     ReadFailed(String),
     /// Watching for devices failed; hotkeys stop until the daemon restarts.
     WatchFailed(String),
+    /// The desktop does not deliver the hotkeys: its shortcuts service is
+    /// missing, refused them or went away. Nothing else is affected.
+    Desktop(String),
 }
 
 impl fmt::Display for Unavailable {
@@ -120,6 +137,7 @@ impl fmt::Display for Unavailable {
             Unavailable::WatchFailed(error) => {
                 write!(f, "hotkeys stopped: watching for keyboards failed: {error}")
             }
+            Unavailable::Desktop(why) => write!(f, "hotkeys are unavailable: {why}"),
         }
     }
 }

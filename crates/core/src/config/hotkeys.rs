@@ -5,9 +5,8 @@ use toml::Spanned;
 
 use super::raw::RawHotkeys;
 use super::validate::{Invalid, at};
-use crate::clicker::{ClickerSettings, Mode};
+use crate::clicker::ClickerSettings;
 use crate::hotkeys::{Binding, Bindings};
-use crate::input::Key;
 
 /// One action's binding, and where the file sets it (`None` for a default).
 struct Placed<'a> {
@@ -79,15 +78,10 @@ fn no_duplicates(placed: &[Placed<'_>]) -> Result<(), Invalid> {
 /// a binding with modifiers too.
 fn not_the_clicker_key(placed: &Placed<'_>, clicker: &ClickerSettings) -> Result<(), Invalid> {
     let binding = placed.binding;
-    if Some(binding.key()) == pressed_key(clicker) {
+    if Some(binding.key()) == clicker.pressed_key() {
         return Err(placed.invalid(format!(
             "hotkey {binding} uses the key the clicker presses; choose another key"
         )));
     }
     Ok(())
-}
-
-/// The key the clicker presses, in the modes that press one.
-fn pressed_key(clicker: &ClickerSettings) -> Option<Key> {
-    matches!(clicker.mode, Mode::KeyRepeat | Mode::HoldKey).then_some(clicker.key)
 }
