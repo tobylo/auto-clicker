@@ -411,6 +411,63 @@ async fn recording_is_refused_while_the_desktop_delivers_the_hotkeys() {
     .await;
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_hotkey_set_off_by_the_programs_own_keys_as_the_desktop_returns_does_nothing() {
+    local(async {
+        // The shortcuts were away, so the run may press F8. The desktop
+        // binds them again; the run's next F8 sets off the playback hotkey
+        // before the program has heard of the new triggers.
+        let d = desktop_daemon_with_recording(&["w"]).await;
+        d.hotkey(defaults()).await;
+        d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(
+            Unavailable::Desktop("a portal service of the desktop stopped".to_owned()),
+        )))
+        .await;
+        d.hotkey(PLAY).await;
+        d.hotkey(HotkeyEvent::ModifiersReleased).await;
+        sleep(Duration::from_millis(20)).await;
+        d.settle().await;
+        assert_eq!(d.activity(), Activity::Playing);
+        d.send(Message::Stop).await;
+        let calls = d.shared.calls().len();
+        // Back: the triggers, then the echo of every hotkey.
+        d.hotkey(defaults()).await;
+        d.hotkey(HotkeyEvent::Status(HotkeyStatus::Available)).await;
+        for action in Action::ALL {
+            d.hotkey(HotkeyEvent::Fired(action)).await;
+            assert_eq!(d.activity(), Activity::Idle, "{action:?}");
+        }
+        d.hotkey(HotkeyEvent::ModifiersReleased).await;
+        // Still nothing just before the window closes.
+        sleep(Duration::from_millis(999)).await;
+        d.press_hotkey().await;
+        assert_eq!(d.activity(), Activity::Idle);
+        assert_eq!(d.shared.calls().len(), calls);
+        // After it, a hotkey is the user's again.
+        sleep(Duration::from_millis(1)).await;
+        d.press_hotkey().await;
+        assert_eq!(d.activity(), Activity::WaitingForRelease);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_first_triggers_and_a_change_of_them_open_no_echo_window() {
+    local(async {
+        // Nothing could be pressed before the first report, and a change in
+        // System Settings is no return: the user's hotkey works at once.
+        let d = desktop_daemon(ClickerSettings::default()).await;
+        d.hotkey(defaults()).await;
+        d.press_hotkey().await;
+        assert_eq!(d.activity(), Activity::WaitingForRelease);
+        d.press_hotkey().await;
+        d.hotkey(reported("Ctrl+Shift+F6", "Meta+F7", "")).await;
+        d.press_hotkey().await;
+        assert_eq!(d.activity(), Activity::WaitingForRelease);
+    })
+    .await;
+}
+
 // Playback
 
 const PLAY: HotkeyEvent = HotkeyEvent::Fired(Action::TogglePlayback);

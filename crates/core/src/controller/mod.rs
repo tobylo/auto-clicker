@@ -525,6 +525,9 @@ impl<P: Platform> Controller<P> {
 
     fn hotkey(&mut self, event: HotkeyEvent) {
         match event {
+            // Right after the desktop's shortcuts came back, a hotkey is the
+            // echo of the program's own keys.
+            HotkeyEvent::Fired(_) if self.in_echo_window() => {}
             // Any hotkey stops playback, or a start of it, and does nothing
             // else.
             HotkeyEvent::Fired(_) if self.playing().is_some() => self.stop(None),

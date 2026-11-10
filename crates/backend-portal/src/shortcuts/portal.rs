@@ -80,9 +80,19 @@ async fn bind(bindings: Bindings) -> Result<Bound<impl Stream<Item = Signal>>, S
     let heard = within("watching for hotkeys", proxy.receive_all_signals())
         .await?
         .map_err(|err| format!("watching for hotkeys: {err}"))?;
-    let closed = within("watching the session", session_closed(portal.connection()))
+    // Every signal is checked against the portal's own unique name, found
+    // here from the bus: neither a match rule nor the proxy's own tracking
+    // of the owner holds against a signal another program sends straight
+    // to this connection.
+    let owner = within("finding the portal", portal_owner(portal.connection()))
         .await?
-        .map_err(|err| format!("watching the session: {err}"))?;
+        .map_err(|err| format!("finding the portal: {err}"))?;
+    let closed = within(
+        "watching the session",
+        session_closed(portal.connection(), owner.clone()),
+    )
+    .await?
+    .map_err(|err| format!("watching the session: {err}"))?;
     let session = within(
         "CreateSession",
         proxy.create_session(CreateSessionOptions::default()),
@@ -103,10 +113,13 @@ async fn bind(bindings: Bindings) -> Result<Bound<impl Stream<Item = Signal>>, S
     .await
     .map_err(|_| "the desktop's shortcuts dialog was left open for 5 min".to_owned())?
     .map_err(|err| failed("BindShortcuts", &err))?;
-    // This connection carries one session, so every signal on it is that
-    // session's.
+    // This connection carries one session, so every signal the portal
+    // sends on it is that session's.
     let signals = stream::select(
-        heard.filter_map(|message| ready(parse(&message))),
+        heard.filter_map(move |message| {
+            let parsed = sent_by(&message, &owner).then(|| parse(&message));
+            ready(parsed.flatten())
+        }),
         closed.map(|()| Signal::Closed),
     );
     Ok(Bound {
@@ -117,22 +130,36 @@ async fn bind(bindings: Bindings) -> Result<Bound<impl Stream<Item = Signal>>, S
     })
 }
 
-/// The `Closed` signals the portal sends for the sessions of `connection`:
-/// the one session this connection carries. Only the portal's, and only
-/// for this connection's sessions, so no other program on the bus can end
-/// the session by sending one. The sender is checked here: the bus delivers
-/// a signal sent straight to this connection whatever the rule says.
+/// The unique name of the portal service's owner, from the bus itself.
+async fn portal_owner(connection: &zbus::Connection) -> zbus::Result<String> {
+    let owner = zbus::fdo::DBusProxy::new(connection)
+        .await?
+        .get_name_owner(zbus::names::BusName::try_from(PORTAL_NAME)?)
+        .await?;
+    Ok(owner.as_str().to_owned())
+}
+
+/// Whether the connection with the unique name `owner` sent `message`. The
+/// bus stamps the sender, so it cannot be forged.
+pub(super) fn sent_by(message: &zbus::Message, owner: &str) -> bool {
+    message
+        .header()
+        .sender()
+        .is_some_and(|sender| sender.as_str() == owner)
+}
+
+/// The `Closed` signals the portal (`owner`) sends for the sessions of
+/// `connection`: the one session this connection carries. Only the
+/// portal's, and only for this connection's sessions, so no other program
+/// on the bus can end the session by sending one.
 async fn session_closed(
     connection: &zbus::Connection,
+    owner: String,
 ) -> zbus::Result<impl Stream<Item = ()> + use<>> {
     let caller = connection.unique_name().ok_or(zbus::Error::Failure(
         "the connection has no name".to_owned(),
     ))?;
     let namespace = session_namespace(caller.as_str());
-    let portal = zbus::fdo::DBusProxy::new(connection)
-        .await?
-        .get_name_owner(zbus::names::BusName::try_from(PORTAL_NAME)?)
-        .await?;
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .sender(PORTAL_NAME)?
@@ -144,7 +171,7 @@ async fn session_closed(
     Ok(closed.filter_map(move |message| {
         // A stream that fails has lost the connection: the session is gone.
         let ours = message.map_or(true, |message| {
-            closes_a_session(&message, portal.as_str(), &namespace)
+            closes_a_session(&message, &owner, &namespace)
         });
         ready(ours.then_some(()))
     }))
@@ -153,16 +180,12 @@ async fn session_closed(
 /// Whether `message` is from the portal (the owner of its bus name, by
 /// unique name) and about a session under `namespace`.
 pub(super) fn closes_a_session(message: &zbus::Message, portal: &str, namespace: &str) -> bool {
-    let header = message.header();
-    let from_portal = header
-        .sender()
-        .is_some_and(|sender| sender.as_str() == portal);
-    let ours = header.path().is_some_and(|path| {
+    let ours = message.header().path().is_some_and(|path| {
         path.as_str()
             .strip_prefix(namespace)
             .is_some_and(|session| session.starts_with('/'))
     });
-    from_portal && ours
+    sent_by(message, portal) && ours
 }
 
 /// Where the portal puts the sessions of the caller with this unique bus
@@ -245,8 +268,7 @@ pub(super) fn preferred_trigger(binding: Binding) -> Option<String> {
 /// shortcuts. When that one restarts, the portal keeps its bus name and
 /// says nothing, yet the session is dead (measured on Plasma 6.8.2). Only
 /// these two names are watched, so no other name on the bus can end a
-/// session. Ends when the bus goes away or sends a change that cannot be
-/// read.
+/// session. Ends when the bus goes away.
 pub(super) async fn watch_owner() -> Result<impl Stream<Item = bool>, String> {
     let connection = within("session bus", async {
         zbus::connection::Builder::session()?
@@ -269,12 +291,14 @@ pub(super) async fn watch_owner() -> Result<impl Stream<Item = bool>, String> {
     };
     let portal = watching(PORTAL_NAME).await?;
     let behind = watching(KDE_BACKEND_NAME).await?;
-    Ok(
-        stream::select(portal, behind).scan(connection, |_connection, change| {
-            // The stream keeps the connection it listens on.
-            ready(change.ok().as_ref().and_then(has_owner))
-        }),
-    )
+    let changes = stream::select(portal, behind)
+        // The stream keeps the connection it listens on, and ends when the
+        // connection fails.
+        .scan(connection, |_connection, change| ready(change.ok()))
+        // A signal that is not the bus's own word about one of the two
+        // names says nothing: it is left out, and the watch goes on.
+        .filter_map(|change| ready(has_owner(&change)));
+    Ok(changes)
 }
 
 /// The bus's own `NameOwnerChanged` signals for `name`.

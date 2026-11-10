@@ -20,7 +20,7 @@ use zbus::zvariant::{ObjectPath, Value};
 
 use super::portal::{
     MAX_LISTED, closes_a_session, connect_failure, failed, has_owner, parse, preferred_trigger,
-    session_namespace, within,
+    sent_by, session_namespace, within,
 };
 use super::reactor::{Listed, Signal, bound_triggers, id_of, serve};
 use super::*;

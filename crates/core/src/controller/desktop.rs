@@ -8,6 +8,9 @@
 //! changes under it.
 
 use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use super::view::Hotkey;
 use super::{Controller, InputLifetime, InputReader, Job, Platform, State};
@@ -46,7 +49,20 @@ pub(super) struct DesktopHotkeys {
     /// desktop's shortcuts are unavailable: nothing can fire then, whatever
     /// the program presses, until the reader reports triggers again.
     live: bool,
+    /// Until when a hotkey is taken for the echo of the program's own keys
+    /// and does nothing: see [`ECHO_WINDOW`].
+    echo_until: Option<Instant>,
 }
+
+/// How long after the desktop's shortcuts come back a hotkey does nothing.
+///
+/// While they were away, a run may press any key. The desktop binds the
+/// shortcuts a moment before the program hears of it, and a key the run
+/// pressed in that moment can set one off: the activation is already on its
+/// way when the triggers arrive and stop the run. It follows them within
+/// milliseconds, and nothing the program runs is left to stop by then, so a
+/// hotkey this soon after is not the user's.
+pub(super) const ECHO_WINDOW: Duration = Duration::from_secs(1);
 
 impl<P: Platform> Controller<P> {
     /// The triggers a new controller starts with: unknown ones when the
@@ -56,6 +72,7 @@ impl<P: Platform> Controller<P> {
         (platform.input_reader() == InputReader::Desktop).then(|| DesktopHotkeys {
             triggers: Triggers::unknown(),
             live: true,
+            echo_until: None,
         })
     }
 
@@ -69,9 +86,16 @@ impl<P: Platform> Controller<P> {
     /// The desktop reported its triggers. A run or a start that presses a
     /// key one of them now uses ends at once.
     pub(super) fn triggers_changed(&mut self, triggers: Triggers) {
+        // Back after being away: what the program pressed meanwhile may
+        // have set off a hotkey of the new session.
+        let back = self.desktop.as_ref().is_some_and(|desktop| !desktop.live);
+        let echo_until = back
+            .then(|| Instant::now().checked_add(ECHO_WINDOW))
+            .flatten();
         self.desktop = Some(DesktopHotkeys {
             triggers,
             live: true,
+            echo_until,
         });
         let Some(keys) = self.job_keys() else {
             return;
@@ -79,6 +103,15 @@ impl<P: Platform> Controller<P> {
         if let Some(why) = self.own_key_refusal(&keys) {
             self.stop(Some(format!("Stopped: {why}")));
         }
+    }
+
+    /// Whether a hotkey that fired now is taken for the echo of the
+    /// program's own keys.
+    pub(super) fn in_echo_window(&self) -> bool {
+        self.desktop
+            .as_ref()
+            .and_then(|desktop| desktop.echo_until)
+            .is_some_and(|until| Instant::now() < until)
     }
 
     /// The keys of the run that is going or about to start, if one is.
