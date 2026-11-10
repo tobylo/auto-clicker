@@ -275,6 +275,22 @@ fn a_start_hotkey_key_seen_up_by_a_resync_is_no_longer_left_out() {
 }
 
 #[test]
+fn a_device_read_first_that_holds_none_of_the_start_hotkey_keeps_it_left_out() {
+    let started_by = Bindings::default().toggle_recording;
+    let mut recorder = Recorder::new(Bindings::default(), START, created(), Some(started_by));
+    // A mouse holding nothing is read before the keyboard holding Ctrl+F7.
+    recorder.resync(MOUSE, |_| false, t(0));
+    recorder.resync(KEYBOARD, |code| [CTRL, F7].contains(&code), t(0));
+    recorder.key(KEYBOARD, KeyInput::release(F7), t(50));
+    recorder.key(KEYBOARD, KeyInput::release(CTRL), t(60));
+    tap(&mut recorder, KEYBOARD, W, [100, 200]);
+    assert_eq!(
+        events_at(recorder, t(300)),
+        [(100, press(key(W))), (200, release(key(W)))]
+    );
+}
+
+#[test]
 fn the_stop_hotkey_is_left_out_and_ends_the_recording_at_its_press() {
     let mut recorder = recorder();
     tap(&mut recorder, KEYBOARD, W, [0, 1_000]);

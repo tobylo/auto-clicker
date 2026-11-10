@@ -119,9 +119,10 @@ pub struct Recorder {
     /// When the recording started, on the event clock.
     start: Duration,
     created: Created,
-    /// Codes of the hotkey that started the recording, still down then:
-    /// left out until each comes up.
-    ignored: Vec<u16>,
+    /// Keys of the hotkey that started the recording, still down then:
+    /// left out until each comes up. Each is tied to the first device read
+    /// holding it, so only that device's state can say it came up.
+    ignored: Vec<(u16, Option<DeviceId>)>,
     /// When the recording hotkey stopped the recording.
     stopped_at: Option<u64>,
     events: Vec<Event>,
@@ -144,7 +145,12 @@ impl Recorder {
         created: Created,
         started_by: Option<Binding>,
     ) -> Recorder {
-        let ignored = started_by.map(chord_codes).unwrap_or_default();
+        let ignored = started_by
+            .map(chord_codes)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|code| (code, None))
+            .collect();
         Recorder {
             bindings,
             start,
@@ -172,7 +178,7 @@ impl Recorder {
         if let (true, Some(action)) = (pressed, fired) {
             return self.hotkey(action, at);
         }
-        if let Some(index) = self.ignored.iter().position(|&known| known == code) {
+        if let Some(index) = self.ignored.iter().position(|&(known, _)| known == code) {
             if !pressed {
                 self.ignored.swap_remove(index);
             }
@@ -240,16 +246,31 @@ impl Recorder {
                 self.release(device, item, at);
             }
         }
-        // A start hotkey's keys stay left out; one that is up now is done.
-        self.ignored.retain(|&code| held(code));
+        self.note_start_hotkey(device, &held);
         let pressed: Vec<Held> = Key::CODES
             .chain(Button::ALL.map(Button::code))
-            .filter(|&code| held(code) && !self.ignored.contains(&code))
+            .filter(|&code| held(code) && !self.is_ignored(code))
             .filter_map(codes::recordable)
             .collect();
         for item in pressed {
             self.press(device, item, at);
         }
+    }
+
+    /// Ties each start hotkey key `device` holds to it, and lets go of
+    /// those tied to it that it no longer holds.
+    fn note_start_hotkey(&mut self, device: DeviceId, held: &impl Fn(u16) -> bool) {
+        for (code, holder) in &mut self.ignored {
+            if holder.is_none() && held(*code) {
+                *holder = Some(device);
+            }
+        }
+        self.ignored
+            .retain(|&(code, holder)| holder != Some(device) || held(code));
+    }
+
+    fn is_ignored(&self, code: u16) -> bool {
+        self.ignored.iter().any(|&(known, _)| known == code)
     }
 
     /// Ends the recording: trims the trip to the tray after a tray stop,
