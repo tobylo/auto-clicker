@@ -7,10 +7,10 @@
 
 ## Decision
 
-**Recordings can carry absolute positions that replay to within a pixel of where the real pointer was** at the scales tested (1 to 1.5), and up to about scale 1.8 (see "Limitations"). Map D3 takes its first branch.
+**Recordings can carry absolute positions that replay to within a pixel of where the real pointer was**, on each axis, at the scales tested (1 to 1.5), and up to about scale 1.8 (see "Limitations"). Map D3 takes its first branch.
 
 - **Reading the position.** While a recording runs, the daemon loads a small KWin script through `org.kde.KWin /Scripting`. On every `workspace.cursorPosChanged` the script sends `workspace.cursorPos` to a D-Bus name the daemon owns, and it reports the layout size whenever the layout changes. The daemon unloads the script when the recording stops.
-- **Replaying it.** Playback moves C01's absolute axes to the recorded position with the formula below. On every layout tested (scales 1, 1.25 and 1.5) it landed within 0.65 physical px of where the real pointer was. Almost all of that is the script's rounding to whole logical px; the formula itself adds under 0.05 px.
+- **Replaying it.** Playback moves C01's absolute axes to the recorded position with the formula below. On every layout tested (scales 1, 1.25 and 1.5) it landed within 0.65 physical px of where the real pointer was, on each axis. Almost all of that is the script's rounding to whole logical px; the formula itself adds under 0.05 px.
 
 ### The mapping formula
 
@@ -70,7 +70,7 @@ The owner moved a Razer Viper V3 Pro in fast circles over the desktop during fou
 | on | 10408, 10834 (about 900–1080 per second) | 18.7%, 17.9% | 1.9%, 2.2% | 5.1%, 6.9% |
 | off | – | 12.1%, 11.7% | 0.0% | 0.0% |
 
-- **A physical high-rate mouse behaves like the synthetic 1000 Hz stream.** Every position was delivered, and KWin used about 6% more of a core. These counts include the second before and the half second after each 10 s run (the harness has since counted only the timed window), so the rate lies between count / 11.5 s and count / 10 s. A later attempt to re-measure it within the window did not cover the movement and is not used.
+- **A physical high-rate mouse behaves like the synthetic 1000 Hz stream.** Every position KWin reported reached the receiver, and KWin used about 6% more of a core. Whether every physical mouse event became a position was not checked: that needs the evdev events, and KWin may merge queued motion before it moves the cursor. These counts include the second before and the half second after each 10 s run (the harness has since counted only the timed window), so the rate lies between count / 11.5 s and count / 10 s. A later attempt to re-measure it within the window did not cover the movement and is not used.
 - **Latency was not measured here.** It needs the evdev event time, and the user is not in the `input` group.
 
 ### Playback: where a replayed position lands
@@ -99,6 +99,7 @@ Results in physical px, the largest over all points:
 | DP-1 right @1.5, 4341x1280 (fractional logical width) | 0.044 | 0.574 |
 | DP-1 placed at x = -3440 (KScreen normalised it to the right) | 0.049 | 0.559 |
 
+- **Distances are per axis.** Every figure in this section is the larger of the x and y differences; the issue's "within 1 px" is read that way. The straight-line distance can be up to √2 times larger: under 0.96 px at scale 1.25, but up to about 1.1 px at scale 1.5.
 - **"Within 1 px" holds in both senses.** The gap between the original and the replayed position is the script's rounding to whole logical px. It is at most 0.5 logical px, which is 0.625 physical px at scale 1.25. The formula itself adds less than 0.05 px.
 - **A move to the panel's top-left pixel lands 1 px inside it.** This happened in the four dual-output layouts, not with the panel alone. It is consistent with KWin pushing the cursor back from an active screen corner (`Edge::pushCursorBack`, `src/screenedge.cpp:522`; Plasma's default top-left corner opens Overview). A real mouse would be pushed back the same way.
 - **Targets on no output are clamped.** Points inside the bounding box that no output covers (the strip under the shorter panel) land on the nearest output's edge. For example, (686, 1350) lands at (686, 1279).
@@ -132,7 +133,7 @@ The locked pointer stands still in KWin (`PointerInputRedirection::updatePositio
 
 ## Limitations
 
-- **Precision is whole logical px.** `workspace.cursorPos` is `Cursor::pos().toPoint()` (`src/scripting/workspace_wrapper.cpp:148`). With the axis rounding, a replay can be off by up to `(0.5 + W / 131072) * scale` physical px per axis: 0.68 px at scale 1.25 with W = 5488 (0.65 measured), but just over 1 px at scale 2. "Within 1 px" therefore holds up to about scale 1.8 to 1.9, depending on the layout width; at scale 2 and above it needs the sub-pixel position upstream report 3 asks for.
+- **Precision is whole logical px.** All bounds here are per axis. `workspace.cursorPos` is `Cursor::pos().toPoint()` (`src/scripting/workspace_wrapper.cpp:148`). With the axis rounding, a replay can be off by up to `(0.5 + W / 131072) * scale` physical px per axis: 0.68 px at scale 1.25 with W = 5488 (0.65 measured), but just over 1 px at scale 2. "Within 1 px" therefore holds up to about scale 1.8 to 1.9, depending on the layout width; at scale 2 and above it needs the sub-pixel position upstream report 3 asks for.
 - **The script cannot tell which device moved the pointer.** It also reports moves made by the program's own virtual mouse. Recording is refused while clicking or playing (R01), so the two never overlap.
 - **Anyone in the session can load KWin scripts.** Any session process can also call the receiver's D-Bus name, so the receiver must accept calls only from the current owner of `org.kde.KWin`.
 - **Pointer lock gives no positions.** While a game locks the pointer, recordings fall back to relative motion.

@@ -27,10 +27,18 @@ sdl.SDL_GetWindowRelativeMouseMode.restype = ctypes.c_bool
 sdl.SDL_DestroyWindow.argtypes = [ctypes.c_void_p]
 sdl.SDL_GetWindowFlags.argtypes = [ctypes.c_void_p]
 sdl.SDL_GetWindowFlags.restype = ctypes.c_uint64
+# SDL3 returns C bool; ctypes would otherwise read an int with undefined
+# upper bits.
+sdl.SDL_Init.argtypes = [ctypes.c_uint32]
+sdl.SDL_Init.restype = ctypes.c_bool
+sdl.SDL_PollEvent.argtypes = [ctypes.c_void_p]
+sdl.SDL_PollEvent.restype = ctypes.c_bool
 sdl.SDL_GetWindowSurface.argtypes = [ctypes.c_void_p]
 sdl.SDL_GetWindowSurface.restype = ctypes.c_void_p
 sdl.SDL_FillSurfaceRect.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32]
 sdl.SDL_UpdateWindowSurface.argtypes = [ctypes.c_void_p]
+sdl.SDL_UpdateWindowSurface.restype = ctypes.c_bool
+sdl.SDL_FillSurfaceRect.restype = ctypes.c_bool
 SDL_WINDOW_INPUT_FOCUS = 0x200
 SDL_WINDOW_MOUSE_FOCUS = 0x400
 
