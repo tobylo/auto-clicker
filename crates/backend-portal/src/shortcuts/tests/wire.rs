@@ -186,6 +186,30 @@ fn a_sessions_closed_signal_counts_only_from_the_portal_and_under_the_callers_pa
 }
 
 #[test]
+fn a_shortcut_signal_counts_only_from_the_portals_own_connection() {
+    let options: HashMap<&str, Value<'_>> = HashMap::new();
+    let activated = |sender: &str| {
+        zbus::Message::signal(
+            "/org/freedesktop/portal/desktop",
+            "org.freedesktop.portal.GlobalShortcuts",
+            "Activated",
+        )
+        .unwrap()
+        .sender(sender)
+        .unwrap()
+        .build(&(session_path(), CLICKING, 0u64, &options))
+        .unwrap()
+    };
+    assert!(sent_by(&activated(":1.7"), ":1.7"));
+    // Another program, sending a well-formed activation straight to this
+    // connection: it would parse, so it must not get that far.
+    assert!(parse(&activated(":1.99")).is_some());
+    assert!(!sent_by(&activated(":1.99"), ":1.7"));
+    // No sender at all.
+    assert!(!sent_by(&signal("Activated", &(session_path(),)), ":1.7"));
+}
+
+#[test]
 fn a_change_listing_far_more_shortcuts_than_the_program_has_is_malformed() {
     let entry = |n: usize| {
         let info: HashMap<&str, Value<'_>> = HashMap::from([
