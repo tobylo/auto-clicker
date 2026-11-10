@@ -8,6 +8,7 @@ Evidence for [docs/decisions/0001-cursor-position.md](../../docs/decisions/0001-
   - `x01.py layout | latency | cpu | mapping | lock | receive` selects the measurement.
   - `probe.py` opens a fullscreen GTK 4 window on one monitor, giving `QueryPointer` a known window to report against.
   - `query_pointer_signals.py` reproduces the upstream `QueryPointer` signal issue.
+  - `selftest.py` checks the harness's own guards without a Plasma session: `dbus-run-session -- python3 harness/selftest.py`.
   - `lockwin.py` is an SDL3 window in relative mouse mode, which locks the pointer.
 - `layouts.sh` runs the mapping check over six display layouts and restores the original layout on exit.
 - `lifecycle.sh` runs the receiver-crash check and a KWin restart on a nested, virtual KWin.

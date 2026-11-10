@@ -34,16 +34,22 @@ def read_line(fd, deadline):
 
 
 def _read_until(fd, deadline):
+    """Reads byte by byte up to the first newline, so nothing after it is
+    taken from the caller's own reader; no newline in time is a failure."""
     data = b""
-    while b"\n" not in data and len(data) < MAX_LINE:
-        left = deadline - time.monotonic()
-        if left <= 0 or not select.select([fd], [], [], left)[0]:
-            break
-        chunk = os.read(fd, MAX_LINE)
-        if not chunk:
-            break
-        data += chunk
-    return data.split(b"\n", 1)[0].decode(errors="replace").strip()
+    while not data.endswith(b"\n"):
+        if len(data) >= MAX_LINE or not readable_before(fd, deadline):
+            raise RuntimeError(f"no complete line in time: {data!r}")
+        byte = os.read(fd, 1)
+        if not byte:
+            raise RuntimeError(f"helper closed its output: {data!r}")
+        data += byte
+    return data.decode(errors="replace").strip()
+
+
+def readable_before(fd, deadline):
+    left = deadline - time.monotonic()
+    return left > 0 and bool(select.select([fd], [], [], left)[0])
 
 
 def stop(proc, timeout=5):
