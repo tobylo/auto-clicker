@@ -46,17 +46,17 @@ impl Trigger {
     /// The trigger the desktop describes as `description`. Empty means the
     /// action has no trigger.
     pub fn reported(description: &str) -> Trigger {
-        let text: String = description
+        let shown: String = description
             .chars()
             .filter(|c| !c.is_control())
             .take(MAX_TEXT)
             .collect();
-        let text = text.trim().to_owned();
-        // Read from the kept text, so what is shown is what was checked.
-        let keys = keys_of(&text);
+        // The keys come from the whole description, never from the part
+        // that fits: a text cut short could end in another key ("F12" cut
+        // to "F1") or lose a trigger.
         Trigger {
-            text: Some(text),
-            keys,
+            text: Some(shown.trim().to_owned()),
+            keys: keys_of(description),
         }
     }
 
@@ -67,18 +67,24 @@ impl Trigger {
     }
 }
 
-/// The key of every trigger in `text` ("Ctrl+F6, Meta+F7"), or `None` when
-/// one of them does not end in a function key.
-fn keys_of(text: &str) -> Option<Vec<Key>> {
-    if text.is_empty() {
+/// The key of every trigger in `description` ("Ctrl+F6, Meta+F7"), or
+/// `None` when one of them is not words joined by `+` that end in a
+/// function key. Anything else between the triggers (another separator, a
+/// word of some language) leaves the keys unknown, never fewer.
+fn keys_of(description: &str) -> Option<Vec<Key>> {
+    if description.is_empty() {
         return Some(Vec::new());
     }
-    text.split(',').map(function_key).collect()
+    description.split(", ").map(function_key).collect()
 }
 
 /// The function key a trigger such as "Ctrl+Shift+F6" ends in.
 fn function_key(trigger: &str) -> Option<Key> {
-    let word = trigger.trim().rsplit('+').next()?;
+    let mut words = trigger.split('+');
+    let word = words.next_back()?;
+    if !words.all(|modifier| !modifier.is_empty() && modifier.chars().all(char::is_alphanumeric)) {
+        return None;
+    }
     let number: u8 = word.strip_prefix('F')?.parse().ok()?;
     // "F06" and "F+6" are not how a desktop writes a key.
     let plain = word.len() == 1 + number.to_string().len();
@@ -215,7 +221,7 @@ mod tests {
 
     #[test]
     fn a_trigger_is_read_by_its_function_key_whatever_the_modifiers_are_called() {
-        let cases: [(&str, Option<&[&str]>); 14] = [
+        let cases: [(&str, Option<&[&str]>); 22] = [
             ("Ctrl+Shift+F6", Some(&["f6"])),
             ("Strg+Umschalt+F6", Some(&["f6"])),
             ("F24", Some(&["f24"])),
@@ -230,6 +236,15 @@ mod tests {
             ("Ctrl+F+6", None),
             ("Ctrl+F6, Ctrl+K", None),
             ("Ctrl+,", None),
+            // Another separator or stray text never hides a trigger.
+            ("Ctrl+Shift+F6; Meta+F9", None),
+            ("Ctrl+Shift+F6 or Meta+F9", None),
+            ("Ctrl+F6,Meta+F9", None),
+            ("Ctrl+F6 ", None),
+            (" F6", None),
+            ("Ctrl + F6", None),
+            ("+F6", None),
+            ("Ctrl+F6\n", None),
         ];
         for (text, keys) in cases {
             let expected: Option<Vec<Key>> =
@@ -243,15 +258,31 @@ mod tests {
         assert_eq!(Trigger::UNKNOWN.text(), None);
         assert_eq!(Trigger::reported("").text(), Some(""));
         assert_eq!(Trigger::reported(" Ctrl+F6\n").text(), Some("Ctrl+F6"));
+        // Eighty spaces and then a trigger: shown as nothing, but not read
+        // as "no trigger".
+        let hidden = format!("{}Ctrl+F6", " ".repeat(MAX_TEXT));
+        assert_eq!(Trigger::reported(&hidden).text(), Some(""));
+        assert_eq!(Trigger::reported(&hidden).keys, None);
         assert_eq!(
             Trigger::reported("Ctrl+\u{1b}[31mF6").text(),
             Some("Ctrl+[31mF6")
         );
         let long = Trigger::reported(&"é".repeat(500));
         assert_eq!(long.text().map(|text| text.chars().count()), Some(MAX_TEXT));
-        // The key is read from the text that is kept, not from what was cut.
-        let cut = format!("{}+F6", "x".repeat(MAX_TEXT));
-        assert_eq!(Trigger::reported(&cut).keys, None);
+        // A cut never changes which keys are read: "F12" cut to "F1", and
+        // a last trigger cut off whole.
+        let long =
+            "Ctrl+Shift+Alt+Meta+F24, Ctrl+Shift+Alt+Meta+F6, Ctrl+Shift+Alt+Meta+F7, Ctrl+F12";
+        let cut = Trigger::reported(long);
+        assert!(cut.text().unwrap().ends_with("Ctrl+F1"), "{:?}", cut.text());
+        assert_eq!(
+            cut.keys,
+            Some(vec![key("f24"), key("f6"), key("f7"), key("f12")])
+        );
+        let dropped =
+            "Ctrl+Alt+Meta+F1, Ctrl+Shift+F10, Ctrl+Shift+F11, Ctrl+Shift+F12, Ctrl+Shift+F13, F9";
+        let keys = Trigger::reported(dropped).keys.unwrap();
+        assert!(keys.contains(&key("f9")), "{keys:?}");
     }
 
     #[test]
