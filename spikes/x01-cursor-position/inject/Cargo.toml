@@ -1,0 +1,15 @@
+[package]
+name = "x01-inject"
+description = "X01 spike: moves C01's virtual mouse on command and timestamps each move"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Not a member of the repository's workspace: spikes are not built by it.
+[workspace]
+
+[dependencies]
+auto-clicker-backend-kernel = { path = "../../../crates/backend-kernel" }
+auto-clicker-core = { path = "../../../crates/core" }
+# Already in the main lock tree through evdev; "time" adds a safe clock_gettime.
+nix = { version = "0.29.0", default-features = false, features = ["time"] }
