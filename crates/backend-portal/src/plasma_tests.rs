@@ -188,12 +188,22 @@ async fn check_below_a_shorter_output(
         .iter()
         .map(|r| f64::from(r.y) + f64::from(r.height))
         .fold(0.0, f64::max);
-    let own_bottom = f64::from(region.y) + f64::from(region.height);
-    if own_bottom >= bottom {
-        println!("skipped the point below a shorter output: the window is on the tallest one");
+    let w = f64::from(region.width);
+    let (left, top) = (f64::from(region.x), f64::from(region.y));
+    let target = (left + w / 2.0, bottom - 1.0);
+    let on_an_output = layout.regions().iter().any(|r| {
+        let (rx, ry) = (f64::from(r.x), f64::from(r.y));
+        (rx..rx + f64::from(r.width)).contains(&target.0)
+            && (ry..ry + f64::from(r.height)).contains(&target.1)
+    });
+    // The clamp must take the point onto this window's output, not another.
+    let (cx, cy) = layout.point(layout.position_of(target.0, target.1));
+    let lands_here = (f64::from(cx) - target.0).abs() <= 1.0
+        && (f64::from(cy) - (top + f64::from(region.height) - 1.0)).abs() <= 1.0;
+    if on_an_output || !lands_here {
+        println!("skipped the point below a shorter output: none below the window's output");
         return;
     }
-    let w = f64::from(region.width);
     window.drain().await;
     input
         .move_absolute(layout.position_of(f64::from(region.x) + w / 2.0, bottom - 1.0))
