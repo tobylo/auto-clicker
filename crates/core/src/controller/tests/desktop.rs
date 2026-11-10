@@ -99,6 +99,69 @@ async fn a_key_run_waits_for_the_desktop_to_report_readable_triggers() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn key_runs_are_allowed_while_the_desktop_delivers_no_hotkeys() {
+    local(async {
+        // The bind never succeeded: no session, so nothing can fire, and
+        // the tray must still be able to start a key run.
+        let d = desktop_daemon(pressing(Mode::HoldKey, "f6")).await;
+        d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(
+            Unavailable::Desktop("no portal".to_owned()),
+        )))
+        .await;
+        d.send(Message::Start).await;
+        assert_eq!(d.activity(), Activity::Clicking);
+        // The desktop comes back and reports a trigger on the run's key:
+        // the run stops before any hotkey of the new session is handled.
+        let start = Instant::now();
+        d.hotkey(defaults()).await;
+        d.hotkey(HotkeyEvent::Status(HotkeyStatus::Available)).await;
+        assert_eq!(d.activity(), Activity::Idle);
+        assert_eq!(start.elapsed(), Duration::ZERO);
+        assert!(
+            d.notice().starts_with("Stopped: the clicker's key"),
+            "{}",
+            d.notice()
+        );
+        // And it is refused again from here on.
+        d.send(Message::Start).await;
+        assert_eq!(d.activity(), Activity::Idle);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_start_between_the_new_triggers_and_available_is_still_refused() {
+    local(async {
+        let d = desktop_daemon(pressing(Mode::HoldKey, "f6")).await;
+        d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(
+            Unavailable::Desktop("the portal stopped".to_owned()),
+        )))
+        .await;
+        // The new session's triggers arrived; "available" has not yet.
+        d.hotkey(defaults()).await;
+        d.send(Message::Start).await;
+        assert_eq!(d.activity(), Activity::Idle);
+        assert_eq!(d.shared.calls(), []);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn other_hotkey_trouble_does_not_lift_the_refusal() {
+    local(async {
+        let d = desktop_daemon(pressing(Mode::HoldKey, "f6")).await;
+        d.hotkey(defaults()).await;
+        d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(
+            Unavailable::NoKeyboard,
+        )))
+        .await;
+        d.send(Message::Start).await;
+        assert_eq!(d.activity(), Activity::Idle);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_modifier_as_the_clicker_key_is_refused() {
     local(async {
         let d = desktop_daemon(pressing(Mode::HoldKey, "leftshift")).await;

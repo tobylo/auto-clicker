@@ -35,7 +35,7 @@ pub use view::{Activity, Hotkey, View, describe};
 
 use crate::clicker::{Ended, RunEnd, Signals, run};
 use crate::config::Config;
-use crate::hotkeys::{Action, HotkeyEvent, HotkeyStatus, Triggers, Unavailable};
+use crate::hotkeys::{Action, HotkeyEvent, HotkeyStatus, Unavailable};
 use crate::input::{Input, InputBackend, InputError};
 use crate::recording::{LocalTime, RecordingFeed, RecordingSlot};
 use hotkeys::HotkeySource;
@@ -263,8 +263,8 @@ pub struct Controller<P: Platform> {
     input_error: Option<String>,
     hotkeys: HotkeySource,
     hotkey_status: Option<HotkeyStatus>,
-    /// The triggers the desktop reports, when it delivers the hotkeys.
-    triggers: Option<Triggers>,
+    /// The desktop's hotkeys, when it delivers them.
+    desktop: Option<desktop::DesktopHotkeys>,
     /// Starts out unknown: a state not yet read is not "unlocked".
     blocked: Option<Blocked>,
     notice: Option<String>,
@@ -290,18 +290,14 @@ impl<P: Platform> Controller<P> {
     ) -> (Controller<P>, Links) {
         let (send, inbox) = mpsc::unbounded_channel();
         let (released_for_sleep, sleep_reports) = watch::channel(0);
-        let triggers = Self::first_triggers(&platform);
+        let desktop = Self::first_triggers(&platform);
         let (view, shown) = watch::channel(View {
             activity: Activity::Idle,
             settings: config.clicker,
-            hotkey: desktop::shown_hotkey(
-                config.hotkeys,
-                triggers.as_ref(),
-                Action::ToggleClicking,
-            ),
+            hotkey: desktop::shown_hotkey(config.hotkeys, desktop.as_ref(), Action::ToggleClicking),
             record_hotkey: desktop::shown_hotkey(
                 config.hotkeys,
-                triggers.as_ref(),
+                desktop.as_ref(),
                 Action::ToggleRecording,
             ),
             notice: None,
@@ -319,7 +315,7 @@ impl<P: Platform> Controller<P> {
             input_error: None,
             hotkeys: HotkeySource::none(),
             hotkey_status: None,
-            triggers,
+            desktop,
             blocked: Some(Blocked::Unknown("not read yet".to_owned())),
             notice: None,
             sleep_notice: None,
@@ -485,6 +481,7 @@ impl<P: Platform> Controller<P> {
 
     fn hotkey_status_changed(&mut self, status: HotkeyStatus) {
         let unavailable = matches!(status, HotkeyStatus::Unavailable(_));
+        self.desktop_status_changed(&status);
         if let HotkeyStatus::Unavailable(why @ Unavailable::WatchFailed(_)) = &status {
             self.input_lost(why.to_string());
         }
