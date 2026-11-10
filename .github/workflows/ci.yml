@@ -32,6 +32,8 @@ jobs:
       # The version scripts/gates.sh requires. rust-cache keeps the binary, so
       # this builds it only when the cache is cold.
       - name: Install cargo-deny
+        # Outside the checkout, so no Cargo config a change adds can redirect it.
+        working-directory: ${{ runner.temp }}
         run: cargo install --locked cargo-deny@0.20.2
       - name: Gates
         run: scripts/gates.sh

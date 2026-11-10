@@ -41,6 +41,17 @@ advisory_db_reachable() {
         bounded 15 git ls-remote --exit-code "$ADVISORY_DB_URL" HEAD >/dev/null 2>&1
 }
 
+# A Cargo config in the tree could replace crates.io with another registry,
+# which cargo-deny would still report as crates.io. The repository keeps none.
+no_cargo_config() {
+    local found
+    found="$(git ls-files -- ':(glob)**/.cargo/config' ':(glob)**/.cargo/config.toml')"
+    if [[ -n "$found" ]]; then
+        echo "Cargo configuration is not allowed in the repository: $found" >&2
+        return 1
+    fi
+}
+
 # Checks that every dependency comes from crates.io, has no known advisory, is
 # not yanked and carries an allowed licence (deny.toml), with the cargo-deny
 # release CI installs. Online, it first refreshes the cached crates.io index
@@ -48,6 +59,7 @@ advisory_db_reachable() {
 # fails once older than deny.toml allows. It builds nothing, so it runs before
 # any build script or proc macro does.
 deny_check() {
+    no_cargo_config || return 1
     local want="cargo-deny $CARGO_DENY_VERSION" found
     found="$(cargo deny --version 2>/dev/null || true)"
     if [[ "$found" != "$want" ]]; then
@@ -57,11 +69,11 @@ deny_check() {
     fi
     if advisory_db_reachable; then
         scripts/refresh-index.sh &&
-            bounded 900 cargo deny --locked check
+            bounded 900 cargo deny --locked check --deny index-failure
         return
     fi
     echo "$ADVISORY_DB_URL is unreachable: checking against the cached advisory database" >&2
-    if ! bounded 300 cargo deny --locked --offline check; then
+    if ! bounded 300 cargo deny --locked --offline check --deny index-failure; then
         echo "This run was offline. If the error above is about the advisory" \
             "database (stale or missing), connect and run the gates again." >&2
         return 1

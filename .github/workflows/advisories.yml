@@ -29,8 +29,10 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # The version scripts/gates.sh requires.
       - name: Install cargo-deny
+        # Outside the checkout, so no Cargo config a change adds can redirect it.
+        working-directory: ${{ runner.temp }}
         run: cargo install --locked cargo-deny@0.20.2
       - name: Refresh the crates.io index
         run: scripts/refresh-index.sh
       - name: Advisories in every crate
-        run: cargo deny --locked --config .github/deny-weekly.toml check advisories
+        run: cargo deny --locked --config .github/deny-weekly.toml check --deny index-failure advisories
