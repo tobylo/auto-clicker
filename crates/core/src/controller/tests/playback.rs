@@ -235,6 +235,7 @@ async fn everything_that_cancels_a_start_cancels_playback_at_once() {
             let before = Instant::now();
             cancel.send(&d);
             d.settle().await;
+            assert_eq!(d.shared.recordings_path().read_dir().unwrap().count(), 1);
             assert_eq!(Instant::now(), before, "{cancel:?}: no time passed");
             if matches!(cancel, Quit) {
                 assert!(d.task.is_finished());
@@ -281,6 +282,34 @@ async fn the_tray_countdown_is_cancelled_by_stop_and_by_any_hotkey() {
             }
             assert_eq!(d.activity(), Activity::Idle, "{cancel:?}");
             sleep(secs(10)).await;
+            d.assert_idle_after(&[]);
+        })
+        .await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn any_hotkey_cancels_playback_waiting_for_the_modifiers_or_the_devices() {
+    for action in [Action::ToggleRecording, Action::TogglePlayback] {
+        local(async {
+            // Waiting for the modifiers.
+            let (d, _) = daemon_with_hold(playing(once())).await;
+            d.hotkey(PLAY).await;
+            d.hotkey(HotkeyEvent::Fired(action)).await;
+            assert_eq!(d.activity(), Activity::Idle, "{action:?}");
+            d.hotkey(HotkeyEvent::ModifiersReleased).await;
+            sleep(secs(5)).await;
+            d.assert_idle_after(&[]);
+
+            // Waiting for the devices to open.
+            let (d, gates) = per_run_daemon(Mode::Click).await;
+            d.shared
+                .with(|r| r.recordings = Some(Arc::new(TempDir::new())));
+            let file = d.shared.store_hold();
+            d.send(Message::Play(file)).await;
+            assert_eq!(d.activity(), Activity::PlayOpening);
+            d.hotkey(HotkeyEvent::Fired(action)).await;
+            assert_eq!(gates.gates(|g| g.opens_dropped), 1, "{action:?}");
             d.assert_idle_after(&[]);
         })
         .await;
@@ -379,6 +408,33 @@ async fn a_failed_write_stops_playback_and_says_why() {
     .await;
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_hotkey_is_read_and_stops_playback_in_the_middle_of_a_dense_burst() {
+    local(async {
+        let shared = shared_with_recordings();
+        let burst: Vec<(u64, Change)> = (0..100_000).map(|_| (0, Change::Wheel(1))).collect();
+        let file = shared.store("18:00:00", 1000, &burst);
+        // A reader that reads only when the run leaves it budget to: the
+        // run hands the thread back between batches before it has spent
+        // the task's budget again.
+        shared.with(|r| {
+            r.busy_readers = true;
+            r.pressed_during_a_run = Some(PLAY);
+        });
+        let d = daemon_with(playing(once()), shared, true).await;
+
+        d.inbox.send(Message::Play(file)).unwrap();
+        d.settle_until(|d| d.activity() == Activity::Idle && !d.shared.calls().is_empty())
+            .await;
+
+        // Stopped after a batch or two, not after the whole burst.
+        let played = d.shared.calls().len();
+        assert!((1..1000).contains(&played), "{played} events played");
+        assert_eq!(d.notice(), "");
+    })
+    .await;
+}
+
 // Which recording plays
 
 #[tokio::test(start_paused = true)]
@@ -433,6 +489,45 @@ async fn when_the_current_recording_is_gone_the_hotkey_plays_the_newest() {
 
         assert_eq!(d.shared.calls(), [Call::Scroll(1), Call::Scroll(2)]);
         assert_eq!(d.listed(), [newer.label()]);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_damaged_current_recording_is_reported_and_no_other_plays_in_its_place() {
+    local(async {
+        let shared = shared_with_recordings();
+        let chosen = shared.store_wheel("18:00:00", 1);
+        shared.store_wheel("18:01:00", 2);
+        let d = daemon_with(playing(Repeat::UntilStopped), shared, true).await;
+        d.send(Message::Play(chosen.clone())).await;
+        d.send(Message::Stop).await;
+        let path = d.shared.recordings_path().join(chosen.as_str());
+
+        // Damaged: said so, and the newer recording does not play instead.
+        fs::write(&path, b"").unwrap();
+        d.hotkey(PLAY).await;
+        assert_eq!(
+            (d.activity(), d.notice().contains(LABEL)),
+            (Activity::Idle, true)
+        );
+        // Too short to repeat: refused, and it stays the current one.
+        let short = Recording::new(
+            "short".to_owned(),
+            Created::parse("2026-11-09T18:00:00.000+01:00").unwrap(),
+            1000,
+            Vec::new(),
+        )
+        .unwrap();
+        let mut json = Vec::new();
+        short.write_json(&mut json).unwrap();
+        fs::write(&path, json).unwrap();
+        for _ in 0..2 {
+            d.hotkey(PLAY).await;
+            let refused = format!("Not playing {LABEL}: it is shorter than 100 ms");
+            assert!(d.notice().starts_with(&refused), "{}", d.notice());
+        }
+        d.assert_idle_after(&[Call::Scroll(1)]);
     })
     .await;
 }
@@ -571,6 +666,20 @@ async fn playback_is_refused_while_clicking_and_ignored_while_recording() {
         }
         assert_eq!(d.activity(), Activity::Clicking);
         d.send(Message::Stop).await;
+
+        // About to record, from the tray.
+        let counting = Config {
+            tray_start_delay: secs(5),
+            ..playing(once())
+        };
+        let (c, counted) = daemon_with_hold(counting).await;
+        c.send(Message::Record).await;
+        c.hotkey(PLAY).await;
+        c.send(Message::Play(counted)).await;
+        assert_eq!(
+            (c.activity(), c.notice()),
+            (Activity::RecordingIn(5), String::new())
+        );
 
         // Recording.
         d.record_hotkey().await;
