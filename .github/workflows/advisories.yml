@@ -1,0 +1,38 @@
+name: Weekly advisories
+
+# Checks every crate in the graph, transitive ones included, for unmaintained
+# and unsound advisories (.github/deny-weekly.toml), which the deny gate checks
+# only for direct dependencies. It runs on main and blocks no pull request; a
+# failure is reported to the owner.
+on:
+  schedule:
+    # Mondays, 06:17 UTC.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The version scripts/gates.sh requires.
+      - name: Install cargo-deny
+        # Outside the checkout, so no Cargo config a change adds can redirect it.
+        working-directory: ${{ runner.temp }}
+        run: cargo install --locked cargo-deny@0.20.2
+      - name: Refresh the crates.io index
+        run: scripts/refresh-index.sh
+      - name: Advisories in every crate
+        run: cargo deny --locked --config .github/deny-weekly.toml check --deny index-failure advisories
