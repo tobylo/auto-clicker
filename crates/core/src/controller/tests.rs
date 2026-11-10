@@ -21,6 +21,8 @@ use crate::clicker::{ClickerSettings, Mode, Repeat};
 use crate::hotkeys::Unavailable;
 use crate::input::fake::{Call, FakeBackend, FakeLog};
 use crate::input::{AbsolutePosition, Button, Key, PressState};
+use crate::recording::{LocalTime, Recorder, RecordingFeed};
+use crate::test_support::TempDir;
 
 fn secs(n: u64) -> Duration {
     Duration::from_secs(n)
@@ -60,6 +62,14 @@ struct Record {
     /// Readers are always ready, as under a flood of key events, and spend
     /// the task's budget on every poll without sending anything.
     busy_readers: bool,
+    /// The feed each reader was given.
+    feeds: Vec<RecordingFeed>,
+    /// Where event-clock time 0 is.
+    epoch: Option<Instant>,
+    /// Where recordings are saved; none when `None`.
+    recordings: Option<Arc<TempDir>>,
+    /// The local time is unreadable.
+    no_local_time: bool,
 }
 
 #[derive(Clone, Default)]
@@ -97,6 +107,18 @@ impl Shared {
                 .map(|&(_, at, call)| (at - start, call))
                 .collect()
         })
+    }
+
+    /// Now on the fake event clock: virtual time since the daemon started.
+    fn clock(&self) -> Duration {
+        let epoch = self.with(|r| *r.epoch.get_or_insert_with(Instant::now));
+        Instant::now() - epoch
+    }
+
+    /// Hands input to the recorder through the newest reader's feed.
+    fn feed(&self, input: impl FnOnce(&mut Recorder)) {
+        let feed = self.with(|r| r.feeds.last().unwrap().clone());
+        feed.with(input);
     }
 
     fn log(&self, n: usize) -> FakeLog {
@@ -207,11 +229,40 @@ impl Platform for FakePlatform {
         Ok(input)
     }
 
-    fn read_hotkeys(&mut self, own: Option<&Input<Devices>>, send: HotkeySender) -> HotkeyReader {
+    fn event_clock(&self) -> Duration {
+        self.0.clock()
+    }
+
+    fn local_time(&self) -> Option<LocalTime> {
+        let unreadable = self.0.with(|r| r.no_local_time);
+        (!unreadable).then_some(LocalTime {
+            year: 2026,
+            month: 11,
+            day: 9,
+            hour: 18,
+            minute: 4,
+            second: 5,
+            millis: 123,
+            offset_seconds: 3600,
+        })
+    }
+
+    fn recordings_dir(&self) -> Option<PathBuf> {
+        self.0
+            .with(|r| r.recordings.as_ref().map(|dir| dir.path().to_path_buf()))
+    }
+
+    fn read_input(
+        &mut self,
+        own: Option<&Input<Devices>>,
+        send: HotkeySender,
+        feed: RecordingFeed,
+    ) -> HotkeyReader {
         let own = own.map(|input| input.backend().id);
         let (n, ends_with, busy) = self.0.with(|r| {
             r.steps.push(Step::ReaderStarted(own));
             r.senders.push(send.clone());
+            r.feeds.push(feed);
             (
                 r.senders.len() - 1,
                 r.reader_ends_with.clone(),
@@ -256,6 +307,10 @@ fn config(mode: Mode) -> Config {
 /// Starts a controller on a local task, with an open session unless
 /// `session_open` is false.
 async fn daemon_with(config: Config, shared: Shared, session_open: bool) -> Daemon {
+    shared.with(|r| {
+        r.epoch = Some(Instant::now());
+        r.recordings.get_or_insert_with(|| Arc::new(TempDir::new()));
+    });
     let input = shared.devices();
     let platform = FakePlatform(shared.clone());
     let (controller, links) = Controller::new(platform, input, config, None);
@@ -556,7 +611,6 @@ async fn a_release_without_a_pending_start_does_nothing() {
     local(async {
         let d = daemon(Mode::HoldButton).await;
         d.hotkey(HotkeyEvent::ModifiersReleased).await;
-        d.hotkey(HotkeyEvent::Fired(Action::ToggleRecording)).await;
         d.hotkey(HotkeyEvent::Fired(Action::TogglePlayback)).await;
         d.assert_idle_after(&[]);
     })
@@ -1025,3 +1079,5 @@ fn the_countdown_wakes_on_each_whole_second_and_then_the_deadline() {
     assert_eq!(next_second(deadline, deadline), deadline);
     assert_eq!(whole_seconds(Duration::ZERO), 0);
 }
+
+mod recording;
