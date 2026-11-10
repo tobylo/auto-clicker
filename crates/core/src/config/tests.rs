@@ -71,6 +71,9 @@ fn every_option_is_read() {
         toggle_clicking = "Ctrl+Shift+F9"
         toggle_recording = "alt+r"
         toggle_playback = "F24"
+
+        [input]
+        output = "portal"
         "#,
     );
     let expected = Config {
@@ -88,6 +91,9 @@ fn every_option_is_read() {
             key: Key::from_name("f6").unwrap(),
             position: Position::Fixed(AbsolutePosition { x: 0, y: 65535 }),
             repeat: Repeat::Times(NonZeroU32::new(7).unwrap()),
+        },
+        input: InputSettings {
+            output: OutputRoute::Portal,
         },
     };
     assert_eq!(config, expected);
@@ -542,4 +548,39 @@ fn the_path_follows_xdg_config_home_then_home() {
             "{xdg_config_home:?} {home:?}"
         );
     }
+}
+
+#[test]
+fn output_defaults_to_the_kernel_and_reads_portal() {
+    let outputs = [
+        parse("version = 1\n").input.output,
+        parse("version = 1\n[input]\n").input.output,
+        parse("version = 1\n[input]\noutput = \"kernel\"\n")
+            .input
+            .output,
+        parse("version = 1\n[input]\noutput = \"portal\"\n")
+            .input
+            .output,
+    ];
+    assert_eq!(
+        outputs,
+        [
+            OutputRoute::Kernel,
+            OutputRoute::Kernel,
+            OutputRoute::Kernel,
+            OutputRoute::Portal
+        ]
+    );
+}
+
+#[test]
+fn an_unknown_output_or_input_key_is_rejected_at_its_line() {
+    let (line, reason) = invalid("version = 1\n[input]\noutput = \"Portal\"\n");
+    assert_eq!(line, Some(3), "{reason}");
+    assert!(
+        reason.contains("kernel") && reason.contains("portal"),
+        "{reason}"
+    );
+    let (line, reason) = invalid("version = 1\n[input]\nbackend = \"portal\"\n");
+    assert_eq!(line, Some(3), "{reason}");
 }

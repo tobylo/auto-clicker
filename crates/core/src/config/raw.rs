@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde::de::{self, MapAccess, Visitor};
 use toml::Spanned;
 
+use super::OutputRoute;
 use crate::clicker::{Mode, Position, Repeat};
 use crate::input::{AbsolutePosition, Button, Key};
 
@@ -25,6 +26,31 @@ pub(super) struct RawConfig {
     pub(super) clicker: RawClicker,
     #[serde(default)]
     pub(super) hotkeys: RawHotkeys,
+    #[serde(default)]
+    pub(super) input: RawInput,
+}
+
+/// `[input]`: which route synthetic input takes.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RawInput {
+    pub(super) output: Option<OutputName>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum OutputName {
+    Kernel,
+    Portal,
+}
+
+impl From<OutputName> for OutputRoute {
+    fn from(name: OutputName) -> OutputRoute {
+        match name {
+            OutputName::Kernel => OutputRoute::Kernel,
+            OutputName::Portal => OutputRoute::Portal,
+        }
+    }
 }
 
 /// `[hotkeys]`: each action's binding, such as "Ctrl+F6", parsed after the

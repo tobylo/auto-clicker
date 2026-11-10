@@ -3,6 +3,9 @@
 use std::{fmt, io};
 
 /// Why synthetic input could not be set up or written.
+///
+/// The first four come from the kernel backend (`/dev/uinput`), the rest
+/// from the portal backend (the RemoteDesktop portal and libei).
 #[derive(Debug)]
 pub enum InputError {
     /// The program may not open `/dev/uinput`.
@@ -13,16 +16,37 @@ pub enum InputError {
     CreateDevice(io::Error),
     /// Writing an event to a device failed.
     Write(io::Error),
+    /// The desktop has no usable RemoteDesktop portal, or would not take the
+    /// program's app id. Says what is missing.
+    PortalUnavailable(String),
+    /// The user did not allow input in the portal's dialog: Deny, Escape or
+    /// closing it. A later start asks again.
+    NotAllowed,
+    /// The user allowed input in the portal's dialog just now. The run does
+    /// not begin, since the dialog took the focus from the game; the next
+    /// start goes ahead without a dialog.
+    AllowedNow,
+    /// A portal call failed or did not answer in time. Says which, and why.
+    Portal(String),
+    /// The compositor ended the input session, or paused its devices. Says
+    /// why. Whatever was held is released by the compositor.
+    SessionLost(String),
 }
 
 impl InputError {
-    /// The underlying operating-system error.
-    pub fn io_error(&self) -> &io::Error {
+    /// The underlying operating-system error, for the kernel backend's
+    /// errors; the portal backend's carry none.
+    pub fn io_error(&self) -> Option<&io::Error> {
         match self {
             InputError::NoPermission(e)
             | InputError::UinputMissing(e)
             | InputError::CreateDevice(e)
-            | InputError::Write(e) => e,
+            | InputError::Write(e) => Some(e),
+            InputError::PortalUnavailable(_)
+            | InputError::NotAllowed
+            | InputError::AllowedNow
+            | InputError::Portal(_)
+            | InputError::SessionLost(_) => None,
         }
     }
 }
@@ -44,13 +68,23 @@ impl fmt::Display for InputError {
                 write!(f, "could not create a virtual input device: {e}")
             }
             InputError::Write(e) => write!(f, "could not write to a virtual input device: {e}"),
+            InputError::PortalUnavailable(why) => {
+                write!(f, "the desktop's remote input portal cannot be used: {why}")
+            }
+            InputError::NotAllowed => {
+                f.write_str("not allowed in the desktop's dialog; Start asks again")
+            }
+            InputError::AllowedNow => f.write_str("allowed; press Start again"),
+            InputError::Portal(why) => write!(f, "the remote input portal failed: {why}"),
+            InputError::SessionLost(why) => write!(f, "the desktop ended remote input: {why}"),
         }
     }
 }
 
 impl std::error::Error for InputError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.io_error())
+        self.io_error()
+            .map(|err| err as &(dyn std::error::Error + 'static))
     }
 }
 
@@ -64,6 +98,16 @@ mod tests {
         let missing = InputError::UinputMissing(io::ErrorKind::NotFound.into());
         assert!(denied.to_string().contains("input` group"));
         assert!(missing.to_string().contains("modprobe uinput"));
+        assert!(
+            InputError::NotAllowed
+                .to_string()
+                .contains("Start asks again")
+        );
+        assert!(
+            InputError::AllowedNow
+                .to_string()
+                .contains("press Start again")
+        );
     }
 
     #[test]
@@ -74,5 +118,18 @@ mod tests {
             err.source().map(ToString::to_string),
             Some("boom".to_owned())
         );
+    }
+
+    #[test]
+    fn portal_errors_have_no_source() {
+        use std::error::Error;
+        let errors = [
+            InputError::PortalUnavailable("no portal".to_owned()),
+            InputError::NotAllowed,
+            InputError::AllowedNow,
+            InputError::Portal("Start: timed out".to_owned()),
+            InputError::SessionLost("disconnected".to_owned()),
+        ];
+        assert!(errors.iter().all(|err| err.source().is_none()));
     }
 }

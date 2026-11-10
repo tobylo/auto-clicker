@@ -80,9 +80,10 @@ fn entries(view: &View) -> [Entry; 6] {
 fn icon_name(activity: Activity) -> &'static str {
     match activity {
         Activity::Clicking => "auto-clicker-clicking",
-        Activity::Idle | Activity::StartingIn(_) | Activity::WaitingForRelease => {
-            "auto-clicker-idle"
-        }
+        Activity::Idle
+        | Activity::StartingIn(_)
+        | Activity::WaitingForRelease
+        | Activity::Opening => "auto-clicker-idle",
     }
 }
 

@@ -48,6 +48,9 @@ mod tests {
     fn other_errors_keep_their_os_error() {
         let err = mapped(EBUSY);
         assert!(matches!(err, InputError::CreateDevice(_)));
-        assert_eq!(err.io_error().raw_os_error(), Some(EBUSY));
+        assert_eq!(
+            err.io_error().and_then(io::Error::raw_os_error),
+            Some(EBUSY)
+        );
     }
 }
