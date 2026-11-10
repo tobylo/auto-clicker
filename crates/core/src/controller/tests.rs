@@ -62,6 +62,9 @@ struct Record {
     /// Readers are always ready, as under a flood of key events, and spend
     /// the task's budget on every poll without sending anything.
     busy_readers: bool,
+    /// What a busy reader sends, once, when it gets to read after the
+    /// devices were first used: a hotkey pressed during a run.
+    pressed_during_a_run: Option<HotkeyEvent>,
     /// The feed each reader was given.
     feeds: Vec<RecordingFeed>,
     /// Where event-clock time 0 is.
@@ -295,12 +298,19 @@ impl Platform for FakePlatform {
             )
         });
         let note = DropNote(self.0.clone(), n);
+        let shared = self.0.clone();
         Box::pin(async move {
             let _note = note;
             match ends_with {
                 Some(event) => send.send(event),
                 None if busy => loop {
+                    // Reading needs budget, as the real reader's does.
                     tokio::task::consume_budget().await;
+                    let pressed = shared.with(|r| {
+                        let running = !r.calls.is_empty();
+                        r.pressed_during_a_run.take_if(|_| running)
+                    });
+                    pressed.into_iter().for_each(|event| send.send(event));
                 },
                 None => pending().await,
             }
@@ -1124,4 +1134,5 @@ fn the_countdown_wakes_on_each_whole_second_and_then_the_deadline() {
 
 mod desktop;
 mod per_run;
+mod playback;
 mod recording;

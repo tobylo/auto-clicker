@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use toml::Spanned;
 
-use super::raw::{RawClicker, RawConfig};
+use super::raw::{RawClicker, RawConfig, RawPlayback};
 use super::{Config, InputSettings, MAX_TRAY_START_DELAY};
 use crate::clicker::{ClickerSettings, INTERVAL_MAX, Interval, JITTER_MAX_PERCENT, Jitter, Mode};
+use crate::playback::{PlaybackSettings, Speed};
 
 /// The version of the file format this program reads.
 pub(super) const VERSION: i64 = 1;
@@ -50,6 +51,30 @@ pub(super) fn validate(raw: RawConfig) -> Result<Config, Invalid> {
         hotkeys: super::hotkeys::hotkeys(&raw.hotkeys, &clicker, input.hotkeys)?,
         clicker,
         input,
+        playback: playback(&raw.playback, defaults.playback)?,
+    })
+}
+
+fn playback(raw: &RawPlayback, defaults: PlaybackSettings) -> Result<PlaybackSettings, Invalid> {
+    Ok(PlaybackSettings {
+        speed: match &raw.speed {
+            Some(written) => speed(written)?,
+            None => defaults.speed,
+        },
+        repeat: raw.repeat.as_ref().map_or(defaults.repeat, |spec| spec.0),
+    })
+}
+
+fn speed(value: &Spanned<f64>) -> Result<Speed, Invalid> {
+    Speed::from_ratio(*value.get_ref()).ok_or_else(|| {
+        at(
+            value,
+            format!(
+                "speed must be from {} to {}",
+                Speed::SLOWEST,
+                Speed::FASTEST
+            ),
+        )
     })
 }
 

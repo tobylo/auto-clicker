@@ -6,6 +6,7 @@ Used by the hand-run device test in tests/device.rs. It prints:
   press N / release N  mouse button N (1 left, 2 middle, 3 right)
   scroll DY          vertical wheel steps, positive down
   key C              a key press, as its Linux key code (layout independent)
+  keyup C            a key release
 """
 
 import gi
@@ -44,6 +45,7 @@ def build(app):
     keys = Gtk.EventControllerKey()
     keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
     keys.connect("key-pressed", lambda c, val, code, state: out("key", code - 8) or True)
+    keys.connect("key-released", lambda c, val, code, state: out("keyup", code - 8))
     win.add_controller(keys)
 
     ready = []

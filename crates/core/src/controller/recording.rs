@@ -35,7 +35,7 @@ impl<P: Platform> Controller<P> {
             }
             State::RecordCountdown(_) => self.state = State::Idle,
             State::Recording(_) => self.finish_recording(StoppedBy::Other, None),
-            State::Countdown(_) | State::Release(_) | State::Opening | State::Clicking(_) => {
+            State::Countdown(..) | State::Release(..) | State::Opening(_) | State::Running(_) => {
                 self.notice = Some("Not recording: clicking is on; stop it first".to_owned());
             }
         }
@@ -162,13 +162,17 @@ impl<P: Platform> Controller<P> {
         });
     }
 
-    /// Saves `recording`; what the tray says about it.
-    fn save(&self, recording: &Recording) -> String {
+    /// Saves `recording`, which becomes the one the playback hotkey plays;
+    /// what the tray says about it.
+    fn save(&mut self, recording: &Recording) -> String {
         let Some(dir) = self.platform.recordings_dir() else {
             return failed("no data directory: neither XDG_DATA_HOME nor HOME is set");
         };
         match save(&dir, recording) {
-            Ok(_) => format!("Saved \u{201c}{}\u{201d}", recording.name()),
+            Ok(path) => {
+                self.saved(&path);
+                format!("Saved \u{201c}{}\u{201d}", recording.name())
+            }
             Err(err) => failed(&err.to_string()),
         }
     }

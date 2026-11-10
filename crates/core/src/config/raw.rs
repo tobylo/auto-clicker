@@ -28,6 +28,16 @@ pub(super) struct RawConfig {
     pub(super) hotkeys: RawHotkeys,
     #[serde(default)]
     pub(super) input: RawInput,
+    #[serde(default)]
+    pub(super) playback: RawPlayback,
+}
+
+/// `[playback]`: how a recording plays.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RawPlayback {
+    pub(super) speed: Option<Spanned<f64>>,
+    pub(super) repeat: Option<PlaysSpec>,
 }
 
 /// `[input]`: which route synthetic input and hotkeys take.
@@ -223,37 +233,56 @@ impl<'de> Deserialize<'de> for Coordinate {
     }
 }
 
-/// `repeat`: "until_stopped", or a number of actions from 1.
+/// The clicker's `repeat`: "until_stopped", or a number of actions from 1.
 #[derive(Debug)]
 pub(super) struct RepeatSpec(pub(super) Repeat);
 
 impl<'de> Deserialize<'de> for RepeatSpec {
     fn deserialize<D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(RepeatVisitor)
+        let counted = RepeatVisitor { counted: "actions" };
+        deserializer.deserialize_any(counted).map(RepeatSpec)
     }
 }
 
-struct RepeatVisitor;
+/// Playback's `repeat`: "until_stopped", or a number of plays from 1.
+#[derive(Debug)]
+pub(super) struct PlaysSpec(pub(super) Repeat);
+
+impl<'de> Deserialize<'de> for PlaysSpec {
+    fn deserialize<D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let counted = RepeatVisitor { counted: "plays" };
+        deserializer.deserialize_any(counted).map(PlaysSpec)
+    }
+}
+
+/// Reads a `repeat`; `counted` names what a number counts.
+struct RepeatVisitor {
+    counted: &'static str,
+}
 
 impl Visitor<'_> for RepeatVisitor {
-    type Value = RepeatSpec;
+    type Value = Repeat;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("\"until_stopped\" or a number of actions from 1")
+        write!(
+            f,
+            "\"until_stopped\" or a number of {} from 1",
+            self.counted
+        )
     }
 
-    fn visit_str<E: de::Error>(self, value: &str) -> Result<RepeatSpec, E> {
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<Repeat, E> {
         match value {
-            "until_stopped" => Ok(RepeatSpec(Repeat::UntilStopped)),
+            "until_stopped" => Ok(Repeat::UntilStopped),
             _ => Err(E::invalid_value(de::Unexpected::Str(value), &self)),
         }
     }
 
-    fn visit_i64<E: de::Error>(self, count: i64) -> Result<RepeatSpec, E> {
+    fn visit_i64<E: de::Error>(self, count: i64) -> Result<Repeat, E> {
         u32::try_from(count)
             .ok()
             .and_then(NonZeroU32::new)
-            .map(|count| RepeatSpec(Repeat::Times(count)))
+            .map(Repeat::Times)
             .ok_or_else(|| {
                 E::custom(format!(
                     "repeat {count} is not from 1 to {}; use \"until_stopped\" to repeat until stopped",

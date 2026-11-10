@@ -128,11 +128,19 @@ impl Triggers {
     }
 
     /// Why a run may not press `key`, if it may not: the key could set off a
-    /// hotkey, or change which hotkey the user's own press sets off.
+    /// hotkey, or, held by the program, change which hotkey the user's own
+    /// press sets off.
     pub fn refusal(&self, key: Key) -> Option<Refusal> {
         if super::Modifier::of_code(key.code()).is_some() {
             return Some(Refusal::Modifier(key));
         }
+        self.hotkey_refusal(key)
+    }
+
+    /// Why a run may not press `key` because it could set off a hotkey, if
+    /// it could. Unlike [`Triggers::refusal`], a modifier passes: a
+    /// recording that holds Ctrl or Shift is what the user did.
+    pub fn hotkey_refusal(&self, key: Key) -> Option<Refusal> {
         Action::ALL
             .into_iter()
             .find_map(|action| self.of(action).refusal(key))
@@ -173,25 +181,25 @@ impl fmt::Display for Refusal {
         match self {
             Refusal::Modifier(key) => write!(
                 f,
-                "the clicker's key, {}, is a modifier, and holding it would change which hotkey \
-                 the desktop sees; choose another key",
+                "{} is a modifier, and the program holding it would change which hotkey the \
+                 desktop sees",
                 key_name(*key)
             ),
             Refusal::HotkeyKey { key, trigger } => write!(
                 f,
-                "the clicker's key, {}, is the key of the hotkey {trigger}, and the desktop \
-                 cannot tell the program's key presses from yours; change the key or the hotkey",
+                "{} is the key of the hotkey {trigger}, and the desktop cannot tell the \
+                 program's key presses from yours",
                 key_name(*key)
             ),
             Refusal::Unreadable(trigger) => write!(
                 f,
-                "the clicker presses a key, and the hotkey \u{201c}{trigger}\u{201d} is not one \
-                 the program can check it against; give every hotkey a function key (F1 to F24) \
-                 in System Settings"
+                "the hotkey \u{201c}{trigger}\u{201d} is not on a function key (F1 to F24), so \
+                 the program cannot tell whether its own key presses would set it off; change \
+                 it in System Settings"
             ),
             Refusal::NotReported => f.write_str(
-                "the clicker presses a key, and the desktop has not said yet which keys the \
-                 hotkeys use",
+                "the desktop has not said yet which keys the hotkeys use, and the program must \
+                 not press one of them",
             ),
         }
     }
@@ -323,6 +331,10 @@ mod tests {
             unreadable.refusal(key("w")),
             Some(Refusal::Unreadable("Ctrl+Space".to_owned()))
         );
+        assert_eq!(
+            unreadable.hotkey_refusal(key("w")),
+            unreadable.refusal(key("w"))
+        );
         let message = unreadable.refusal(key("w")).unwrap().to_string();
         assert!(
             message.contains("Ctrl+Space") && message.contains("F1 to F24"),
@@ -344,6 +356,8 @@ mod tests {
         for name in ["leftshift", "rightctrl", "leftalt", "rightmeta"] {
             let refusal = triggers.refusal(key(name));
             assert_eq!(refusal, Some(Refusal::Modifier(key(name))), "{name}");
+            // Only as a key the program holds by itself: a recording may.
+            assert_eq!(triggers.hotkey_refusal(key(name)), None, "{name}");
         }
         let message = triggers.refusal(key("leftshift")).unwrap().to_string();
         assert!(
