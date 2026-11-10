@@ -19,6 +19,7 @@ env:
 jobs:
   advisories:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,5 +30,9 @@ jobs:
       # The version scripts/gates.sh requires.
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny@0.20.2
+      # Refreshes the cached crates.io index entries that cargo-deny reads yanks
+      # from; a dry run writes no Cargo.lock.
+      - name: Refresh the crates.io index
+        run: cargo update --dry-run
       - name: Advisories in every crate
         run: cargo deny --locked --config .github/deny-weekly.toml check advisories

@@ -4,6 +4,10 @@
 # workspace's direct dependencies to every crate in the graph. The run reports
 # without blocking pull requests.
 
+[graph]
+# Optional dependencies are checked too, whether or not a feature enables them.
+all-features = true
+
 [advisories]
 unmaintained = "all"
 unsound = "all"

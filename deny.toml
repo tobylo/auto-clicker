@@ -6,6 +6,10 @@
 # .github/workflows/advisories.yml; keep its [advisories] section in step with
 # this one.
 
+[graph]
+# Optional dependencies are checked too, whether or not a feature enables them.
+all-features = true
+
 [advisories]
 # Vulnerabilities always fail, whichever crate in the graph they are in;
 # cargo-deny has no scope for them. Unmaintained and unsound advisories fail for
