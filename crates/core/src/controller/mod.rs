@@ -6,11 +6,12 @@
 //! change the controller publishes a [`View`] for the tray to show.
 //!
 //! The controller runs as one future on the daemon's single thread. The
-//! clicking run and the hotkey reader are futures it polls in its own loop,
-//! so whatever happens to the controller happens to them. Every wait it has
-//! (the tray countdown, the wait for the hotkey's modifiers to come up) is a
-//! branch of that loop's one `select!`, beside every message, so a stop or a
-//! shutdown ends it at once.
+//! clicking run, the hotkey reader and an open of the input devices are
+//! futures it polls in its own loop, so whatever happens to the controller
+//! happens to them. Every wait it has (the tray countdown, the wait for the
+//! hotkey's modifiers to come up, an open that waits on the desktop's
+//! permission dialog) is a branch of that loop's one `select!`, beside every
+//! message, so a stop or a shutdown ends it at once.
 
 mod hotkeys;
 mod recording;
@@ -86,13 +87,47 @@ pub struct Links {
     pub released_for_sleep: watch::Receiver<u64>,
 }
 
+/// Opening the input devices: it may wait on the user (a permission
+/// dialog), so the controller polls it beside everything else, and drops it
+/// to cancel.
+pub type OpenInput<B> = Pin<Box<dyn Future<Output = Result<Input<B>, InputError>>>>;
+
+/// Resolves when the input devices stopped working without a write saying
+/// so: the desktop ended the session. Never resolves on a backend that
+/// cannot tell.
+pub type InputLoss = Pin<Box<dyn Future<Output = InputError>>>;
+
+/// How long a platform's input devices live.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputLifetime {
+    /// Opened once and kept between runs. They are input devices the hotkey
+    /// reader can see, so the reader stops before each open and starts again
+    /// after it, knowing them (the kernel backend).
+    Kept,
+    /// Opened for each run and closed when it ends. The hotkey reader cannot
+    /// see them and keeps running while one opens (the portal backend: the
+    /// desktop shows that remote input is active only while a run lasts).
+    PerRun,
+}
+
 /// What the controller needs from the platform: its input devices, an input
 /// reader that ignores them, and the clocks and directory recordings need.
 pub trait Platform {
     type Backend: InputBackend + 'static;
 
-    /// Opens the virtual input devices.
-    fn open_input(&mut self) -> Result<Input<Self::Backend>, InputError>;
+    /// How long the devices live.
+    const LIFETIME: InputLifetime;
+
+    /// Opens the input devices. The future owns what it opened so far:
+    /// dropping it part way closes that again.
+    fn open_input(&mut self) -> OpenInput<Self::Backend>;
+
+    /// Watches `input` for a loss that no write reports, such as the desktop
+    /// ending the session while a button is held. The default never fires.
+    fn input_lost(&self, input: &Input<Self::Backend>) -> InputLoss {
+        let _ = input;
+        Box::pin(pending())
+    }
 
     /// Starts reading input, ignoring the devices of `own` (none when it is
     /// `None`): hotkeys go to `send`, and while a recording runs, what the
@@ -130,6 +165,8 @@ enum State<B: InputBackend> {
     /// A start from the hotkey, waiting for its modifiers to come up until
     /// this deadline.
     Release(Instant),
+    /// A start waiting for the devices to open.
+    Opening,
     Clicking(Running<B>),
     /// A recording from the tray starts at this deadline.
     RecordCountdown(Instant),
@@ -142,6 +179,10 @@ struct Running<B: InputBackend> {
     run: Pin<Box<dyn Future<Output = RunEnd<B>>>>,
     stop: Option<oneshot::Sender<()>>,
     shutdown: Option<oneshot::Sender<()>>,
+    /// Fires when the devices are lost without a write noticing.
+    loss: InputLoss,
+    /// Why the devices were lost, once `loss` fired.
+    lost: Option<InputError>,
 }
 
 impl<B: InputBackend> Running<B> {
@@ -180,6 +221,8 @@ async fn signal(receiver: oneshot::Receiver<()>) {
 enum Wake<B: InputBackend> {
     Message(Message),
     RunEnded(RunEnd<B>),
+    InputLost(InputError),
+    Opened(Result<Input<B>, InputError>),
     Hotkey(HotkeyEvent),
     Deadline,
 }
@@ -193,9 +236,11 @@ pub struct Controller<P: Platform> {
     inbox: mpsc::UnboundedReceiver<Message>,
     view: watch::Sender<View>,
     state: State<P::Backend>,
-    /// The devices while no run has them. `None` during a run, and after
-    /// opening them again failed.
+    /// The devices while no run has them. `None` during a run, after
+    /// opening them again failed, and between runs when they live per run.
     input: Option<Input<P::Backend>>,
+    /// The devices being opened.
+    opening: Option<OpenInput<P::Backend>>,
     /// Why the devices could not be opened again.
     input_error: Option<String>,
     hotkeys: HotkeySource,
@@ -215,11 +260,11 @@ pub struct Controller<P: Platform> {
 }
 
 impl<P: Platform> Controller<P> {
-    /// A controller over `input`, the devices opened at start, and how to
-    /// reach it.
+    /// A controller over `input`, the devices opened at start (`None` when
+    /// they open for each run), and how to reach it.
     pub fn new(
         platform: P,
-        input: Input<P::Backend>,
+        input: Option<Input<P::Backend>>,
         config: Config,
         config_error: Option<String>,
     ) -> (Controller<P>, Links) {
@@ -240,7 +285,8 @@ impl<P: Platform> Controller<P> {
             inbox,
             view,
             state: State::Idle,
-            input: Some(input),
+            input,
+            opening: None,
             input_error: None,
             hotkeys: HotkeySource::none(),
             hotkey_status: None,
@@ -258,6 +304,12 @@ impl<P: Platform> Controller<P> {
             released_for_sleep: sleep_reports,
         };
         (controller, links)
+    }
+
+    /// Shows `err` as a problem until the devices open: what a check at
+    /// start found, before any open.
+    pub fn report_input_problem(&mut self, err: &InputError) {
+        self.input_error = Some(err.to_string());
     }
 
     /// Runs until [`Message::Quit`], or until every sender of the inbox is
@@ -296,13 +348,15 @@ impl<P: Platform> Controller<P> {
             inbox,
             state,
             hotkeys,
+            opening,
             ..
         } = self;
         tokio::select! {
             biased;
             message = inbox.recv() => Wake::Message(message.unwrap_or(Message::Quit)),
             event = hotkeys::received(&mut hotkeys.events) => Wake::Hotkey(event),
-            end = run_end(state) => Wake::RunEnded(end),
+            wake = run_wake(state) => wake,
+            opened = open_end(opening) => Wake::Opened(opened),
             () = sleep_until_some(deadline) => Wake::Deadline,
             never = hotkeys::drive(&mut hotkeys.reader) => match never {},
         }
@@ -320,18 +374,22 @@ impl<P: Platform> Controller<P> {
     /// waited for right here: a stopped run never waits behind other work,
     /// and no other state sees a run that is still stopping.
     async fn finish_stopped_run(&mut self) {
-        let end = match &mut self.state {
-            State::Clicking(running) if running.stopping() => (&mut running.run).await,
+        let (end, lost) = match &mut self.state {
+            State::Clicking(running) if running.stopping() => {
+                ((&mut running.run).await, running.lost.take())
+            }
             _ => return,
         };
-        self.run_ended(end);
+        self.run_ended(end, lost);
     }
 
     /// Handles one wake; `false` when the controller should end.
     fn handle(&mut self, wake: Wake<P::Backend>) -> bool {
         match wake {
             Wake::Message(message) => return self.message(message),
-            Wake::RunEnded(end) => self.run_ended(end),
+            Wake::RunEnded(end) => self.run_ended(end, None),
+            Wake::InputLost(err) => self.devices_lost(err),
+            Wake::Opened(opened) => self.opened(opened),
             Wake::Hotkey(event) => self.hotkey(event),
             Wake::Deadline => self.deadline(),
         }
@@ -416,7 +474,7 @@ impl<P: Platform> Controller<P> {
                     self.state = State::Release(deadline);
                 }
             }
-            State::Countdown(_) | State::Release(_) => self.state = State::Idle,
+            State::Countdown(_) | State::Release(_) | State::Opening => self.cancel_start(),
             State::Clicking(running) => running.stop(),
             // Other hotkeys do nothing while recording.
             State::RecordCountdown(_) | State::Recording(_) => {}
@@ -441,7 +499,7 @@ impl<P: Platform> Controller<P> {
     fn stop_clicking(&mut self) {
         if matches!(
             self.state,
-            State::Countdown(_) | State::Release(_) | State::Clicking(_)
+            State::Countdown(_) | State::Release(_) | State::Opening | State::Clicking(_)
         ) {
             self.stop(None);
         }
@@ -452,14 +510,23 @@ impl<P: Platform> Controller<P> {
     fn stop(&mut self, notice: Option<String>) {
         match &mut self.state {
             State::Idle => return,
-            State::Countdown(_) | State::Release(_) | State::RecordCountdown(_) => {
-                self.state = State::Idle;
-            }
+            State::Countdown(_) | State::Release(_) | State::Opening => self.cancel_start(),
+            State::RecordCountdown(_) => self.state = State::Idle,
             State::Clicking(running) => running.stop(),
             State::Recording(_) => return self.stop_recording(notice),
         }
         if notice.is_some() {
             self.notice = notice;
+        }
+    }
+
+    /// Cancels a start that has not begun. An open made for it alone is
+    /// dropped, which closes what it opened so far (a permission dialog
+    /// included); kept devices go on opening.
+    fn cancel_start(&mut self) {
+        self.state = State::Idle;
+        if P::LIFETIME == InputLifetime::PerRun {
+            self.opening = None;
         }
     }
 
@@ -515,20 +582,27 @@ impl<P: Platform> Controller<P> {
                 Some(next_second(deadline, Instant::now()))
             }
             State::Release(deadline) | State::Recording(deadline) => Some(deadline),
-            State::Idle | State::Clicking(_) => None,
+            State::Idle | State::Opening | State::Clicking(_) => None,
         }
     }
 
-    /// Starts clicking, opening the devices again first if a run lost them.
+    /// Starts clicking, or waits for the devices to open first when no
+    /// devices are open.
     fn begin_run(&mut self) {
-        self.state = State::Idle;
-        if self.input.is_none() {
-            self.reopen();
+        match self.input.take() {
+            Some(input) => self.run_with(input),
+            None => {
+                self.state = State::Opening;
+                if self.opening.is_none() {
+                    self.open();
+                }
+            }
         }
-        let Some(input) = self.input.take() else {
-            return;
-        };
+    }
+
+    fn run_with(&mut self, input: Input<P::Backend>) {
         self.notice = None;
+        let loss = self.platform.input_lost(&input);
         let (stop, stop_signal) = oneshot::channel();
         let (shutdown, shutdown_signal) = oneshot::channel();
         let settings = self.config.clicker;
@@ -541,35 +615,88 @@ impl<P: Platform> Controller<P> {
             run: Box::pin(async move { run(input, &settings, rng, signals).await }),
             stop: Some(stop),
             shutdown: Some(shutdown),
+            loss,
+            lost: None,
         });
     }
 
-    fn run_ended(&mut self, end: RunEnd<P::Backend>) {
-        self.state = State::Idle;
-        match end.result {
-            Ok(Ended::Finished) => self.notice = Some("Finished every action".to_owned()),
-            Ok(Ended::Stopped | Ended::ShutDown) => {}
-            Err(err) => self.notice = Some(format!("Clicking stopped: {err}")),
-        }
-        match end.input {
-            Some(input) => self.input = Some(input),
-            None => self.reopen(),
+    /// The devices stopped working under a run: it stops at once, and its
+    /// end reports why.
+    fn devices_lost(&mut self, err: InputError) {
+        if let State::Clicking(running) = &mut self.state {
+            running.lost = Some(err);
+            running.stop();
         }
     }
 
-    /// Opens the devices again after a run lost them, and restarts the
-    /// hotkey reader with their identities. The old reader goes first: it
-    /// would read the new devices as keyboards.
-    fn reopen(&mut self) {
-        self.hotkeys = HotkeySource::none();
-        match self.platform.open_input() {
-            Ok(input) => {
-                self.input = Some(input);
-                self.input_error = None;
+    /// `lost` says why the devices were lost under the run, if they were.
+    fn run_ended(&mut self, end: RunEnd<P::Backend>, lost: Option<InputError>) {
+        self.state = State::Idle;
+        let devices_lost = lost.is_some();
+        match (lost, end.result) {
+            (Some(err), _) | (None, Err(err)) => {
+                self.notice = Some(format!("Clicking stopped: {err}"));
             }
-            Err(err) => self.input_error = Some(err.to_string()),
+            (None, Ok(Ended::Finished)) => self.notice = Some("Finished every action".to_owned()),
+            (None, Ok(Ended::Stopped | Ended::ShutDown)) => {}
         }
-        self.start_reader();
+        // Lost devices are closed, and so are devices that live per run.
+        let kept = end
+            .input
+            .filter(|_| !devices_lost && P::LIFETIME == InputLifetime::Kept);
+        match kept {
+            Some(input) => self.input = Some(input),
+            None if P::LIFETIME == InputLifetime::Kept => self.open(),
+            None => {}
+        }
+    }
+
+    /// Starts opening the devices. Kept devices are visible to the hotkey
+    /// reader, so it stops first (it would read them as keyboards) and
+    /// starts again once the open has ended.
+    fn open(&mut self) {
+        if P::LIFETIME == InputLifetime::Kept {
+            self.hotkeys = HotkeySource::none();
+        }
+        self.opening = Some(self.platform.open_input());
+    }
+
+    /// An open ended: a start waiting for it begins, or says why it cannot.
+    fn opened(&mut self, opened: Result<Input<P::Backend>, InputError>) {
+        self.opening = None;
+        let waiting = matches!(self.state, State::Opening);
+        if waiting {
+            self.state = State::Idle;
+        }
+        self.keep_opened(opened, waiting);
+        if P::LIFETIME == InputLifetime::Kept {
+            self.start_reader();
+        }
+        if waiting && let Some(input) = self.input.take() {
+            self.run_with(input);
+        }
+    }
+
+    /// Keeps what an open gave, or says why it failed. Per-run devices with
+    /// no start waiting for them close again at once.
+    fn keep_opened(&mut self, opened: Result<Input<P::Backend>, InputError>, waiting: bool) {
+        let kept = P::LIFETIME == InputLifetime::Kept;
+        match opened {
+            Ok(input) => {
+                self.input_error = None;
+                if waiting || kept {
+                    self.input = Some(input);
+                }
+            }
+            Err(err) => {
+                if waiting {
+                    self.notice = Some(format!("Not started: {err}"));
+                }
+                if kept {
+                    self.input_error = Some(err.to_string());
+                }
+            }
+        }
     }
 
     fn start_reader(&mut self) {
@@ -609,6 +736,7 @@ impl<P: Platform> Controller<P> {
                 deadline.saturating_duration_since(Instant::now()),
             )),
             State::Release(_) => Activity::WaitingForRelease,
+            State::Opening => Activity::Opening,
             State::Clicking(_) => Activity::Clicking,
             State::RecordCountdown(deadline) => Activity::RecordingIn(whole_seconds(
                 deadline.saturating_duration_since(Instant::now()),
@@ -637,11 +765,30 @@ impl<P: Platform> Controller<P> {
     }
 }
 
-/// The end of the clicking run; never resolves while nothing runs.
-fn run_end<B: InputBackend>(state: &mut State<B>) -> impl Future<Output = RunEnd<B>> + '_ {
-    poll_fn(move |cx| match state {
-        State::Clicking(running) => running.run.as_mut().poll(cx),
-        _ => Poll::Pending,
+/// The end of the clicking run, or else the loss of its devices once the
+/// run's own writes have not reported it; never resolves while nothing runs.
+fn run_wake<B: InputBackend>(state: &mut State<B>) -> impl Future<Output = Wake<B>> + '_ {
+    poll_fn(move |cx| {
+        let State::Clicking(running) = state else {
+            return Poll::Pending;
+        };
+        if let Poll::Ready(end) = running.run.as_mut().poll(cx) {
+            return Poll::Ready(Wake::RunEnded(end));
+        }
+        if running.lost.is_none() {
+            return running.loss.as_mut().poll(cx).map(Wake::InputLost);
+        }
+        Poll::Pending
+    })
+}
+
+/// The end of the open in flight; never resolves while none is.
+fn open_end<B: InputBackend>(
+    opening: &mut Option<OpenInput<B>>,
+) -> impl Future<Output = Result<Input<B>, InputError>> + '_ {
+    poll_fn(move |cx| match opening {
+        Some(open) => open.as_mut().poll(cx),
+        None => Poll::Pending,
     })
 }
 

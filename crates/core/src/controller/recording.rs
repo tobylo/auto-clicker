@@ -35,7 +35,7 @@ impl<P: Platform> Controller<P> {
             }
             State::RecordCountdown(_) => self.state = State::Idle,
             State::Recording(_) => self.finish_recording(StoppedBy::Other, None),
-            State::Countdown(_) | State::Release(_) | State::Clicking(_) => {
+            State::Countdown(_) | State::Release(_) | State::Opening | State::Clicking(_) => {
                 self.notice = Some("Not recording: clicking is on; stop it first".to_owned());
             }
         }

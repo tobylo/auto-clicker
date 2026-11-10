@@ -7,7 +7,7 @@ use std::time::Duration;
 use toml::Spanned;
 
 use super::raw::{RawClicker, RawConfig};
-use super::{Config, MAX_TRAY_START_DELAY};
+use super::{Config, InputSettings, MAX_TRAY_START_DELAY};
 use crate::clicker::{ClickerSettings, INTERVAL_MAX, Interval, JITTER_MAX_PERCENT, Jitter, Mode};
 
 /// The version of the file format this program reads.
@@ -45,6 +45,9 @@ pub(super) fn validate(raw: RawConfig) -> Result<Config, Invalid> {
         tray_start_delay,
         hotkeys: super::hotkeys::hotkeys(&raw.hotkeys, &clicker)?,
         clicker,
+        input: InputSettings {
+            output: raw.input.output.map_or(defaults.input.output, Into::into),
+        },
     })
 }
 

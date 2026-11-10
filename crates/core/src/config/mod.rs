@@ -22,6 +22,10 @@
 //! toggle_clicking = "Ctrl+F6"
 //! toggle_recording = "Ctrl+F7"
 //! toggle_playback = "Ctrl+F8"
+//!
+//! [input]
+//! output = "kernel"             # kernel (/dev/uinput) or portal (the desktop's
+//!                               # remote input portal, which asks once)
 //! ```
 
 mod error;
@@ -50,6 +54,25 @@ pub struct Config {
     pub tray_start_delay: Duration,
     pub clicker: ClickerSettings,
     pub hotkeys: Bindings,
+    pub input: InputSettings,
+}
+
+/// `[input]`: how the program reaches the input devices.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InputSettings {
+    /// Where clicks and keys go.
+    pub output: OutputRoute,
+}
+
+/// The route clicks and keys take to the desktop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OutputRoute {
+    /// Virtual devices through `/dev/uinput`.
+    #[default]
+    Kernel,
+    /// The desktop's RemoteDesktop portal and libei. The desktop asks the
+    /// user once.
+    Portal,
 }
 
 impl Default for Config {
@@ -58,6 +81,7 @@ impl Default for Config {
             tray_start_delay: Duration::from_secs(5),
             clicker: ClickerSettings::default(),
             hotkeys: Bindings::default(),
+            input: InputSettings::default(),
         }
     }
 }

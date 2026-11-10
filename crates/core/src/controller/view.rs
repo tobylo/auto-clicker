@@ -18,6 +18,9 @@ pub enum Activity {
     StartingIn(u64),
     /// A start from the hotkey waits for its modifiers to come up.
     WaitingForRelease,
+    /// A start waits for the input devices to open, which can mean the
+    /// desktop's permission dialog.
+    Opening,
     Clicking,
     /// A recording from the tray counts down; whole seconds left, rounded
     /// up.
@@ -30,7 +33,10 @@ impl Activity {
     pub fn clicking(self) -> bool {
         matches!(
             self,
-            Activity::StartingIn(_) | Activity::WaitingForRelease | Activity::Clicking
+            Activity::StartingIn(_)
+                | Activity::WaitingForRelease
+                | Activity::Opening
+                | Activity::Clicking
         )
     }
 
@@ -68,6 +74,9 @@ impl View {
                     "Auto clicker: starts when you let go of {}",
                     modifiers_of(self.hotkey)
                 )
+            }
+            Activity::Opening => {
+                "Auto clicker: starting; allow input if the desktop asks".to_owned()
             }
             Activity::Clicking => "Auto clicker: clicking".to_owned(),
             Activity::RecordingIn(seconds) => format!("Auto clicker: records in {seconds} s"),
@@ -319,12 +328,13 @@ mod tests {
             Idle,
             StartingIn(1),
             WaitingForRelease,
+            Opening,
             Clicking,
             RecordingIn(1),
             Recording,
         ]
         .map(|activity| (activity.clicking(), activity.recording()));
         let (no, click, record) = ((false, false), (true, false), (false, true));
-        assert_eq!(kinds, [no, click, click, click, record, record]);
+        assert_eq!(kinds, [no, click, click, click, click, record, record]);
     }
 }

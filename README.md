@@ -135,12 +135,24 @@ repeat = "until_stopped"      # or a number of actions (a double click is one); 
 toggle_clicking = "Ctrl+F6"   # start or stop clicking
 toggle_recording = "Ctrl+F7"  # start recording a macro, or stop and save it
 toggle_playback = "Ctrl+F8"   # play or stop the macro
+
+[input]
+output = "kernel"             # how clicks and keys reach the desktop: kernel or portal
 ```
 
 - Keys are named by where they sit on the keyboard, not by the label printed on them, so a setting stays on the same physical key whatever keyboard layout is in use. The letter and symbol names are the labels of a US keyboard: on a German keyboard, "z" is the key labelled Y. The names, lowercase: "a" to "z", "0" to "9", "f1" to "f24", "space", "enter", "esc", "tab", "backspace", "capslock", "minus", "equal", "leftbrace", "rightbrace", "semicolon", "apostrophe", "grave", "backslash", "comma", "dot", "slash", left and right "shift", "ctrl", "alt" and "meta" (such as "leftshift"), "up", "down", "left", "right", "home", "end", "pageup", "pagedown", "insert", "delete", the keypad keys ("kp0" to "kp9", "kpplus", "kpminus", "kpasterisk", "kpslash", "kpdot", "kpenter"), "numlock", "scrolllock", "sysrq", "pause", "compose" and "102nd", the extra key beside the left Shift on ISO keyboards (most European ones). Any other key is given by its Linux key code, such as `key = 113` for the mute key.
 - On a Swedish or Finnish keyboard, the letters, the digits, "comma" and "dot" match their labels. The other keys: "grave" is §, "minus" is +, "equal" is ´, "leftbrace" is Å, "rightbrace" is ¨, "semicolon" is Ö, "apostrophe" is Ä, "backslash" is ', "102nd" is < and "slash" is -.
 - A fixed point runs from 0 to 65535 across all screens together, left to right and top to bottom. Games that lock the pointer (Minecraft while playing) ignore it; use the cursor position there.
+- `output = "portal"` clicks and types without `/dev/uinput`, through the desktop's remote input portal (see [Clicking through the portal](#clicking-through-the-portal)). `kernel`, the default, uses `/dev/uinput`. Hotkeys and recording still read the keyboards and mice directly either way.
 - A hotkey is any of Ctrl, Shift, Alt and Meta, then a key name from the list above, joined by `+`, in any letter case: "Ctrl+F6", "ctrl+shift+f9", "F13". It fires when the key is pressed while exactly those modifiers are held, left or right alike, on any keyboard. Two actions cannot share a hotkey, and no hotkey can use the key the clicker presses.
+
+## Clicking through the portal
+
+With `output = "portal"`, the program asks Plasma for remote input (the RemoteDesktop portal) instead of creating virtual devices, so it needs no access to `/dev/uinput`. The first time you start clicking, Plasma asks whether "Auto Clicker" may control the keyboard and pointer. After you allow it, clicking does not begin by itself, since the dialog took the focus from your game: switch back and start again. Plasma remembers the answer, so later starts go ahead without asking; the program keeps Plasma's token for it in `~/.local/state/auto-clicker/portal-token`. If you deny it, the tray says so and the next start asks again. Plasma lists the permission under System Settings, where it can be revoked.
+
+The program opens a remote input session for each run and closes it when the run stops, so Plasma shows that remote control is active only while clicking. If Plasma ends the session during a run (the permission was revoked, or the screen locked), clicking stops, Plasma lets go of every button and key, and the tray says why.
+
+The portal needs the package's `io.github.tobylo.AutoClicker.desktop`: Plasma keeps the permission per app. If the portal cannot be used, the program keeps running and the tray says why.
 
 ## Hotkeys
 

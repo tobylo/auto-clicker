@@ -103,6 +103,7 @@ fn icon_name(activity: Activity) -> &'static str {
         Activity::Idle
         | Activity::StartingIn(_)
         | Activity::WaitingForRelease
+        | Activity::Opening
         | Activity::RecordingIn(_) => "auto-clicker-idle",
     }
 }
@@ -232,7 +233,7 @@ mod tests {
         let idle = [("Start clicking", true), ("Record", true)];
         assert_eq!(shown(Idle), [&idle[..], &rest[..]].concat());
         let clicking = [("Stop clicking", true), ("Record", false)];
-        for busy in [StartingIn(3), WaitingForRelease, Clicking] {
+        for busy in [StartingIn(3), WaitingForRelease, Opening, Clicking] {
             assert_eq!(shown(busy), [&clicking[..], &rest[..]].concat(), "{busy:?}");
         }
         let recording = [("Start clicking", false), ("Stop recording", true)];
@@ -268,7 +269,13 @@ mod tests {
         use Activity::*;
         assert_eq!(icon_name(Clicking), "auto-clicker-clicking");
         assert_eq!(icon_name(Recording), "auto-clicker-recording");
-        for waiting in [Idle, StartingIn(1), WaitingForRelease, RecordingIn(1)] {
+        for waiting in [
+            Idle,
+            StartingIn(1),
+            WaitingForRelease,
+            Opening,
+            RecordingIn(1),
+        ] {
             assert_eq!(icon_name(waiting), "auto-clicker-idle", "{waiting:?}");
         }
     }
