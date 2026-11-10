@@ -118,10 +118,11 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    /// Opens the echo window, unless one is open: that one keeps its end.
+    /// Opens the echo window for its whole length from now: the run that
+    /// was just stopped may have pressed its key a moment ago, whatever
+    /// window was open before.
     fn open_echo_window(&mut self) {
-        let open = self.in_echo_window();
-        if let Some(desktop) = self.desktop.as_mut().filter(|_| !open) {
+        if let Some(desktop) = &mut self.desktop {
             desktop.echo_until = Instant::now().checked_add(ECHO_WINDOW);
         }
     }

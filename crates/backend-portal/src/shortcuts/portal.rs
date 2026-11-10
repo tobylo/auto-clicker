@@ -122,6 +122,10 @@ async fn bind(bindings: Bindings) -> Result<Bound<impl Stream<Item = Signal>>, S
         }),
         closed.map(|()| Signal::Closed),
     );
+    // The program asked for three; an answer far longer is not its own.
+    if answer.shortcuts().len() > MAX_LISTED {
+        return Err("BindShortcuts answered with a list the program cannot read".to_owned());
+    }
     Ok(Bound {
         listed: answer.shortcuts().iter().map(listed).collect(),
         signals,
