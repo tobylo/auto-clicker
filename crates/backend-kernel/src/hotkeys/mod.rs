@@ -109,6 +109,7 @@ async fn run<S: FnMut(HotkeyEvent)>(mut reader: Reader<S>, shutdown: impl Future
     if let Err(err) = reader.scan() {
         return reader.stop(&err);
     }
+    reader.feed.with(Recorder::start_read);
     loop {
         reader.report();
         let wake = tokio::select! {

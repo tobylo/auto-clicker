@@ -347,6 +347,20 @@ fn an_unplugged_device_takes_its_exclusions_with_it() {
 }
 
 #[test]
+fn a_device_added_after_the_start_records_its_held_ctrl() {
+    let started_by = Bindings::default().toggle_recording;
+    let mut recorder = Recorder::new(Bindings::default(), START, created(), Some(started_by));
+    recorder.resync(KEYBOARD, |code| [CTRL, F7].contains(&code), t(0));
+    recorder.start_read();
+    // Plugged in later with Ctrl held: the user's own Ctrl.
+    recorder.resync(OTHER_KEYBOARD, |code| code == CTRL, t(1_000));
+    assert_eq!(
+        events_at(recorder, t(2_000)),
+        [(1_000, press(key(CTRL))), (2_000, release(key(CTRL)))]
+    );
+}
+
+#[test]
 fn the_stop_hotkey_is_left_out_and_ends_the_recording_at_its_press() {
     let mut recorder = recorder();
     tap(&mut recorder, KEYBOARD, W, [0, 1_000]);
