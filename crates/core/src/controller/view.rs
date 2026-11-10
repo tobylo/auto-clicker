@@ -33,7 +33,10 @@ impl Activity {
     pub fn clicking(self) -> bool {
         matches!(
             self,
-            Activity::StartingIn(_) | Activity::WaitingForRelease | Activity::Clicking
+            Activity::StartingIn(_)
+                | Activity::WaitingForRelease
+                | Activity::Opening
+                | Activity::Clicking
         )
     }
 
@@ -325,12 +328,13 @@ mod tests {
             Idle,
             StartingIn(1),
             WaitingForRelease,
+            Opening,
             Clicking,
             RecordingIn(1),
             Recording,
         ]
         .map(|activity| (activity.clicking(), activity.recording()));
         let (no, click, record) = ((false, false), (true, false), (false, true));
-        assert_eq!(kinds, [no, click, click, click, record, record]);
+        assert_eq!(kinds, [no, click, click, click, click, record, record]);
     }
 }
