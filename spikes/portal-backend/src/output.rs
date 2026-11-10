@@ -28,13 +28,17 @@ pub async fn run(token_file: &Path, args: &[String]) -> Result<(), String> {
     out.wait_for(&[DeviceCapability::Button, DeviceCapability::Keyboard])
         .await?;
     out.describe();
+    scenario(&mut out, &remote, args).await
+}
+
+async fn scenario(out: &mut Output, remote: &Remote, args: &[String]) -> Result<(), String> {
     match args {
-        [name] if name == "demo" => demo(&mut out).await,
-        [name, n, ms] if name == "rate" => rate(&mut out, number(n)?, number(ms)?).await,
-        [name, what, how] if name == "hold" => hold(&mut out, &remote, what, how).await,
-        [name] if name == "combo" => combo(&mut out).await,
-        [name] if name == "locked" => locked(&mut out).await,
-        [name] if name == "park" => park(&mut out).await,
+        [name] if name == "demo" => demo(out).await,
+        [name, n, ms] if name == "rate" => rate(out, number(n)?, number(ms)?).await,
+        [name, what, how] if name == "hold" => hold(out, remote, what, how).await,
+        [name] if name == "combo" => combo(out).await,
+        [name] if name == "locked" => locked(out).await,
+        [name] if name == "park" => park(out).await,
         _ => Err(format!("unknown output scenario {args:?}")),
     }
 }

@@ -37,11 +37,18 @@ def periods(lines):
     return presses, [b - a for a, b in zip(presses, presses[1:])]
 
 
+def shown(what, many):
+    """Key repeats are only counted, and buttons are not listed in long runs."""
+    if what == "key repeat":
+        return False
+    return not (many and what.startswith("button"))
+
+
 def main(path):
     lines = list(events(path))
     repeats = sum(1 for _, what in lines if what == "key repeat")
     for time, what in lines:
-        if what != "key repeat" and (len(lines) <= 200 or not what.startswith("button")):
+        if shown(what, len(lines) > 200):
             print(time, what)
     if repeats:
         print(f"key repeats sent by the compositor: {repeats}")
