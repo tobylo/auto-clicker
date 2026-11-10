@@ -1,4 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#e11d48"/>
-  <text x="32" y="32" dy="0.35em" text-anchor="middle" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="26" font-weight="600" fill="#ffffff">AC</text>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#4338ca"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#tile)"/>
+  <rect x="18" y="8" width="28" height="48" rx="14" fill="#ffffff"/>
+  <path d="M18 26v-4a14 14 0 0 1 14-14v18z" fill="#facc15"/>
+  <path d="M32 8v18M18 26h28" stroke="#4338ca" stroke-width="2"/>
+  <path d="M35 30l-9 13h6l-3 10 10-14h-6z" fill="#4338ca"/>
 </svg>
