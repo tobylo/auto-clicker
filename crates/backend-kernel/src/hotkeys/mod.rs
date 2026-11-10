@@ -243,7 +243,10 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
                 self.send_reaction(reaction);
             }
             Step::Resync => match device.stream.device().get_key_state() {
-                Ok(keys) => self.matcher.resync(id, |code| keys.contains(KeyCode(code))),
+                Ok(keys) => {
+                    let held = |code| keys.contains(KeyCode(code));
+                    self.matcher.resync(id, held, events::now());
+                }
                 Err(err) => self.read_failed(id, &err),
             },
             Step::Nothing => {}
@@ -275,7 +278,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
     fn remove(&mut self, id: DeviceId) -> Option<OsString> {
         let index = self.devices.iter().position(|device| device.id == id)?;
         let name = self.devices.swap_remove(index).name;
-        let reaction = self.matcher.device_lost(id);
+        let reaction = self.matcher.device_lost(id, events::now());
         self.send_reaction(reaction);
         Some(name)
     }

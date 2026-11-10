@@ -218,9 +218,9 @@ async fn unplugging_one_keyboard_leaves_the_other_working() {
         reader.fires_from(&mut first).await;
         reader.fires_from(&mut second).await;
         drop(first);
-        second.ctrl_f24();
-        let fired = reader.next_hotkey(DEVICE_TIMEOUT).await;
-        assert_eq!(fired, Some(HotkeyEvent::Fired(Action::ToggleClicking)));
+        // Presses from before the reader saw the unplug do not fire, so
+        // press until one does.
+        reader.fires_from(&mut second).await;
     })
     .await;
 }

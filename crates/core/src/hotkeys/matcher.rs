@@ -1,5 +1,7 @@
 //! Matching key events from every keyboard against the bindings.
 
+use std::time::Duration;
+
 use super::{Action, Bindings, HotkeyEvent, Modifier, Modifiers};
 
 /// One device the backend reads, as long as it is open. The backend never
@@ -14,6 +16,7 @@ pub struct DeviceId(pub u64);
 pub struct KeyEvent {
     code: u16,
     value: KeyValue,
+    time: Duration,
 }
 
 enum KeyValue {
@@ -24,15 +27,16 @@ enum KeyValue {
 
 impl KeyEvent {
     /// The event with this key code and evdev value (0 up, 1 down, 2
-    /// autorepeat), or `None` for any other value.
-    pub fn new(code: u16, value: i32) -> Option<KeyEvent> {
+    /// autorepeat), or `None` for any other value. `time` is when it
+    /// happened, on the monotonic clock, as the kernel stamped it.
+    pub fn new(code: u16, value: i32, time: Duration) -> Option<KeyEvent> {
         let value = match value {
             0 => KeyValue::Release,
             1 => KeyValue::Press,
             2 => KeyValue::Repeat,
             _ => return None,
         };
-        Some(KeyEvent { code, value })
+        Some(KeyEvent { code, value, time })
     }
 }
 
@@ -57,6 +61,14 @@ impl Reaction {
 
 /// The modifier state across all devices, and the bindings it is matched
 /// against.
+///
+/// Key events arrive in the order they happened. Three changes do not: a
+/// device unplugged, a device that fails, and the keys a device holds, read
+/// after its events were lost. Each lands while older key events may still
+/// be queued, so an older press would be matched against newer state. The
+/// matcher therefore keeps the time of the last such change, and a press
+/// that happened before it never fires. State changes still apply, so the
+/// state is right again once the queued events are through.
 pub struct Matcher {
     bindings: Bindings,
     /// The modifier keys each device holds down, one bit per key code in
@@ -64,12 +76,11 @@ pub struct Matcher {
     held: Vec<(DeviceId, u8)>,
     /// A binding fired and not every modifier was released since.
     awaiting_release: bool,
-    /// Events were lost, and nothing fires until every device that lost
-    /// them has been read again and every modifier is up: what a device
-    /// holds is unknown until it is read, and events queued before the read
-    /// are older than it.
-    suspended: bool,
-    /// The devices that lost events and were not read again yet.
+    /// When the last change that came out of order happened; no press from
+    /// before it fires.
+    cutoff: Duration,
+    /// The devices that lost events and were not read again yet: what they
+    /// hold is unknown, so nothing fires.
     unread: Vec<DeviceId>,
 }
 
@@ -90,7 +101,7 @@ impl Matcher {
             bindings,
             held: Vec::new(),
             awaiting_release: false,
-            suspended: false,
+            cutoff: Duration::ZERO,
             unread: Vec::new(),
         }
     }
@@ -106,43 +117,40 @@ impl Matcher {
                 self.update(device, |keys| keys & !bit);
                 self.release_reaction()
             }
-            (None, KeyValue::Press) => self.press(event.code),
+            (None, KeyValue::Press) => self.press(event.code, event.time),
             (_, KeyValue::Repeat) | (None, KeyValue::Release) => Reaction::default(),
         }
     }
 
     /// Forgets the keys a device held once it is unplugged or cannot be
-    /// read. Its keys are not seen coming up, and events from other devices
-    /// may still be queued: if it held a modifier while a release is
-    /// awaited, the release is lost rather than claimed.
-    pub fn device_lost(&mut self, device: DeviceId) -> Reaction {
+    /// read, `now`. Its keys are not seen coming up: if it held a modifier
+    /// while a release is awaited, the release is lost rather than claimed.
+    pub fn device_lost(&mut self, device: DeviceId, now: Duration) -> Reaction {
         self.unread.retain(|unread| *unread != device);
+        self.cutoff = self.cutoff.max(now);
         let held_any = self.take(device) != 0;
-        self.settle();
         self.lose_release_if(held_any)
     }
 
-    /// A device's events were lost. Its state is unknown until
-    /// [`Matcher::resync`]: an awaited release is lost, and nothing fires
-    /// until every modifier is up again, since the state read then is newer
-    /// than events still queued on this device or others.
+    /// A device's events were lost. Nothing fires until it is read again
+    /// with [`Matcher::resync`], and an awaited release is lost.
     pub fn events_lost(&mut self, device: DeviceId) -> Reaction {
         if !self.unread.contains(&device) {
             self.unread.push(device);
         }
-        self.suspended = true;
         self.lose_release_if(true)
     }
 
-    /// Replaces what a device holds with what it reports holding now, after
-    /// its events were lost.
-    pub fn resync(&mut self, device: DeviceId, held: impl Fn(u16) -> bool) {
+    /// Replaces what a device holds with what it reports holding `now`,
+    /// after its events were lost.
+    pub fn resync(&mut self, device: DeviceId, held: impl Fn(u16) -> bool, now: Duration) {
         let keys = MODIFIER_CODES
             .iter()
             .enumerate()
             .filter(|&(_, &code)| held(code))
             .fold(0, |keys, (index, _)| keys | 1 << index);
         self.unread.retain(|unread| *unread != device);
+        self.cutoff = self.cutoff.max(now);
         self.update(device, |_| keys);
     }
 
@@ -162,14 +170,6 @@ impl Matcher {
         ended
     }
 
-    /// Ends a suspension once every device that lost events was read again
-    /// and no modifier is held.
-    fn settle(&mut self) {
-        if self.held.is_empty() && self.unread.is_empty() {
-            self.suspended = false;
-        }
-    }
-
     /// The modifiers held on any device.
     pub fn modifiers(&self) -> Modifiers {
         let keys = self.held.iter().fold(0, |all, (_, keys)| all | keys);
@@ -186,7 +186,6 @@ impl Matcher {
         if keys != 0 {
             self.held.push((device, keys));
         }
-        self.settle();
     }
 
     /// Removes a device's entry; returns the keys it held.
@@ -197,13 +196,20 @@ impl Matcher {
         }
     }
 
-    fn press(&mut self, code: u16) -> Reaction {
+    /// Whether a press that happened at `time` may fire: no device's state
+    /// is unknown, and it is not older than the last change that came out
+    /// of order.
+    fn may_fire(&self, time: Duration) -> bool {
+        self.unread.is_empty() && time >= self.cutoff
+    }
+
+    fn press(&mut self, code: u16, time: Duration) -> Reaction {
         let modifiers = self.modifiers();
         let fired =
             self.bindings.actions().into_iter().find(|(_, binding)| {
                 binding.key().code() == code && binding.modifiers() == modifiers
             });
-        let Some((action, _)) = fired.filter(|_| !self.suspended) else {
+        let Some((action, _)) = fired.filter(|_| self.may_fire(time)) else {
             return Reaction::default();
         };
         self.awaiting_release = true;

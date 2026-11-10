@@ -2,6 +2,7 @@
 
 use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
+use std::time::Duration;
 
 use super::*;
 use crate::input::Key;
@@ -125,26 +126,45 @@ const F6: u16 = 64;
 const F7: u16 = 65;
 const F9: u16 = 67;
 
-/// One input to the matcher.
+/// One input to the matcher. Times are in milliseconds.
 #[derive(Clone, Copy)]
 enum Step {
-    Key(DeviceId, u16, i32),
-    /// The device was unplugged or failed.
-    Gone(DeviceId),
+    /// A key event at a time: [`LATE`] unless [`at`] sets an earlier one.
+    Key(DeviceId, u16, i32, u64),
+    /// The device was unplugged or failed at a time.
+    Gone(DeviceId, u64),
     /// The device's events were lost.
     Lost(DeviceId),
+    /// The device was read again after lost events at a time, holding these
+    /// keys.
+    Read(DeviceId, &'static [u16], u64),
 }
 
+/// Later than every out-of-order change in these tests.
+const LATE: u64 = 1_000_000;
+
 fn down(device: DeviceId, code: u16) -> Step {
-    Step::Key(device, code, 1)
+    Step::Key(device, code, 1, LATE)
 }
 
 fn up(device: DeviceId, code: u16) -> Step {
-    Step::Key(device, code, 0)
+    Step::Key(device, code, 0, LATE)
 }
 
 fn repeat(device: DeviceId, code: u16) -> Step {
-    Step::Key(device, code, 2)
+    Step::Key(device, code, 2, LATE)
+}
+
+/// A key event that happened at `ms`, though it is read later.
+fn at(ms: u64, step: Step) -> Step {
+    match step {
+        Step::Key(device, code, value, _) => Step::Key(device, code, value, ms),
+        other => other,
+    }
+}
+
+fn ms(ms: u64) -> Duration {
+    Duration::from_millis(ms)
 }
 
 /// Feeds `steps` to `matcher` and returns what it sent.
@@ -153,11 +173,15 @@ fn feed(matcher: &mut Matcher, steps: &[Step]) -> Vec<HotkeyEvent> {
         .iter()
         .flat_map(|&step| {
             let reaction = match step {
-                Step::Key(device, code, value) => {
-                    matcher.key(device, KeyEvent::new(code, value).unwrap())
+                Step::Key(device, code, value, time) => {
+                    matcher.key(device, KeyEvent::new(code, value, ms(time)).unwrap())
                 }
-                Step::Gone(device) => matcher.device_lost(device),
+                Step::Gone(device, now) => matcher.device_lost(device, ms(now)),
                 Step::Lost(device) => matcher.events_lost(device),
+                Step::Read(device, held, now) => {
+                    matcher.resync(device, |code| held.contains(&code), ms(now));
+                    Reaction::default()
+                }
             };
             reaction.events()
         })
@@ -363,112 +387,85 @@ fn a_release_never_seen_pressed_leaves_nothing_held() {
 }
 
 #[test]
-fn nothing_fires_after_lost_events_until_every_modifier_is_up() {
-    let mut matcher = Matcher::new(Bindings::default());
-    let lost = feed(&mut matcher, &[Step::Lost(A)]);
-    matcher.resync(A, |code| [RIGHTCTRL, F6].contains(&code));
-    // F7 queued before the read, though the read already saw Ctrl.
-    let queued = feed(&mut matcher, &[down(B, F7), down(B, LEFTCTRL), down(B, F7)]);
-    let after = feed(
-        &mut matcher,
-        &[
-            up(A, RIGHTCTRL),
-            up(B, LEFTCTRL),
-            down(B, LEFTCTRL),
-            down(B, F7),
-        ],
-    );
-    assert_eq!(
-        (lost, queued, after),
-        (vec![], vec![], vec![Fired(Action::ToggleRecording)])
-    );
-}
-
-#[test]
-fn a_resync_holding_nothing_ends_the_suspension() {
-    let mut matcher = Matcher::new(Bindings::default());
-    feed(&mut matcher, &[Step::Lost(A)]);
-    matcher.resync(A, |_| false);
-    let sent = feed(&mut matcher, &[down(A, LEFTCTRL), down(A, F6)]);
+fn nothing_fires_while_a_device_that_lost_events_is_not_read_again() {
+    let sent = run(&[
+        Step::Lost(A),
+        down(B, LEFTCTRL),
+        down(B, F6),
+        Step::Read(A, &[], 500),
+        down(B, F6),
+    ]);
     assert_eq!(sent, [Fired(Action::ToggleClicking)]);
 }
 
 #[test]
-fn the_suspension_lasts_while_another_device_holds_a_modifier() {
-    let mut matcher = Matcher::new(Bindings::default());
-    feed(&mut matcher, &[down(A, LEFTCTRL), Step::Lost(B)]);
-    matcher.resync(B, |_| false);
-    // A's Ctrl may predate B's read: Ctrl+F6 waits until it is up.
-    let held = feed(&mut matcher, &[down(A, F6)]);
-    let after = feed(
-        &mut matcher,
-        &[up(A, LEFTCTRL), down(A, LEFTCTRL), down(A, F6)],
-    );
-    assert_eq!((held, after), (vec![], vec![Fired(Action::ToggleClicking)]));
+fn a_press_older_than_a_read_after_lost_events_never_fires() {
+    // A's read finds nothing held, but B's Ctrl+F6 queued from before it
+    // may have been pressed with a modifier A held then.
+    let sent = run(&[
+        Step::Lost(A),
+        Step::Read(A, &[], 500),
+        at(400, down(B, LEFTCTRL)),
+        at(450, down(B, F6)),
+        down(B, F6),
+    ]);
+    assert_eq!(sent, [Fired(Action::ToggleClicking)]);
 }
 
 #[test]
-fn the_suspension_lasts_until_every_device_that_lost_events_is_read() {
-    let bindings = Bindings {
-        toggle_clicking: binding("F9"),
-        ..Bindings::default()
-    };
-    let mut matcher = Matcher::new(bindings);
-    // A lost events; B lets go of its Ctrl before A is read again.
-    let before = feed(
+fn a_press_older_than_an_unplug_never_fires() {
+    // Ctrl+Shift+F6 pressed; B, holding Shift, is unplugged before A's F6
+    // is read.
+    let sent = run(&[
+        down(A, LEFTCTRL),
+        down(B, LEFTSHIFT),
+        Step::Gone(B, 500),
+        at(300, down(A, F6)),
+        down(A, F6),
+    ]);
+    assert_eq!(sent, [Fired(Action::ToggleClicking)]);
+}
+
+#[test]
+fn queued_events_older_than_a_read_still_change_the_state() {
+    // The read at 500 saw Ctrl held: the queued up at 400 and down at 450
+    // replay to the same state.
+    let sent = run(&[
+        Step::Lost(A),
+        Step::Read(A, &[LEFTCTRL], 500),
+        at(400, up(A, LEFTCTRL)),
+        at(450, down(A, LEFTCTRL)),
+        down(A, F6),
+    ]);
+    assert_eq!(sent, [Fired(Action::ToggleClicking)]);
+}
+
+#[test]
+fn a_read_replaces_what_the_device_held() {
+    let mut matcher = Matcher::new(Bindings::default());
+    feed(
         &mut matcher,
         &[
-            down(B, LEFTCTRL),
+            down(A, LEFTCTRL),
             Step::Lost(A),
-            up(B, LEFTCTRL),
-            down(B, F9),
+            Step::Read(A, &[LEFTSHIFT], 500),
         ],
     );
-    matcher.resync(A, |code| code == LEFTSHIFT);
-    let held = feed(&mut matcher, &[down(B, F9)]);
-    let after = feed(&mut matcher, &[up(A, LEFTSHIFT), down(B, F9)]);
-    assert_eq!(
-        (before, held, after),
-        (
-            vec![],
-            vec![],
-            vec![Fired(Action::ToggleClicking), ModifiersReleased]
-        )
-    );
-}
-
-#[test]
-fn a_device_gone_before_its_read_ends_the_wait_for_it() {
-    let mut matcher = Matcher::new(Bindings::default());
-    let sent = feed(
-        &mut matcher,
-        &[Step::Lost(A), Step::Gone(A), down(B, LEFTCTRL), down(B, F6)],
-    );
-    assert_eq!(sent, [Fired(Action::ToggleClicking)]);
-}
-
-#[test]
-fn lost_events_lose_an_awaited_release_and_a_resync_never_claims_one() {
-    let mut matcher = Matcher::new(Bindings::default());
-    let sent = feed(
-        &mut matcher,
-        &[down(A, LEFTCTRL), down(A, F6), Step::Lost(A)],
-    );
-    matcher.resync(A, |_| false);
-    let after = feed(&mut matcher, &[down(B, LEFTSHIFT), up(B, LEFTSHIFT)]);
-    assert_eq!(
-        (sent, after),
-        (vec![Fired(Action::ToggleClicking), ReleaseLost], vec![])
-    );
-}
-
-#[test]
-fn a_resync_replaces_what_the_device_held() {
-    let mut matcher = Matcher::new(Bindings::default());
-    feed(&mut matcher, &[down(A, LEFTCTRL)]);
-    matcher.resync(A, |code| code == LEFTSHIFT);
     let shift = [Modifier::Shift].into_iter().collect();
     assert_eq!(matcher.modifiers(), shift);
+}
+
+#[test]
+fn lost_events_lose_an_awaited_release_and_a_read_never_claims_one() {
+    let sent = run(&[
+        down(A, LEFTCTRL),
+        down(A, F6),
+        Step::Lost(A),
+        Step::Read(A, &[], 500),
+        down(B, LEFTSHIFT),
+        up(B, LEFTSHIFT),
+    ]);
+    assert_eq!(sent, [Fired(Action::ToggleClicking), ReleaseLost]);
 }
 
 #[test]
@@ -476,7 +473,7 @@ fn a_device_lost_holding_a_modifier_loses_the_release() {
     let mut matcher = Matcher::new(Bindings::default());
     let sent = feed(
         &mut matcher,
-        &[down(A, LEFTCTRL), down(A, F6), Step::Gone(A)],
+        &[down(A, LEFTCTRL), down(A, F6), Step::Gone(A, 500)],
     );
     // Another keyboard's modifiers cannot complete it any more.
     let after = feed(
@@ -498,15 +495,26 @@ fn a_device_lost_holding_nothing_keeps_the_wait() {
     let sent = run(&[
         down(A, LEFTCTRL),
         down(A, F6),
-        Step::Gone(B),
+        Step::Gone(B, 500),
         up(A, LEFTCTRL),
     ]);
     assert_eq!(sent, [Fired(Action::ToggleClicking), ModifiersReleased]);
 }
 
 #[test]
+fn a_device_gone_before_it_is_read_again_is_not_waited_for() {
+    let sent = run(&[
+        Step::Lost(A),
+        Step::Gone(A, 500),
+        down(B, LEFTCTRL),
+        down(B, F6),
+    ]);
+    assert_eq!(sent, [Fired(Action::ToggleClicking)]);
+}
+
+#[test]
 fn nothing_is_lost_without_a_wait() {
-    let sent = run(&[down(A, LEFTCTRL), Step::Gone(A), Step::Lost(A)]);
+    let sent = run(&[down(A, LEFTCTRL), Step::Gone(A, 500), Step::Lost(B)]);
     assert_eq!(sent, []);
 }
 
@@ -517,8 +525,8 @@ fn no_release_without_a_fire() {
 
 #[test]
 fn only_evdev_key_values_make_events() {
-    assert!(KeyEvent::new(F6, 3).is_none());
-    assert!(KeyEvent::new(F6, -1).is_none());
+    assert!(KeyEvent::new(F6, 3, ms(1)).is_none());
+    assert!(KeyEvent::new(F6, -1, ms(1)).is_none());
 }
 
 #[test]
@@ -596,7 +604,7 @@ fn what_the_controller_gets_names_no_key() {
     let mut shown = String::new();
     for code in 1..=248 {
         for value in [1, 2, 0] {
-            let reaction = matcher.key(A, KeyEvent::new(code, value).unwrap());
+            let reaction = matcher.key(A, KeyEvent::new(code, value, ms(1)).unwrap());
             shown.push_str(&format!("{reaction:?}"));
         }
     }

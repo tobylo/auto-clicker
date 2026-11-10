@@ -1,5 +1,7 @@
 //! What each input event from a keyboard means for the matcher.
 
+use std::time::{Duration, UNIX_EPOCH};
+
 use auto_clicker_core::hotkeys::KeyEvent;
 use evdev::{EventType, InputEvent, SynchronizationCode};
 
@@ -46,8 +48,34 @@ pub(crate) fn is_loss(event: &InputEvent) -> bool {
 /// The key event an input event is, if it is one.
 fn key_event(event: &InputEvent) -> Option<KeyEvent> {
     (event.event_type() == EventType::KEY)
-        .then(|| KeyEvent::new(event.code(), event.value()))
+        .then(|| KeyEvent::new(event.code(), event.value(), time(event)))
         .flatten()
+}
+
+/// When the event happened, on the monotonic clock every device read is set
+/// to. A time that cannot be read is the earliest, so the event cannot fire
+/// after a change it might predate.
+fn time(event: &InputEvent) -> Duration {
+    event
+        .timestamp()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+}
+
+/// The monotonic clock now, as event times count it.
+#[allow(unsafe_code)]
+pub(crate) fn now() -> Duration {
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `now` is a live, writable `timespec` for the call to fill.
+    // `CLOCK_MONOTONIC` always exists, so the call cannot fail; were it to,
+    // `now` stays zero, which suppresses nothing.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
+    let seconds = u64::try_from(now.tv_sec).unwrap_or(0);
+    let nanos = u32::try_from(now.tv_nsec).unwrap_or(0);
+    Duration::new(seconds, nanos)
 }
 
 #[cfg(test)]
