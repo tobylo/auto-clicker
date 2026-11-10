@@ -7,13 +7,15 @@
 # events it received, the ground truth for presses and releases; key codes
 # removed) and PREFIX.spike (COMMAND's output). Fails when COMMAND fails or a
 # log could not be written. However the script ends (Ctrl+C and SIGTERM
-# included), it closes the window. Run it under the spike lock.
+# included), it closes the window; a signal takes effect once COMMAND returns,
+# so COMMAND carries its own time limit (the spike's --deadline and
+# run-unit.sh's RuntimeMaxSec). Run it under the spike lock.
 set -u
 prefix=$1
 shift
 here=$(cd "$(dirname "$0")" && pwd)
 # A `ready` left by an earlier run must not let input start early.
-rm -f "$prefix.window"
+rm -f -- "$prefix.window" || exit 1
 python3 "$here/probe_logged.py" "$prefix" &
 window=$!
 
