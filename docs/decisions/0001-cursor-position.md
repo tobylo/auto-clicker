@@ -27,20 +27,20 @@ v = clamp(round(x * 65536 / W), 0, 65535)      and likewise y with H
 
 ## Measurements
 
-Every number below came from the commands under "Commands", run on the committed spike code on 2026-11-10: latency, pointer lock, lifecycle and the dual-output mapping between 02:49 and 02:54 (after the laptop had restarted), CPU and the other layouts between 01:01 and 01:08. Earlier runs of the same checks gave the same results. The laptop was otherwise idle and its mouse and keyboard untouched, and all input was synthetic, from C01's virtual mouse, except under "Real mouse".
+Every number below came from the commands under "Commands", run on 2026-11-10: latency, pointer lock, lifecycle and all six layouts on the final spike code between 07:18 and 07:21, CPU between 01:01 and 01:08 on code whose measurement path has not changed since. Earlier runs of the same checks gave the same results. The laptop was otherwise idle and its mouse and keyboard untouched, and all input was synthetic, from C01's virtual mouse, except under "Real mouse".
 
 ### Latency: uinput write to receipt
 
 Absolute moves went to distinct positions, paced on absolute deadlines. The time is taken just before each move is written, so every figure is an upper bound. Each call was matched to its move. Three sweeps of 900 moves were run per rate, 2700 moves in all.
 
-| Rate | Moves | Callbacks | Received | p50 | p90 | p99 | max |
-|---|---|---|---|---|---|---|---|
-| 125 Hz | 2700 | 2700 | 2700 | 0.55 ms | 0.71 ms | 0.81 ms | 1.07 ms |
-| 500 Hz | 2700 | 2700 | 2700 | 0.42 ms | 0.58 ms | 0.69 ms | 0.97 ms |
-| 1000 Hz | 2700 | 2701 | 2701 | 0.26 ms | 0.38 ms | 0.54 ms | 1.19 ms |
-| 2000 Hz | 2700 | 2700 | 2700 | 0.20 ms | 0.28 ms | 0.38 ms | 1.04 ms |
+| Rate | Moves | Matched exactly once | p50 | p90 | p99 | max |
+|---|---|---|---|---|---|---|
+| 125 Hz | 2700 | 2700 | 0.53 ms | 0.68 ms | 0.82 ms | 1.05 ms |
+| 500 Hz | 2700 | 2700 | 0.40 ms | 0.55 ms | 0.66 ms | 0.91 ms |
+| 1000 Hz | 2700 | 2700 | 0.25 ms | 0.31 ms | 0.46 ms | 0.92 ms |
+| 2000 Hz | 2700 | 2700 | 0.19 ms | 0.25 ms | 0.33 ms | 0.85 ms |
 
-- **Nothing coalesces or drops.** Every injected move was matched to exactly one delivered call (received equals moves at every rate). The extra callback at 1000 Hz is the move onto the sweep's start row.
+- **Nothing coalesces or drops.** The harness maps each call back to the move that caused it and counts moves matched once, more than once and never: at every rate, all 2700 moves were matched exactly once, and no call was left over.
 - **The script's own time is too coarse to use.** It has only `Date.now()`, wall-clock time in whole milliseconds. Script-to-receipt read between −0.33 and +0.54 ms at p50 across runs, an error of up to a millisecond either way. The end-to-end figure above is measured on one µs clock and bounds it.
 - **The 1000 and 2000 Hz rows are synthetic.** "Real mouse" below checks the rate a physical mouse produces.
 
