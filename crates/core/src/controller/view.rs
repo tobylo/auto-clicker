@@ -17,6 +17,9 @@ pub enum Activity {
     StartingIn(u64),
     /// A start from the hotkey waits for its modifiers to come up.
     WaitingForRelease,
+    /// A start waits for the input devices to open, which can mean the
+    /// desktop's permission dialog.
+    Opening,
     Clicking,
 }
 
@@ -46,6 +49,9 @@ impl View {
                     "Auto clicker: starts when you let go of {}",
                     modifiers_of(self.hotkey)
                 )
+            }
+            Activity::Opening => {
+                "Auto clicker: starting; allow input if the desktop asks".to_owned()
             }
             Activity::Clicking => "Auto clicker: clicking".to_owned(),
         }

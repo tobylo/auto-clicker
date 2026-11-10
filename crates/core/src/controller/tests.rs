@@ -109,16 +109,21 @@ impl Shared {
     }
 
     fn devices(&self) -> Input<Devices> {
+        Input::new(self.bare_devices())
+    }
+
+    /// New devices without the guard, for a test platform that wraps them.
+    fn bare_devices(&self) -> Devices {
         let (inner, log) = FakeBackend::new();
         let id = self.with(|r| {
             r.logs.push(log);
             r.logs.len() - 1
         });
-        Input::new(Devices {
+        Devices {
             id,
             inner,
             shared: self.clone(),
-        })
+        }
     }
 }
 
@@ -188,10 +193,8 @@ impl Drop for DropNote {
 
 struct FakePlatform(Shared);
 
-impl Platform for FakePlatform {
-    type Backend = Devices;
-
-    fn open_input(&mut self) -> Result<Input<Devices>, InputError> {
+impl FakePlatform {
+    fn open_now(&mut self) -> Result<Input<Devices>, InputError> {
         let fail = self.0.with(|r| {
             let fail = r.failing_opens > 0;
             r.failing_opens = r.failing_opens.saturating_sub(1);
@@ -205,6 +208,18 @@ impl Platform for FakePlatform {
         let id = input.backend().id;
         self.0.with(|r| r.steps.push(Step::Opened(Some(id))));
         Ok(input)
+    }
+}
+
+impl Platform for FakePlatform {
+    type Backend = Devices;
+
+    const LIFETIME: InputLifetime = InputLifetime::Kept;
+
+    /// Opens at once, as the kernel backend does.
+    fn open_input(&mut self) -> OpenInput<Devices> {
+        let opened = self.open_now();
+        Box::pin(async move { opened })
     }
 
     fn read_hotkeys(&mut self, own: Option<&Input<Devices>>, send: HotkeySender) -> HotkeyReader {
@@ -258,7 +273,7 @@ fn config(mode: Mode) -> Config {
 async fn daemon_with(config: Config, shared: Shared, session_open: bool) -> Daemon {
     let input = shared.devices();
     let platform = FakePlatform(shared.clone());
-    let (controller, links) = Controller::new(platform, input, config, None);
+    let (controller, links) = Controller::new(platform, Some(input), config, None);
     let Links {
         send: inbox,
         view,
@@ -995,7 +1010,7 @@ async fn the_view_shows_the_config_error_and_hotkey_problems() {
         let input = shared.devices();
         let error = Some("config.toml:3: bad".to_owned());
         let platform = FakePlatform(shared.clone());
-        let (controller, links) = Controller::new(platform, input, Config::default(), error);
+        let (controller, links) = Controller::new(platform, Some(input), Config::default(), error);
         let view = links.view;
         assert_eq!(view.borrow().title(), "Auto clicker: idle");
         let task = tokio::task::spawn_local(controller.run());
@@ -1025,3 +1040,5 @@ fn the_countdown_wakes_on_each_whole_second_and_then_the_deadline() {
     assert_eq!(next_second(deadline, deadline), deadline);
     assert_eq!(whole_seconds(Duration::ZERO), 0);
 }
+
+mod per_run;

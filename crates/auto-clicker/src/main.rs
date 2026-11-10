@@ -10,15 +10,16 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use auto_clicker_backend_kernel::KernelBackend;
-use auto_clicker_core::config::{Config, config_path};
-use auto_clicker_core::controller::{Controller, Links, Message};
-use auto_clicker_core::input::InputError;
+use auto_clicker_backend_portal::{PortalOutput, token_path};
+use auto_clicker_core::config::{Config, OutputRoute, config_path};
+use auto_clicker_core::controller::{Controller, Links, Message, Platform};
+use auto_clicker_core::input::{Input, InputError};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use instance::ClaimError;
-use platform::Kernel;
+use platform::{Kernel, Portal};
 
 /// Another daemon is running in this session. The user service does not
 /// restart on it.
@@ -43,7 +44,63 @@ fn main() -> ExitCode {
 
 /// Runs the daemon until Quit, SIGTERM or SIGINT.
 async fn daemon() -> ExitCode {
-    match start().await {
+    // Claimed first: a second daemon reads no config, opens no device and
+    // reads no keyboard.
+    let name = match claim_name().await {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    let (config, config_error) = load_config();
+    let bindings = config.hotkeys;
+    match config.input.output {
+        OutputRoute::Kernel => {
+            let input = match KernelBackend::open() {
+                Ok(input) => input,
+                Err(err) => {
+                    eprintln!("auto-clicker: {err}");
+                    return ExitCode::from(open_failure(&err));
+                }
+            };
+            let start = Start {
+                input: Some(input),
+                problem: None,
+                config,
+                config_error,
+            };
+            serve(Kernel { bindings }, start, name).await
+        }
+        OutputRoute::Portal => {
+            let output = PortalOutput::new(token_path());
+            // No dialog here: a session opens at each start. The check
+            // registers the app id and shows what is missing, if anything.
+            let problem = output.probe().await.err();
+            if let Some(problem) = &problem {
+                eprintln!("auto-clicker: {problem}");
+            }
+            let start = Start {
+                input: None,
+                problem,
+                config,
+                config_error,
+            };
+            serve(Portal { output, bindings }, start, name).await
+        }
+    }
+}
+
+/// What the controller starts with.
+struct Start<P: Platform> {
+    /// The devices, when they are kept between runs.
+    input: Option<Input<P::Backend>>,
+    /// What a check at start found wrong with the devices.
+    problem: Option<InputError>,
+    config: Config,
+    config_error: Option<String>,
+}
+
+/// Runs a controller on `platform` until it ends.
+async fn serve<P: Platform>(platform: P, start: Start<P>, name: instance::Claim) -> ExitCode {
+    match connect(platform, start, name).await {
         Ok(controller) => {
             controller.run().await;
             ExitCode::SUCCESS
@@ -53,19 +110,16 @@ async fn daemon() -> ExitCode {
 }
 
 /// Everything before the controller runs; the exit status when it fails.
-async fn start() -> Result<Controller<Kernel>, ExitCode> {
-    // Claimed first: a second daemon reads no config, opens no device and
-    // reads no keyboard.
-    let name = claim_name().await?;
-    let (config, config_error) = load_config();
-    let input = KernelBackend::open().map_err(|err| {
-        eprintln!("auto-clicker: {err}");
-        ExitCode::from(open_failure(&err))
-    })?;
-    let platform = Kernel {
-        bindings: config.hotkeys,
-    };
-    let (controller, links) = Controller::new(platform, input, config, config_error);
+async fn connect<P: Platform>(
+    platform: P,
+    start: Start<P>,
+    name: instance::Claim,
+) -> Result<Controller<P>, ExitCode> {
+    let (mut controller, links) =
+        Controller::new(platform, start.input, start.config, start.config_error);
+    if let Some(problem) = &start.problem {
+        controller.report_input_problem(problem);
+    }
     let Links {
         send,
         view: views,
@@ -116,11 +170,11 @@ fn load_config() -> (Config, Option<String>) {
     (loaded.config, error)
 }
 
-/// The exit status for devices that could not be opened at start.
+/// The exit status for kernel devices that could not be opened at start.
 fn open_failure(err: &InputError) -> u8 {
     match err {
         InputError::NoPermission(_) | InputError::UinputMissing(_) => EXIT_NO_UINPUT,
-        InputError::CreateDevice(_) | InputError::Write(_) => 1,
+        _ => 1,
     }
 }
 
