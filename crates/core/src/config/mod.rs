@@ -164,4 +164,6 @@ fn config_path_from(xdg_config_home: Option<OsString>, home: Option<OsString>) -
 #[cfg(test)]
 mod hotkey_tests;
 #[cfg(test)]
+mod input_tests;
+#[cfg(test)]
 mod tests;
