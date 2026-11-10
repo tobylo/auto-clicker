@@ -87,33 +87,56 @@ pub(crate) async fn run(
     let mut failed_in_a_row = 0u32;
     loop {
         let (end, bound) = one_session(desktop, &mut owners, &mut send).await;
-        failed_in_a_row = if bound {
-            0
-        } else {
-            failed_in_a_row.saturating_add(1)
-        };
+        failed_in_a_row = failures_after(failed_in_a_row, bound);
         let gave_up = failed_in_a_row >= MAX_FAILED_IN_A_ROW;
-        let why = match end {
-            End::Session(why) if gave_up => Some(why),
-            // Nothing is tried again before a portal service changes.
-            End::Session(why) => {
-                send(unavailable(why));
-                owner_change(owners.next().await)
-            }
-            End::Owner(change) => owner_change(change),
-        };
-        let Some(why) = why else {
-            return send(unavailable(
-                "the session bus can no longer be watched; restart auto-clicker".to_owned(),
-            ));
-        };
-        if gave_up {
-            return send(unavailable(format!(
-                "the desktop's shortcuts could not be bound in {MAX_FAILED_IN_A_ROW} tries \
-                 (the last: {why}); restart auto-clicker to try again"
-            )));
+        let why = reason(end, gave_up, &mut owners, &mut send).await;
+        let (report, done) = verdict(why, gave_up);
+        send(unavailable(report));
+        if done {
+            return;
         }
-        send(unavailable(why));
+    }
+}
+
+/// How many sessions in a row have failed to bind, after one more.
+fn failures_after(before: u32, bound: bool) -> u32 {
+    if bound { 0 } else { before.saturating_add(1) }
+}
+
+/// Why the next session is opened, once it may be: a session that ended by
+/// itself waits here for a portal service to change first, unless the
+/// reader has given up. `None` when the bus can no longer be watched.
+async fn reason(
+    end: End,
+    gave_up: bool,
+    owners: &mut (impl Stream<Item = bool> + Unpin),
+    send: &mut impl FnMut(HotkeyEvent),
+) -> Option<String> {
+    match end {
+        End::Session(why) if gave_up => Some(why),
+        End::Session(why) => {
+            send(unavailable(why));
+            owner_change(owners.next().await)
+        }
+        End::Owner(change) => owner_change(change),
+    }
+}
+
+/// What to report before the next session, and whether there is none.
+fn verdict(why: Option<String>, gave_up: bool) -> (String, bool) {
+    match why {
+        None => (
+            "the session bus can no longer be watched; restart auto-clicker".to_owned(),
+            true,
+        ),
+        Some(why) if gave_up => (
+            format!(
+                "the desktop's shortcuts could not be bound in {MAX_FAILED_IN_A_ROW} tries (the \
+                 last: {why}); restart auto-clicker to try again"
+            ),
+            true,
+        ),
+        Some(why) => (why, false),
     }
 }
 
