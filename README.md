@@ -16,7 +16,7 @@ Run `auto-clicker`. It stays in the system tray; a left or right click on its ic
 
 The hotkey (Ctrl+F6 by default) starts and stops clicking at once, without a countdown. A start waits until you let go of Ctrl, so the first click is a plain click and not Ctrl+click; if Ctrl is still held after 30 seconds, nothing starts and the tooltip says why.
 
-Clicking stops when the screen locks, another user's session comes to the front, or the computer goes to sleep, and it cannot start again until the session is back. The tooltip says what the clicker will do, and why it stopped or cannot start.
+Clicking stops when the screen locks, another user's session comes to the front, or the computer goes to sleep, and it cannot start again until the session is back. Before sleep, the program holds the computer back (for 2 seconds at most) until it has let go of every button and key it pressed, so nothing stays pressed while asleep. The tooltip says what the clicker will do, and why it stopped or cannot start.
 
 Only one copy runs per session: a second one prints "auto-clicker is already running" and exits. A running copy quits if it loses the session bus. It talks to the session and system buses through their Unix sockets only, and refuses to start when `DBUS_SESSION_BUS_ADDRESS` names anything else.
 

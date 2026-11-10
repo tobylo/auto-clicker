@@ -55,6 +55,23 @@ pub enum Message {
     /// logind asked the session to lock: stop now. The lock itself arrives
     /// as [`Message::Session`].
     LockRequested,
+    /// The machine is about to sleep; the n-th such notice. Stops clicking
+    /// and refuses starts like [`Blocked::Sleeping`], until a
+    /// [`Message::Session`] says otherwise. Once nothing is held any more,
+    /// the controller reports `n` on [`Links::released_for_sleep`], so the
+    /// sender can let the machine sleep.
+    Sleep(u64),
+}
+
+/// Where to reach a controller, and what it reports.
+pub struct Links {
+    /// Where to send it messages.
+    pub send: mpsc::UnboundedSender<Message>,
+    /// What it shows.
+    pub view: watch::Receiver<View>,
+    /// The last [`Message::Sleep`] it handled, reported once nothing was
+    /// held any more. Starts at 0.
+    pub released_for_sleep: watch::Receiver<u64>,
 }
 
 /// What the controller needs from the platform: its input devices and a
@@ -153,23 +170,23 @@ pub struct Controller<P: Platform> {
     /// Starts out unknown: a state not yet read is not "unlocked".
     blocked: Option<Blocked>,
     notice: Option<String>,
+    /// A [`Message::Sleep`] handled but not yet reported.
+    sleep_notice: Option<u64>,
+    released_for_sleep: watch::Sender<u64>,
     rng: fastrand::Rng,
 }
 
 impl<P: Platform> Controller<P> {
-    /// A controller over `input`, the devices opened at start; where to
-    /// send it messages; and the view it publishes.
+    /// A controller over `input`, the devices opened at start, and how to
+    /// reach it.
     pub fn new(
         platform: P,
         input: Input<P::Backend>,
         config: Config,
         config_error: Option<String>,
-    ) -> (
-        Controller<P>,
-        mpsc::UnboundedSender<Message>,
-        watch::Receiver<View>,
-    ) {
+    ) -> (Controller<P>, Links) {
         let (send, inbox) = mpsc::unbounded_channel();
+        let (released_for_sleep, sleep_reports) = watch::channel(0);
         let (view, shown) = watch::channel(View {
             activity: Activity::Idle,
             settings: config.clicker,
@@ -190,9 +207,16 @@ impl<P: Platform> Controller<P> {
             hotkey_status: None,
             blocked: Some(Blocked::Unknown("not read yet".to_owned())),
             notice: None,
+            sleep_notice: None,
+            released_for_sleep,
             rng: fastrand::Rng::new(),
         };
-        (controller, send, shown)
+        let links = Links {
+            send,
+            view: shown,
+            released_for_sleep: sleep_reports,
+        };
+        (controller, links)
     }
 
     /// Runs until [`Message::Quit`], or until every sender of the inbox is
@@ -207,6 +231,7 @@ impl<P: Platform> Controller<P> {
                 break;
             }
             self.finish_stopped_run().await;
+            self.report_sleep();
         }
         if let State::Clicking(running) = mem::replace(&mut self.state, State::Idle) {
             drop(running.shut_down().await);
@@ -240,6 +265,14 @@ impl<P: Platform> Controller<P> {
         }
     }
 
+    /// Reports a sleep notice once its stop is done: by now any run it
+    /// stopped has ended and let go of everything.
+    fn report_sleep(&mut self) {
+        if let Some(notice) = self.sleep_notice.take() {
+            self.released_for_sleep.send_replace(notice);
+        }
+    }
+
     /// A run told to stop ends at once (the engine's contract), so it is
     /// waited for right here: a stopped run never waits behind other work,
     /// and no other state sees a run that is still stopping.
@@ -269,6 +302,10 @@ impl<P: Platform> Controller<P> {
             Message::Stop => self.stop(None),
             Message::Session(blocked) => self.session(blocked),
             Message::LockRequested => self.stop(Some(format!("Stopped: {}", Blocked::Locked))),
+            Message::Sleep(notice) => {
+                self.session(Some(Blocked::Sleeping));
+                self.sleep_notice = Some(notice);
+            }
             Message::Quit => return false,
         }
         true

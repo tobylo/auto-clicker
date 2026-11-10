@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use auto_clicker_backend_kernel::KernelBackend;
 use auto_clicker_core::config::{Config, config_path};
-use auto_clicker_core::controller::{Controller, Message};
+use auto_clicker_core::controller::{Controller, Links, Message};
 use auto_clicker_core::input::InputError;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
@@ -65,7 +65,12 @@ async fn start() -> Result<Controller<Kernel>, ExitCode> {
     let platform = Kernel {
         bindings: config.hotkeys,
     };
-    let (controller, send, views) = Controller::new(platform, input, config, config_error);
+    let (controller, links) = Controller::new(platform, input, config, config_error);
+    let Links {
+        send,
+        view: views,
+        released_for_sleep,
+    } = links;
     forward_signals(send.clone())
         .map_err(|err| fail(&format!("could not watch for signals: {err}")))?;
     match timeout(BUS_TIMEOUT, tray::show(views, send.clone())).await {
@@ -73,7 +78,7 @@ async fn start() -> Result<Controller<Kernel>, ExitCode> {
         Ok(Err(err)) => return Err(fail(&format!("tray icon: {err}"))),
         Err(_) => return Err(fail("tray icon: the session bus did not answer")),
     }
-    tokio::spawn(session::watch(send.clone()));
+    tokio::spawn(session::watch(send.clone(), released_for_sleep));
     tokio::spawn(async move {
         name.lost().await;
         eprintln!("auto-clicker: lost the session bus name; quitting");

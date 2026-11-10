@@ -48,6 +48,10 @@ struct Record {
     steps: Vec<Step>,
     /// Every device call: the devices' id, the virtual time and the call.
     calls: Vec<(usize, Instant, Call)>,
+    /// The controller's sleep reports, and the last one reported when each
+    /// call was made: what a release came before.
+    sleep_reports: Option<watch::Receiver<u64>>,
+    reported_at_call: Vec<u64>,
     logs: Vec<FakeLog>,
     senders: Vec<HotkeySender>,
     failing_opens: usize,
@@ -134,7 +138,14 @@ impl fmt::Debug for Devices {
 impl Devices {
     fn note(&self, call: Call) {
         let (id, at) = (self.id, Instant::now());
-        self.shared.with(|r| r.calls.push((id, at, call)));
+        self.shared.with(|r| {
+            r.calls.push((id, at, call));
+            let reported = r
+                .sleep_reports
+                .as_ref()
+                .map_or(0, |reports| *reports.borrow());
+            r.reported_at_call.push(reported);
+        });
     }
 }
 
@@ -226,6 +237,7 @@ impl Platform for FakePlatform {
 
 struct Daemon {
     inbox: mpsc::UnboundedSender<Message>,
+    released_for_sleep: watch::Receiver<u64>,
     view: watch::Receiver<View>,
     shared: Shared,
     task: JoinHandle<()>,
@@ -246,10 +258,17 @@ fn config(mode: Mode) -> Config {
 async fn daemon_with(config: Config, shared: Shared, session_open: bool) -> Daemon {
     let input = shared.devices();
     let platform = FakePlatform(shared.clone());
-    let (controller, inbox, view) = Controller::new(platform, input, config, None);
+    let (controller, links) = Controller::new(platform, input, config, None);
+    let Links {
+        send: inbox,
+        view,
+        released_for_sleep,
+    } = links;
+    shared.with(|r| r.sleep_reports = Some(released_for_sleep.clone()));
     let task = tokio::task::spawn_local(controller.run());
     let daemon = Daemon {
         inbox,
+        released_for_sleep,
         view,
         shared,
         task,
@@ -710,6 +729,47 @@ async fn a_blocked_session_cancels_the_countdown() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_sleep_notice_is_reported_only_once_nothing_is_held() {
+    local(async {
+        let d = daemon(Mode::HoldButton).await;
+        d.start_by_hotkey().await;
+        let before = Instant::now();
+        d.send(Message::Sleep(7)).await;
+        assert_eq!(Instant::now(), before);
+        assert_eq!(*d.released_for_sleep.borrow(), 7);
+        // The release was written before the report.
+        assert_eq!(d.shared.calls(), [LEFT_DOWN, LEFT_UP]);
+        assert_eq!(d.shared.with(|r| r.reported_at_call.clone()), [0, 0]);
+        assert_eq!(d.activity(), Activity::Idle);
+        // Starts are refused until the session says otherwise.
+        d.send(Message::Start).await;
+        d.press_hotkey().await;
+        d.assert_idle_after(&[LEFT_DOWN, LEFT_UP]);
+        assert_eq!(d.notice(), format!("Not started: {}", Blocked::Sleeping));
+        d.send(Message::Session(None)).await;
+        d.start_by_hotkey().await;
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sleep_notice_while_idle_or_counting_down_is_reported_at_once() {
+    local(async {
+        let d = daemon(Mode::HoldButton).await;
+        d.send(Message::Sleep(1)).await;
+        assert_eq!(*d.released_for_sleep.borrow(), 1);
+        d.send(Message::Session(None)).await;
+        d.send(Message::Start).await;
+        d.send(Message::Sleep(2)).await;
+        assert_eq!(*d.released_for_sleep.borrow(), 2);
+        sleep(secs(10)).await;
+        d.settle().await;
+        d.assert_idle_after(&[]);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_lock_request_stops_clicking_but_does_not_block() {
     local(async {
         let d = daemon(Mode::HoldButton).await;
@@ -935,7 +995,8 @@ async fn the_view_shows_the_config_error_and_hotkey_problems() {
         let input = shared.devices();
         let error = Some("config.toml:3: bad".to_owned());
         let platform = FakePlatform(shared.clone());
-        let (controller, _inbox, view) = Controller::new(platform, input, Config::default(), error);
+        let (controller, links) = Controller::new(platform, input, Config::default(), error);
+        let view = links.view;
         assert_eq!(view.borrow().title(), "Auto clicker: idle");
         let task = tokio::task::spawn_local(controller.run());
         yield_now().await;

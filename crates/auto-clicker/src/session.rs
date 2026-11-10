@@ -13,12 +13,12 @@ use std::time::Duration;
 
 use auto_clicker_core::controller::{Blocked, Message, SessionFacts};
 use futures_util::StreamExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use zbus::fdo::{
     DBusProxy, NameOwnerChangedStream, PropertiesChanged, PropertiesChangedStream, PropertiesProxy,
 };
 use zbus::proxy::CacheProperties;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, Value};
+use zbus::zvariant::{ObjectPath, OwnedFd, OwnedObjectPath, Value};
 use zbus::{Connection, connection};
 
 const LOGIND: &str = "org.freedesktop.login1";
@@ -29,6 +29,9 @@ const USER_INTERFACE: &str = "org.freedesktop.login1.User";
 const SYSTEM_BUS: &str = "unix:path=/run/dbus/system_bus_socket";
 /// How long logind may take to answer any call.
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long sleep waits for the controller to let go of everything. logind
+/// waits for a delay lock 5 s at most by default (`InhibitDelayMaxSec`).
+const RELEASE_BEFORE_SLEEP: Duration = Duration::from_secs(2);
 
 #[zbus::proxy(
     interface = "org.freedesktop.login1.Manager",
@@ -44,6 +47,8 @@ trait Manager {
 
     #[zbus(name = "GetUserByPID")]
     fn get_user_by_pid(&self, pid: u32) -> zbus::Result<OwnedObjectPath>;
+
+    fn inhibit(&self, what: &str, who: &str, why: &str, mode: &str) -> zbus::Result<OwnedFd>;
 }
 
 #[zbus::proxy(
@@ -74,8 +79,14 @@ trait Session {
 /// the controller is gone. When logind cannot be followed, says why and
 /// stops: the controller then refuses to start, since a state it cannot read
 /// is not "unlocked".
-pub async fn watch(send: mpsc::UnboundedSender<Message>) {
-    if let Err(err) = watch_logind(&send).await {
+///
+/// While the machine is awake it holds a sleep delay lock. When logind
+/// announces sleep, it tells the controller, waits (at most
+/// `RELEASE_BEFORE_SLEEP`) until the controller reports on `released` that
+/// nothing is held, and only then gives the lock back, so the machine never
+/// sleeps with a button or key down.
+pub async fn watch(send: mpsc::UnboundedSender<Message>, released: watch::Receiver<u64>) {
+    if let Err(err) = watch_logind(&send, released).await {
         let reason = format!("logind: {err}");
         let _ = send.send(Message::Session(Some(Blocked::Unknown(reason))));
     }
@@ -109,10 +120,17 @@ enum End {
 /// restarting, a call that failed, a session it could not read), starts are
 /// refused with the reason until logind next changes owner, and then it is
 /// followed afresh. Nothing is retried on a timer.
-async fn watch_logind(send: &mpsc::UnboundedSender<Message>) -> zbus::Result<()> {
+async fn watch_logind(
+    send: &mpsc::UnboundedSender<Message>,
+    released: watch::Receiver<u64>,
+) -> zbus::Result<()> {
     let (bus, mut owners) = bounded("connecting", connect()).await?;
     loop {
-        let (reason, back) = match follow_once(&bus, send, &mut owners).await {
+        let reach = Reach {
+            send,
+            released: released.clone(),
+        };
+        let (reason, back) = match follow_once(&bus, reach, &mut owners).await {
             Ok(End::ControllerGone) => return Ok(()),
             Ok(End::LogindGone { back }) => ("logind is restarting".to_owned(), back),
             Err(err) => (format!("logind: {err}"), false),
@@ -154,10 +172,10 @@ async fn bounded<T>(what: &str, step: impl Future<Output = zbus::Result<T>>) -> 
 /// Subscribes to one logind instance and follows it.
 async fn follow_once(
     bus: &Connection,
-    send: &mpsc::UnboundedSender<Message>,
+    reach: Reach<'_>,
     owners: &mut NameOwnerChangedStream,
 ) -> zbus::Result<End> {
-    bounded("subscribing", Logind::subscribe(bus, send))
+    bounded("subscribing", Logind::subscribe(bus, reach))
         .await?
         .follow(owners)
         .await
@@ -184,10 +202,20 @@ struct SessionStreams {
     properties: PropertiesChangedStream,
 }
 
+/// How the watcher reaches the controller: where to send, and its reports
+/// of letting go before sleep.
+struct Reach<'a> {
+    send: &'a mpsc::UnboundedSender<Message>,
+    released: watch::Receiver<u64>,
+}
+
 /// Everything subscribed to on one logind instance.
 struct Logind<'a> {
     bus: Connection,
-    send: &'a mpsc::UnboundedSender<Message>,
+    manager: ManagerProxy<'static>,
+    reach: Reach<'a>,
+    /// The sleep delay lock, held while the machine is awake.
+    sleep_lock: Option<OwnedFd>,
     facts: SessionFacts,
     sleeps: PrepareForSleepStream,
     /// The user's properties: `Display` changes.
@@ -200,10 +228,7 @@ impl<'a> Logind<'a> {
     /// Subscribes to everything, then reads the current state and tells the
     /// controller. Signals are subscribed to before the state is read, so
     /// none is missed in between.
-    async fn subscribe(
-        bus: &Connection,
-        send: &'a mpsc::UnboundedSender<Message>,
-    ) -> zbus::Result<Logind<'a>> {
+    async fn subscribe(bus: &Connection, reach: Reach<'a>) -> zbus::Result<Logind<'a>> {
         let manager = ManagerProxy::builder(bus)
             .cache_properties(CacheProperties::No)
             .build()
@@ -223,9 +248,17 @@ impl<'a> Logind<'a> {
             .display()
             .await?
             .1;
+        // Taken before the state is told, so no run starts unprotected.
+        let sleep_lock = if facts.sleeping {
+            None
+        } else {
+            take_sleep_lock(&manager).await
+        };
         let mut logind = Logind {
             bus: bus.clone(),
-            send,
+            manager,
+            reach,
+            sleep_lock,
             facts,
             sleeps,
             user,
@@ -277,6 +310,11 @@ impl<'a> Logind<'a> {
                 };
                 let told = match step(&mut self.facts, &path, change) {
                     Step::Tell(message) => self.tell(message),
+                    Step::Sleep => self.prepare_for_sleep().await,
+                    Step::Woke(message) => {
+                        self.sleep_lock = take_sleep_lock(&self.manager).await;
+                        self.tell(message)
+                    }
                     Step::Switch(path) => {
                         bounded("switching sessions", self.switch_to(path)).await?
                     }
@@ -322,9 +360,42 @@ impl<'a> Logind<'a> {
         }
     }
 
+    /// Tells the controller the machine is about to sleep, waits until it
+    /// has let go of everything (or `RELEASE_BEFORE_SLEEP` passed), and lets
+    /// the machine sleep. `false` when the controller is gone.
+    async fn prepare_for_sleep(&mut self) -> bool {
+        let notice = self.reach.released.borrow().saturating_add(1);
+        if !self.tell(Message::Sleep(notice)) {
+            return false;
+        }
+        let released = self.reach.released.wait_for(|reported| *reported >= notice);
+        if tokio::time::timeout(RELEASE_BEFORE_SLEEP, released)
+            .await
+            .is_err()
+        {
+            eprintln!("auto-clicker: the controller did not report before sleep");
+        }
+        self.sleep_lock = None;
+        true
+    }
+
     /// Sends `message`; `false` when the controller is gone.
     fn tell(&self, message: Message) -> bool {
-        self.send.send(message).is_ok()
+        self.reach.send.send(message).is_ok()
+    }
+}
+
+/// A sleep delay lock: logind waits for it to be given back before sleep.
+/// Without one (logind refused), sleep only stops clicking as it starts.
+async fn take_sleep_lock(manager: &ManagerProxy<'static>) -> Option<OwnedFd> {
+    let why = "Lets go of every pressed button and key before sleep";
+    let lock = manager.inhibit("sleep", "auto-clicker", why, "delay");
+    match bounded("taking the sleep lock", lock).await {
+        Ok(lock) => Some(lock),
+        Err(err) => {
+            eprintln!("auto-clicker: no sleep delay lock: {err}");
+            None
+        }
     }
 }
 
@@ -418,6 +489,10 @@ fn leave_session(facts: &mut SessionFacts) -> Message {
 #[derive(Debug, PartialEq)]
 enum Step {
     Tell(Message),
+    /// The machine is about to sleep.
+    Sleep,
+    /// The machine woke: take the sleep lock again, then tell this.
+    Woke(Message),
     /// The user's display session is another one now: follow it instead.
     Switch(OwnedObjectPath),
     LogindGone {
@@ -433,7 +508,14 @@ fn step(facts: &mut SessionFacts, path: &OwnedObjectPath, change: Change) -> Ste
         Change::Display(new) => return Step::Switch(new),
         Change::LogindGone { back } => return Step::LogindGone { back },
         Change::LockRequested => return Step::Tell(Message::LockRequested),
-        Change::Sleep(sleeping) => facts.sleeping = sleeping,
+        Change::Sleep(true) => {
+            facts.sleeping = true;
+            return Step::Sleep;
+        }
+        Change::Sleep(false) => {
+            facts.sleeping = false;
+            return Step::Woke(Message::Session(facts.blocked()));
+        }
         Change::Locked(locked) => facts.locked = locked,
         Change::Active(active) => facts.active = active,
     }
@@ -467,8 +549,9 @@ mod tests {
         let mut tell = |change| step(&mut facts, &here, change);
         let session = |blocked| Step::Tell(Message::Session(blocked));
         assert_eq!(tell(Change::Locked(true)), session(Some(Blocked::Locked)));
-        assert_eq!(tell(Change::Sleep(true)), session(Some(Blocked::Sleeping)));
-        assert_eq!(tell(Change::Sleep(false)), session(Some(Blocked::Locked)));
+        assert_eq!(tell(Change::Sleep(true)), Step::Sleep);
+        let woke = Step::Woke(Message::Session(Some(Blocked::Locked)));
+        assert_eq!(tell(Change::Sleep(false)), woke);
         assert_eq!(tell(Change::Locked(false)), session(None));
         assert_eq!(
             tell(Change::Active(false)),
@@ -494,7 +577,7 @@ mod tests {
         let resumed = step(&mut facts, &no_session(), Change::Sleep(false));
         assert_eq!(
             resumed,
-            Step::Tell(Message::Session(Some(Blocked::Inactive)))
+            Step::Woke(Message::Session(Some(Blocked::Inactive)))
         );
     }
 
