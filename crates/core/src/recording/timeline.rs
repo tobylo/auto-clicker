@@ -161,8 +161,26 @@ impl Timeline {
             self.window = Window::AfterEvent;
             return;
         }
-        let index = self.boundaries.partition_point(|&other| other <= at);
-        self.boundaries.insert(index, at);
+        // A boundary already queued with the same pending positions before
+        // and after it does what both would, so at most one more boundary
+        // waits than positions do. The earlier time is kept.
+        let after = self.pending.partition_point(|event| event.at <= at);
+        let low = after
+            .checked_sub(1)
+            .and_then(|index| self.pending.get(index))
+            .map(|event| event.at);
+        let high = self.pending.get(after).map(|event| event.at);
+        let same = self
+            .boundaries
+            .iter_mut()
+            .find(|b| low.is_none_or(|low| low <= **b) && high.is_none_or(|high| **b < high));
+        match same {
+            Some(same) => *same = (*same).min(at),
+            None => {
+                let index = self.boundaries.partition_point(|&other| other <= at);
+                self.boundaries.insert(index, at);
+            }
+        }
     }
 
     /// A position stamped `at`. It waits until its place is final.
@@ -277,5 +295,41 @@ impl Timeline {
         let index = self.events.partition_point(|other| other.at <= event.at);
         self.events.insert(index, event);
         self.positioned = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boundaries_wait_no_more_than_positions_do() {
+        let mut timeline = Timeline::new(u64::MAX);
+        // Wheel turns that sum to nothing write no input event, so nothing
+        // places what waits.
+        for at in 1..=10_000 {
+            timeline.event_read(at);
+        }
+        assert_eq!(timeline.boundaries.len(), 1);
+        timeline.position(20_000, Point { x: 1, y: 1 });
+        timeline.position(20_500, Point { x: 2, y: 1 });
+        for at in 10_001..=30_000 {
+            timeline.event_read(at);
+        }
+        assert_eq!((timeline.pending.len(), timeline.boundaries.len()), (2, 3));
+        // The earliest of each stretch is kept; the one at 1 µs was applied
+        // when the reports placed what came 20 ms before them.
+        assert_eq!(timeline.boundaries, [10_001, 20_000, 20_500]);
+    }
+
+    #[test]
+    fn a_boundary_at_a_positions_time_comes_after_it() {
+        let mut timeline = Timeline::new(u64::MAX);
+        timeline.position(5_000, Point { x: 1, y: 1 });
+        // Read from two mice out of order: one after the position, one
+        // before it.
+        timeline.event_read(5_000);
+        timeline.event_read(4_000);
+        assert_eq!(timeline.boundaries, [4_000, 5_000]);
     }
 }

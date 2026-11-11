@@ -190,7 +190,8 @@ async fn a_layout_change_stops_a_playback_using_positions_at_once() {
             d.set_layout(now);
             d.send(Message::LayoutChanged).await;
             d.settle().await;
-            // Well before W would come up by itself, at 500 ms.
+            // Stopped within a few polls, with the paused clock not moved:
+            // well before W would come up by itself, at 500 ms.
             assert!(asked.elapsed() < HELD_FOR / 10, "{:?}", asked.elapsed());
             assert_eq!((d.activity(), d.notice()), (Activity::Idle, why.to_owned()));
             assert_eq!(d.shared.calls().last(), Some(&w(PressState::Up)));
@@ -274,6 +275,28 @@ async fn a_recording_that_fills_up_stops_and_saves_at_once() {
             "{}",
             d.notice()
         );
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_wake_left_from_a_full_recording_does_not_stop_the_next() {
+    local(async {
+        let d = daemon(Mode::Click).await;
+        d.record_hotkey().await;
+        d.shared.feed(|recorder| {
+            let full = std::mem::replace(recorder, recorder_stub()).with_budget(0);
+            *recorder = full;
+            // The second turn writes the first, which does not fit.
+            recorder.wheel(ms(1), 1);
+            recorder.wheel(ms(5), 1);
+            assert!(recorder.is_full());
+        });
+        // Stopped and started again before the controller sees the wake.
+        d.shared.hotkey(HotkeyEvent::Fired(Action::ToggleRecording));
+        d.shared.hotkey(HotkeyEvent::Fired(Action::ToggleRecording));
+        d.settle().await;
+        assert_eq!(d.activity(), Activity::Recording);
     })
     .await;
 }
