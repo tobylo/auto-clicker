@@ -8,7 +8,7 @@ fn save(id: u64) -> Request {
         ask: Ask::Save {
             settings: Draft::from(&Config::default()),
             replace: false,
-            without_modifier: true,
+            without_modifier: vec![Action::ToggleClicking],
         },
     }
 }
@@ -57,7 +57,7 @@ fn every_answer_reads_back_as_sent() {
         Outcome::Failed("disk full".to_owned()),
         Outcome::Confirm(Confirm::Replace(Stale::Changed)),
         Outcome::Confirm(Confirm::Replace(Stale::Unusable)),
-        Outcome::Confirm(Confirm::WithoutModifier(Action::ToggleRecording)),
+        Outcome::Confirm(Confirm::WithoutModifier(vec![Action::ToggleRecording])),
     ];
     for outcome in outcomes {
         let answer = Answer { id: 1, outcome };

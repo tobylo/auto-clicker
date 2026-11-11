@@ -28,7 +28,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
             .map(|device| device.id)
             .collect();
         for id in open {
-            self.read_state(id, super::Read::Again);
+            self.read_state(id);
         }
         self.registry.forget_not_wanted();
         // Devices it opens are read as they are added.

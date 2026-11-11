@@ -68,7 +68,7 @@ impl Window {
 #[derive(Default)]
 struct Agreed {
     replace: bool,
-    without_modifier: bool,
+    without_modifier: Vec<Action>,
 }
 
 fn save(settings: Draft, agreed: Agreed) -> Ask {
@@ -81,8 +81,16 @@ fn save(settings: Draft, agreed: Agreed) -> Ask {
 
 const REPLACE: Agreed = Agreed {
     replace: true,
-    without_modifier: false,
+    without_modifier: Vec::new(),
 };
+
+/// Agreement to these actions' hotkeys without a modifier.
+fn plain_keys(actions: &[Action]) -> Agreed {
+    Agreed {
+        replace: false,
+        without_modifier: actions.to_vec(),
+    }
+}
 
 /// A controller with a config file and a settings window open.
 struct Setup {
@@ -391,29 +399,30 @@ async fn without_a_config_file_a_save_fails_and_says_why() {
 // Hotkeys
 
 #[tokio::test(start_paused = true)]
-async fn a_hotkey_without_a_modifier_needs_the_users_word_once() {
+async fn each_new_hotkey_without_a_modifier_needs_the_users_word_once() {
     local(async {
         let mut s = setup().await;
-        let plain = draft(|d| d.hotkeys.toggle_recording = "F13".to_owned());
+        let plain = draft(|d| {
+            d.hotkeys.toggle_recording = "F13".to_owned();
+            d.hotkeys.toggle_playback = "F14".to_owned();
+        });
+        let (recording, playback) = (Action::ToggleRecording, Action::TogglePlayback);
         assert_eq!(
             s.window.save(&s.d, plain.clone()).await,
-            Outcome::Confirm(Confirm::WithoutModifier(Action::ToggleRecording))
+            Outcome::Confirm(Confirm::WithoutModifier(vec![recording, playback]))
+        );
+        // Agreeing to one is not agreeing to the other.
+        let one = s
+            .window
+            .ask(&s.d, save(plain.clone(), plain_keys(&[recording])))
+            .await;
+        assert_eq!(
+            one,
+            Outcome::Confirm(Confirm::WithoutModifier(vec![playback]))
         );
         assert!(!s.path.exists());
-        let outcome = s
-            .window
-            .ask(
-                &s.d,
-                save(
-                    plain.clone(),
-                    Agreed {
-                        replace: false,
-                        without_modifier: true,
-                    },
-                ),
-            )
-            .await;
-        assert_eq!(outcome, Outcome::Saved);
+        let both = save(plain.clone(), plain_keys(&[recording, playback]));
+        assert_eq!(s.window.ask(&s.d, both).await, Outcome::Saved);
         // Saved already: another change does not ask again.
         let mut more = plain;
         hold_right(&mut more);

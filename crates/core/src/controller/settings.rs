@@ -116,7 +116,7 @@ impl<P: Platform> Controller<P> {
                         settings,
                         replace,
                         without_modifier,
-                    } => self.save_settings(&settings, replace, without_modifier),
+                    } => self.save_settings(&settings, replace, &without_modifier),
                 };
                 let outcome = outcome.bounded();
                 self.settings.answer = Some(Answer { id, outcome });
@@ -124,7 +124,12 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    fn save_settings(&mut self, draft: &Draft, replace: bool, without_modifier: bool) -> Outcome {
+    fn save_settings(
+        &mut self,
+        draft: &Draft,
+        replace: bool,
+        without_modifier: &[Action],
+    ) -> Outcome {
         if !self.settled() {
             return Outcome::Busy;
         }
@@ -132,8 +137,9 @@ impl<P: Platform> Controller<P> {
             Ok(config) => config,
             Err(refusal) => return Outcome::Refused(refusal),
         };
-        if !without_modifier && let Some(action) = self.new_without_modifier(&config.hotkeys) {
-            return Outcome::Confirm(Confirm::WithoutModifier(action));
+        let unagreed = self.new_without_modifier(&config.hotkeys, without_modifier);
+        if !unagreed.is_empty() {
+            return Outcome::Confirm(Confirm::WithoutModifier(unagreed));
         }
         let outcome = match self.settings.file.save(&config, replace) {
             Ok(Saved::Synced) => Outcome::Saved,
@@ -182,17 +188,20 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    /// The first action whose binding has no modifier and is not saved
-    /// already: one the user has not agreed to yet.
-    fn new_without_modifier(&self, bindings: &Bindings) -> Option<Action> {
+    /// Every action whose binding has no modifier, is not saved already and
+    /// is not among those the user `agreed` to.
+    fn new_without_modifier(&self, bindings: &Bindings, agreed: &[Action]) -> Vec<Action> {
         let saved = &self.settings.saved.hotkeys;
         bindings
             .actions()
             .into_iter()
-            .find_map(|(action, binding)| {
-                (binding.modifiers() == Modifiers::NONE && saved.binding(action) != binding)
-                    .then_some(action)
+            .filter(|&(action, binding)| {
+                binding.modifiers() == Modifiers::NONE
+                    && saved.binding(action) != binding
+                    && !agreed.contains(&action)
             })
+            .map(|(action, _)| action)
+            .collect()
     }
 
     /// Takes a saved config into use: the clicker, playback and tray

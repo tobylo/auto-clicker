@@ -51,8 +51,9 @@ pub enum Ask {
         /// Replace a file that changed since the daemon read it, or that
         /// could not be used: the user agreed.
         replace: bool,
-        /// Hotkeys without a modifier are what the user wants: they agreed.
-        without_modifier: bool,
+        /// The actions whose hotkey without a modifier the user agreed to,
+        /// as a [`Confirm::WithoutModifier`] named them.
+        without_modifier: Vec<Action>,
     },
 }
 
@@ -115,14 +116,14 @@ pub enum Outcome {
 }
 
 /// What a save needs the user's word on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Confirm {
     /// The file changed since it was read, or could not be used.
     Replace(Stale),
-    /// This action's hotkey has no modifier, so it fires on a plain key
-    /// press, in a game too.
-    WithoutModifier(Action),
+    /// These actions' new hotkeys have no modifier, so they fire on a plain
+    /// key press, in a game too. Each needs the user's word.
+    WithoutModifier(Vec<Action>),
 }
 
 impl Outcome {

@@ -88,16 +88,6 @@ pub struct Matcher {
 /// them.
 pub(super) const MODIFIER_CODES: [u16; 8] = [29, 97, 42, 54, 56, 100, 125, 126];
 
-/// The modifier keys `held` says are down, one bit per key code in
-/// [`MODIFIER_CODES`].
-fn held_modifiers(held: &impl Fn(u16) -> bool) -> u8 {
-    MODIFIER_CODES
-        .iter()
-        .enumerate()
-        .filter(|&(_, &code)| held(code))
-        .fold(0, |keys, (index, _)| keys | 1 << index)
-}
-
 fn modifier_bit(code: u16) -> Option<u8> {
     MODIFIER_CODES
         .iter()
@@ -152,23 +142,15 @@ impl Matcher {
     }
 
     /// Replaces what a device holds with what it reports holding `now`,
-    /// after its events were lost, or as a recording starts and the events
-    /// it had queued are dropped.
+    /// after its events were lost.
     pub fn resync(&mut self, device: DeviceId, held: impl Fn(u16) -> bool, now: Duration) {
+        let keys = MODIFIER_CODES
+            .iter()
+            .enumerate()
+            .filter(|&(_, &code)| held(code))
+            .fold(0, |keys, (index, _)| keys | 1 << index);
         self.unread.retain(|unread| *unread != device);
         self.cutoff = self.cutoff.max(now);
-        self.update(device, |_| held_modifiers(&held));
-    }
-
-    /// Takes what a device holds `now`, as it is opened. None of its events
-    /// were read before, so a press queued on another device was matched
-    /// against none of them: only a modifier it holds, which may have gone
-    /// down after that press, keeps older presses from firing.
-    pub fn opened(&mut self, device: DeviceId, held: impl Fn(u16) -> bool, now: Duration) {
-        let keys = held_modifiers(&held);
-        if keys != 0 {
-            self.cutoff = self.cutoff.max(now);
-        }
         self.update(device, |_| keys);
     }
 
