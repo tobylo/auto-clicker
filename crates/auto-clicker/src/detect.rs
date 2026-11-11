@@ -65,10 +65,7 @@ impl Detected {
                 Output::Kernel(_) => Route::Kernel,
                 Output::Portal(_) => Route::Portal,
             },
-            hotkeys: match self.hotkeys {
-                InputReader::Devices => Route::Kernel,
-                InputReader::Desktop => Route::Portal,
-            },
+            hotkeys: self.hotkeys.into(),
         }
     }
 }
