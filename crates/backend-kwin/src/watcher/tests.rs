@@ -1207,3 +1207,24 @@ async fn an_unload_whose_tries_the_layout_spent_is_tried_again_once_kwin_answers
     })
     .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_report_lost_during_the_last_try_does_not_add_another() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.kwin.with(|s| s.refused = Some(LAYOUT));
+        h.start(inbox).await;
+        for wait in &BACK_OFF[..BACK_OFF.len() - 1] {
+            after(*wait).await;
+        }
+        // The last try never answers, and a layout report is lost meanwhile.
+        h.kwin.with(|s| s.hanging = true);
+        after(BACK_OFF[BACK_OFF.len() - 1]).await;
+        h.receiver.layout_dropped.notify_one();
+        settle().await;
+        h.calls();
+        after(crate::scripting::CALL_TIMEOUT).await;
+        assert_eq!(h.calls(), []);
+    })
+    .await;
+}

@@ -312,10 +312,11 @@ impl<S: Scripting + 'static> Watcher<S> {
                         self.layout_token = None;
                         self.set_layout(None);
                         // A script directory that failed its check stays
-                        // failed: no load is tried until the next start.
-                        if self.session.dir.is_ok() && self.back_off() {
-                            self.layout_due = Due::AfterBackOff;
-                        }
+                        // failed: no load is tried until the next start. The
+                        // failure decides, over a reload a lost report asked
+                        // for while this load was in flight.
+                        let retried = self.session.dir.is_ok() && self.back_off();
+                        self.layout_due = if retried { Due::AfterBackOff } else { Due::No };
                     }
                     Script::Position => self.position_token = None,
                 }
