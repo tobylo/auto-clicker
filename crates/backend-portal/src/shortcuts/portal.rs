@@ -9,19 +9,21 @@
 use std::future::{Future, ready};
 use std::time::Duration;
 
+use ashpd::ActivationToken;
 use ashpd::PortalError;
 use ashpd::desktop::global_shortcuts::{
-    Activated, BindShortcutsOptions, Deactivated, GlobalShortcuts, NewShortcut, Shortcut,
-    ShortcutsChanged,
+    Activated, BindShortcutsOptions, ConfigureShortcutsOptions, Deactivated, GlobalShortcuts,
+    NewShortcut, Shortcut, ShortcutsChanged,
 };
 use ashpd::desktop::{CreateSessionOptions, ResponseError, Session};
+use auto_clicker_core::controller::ReaderCommands;
 use auto_clicker_core::hotkeys::{Action, Binding, Bindings, HotkeyEvent, Modifier};
 use auto_clicker_core::input::InputError;
 use futures_util::{Stream, StreamExt, stream};
 use tokio::time::timeout;
 
 use super::Desktop;
-use super::reactor::{Listed, Signal, bound_triggers, id_of, serve};
+use super::reactor::{Listed, Served, Signal, bound_triggers, id_of, serve};
 use crate::session::{APP_ID, CALL_TIMEOUT, DIALOG_TIMEOUT, Portal};
 
 /// The longest list of shortcuts a signal may carry.
@@ -45,24 +47,54 @@ impl PortalShortcuts {
 }
 
 impl Desktop for PortalShortcuts {
-    async fn session(&mut self, send: &mut dyn FnMut(HotkeyEvent)) -> String {
+    async fn session(
+        &mut self,
+        send: &mut dyn FnMut(HotkeyEvent),
+        commands: &mut ReaderCommands,
+    ) -> String {
         match bind(self.bindings).await {
             Ok(bound) => {
                 let triggers = bound_triggers(&bound.listed);
+                let (proxy, session) = (&bound.proxy, &bound.session);
+                let served = Served {
+                    signals: bound.signals,
+                    commands,
+                    configure: async |token| configure(proxy, session, token).await,
+                };
                 // The session lives on the connection `bound` holds.
-                serve(triggers, bound.signals, send).await
+                serve(triggers, served, send).await
             }
             Err(why) => why,
         }
     }
 }
 
-/// A bound session: what the bind answered, and the session's signals.
+/// A bound session: what the bind answered, the session's signals, and
+/// the session itself with the proxy it was made through.
 struct Bound<S> {
     listed: Vec<Listed>,
     signals: S,
-    _session: Session<GlobalShortcuts>,
+    proxy: GlobalShortcuts,
+    session: Session<GlobalShortcuts>,
     _portal: Portal,
+}
+
+/// Opens the desktop's settings for the session's shortcuts
+/// (`ConfigureShortcuts`, version 2 of the portal), raised with
+/// `activation_token` if there is one.
+async fn configure(
+    proxy: &GlobalShortcuts,
+    session: &Session<GlobalShortcuts>,
+    activation_token: Option<String>,
+) -> Result<(), String> {
+    let options = ConfigureShortcutsOptions::default()
+        .set_activation_token(activation_token.map(ActivationToken::from));
+    within(
+        "ConfigureShortcuts",
+        proxy.configure_shortcuts(session, None, options),
+    )
+    .await?
+    .map_err(|err| failed("ConfigureShortcuts", &err))
 }
 
 /// Opens a session on a new connection and binds the three shortcuts.
@@ -129,7 +161,8 @@ async fn bind(bindings: Bindings) -> Result<Bound<impl Stream<Item = Signal>>, S
     Ok(Bound {
         listed: answer.shortcuts().iter().map(listed).collect(),
         signals,
-        _session: session,
+        proxy,
+        session,
         _portal: portal,
     })
 }

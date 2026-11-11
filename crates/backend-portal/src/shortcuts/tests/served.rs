@@ -214,3 +214,32 @@ async fn a_session_ends_when_closed_unreadable_or_cut_off_and_says_which() {
     })
     .await;
 }
+
+fn configure(token: Option<&str>) -> ReaderCommand {
+    ReaderCommand::ConfigureShortcuts {
+        activation_token: token.map(str::to_owned),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_bound_session_opens_the_desktops_settings_and_says_how_it_went() {
+    local(async {
+        let s = Served::start().await;
+        s.commands.send(configure(Some("token-1"))).unwrap();
+        settle().await;
+        assert_eq!(s.take(), [HotkeyEvent::Configured(Ok(()))]);
+        *s.configured.borrow_mut() = Err("refused".to_owned());
+        s.commands.send(configure(None)).unwrap();
+        settle().await;
+        assert_eq!(
+            s.take(),
+            [HotkeyEvent::Configured(Err("refused".to_owned()))]
+        );
+        let tokens = s.tokens.borrow().clone();
+        assert_eq!(tokens, [Some("token-1".to_owned()), None]);
+        // Hotkeys go on as before.
+        s.press(CLICKING).await;
+        assert_eq!(s.take(), [fired(Action::ToggleClicking)]);
+    })
+    .await;
+}

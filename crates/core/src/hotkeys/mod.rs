@@ -6,9 +6,11 @@
 //! [`HotkeyEvent`]s; nothing here changes the program's mode.
 //!
 //! Key events are only matched, never stored or shown: [`KeyEvent`] has no
-//! `Debug` or `Display`, and no [`HotkeyEvent`] carries a key.
+//! `Debug` or `Display`, and no [`HotkeyEvent`] carries a key but what a
+//! capture the user started got, which becomes a binding once saved.
 
 mod binding;
+mod capture;
 mod matcher;
 mod trigger;
 
@@ -17,6 +19,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 pub use binding::{Binding, Modifier, Modifiers};
+pub use capture::{Capture, Captured};
 pub use matcher::{DeviceId, KeyEvent, Matcher, Reaction};
 pub use trigger::{DESKTOP_RELEASE_PAUSE, Refusal, Trigger, Triggers};
 
@@ -109,6 +112,10 @@ pub enum HotkeyEvent {
     /// The triggers the desktop reports, from a reader that gets its hotkeys
     /// from the desktop: after it bound them, and whenever one changes.
     Triggers(Triggers),
+    /// What a reader started to capture got: once, then nothing more.
+    Captured(Captured),
+    /// The desktop's shortcut settings were opened (`Ok`), or why not.
+    Configured(Result<(), String>),
 }
 
 /// Whether hotkeys can be read: from a keyboard, or from the desktop.

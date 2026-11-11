@@ -64,6 +64,8 @@ pub(crate) struct Role {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Wanted<'a> {
     pub(crate) bindings: &'a Bindings,
+    /// A capture runs: every keyboard counts as one with a hotkey key.
+    pub(crate) capture: bool,
     /// A recording runs: recordable devices are wanted too.
     pub(crate) recording: bool,
 }
@@ -131,23 +133,24 @@ fn classify(file: File, paths: &Paths, own: &[PathBuf], wanted: Wanted<'_>) -> i
         return Ok(Node::Ours);
     }
     let device = RawDevice::from_fd(file.into())?;
-    let Some(role) = decide(capabilities(&device, wanted.bindings), wanted.recording) else {
+    let Some(role) = decide(capabilities(&device, wanted), wanted.recording) else {
         return Ok(Node::NotWanted);
     };
     use_monotonic_clock(device.as_fd())?;
     Ok(Node::Device(Box::new(device.into_event_stream()?), role))
 }
 
-fn capabilities(device: &RawDevice, bindings: &Bindings) -> Capabilities {
+fn capabilities(device: &RawDevice, wanted: Wanted<'_>) -> Capabilities {
     let Some(keys) = device.supported_keys() else {
         return Capabilities::default();
     };
     let has = |code| keys.contains(KeyCode(code));
     let relative = device.supported_relative_axes();
     let has_axis = |axis| relative.is_some_and(|axes| axes.contains(axis));
+    let any_key = Key::CODES.into_iter().any(has);
     Capabilities {
-        hotkey_keys: bindings.wants_device(has),
-        keys: Key::CODES.into_iter().any(has),
+        hotkey_keys: wanted.bindings.wants_device(has) || (wanted.capture && any_key),
+        keys: any_key,
         mouse: has(BTN_LEFT)
             && has_axis(RelativeAxisCode::REL_X)
             && has_axis(RelativeAxisCode::REL_Y),

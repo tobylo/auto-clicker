@@ -12,12 +12,10 @@ use auto_clicker_backend_kernel::{
 use auto_clicker_backend_portal::{PortalBackend, PortalOutput, read_shortcuts};
 use auto_clicker_core::config::HotkeyRoute;
 use auto_clicker_core::controller::{
-    HotkeyReader, HotkeySender, InputLifetime, InputLoss, InputReader, OpenInput, Platform,
-    ReadInput,
+    HotkeyReader, InputLifetime, InputLoss, InputReader, OpenInput, Platform, ReadInput,
 };
-use auto_clicker_core::hotkeys::Bindings;
 use auto_clicker_core::input::Input;
-use auto_clicker_core::recording::{LocalTime, RecordingFeed, recordings_dir};
+use auto_clicker_core::recording::{LocalTime, recordings_dir};
 
 /// Where hotkeys come from, on either output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,21 +32,25 @@ impl Hotkeys {
     }
 
     /// Starts the reader of this route. Only the keyboard reader has
-    /// devices of the program's `own` to leave out and a recording to feed;
-    /// the desktop's is asked for the bindings at its first bind.
+    /// devices of the program's `own` to leave out, a recording to feed and
+    /// keys to capture; the desktop's is asked for the bindings at its first
+    /// bind, and opens the desktop's settings when the controller asks.
     fn read(self, own: Vec<DeviceIdentity>, reading: ReadInput) -> HotkeyReader {
-        let ReadInput {
-            bindings,
-            send,
-            feed,
-        } = reading;
         match self.route {
-            HotkeyRoute::Kernel => evdev_reader(bindings, own, send, feed),
+            HotkeyRoute::Kernel => evdev_reader(own, reading),
             // The controller stops the reader by dropping it, which closes
             // the desktop's session.
-            HotkeyRoute::Portal => Box::pin(read_shortcuts(bindings, move |event| {
-                send.send(event);
-            })),
+            HotkeyRoute::Portal => {
+                let ReadInput {
+                    bindings,
+                    send,
+                    commands,
+                    ..
+                } = reading;
+                Box::pin(read_shortcuts(bindings, commands, move |event| {
+                    send.send(event);
+                }))
+            }
         }
     }
 }
@@ -142,18 +144,22 @@ impl Platform for Portal {
     }
 }
 
-/// The evdev input reader, ignoring the devices `own`.
-fn evdev_reader(
-    bindings: Bindings,
-    own: Vec<DeviceIdentity>,
-    send: HotkeySender,
-    feed: RecordingFeed,
-) -> HotkeyReader {
+/// The evdev input reader, ignoring the devices `own`. It has nothing to
+/// open in the desktop, so it takes no command.
+fn evdev_reader(own: Vec<DeviceIdentity>, reading: ReadInput) -> HotkeyReader {
+    let ReadInput {
+        bindings,
+        send,
+        feed,
+        capture,
+        ..
+    } = reading;
     // The controller stops the reader by dropping it, so it needs no
     // shutdown signal of its own.
     Box::pin(async move {
         let sources = InputSources {
             bindings,
+            capture,
             own: &own,
             feed,
         };

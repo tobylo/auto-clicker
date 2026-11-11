@@ -646,3 +646,5 @@ fn what_the_controller_gets_names_no_key() {
     }
     assert!(!shown.chars().any(|c| c.is_ascii_digit()), "{shown}");
 }
+
+mod capture;
