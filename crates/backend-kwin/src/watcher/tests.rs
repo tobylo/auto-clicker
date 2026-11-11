@@ -62,6 +62,8 @@ struct State {
     failing_unloads: usize,
     /// Every call from now on never answers.
     hanging: bool,
+    /// KWin refuses to load this plugin.
+    refused: Option<&'static str>,
     /// What a script reports as it runs; nothing when `None`.
     screens: Option<&'static str>,
     pointer: &'static str,
@@ -148,6 +150,9 @@ impl Scripting for FakeKwin {
     async fn load(&self, _owner: &str, path: &Path, script: Script) -> Result<i32, CallError> {
         self.call(Load(script.plugin())).await?;
         self.with(|s| {
+            if s.refused == Some(script.plugin()) {
+                return Ok(-1);
+            }
             s.loaded.push((script.plugin(), path.to_path_buf()));
             Ok(i32::try_from(s.loaded.len() - 1).unwrap())
         })
@@ -670,6 +675,23 @@ async fn a_call_that_never_answers_ends_at_its_deadline() {
         settle().await;
         // The sweep gave up; the layout load is the next call.
         assert_eq!(h.calls(), [Unload(LAYOUT)]);
+        assert_eq!(h.layout(), None);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn without_a_layout_script_a_recordings_layout_is_not_kept() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.kwin.with(|s| s.refused = Some(LAYOUT));
+        h.start(inbox).await;
+        assert_eq!(h.layout(), None);
+        // The position script reports the layout, but nothing would see it
+        // change once the recording ends: it is not taken.
+        h.record().await;
+        assert_eq!(h.layout(), None);
+        assert!(h.stop().await.is_empty());
         assert_eq!(h.layout(), None);
     })
     .await;

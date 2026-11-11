@@ -230,7 +230,7 @@ impl<S: Scripting + 'static> Watcher<S> {
                 self.feed
                     .with(|recorder| recorder.position(time, point, current.as_ref()));
             }
-            Body::Layout(layout) if self.is_current(&token) => self.set_layout(layout),
+            Body::Layout(layout) if self.takes_layout_from(&token) => self.set_layout(layout),
             Body::Position(_) | Body::Layout(_) => {}
         }
     }
@@ -299,10 +299,15 @@ impl<S: Scripting + 'static> Watcher<S> {
         Box::pin(async move { Done::Loaded(script, session.load(&owner, script, &token).await) })
     }
 
-    fn is_current(&self, token: &Token) -> bool {
-        [&self.layout_token, &self.position_token]
-            .into_iter()
-            .any(|current| current.as_ref() == Some(token))
+    /// Whether a layout report with `token` is taken: from the layout
+    /// script, or from the position script while a layout script runs. A
+    /// layout only the position script reported would stay after the
+    /// recording with nothing to see it change.
+    fn takes_layout_from(&self, token: &Token) -> bool {
+        let Some(layout) = &self.layout_token else {
+            return false;
+        };
+        token == layout || self.position_token.as_ref() == Some(token)
     }
 
     /// Tells the receiver whom to accept calls from now.
