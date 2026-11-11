@@ -20,8 +20,9 @@
 //! than it. So a position waits ("pending") until its place among the input
 //! events is final, and the rules are applied in time order. A position's
 //! place is final once an input event at or after its time is written,
-//! since no input event goes before that one; or once a report
-//! [`SETTLE_US`] later arrives, which bounds how many wait. An input event
+//! since no input event goes before that one; or once a report, a press,
+//! a release or a wheel turn [`SETTLE_US`] later is read, which bounds how
+//! many positions and wheel turns wait. An input event
 //! read later than that still goes in time order, but the positions around
 //! it may already have been merged.
 
@@ -161,26 +162,9 @@ impl Timeline {
             self.window = Window::AfterEvent;
             return;
         }
-        // A boundary already queued with the same pending positions before
-        // and after it does what both would, so at most one more boundary
-        // waits than positions do. The earlier time is kept.
-        let after = self.pending.partition_point(|event| event.at <= at);
-        let low = after
-            .checked_sub(1)
-            .and_then(|index| self.pending.get(index))
-            .map(|event| event.at);
-        let high = self.pending.get(after).map(|event| event.at);
-        let same = self
-            .boundaries
-            .iter_mut()
-            .find(|b| low.is_none_or(|low| low <= **b) && high.is_none_or(|high| **b < high));
-        match same {
-            Some(same) => *same = (*same).min(at),
-            None => {
-                let index = self.boundaries.partition_point(|&other| other <= at);
-                self.boundaries.insert(index, at);
-            }
-        }
+        let index = self.boundaries.partition_point(|&other| other <= at);
+        self.boundaries.insert(index, at);
+        self.settle(at.saturating_sub(SETTLE_US));
     }
 
     /// A position stamped `at`. It waits until its place is final.
@@ -303,23 +287,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn boundaries_wait_no_more_than_positions_do() {
+    fn wheel_turns_wait_twenty_milliseconds_at_most() {
         let mut timeline = Timeline::new(u64::MAX);
-        // Wheel turns that sum to nothing write no input event, so nothing
-        // places what waits.
-        for at in 1..=10_000 {
-            timeline.event_read(at);
+        // Wheel turns that sum to nothing write no input event, so only
+        // later turns place what waits.
+        for n in 0..10_000 {
+            timeline.event_read(n * 100);
         }
-        assert_eq!(timeline.boundaries.len(), 1);
-        timeline.position(20_000, Point { x: 1, y: 1 });
-        timeline.position(20_500, Point { x: 2, y: 1 });
-        for at in 10_001..=30_000 {
-            timeline.event_read(at);
-        }
-        assert_eq!((timeline.pending.len(), timeline.boundaries.len()), (2, 3));
-        // The earliest of each stretch is kept; the one at 1 µs was applied
-        // when the reports placed what came 20 ms before them.
-        assert_eq!(timeline.boundaries, [10_001, 20_000, 20_500]);
+        // Those at most 20 ms before the last one still wait.
+        assert_eq!(timeline.boundaries.len(), 200);
+        assert_eq!(timeline.boundaries.front(), Some(&(1_000_000 - SETTLE_US)));
     }
 
     #[test]
