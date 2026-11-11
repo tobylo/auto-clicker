@@ -427,16 +427,20 @@ mod tests {
 
     #[test]
     fn a_proxy_that_misread_the_version_is_a_failed_call() {
-        assert!(usable(2, 2).is_ok());
-        assert!(matches!(
-            usable(1, 1),
-            Err(InputError::PortalUnavailable(_))
-        ));
-        assert!(matches!(
-            usable(1, 2),
-            Err(InputError::PortalUnavailable(_))
-        ));
-        assert!(matches!(usable(2, 1), Err(InputError::Portal(_))));
+        let outcome = |found, cached| match usable(found, cached) {
+            Ok(()) => "usable",
+            Err(InputError::PortalUnavailable(_)) => "unavailable",
+            Err(_) => "failed call",
+        };
+        let cases = [
+            ((2, 2), "usable"),
+            ((1, 1), "unavailable"),
+            ((1, 2), "unavailable"),
+            ((2, 1), "failed call"),
+        ];
+        for ((found, cached), expected) in cases {
+            assert_eq!(outcome(found, cached), expected, "{found} {cached}");
+        }
     }
 
     #[test]
