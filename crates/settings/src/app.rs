@@ -62,9 +62,11 @@ impl App {
     pub fn update(&mut self, update: Update) {
         match update {
             Update::View(view) => self.view(&view),
+            // Shows the window if it is hidden. On Wayland a window cannot
+            // bring itself forward or out of the minimised state: that needs
+            // an activation token from the tray's click, which neither the
+            // menu nor Slint's Wayland-only build can pass on yet.
             Update::Raise => {
-                // Best effort: KWin may leave the window where it is.
-                self.window.window().set_minimized(false);
                 let _ = self.window.show();
             }
         }
