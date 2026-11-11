@@ -722,3 +722,12 @@ fn reports_at_one_time_keep_their_order() {
     // the third replaces.
     assert_eq!(positions, [(2_000, at(1, 0)), (2_100, at(3, 0))]);
 }
+
+#[test]
+fn motion_by_nothing_does_not_move_the_first_position() {
+    let mut recorder = positioned();
+    recorder.motion(t(500), 0, 0);
+    report(&mut recorder, 1_000, 10, 20);
+    click(&mut recorder, [2_000, 3_000]);
+    assert_eq!(events_at(recorder, t(4_000))[0], (0, at(10, 20)));
+}

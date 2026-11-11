@@ -255,7 +255,8 @@ impl Recorder {
 
     /// Relative pointer motion at `time`.
     pub fn motion(&mut self, time: Duration, dx: i32, dy: i32) {
-        if let Some(at) = self.offset(time) {
+        let moved = dx != 0 || dy != 0;
+        if let Some(at) = self.offset(time).filter(|_| moved) {
             self.timeline.motion_read(at);
         }
         self.add(

@@ -132,7 +132,8 @@ impl Timeline {
     /// Removes the written event at `index` (a hotkey's modifier).
     pub(super) fn remove(&mut self, index: usize) {
         if index < self.events.len() {
-            self.events.remove(index);
+            let removed = self.events.remove(index);
+            self.bytes = self.bytes.saturating_sub(event_bytes(removed.change));
         }
     }
 
@@ -158,7 +159,12 @@ impl Timeline {
     pub(super) fn event_read(&mut self, at: u64) {
         let at = at.max(self.last_input_at);
         if at <= self.settled_to {
-            self.window = Window::AfterEvent;
+            // Read more than 20 ms late: it ends the millisecond only if no
+            // later position opened one since.
+            self.window = match self.window {
+                Window::Open { at: open, .. } if open > at => self.window,
+                _ => Window::AfterEvent,
+            };
             return;
         }
         // Turns at one time do what one would, so at most one waits per
@@ -309,6 +315,29 @@ mod tests {
         // Those at most 20 ms before the last one still wait.
         assert_eq!(timeline.boundaries.len(), 200);
         assert_eq!(timeline.boundaries.front(), Some(&(1_000_000 - SETTLE_US)));
+    }
+
+    #[test]
+    fn a_turn_read_too_late_leaves_a_newer_millisecond_open() {
+        let mut timeline = Timeline::new(u64::MAX);
+        timeline.motion_read(0);
+        timeline.position(100_000, Point { x: 1, y: 1 });
+        // Places the position at 100 ms, which opens its millisecond.
+        timeline.position(120_000, Point { x: 2, y: 1 });
+        timeline.event_read(80_000);
+        assert!(matches!(timeline.window, Window::Open { at: 100_000, .. }));
+        timeline.event_read(100_000);
+        assert_eq!(timeline.window, Window::AfterEvent);
+    }
+
+    #[test]
+    fn a_removed_event_frees_its_bytes() {
+        let mut timeline = Timeline::new(u64::MAX);
+        let press = Change::Press(crate::input::Held::Key(crate::input::Key::new(29).unwrap()));
+        timeline.input(0, press);
+        assert_eq!(timeline.bytes, event_bytes(press));
+        timeline.remove(0);
+        assert_eq!(timeline.bytes, 0);
     }
 
     #[test]
