@@ -423,6 +423,30 @@ fn a_press_older_than_a_read_after_lost_events_never_fires() {
 }
 
 #[test]
+fn a_keyboard_opened_holding_nothing_lets_an_older_press_fire() {
+    // B's Ctrl+F6 is queued while A is plugged in and read: A holds
+    // nothing, so nothing B's press is matched against changed.
+    let sent = run(&[
+        at(300, down(B, LEFTCTRL)),
+        Step::Read(A, &[], 500),
+        at(450, down(B, F6)),
+    ]);
+    assert_eq!(sent, [Fired(Action::ToggleClicking)]);
+}
+
+#[test]
+fn a_keyboard_opened_holding_a_modifier_blocks_an_older_press() {
+    // A is read holding Ctrl at 500; B's F6 from 450 may have come before
+    // that Ctrl went down.
+    let sent = run(&[
+        Step::Read(A, &[LEFTCTRL], 500),
+        at(450, down(B, F6)),
+        down(B, F6),
+    ]);
+    assert_eq!(sent, [Fired(Action::ToggleClicking)]);
+}
+
+#[test]
 fn a_press_older_than_an_unplug_never_fires() {
     // Ctrl+Shift+F6 pressed; B, holding Shift, is unplugged before A's F6
     // is read.
