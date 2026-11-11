@@ -14,8 +14,10 @@
 //! is open the desktop shows that remote input is active. When the session
 //! ends, the compositor releases whatever its devices still held.
 
+mod answer;
 mod eis;
 mod layout;
+mod offered;
 mod session;
 mod shortcuts;
 mod token;
@@ -34,6 +36,7 @@ use auto_clicker_core::input::{
 use reis::ei;
 use reis::event::DeviceCapability;
 
+pub use offered::shortcuts_offered;
 pub use session::APP_ID;
 pub use shortcuts::read_shortcuts;
 pub use token::token_path;

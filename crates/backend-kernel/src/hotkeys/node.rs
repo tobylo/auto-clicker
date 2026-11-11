@@ -295,7 +295,8 @@ mod tests {
                 role(true, false),
                 role(true, false),
             ),
-            // A tablet, a joystick: nothing to read.
+            // A tablet, a joystick, a gamepad: nothing to read, even when
+            // its node is readable and the keyboard's is not.
             (caps(false, false, false, false), None, None),
         ];
         for (caps, idle, recording) in cases {
