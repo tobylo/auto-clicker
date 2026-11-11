@@ -111,6 +111,8 @@ impl Platform for PerRunPlatform {
 
     const LIFETIME: InputLifetime = InputLifetime::PerRun;
 
+    const OUTPUT: Route = Route::Portal;
+
     fn open_input(&mut self) -> OpenInput<Closing> {
         let (gate, decided) = oneshot::channel();
         self.0.gates(|g| g.open = Some(gate));
@@ -141,17 +143,12 @@ impl Platform for PerRunPlatform {
         })
     }
 
-    fn read_input(
-        &mut self,
-        own: Option<&Input<Closing>>,
-        send: HotkeySender,
-        feed: RecordingFeed,
-    ) -> HotkeyReader {
+    fn read_input(&mut self, own: Option<&Input<Closing>>, reading: ReadInput) -> HotkeyReader {
         assert!(
             own.is_none(),
             "per-run devices are never shown to the reader"
         );
-        self.fake().read_input(None, send, feed)
+        self.fake().read_input(None, reading)
     }
 
     fn event_clock(&self) -> Duration {
@@ -197,6 +194,40 @@ pub(super) async fn per_run_daemon(mode: Mode) -> (Daemon, PerRunShared) {
     };
     d.send(Message::Session(None)).await;
     (d, shared)
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_view_names_the_route_each_platform_takes() {
+    local(async {
+        let (portal, _gates) = per_run_daemon(Mode::Click).await;
+        let kernel = daemon(Mode::Click).await;
+        let routes = |output, hotkeys| Routes { output, hotkeys };
+        assert_eq!(portal.view().routes, routes(Route::Portal, Route::Kernel));
+        assert_eq!(kernel.view().routes, routes(Route::Kernel, Route::Kernel));
+    })
+    .await;
+}
+
+/// As on the kept devices: quitting releases what the run's devices hold,
+/// then closes them, which on the portal ends the desktop's session. The
+/// input guard keeps the order.
+#[tokio::test(start_paused = true)]
+async fn quitting_releases_everything_before_the_runs_devices_close() {
+    local(async {
+        let (d, gates) = per_run_daemon(Mode::HoldButton).await;
+        d.send(Message::Start).await;
+        gates.finish_open(Ok(()));
+        d.settle().await;
+        assert_eq!(d.shared.calls(), [LEFT_DOWN]);
+        let before = Instant::now();
+        d.inbox.send(Message::Quit).unwrap();
+        timeout(secs(1), d.task).await.unwrap().unwrap();
+        assert_eq!(Instant::now(), before, "no time passed");
+        assert_eq!(d.shared.calls(), [LEFT_DOWN, LEFT_UP]);
+        assert_eq!(d.shared.closed(), [(0, 2)]);
+        assert_eq!(gates.gates(|g| g.closed), 1);
+    })
+    .await;
 }
 
 #[tokio::test(start_paused = true)]

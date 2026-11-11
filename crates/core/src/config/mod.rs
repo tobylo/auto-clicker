@@ -24,27 +24,41 @@
 //! toggle_playback = "Ctrl+Shift+F8"
 //!
 //! [input]
-//! output = "kernel"             # kernel (/dev/uinput) or portal (the desktop's
-//!                               # remote input portal, which asks once)
-//! hotkeys = "kernel"            # kernel (reads the keyboards) or portal (the
-//!                               # desktop's shortcuts, which asks once)
+//! output = "auto"               # auto, kernel (/dev/uinput) or portal (the
+//!                               # desktop's remote input portal, which asks once)
+//! hotkeys = "auto"              # auto, kernel (reads the keyboards) or portal
+//!                               # (the desktop's shortcuts, which asks once)
+//!                               # auto: kernel where the program has access
 //!
 //! [playback]
 //! speed = 1.0                   # 0.25 to 4 times the recorded speed
 //! repeat = 1                    # a number of plays, or "until_stopped"
 //! ```
 
+pub(crate) mod check;
+mod draft;
 mod error;
+mod file;
 mod hotkeys;
+mod names;
 mod raw;
 mod read;
 mod validate;
+mod write;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub use draft::{
+    ClickerDraft, CountDraft, Draft, Field, HotkeysDraft, InputDraft, IntervalDraft, PlaybackDraft,
+    PositionDraft, Refusal, spell_interval,
+};
 pub use error::{ConfigError, Problem};
+use file::Seen;
+pub use file::{ConfigFile, SaveError, Saved, Stale};
+pub use names::{ButtonName, ModeName, RouteName};
+pub use write::render;
 
 use crate::clicker::ClickerSettings;
 use crate::hotkeys::Bindings;
@@ -77,19 +91,34 @@ pub struct InputSettings {
 /// The route hotkeys take to the program.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HotkeyRoute {
-    /// The keyboards, read from `/dev/input`, which needs the `input` group.
+    /// The keyboards where the program may read one at start, else the
+    /// desktop's shortcuts where the desktop offers them.
     #[default]
+    Auto,
+    /// The keyboards, read from `/dev/input`, which needs the `input` group.
     Kernel,
     /// The desktop's GlobalShortcuts portal. The desktop asks the user once,
     /// and its settings choose the keys from then on.
     Portal,
 }
 
+impl HotkeyRoute {
+    /// Whether the program may end up matching the hotkeys itself, from the
+    /// keyboards: on the kernel route, and on the automatic one, which may
+    /// pick it.
+    pub fn may_read_keyboards(self) -> bool {
+        self != HotkeyRoute::Portal
+    }
+}
+
 /// The route clicks and keys take to the desktop.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OutputRoute {
-    /// Virtual devices through `/dev/uinput`.
+    /// `/dev/uinput` where the program may open it at start, else the
+    /// desktop's remote input portal where the desktop offers it.
     #[default]
+    Auto,
+    /// Virtual devices through `/dev/uinput`.
     Kernel,
     /// The desktop's RemoteDesktop portal and libei. The desktop asks the
     /// user once.
@@ -108,12 +137,13 @@ impl Default for Config {
     }
 }
 
-/// The result of loading the config: always a config to run on, and the
-/// error, if the file could not be used.
+/// The result of loading the config: always a config to run on, the error,
+/// if the file could not be used, and the file as it was read, for saving.
 #[derive(Debug)]
 pub struct Loaded {
     pub config: Config,
     pub error: Option<ConfigError>,
+    pub file: ConfigFile,
 }
 
 impl Config {
@@ -128,26 +158,31 @@ impl Config {
 
     /// Loads the file at `path`. Never writes to it.
     pub fn load(path: &Path) -> Loaded {
-        let parsed = read::read_config(path).and_then(|bytes| bytes.map(parse_bytes).transpose());
+        let parsed = read::read_config(path).and_then(|bytes| match bytes {
+            None => Ok((Config::default(), Seen::Missing)),
+            Some(bytes) => parse_bytes(&bytes).map(|config| (config, Seen::Text(bytes))),
+        });
         match parsed {
-            Ok(config) => Loaded {
-                config: config.unwrap_or_default(),
+            Ok((config, seen)) => Loaded {
+                config,
                 error: None,
+                file: ConfigFile::new(path, seen),
             },
             Err(problem) => Loaded {
                 config: Config::default(),
                 error: Some(ConfigError::new(path, problem)),
+                file: ConfigFile::new(path, Seen::Unusable),
             },
         }
     }
 }
 
-fn parse_bytes(bytes: Vec<u8>) -> Result<Config, Problem> {
-    let text = String::from_utf8(bytes).map_err(|_| Problem::Invalid {
+fn parse_bytes(bytes: &[u8]) -> Result<Config, Problem> {
+    let text = std::str::from_utf8(bytes).map_err(|_| Problem::Invalid {
         line: None,
         reason: "the file is not UTF-8 text".to_owned(),
     })?;
-    Config::parse(&text)
+    Config::parse(text)
 }
 
 /// Where the config file is: `$XDG_CONFIG_HOME/auto-clicker/config.toml`, or
@@ -168,6 +203,8 @@ fn config_path_from(xdg_config_home: Option<OsString>, home: Option<OsString>) -
         .map(|dir| dir.join("auto-clicker").join("config.toml"))
 }
 
+#[cfg(test)]
+mod file_tests;
 #[cfg(test)]
 mod hotkey_tests;
 #[cfg(test)]

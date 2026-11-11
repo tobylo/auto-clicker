@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use toml::Spanned;
 
+use super::check;
 use super::raw::{RawClicker, RawConfig, RawPlayback};
-use super::{Config, InputSettings, MAX_TRAY_START_DELAY};
-use crate::clicker::{ClickerSettings, INTERVAL_MAX, Interval, JITTER_MAX_PERCENT, Jitter, Mode};
+use super::{Config, InputSettings};
+use crate::clicker::{ClickerSettings, Interval, Mode};
 use crate::playback::{PlaybackSettings, Speed};
 
 /// The version of the file format this program reads.
@@ -66,30 +67,11 @@ fn playback(raw: &RawPlayback, defaults: PlaybackSettings) -> Result<PlaybackSet
 }
 
 fn speed(value: &Spanned<f64>) -> Result<Speed, Invalid> {
-    Speed::from_ratio(*value.get_ref()).ok_or_else(|| {
-        at(
-            value,
-            format!(
-                "speed must be from {} to {}",
-                Speed::SLOWEST,
-                Speed::FASTEST
-            ),
-        )
-    })
+    check::speed(*value.get_ref()).map_err(|reason| at(value, reason))
 }
 
 fn tray_start_delay(delay: &Spanned<i64>) -> Result<Duration, Invalid> {
-    let max = MAX_TRAY_START_DELAY.as_secs();
-    u64::try_from(*delay.get_ref())
-        .ok()
-        .filter(|seconds| *seconds <= max)
-        .map(Duration::from_secs)
-        .ok_or_else(|| {
-            at(
-                delay,
-                format!("tray_start_delay must be from 0 to {max} seconds"),
-            )
-        })
+    check::tray_start_delay(*delay.get_ref()).map_err(|reason| at(delay, reason))
 }
 
 fn clicker(raw: RawClicker, defaults: ClickerSettings) -> Result<ClickerSettings, Invalid> {
@@ -98,7 +80,9 @@ fn clicker(raw: RawClicker, defaults: ClickerSettings) -> Result<ClickerSettings
         mode,
         interval: interval(&raw, mode)?.unwrap_or(defaults.interval),
         jitter: match &raw.jitter_percent {
-            Some(jitter) => jitter_percent(jitter)?,
+            Some(jitter) => {
+                check::jitter_percent(*jitter.get_ref()).map_err(|reason| at(jitter, reason))?
+            }
             None => defaults.jitter,
         },
         button: raw.button.map_or(defaults.button, Into::into),
@@ -116,81 +100,12 @@ fn interval(raw: &RawClicker, mode: Mode) -> Result<Option<Interval>, Invalid> {
             rate,
             "set either interval_ms or clicks_per_second, not both".to_owned(),
         )),
-        (Some(ms), None) => interval_ms(ms, mode).map(Some),
-        (None, Some(rate)) => clicks_per_second(rate, mode).map(Some),
+        (Some(ms), None) => check::interval_ms(*ms.get_ref(), mode)
+            .map(Some)
+            .map_err(|reason| at(ms, reason)),
+        (None, Some(rate)) => check::clicks_per_second(*rate.get_ref(), mode)
+            .map(Some)
+            .map_err(|reason| at(rate, reason)),
         (None, None) => Ok(None),
     }
-}
-
-fn interval_ms(value: &Spanned<i64>, mode: Mode) -> Result<Interval, Invalid> {
-    let ms = *value.get_ref();
-    let (floor, max) = bounds_ms(mode);
-    let interval = u64::try_from(ms)
-        .ok()
-        .and_then(|ms| for_mode_interval(Duration::from_millis(ms), mode));
-    interval.ok_or_else(|| {
-        at(
-            value,
-            format!(
-                "interval_ms must be from {floor} to {max}{}",
-                for_mode(mode)
-            ),
-        )
-    })
-}
-
-fn clicks_per_second(value: &Spanned<f64>, mode: Mode) -> Result<Interval, Invalid> {
-    let rate = *value.get_ref();
-    let (floor, max) = bounds_ms(mode);
-    // A zero, negative or NaN rate gives an interval that is infinite,
-    // negative or NaN, which `try_from_secs_f64` rejects; an infinite rate
-    // gives zero, which is below the floor.
-    let interval = Duration::try_from_secs_f64(1.0 / rate)
-        .ok()
-        .and_then(|interval| for_mode_interval(interval, mode));
-    interval.ok_or_else(|| {
-        // Shown rounded: the exact limits are 1000/floor and 1000/max.
-        let most = 1000.0 / floor as f64;
-        let least = 1000.0 / max as f64;
-        at(
-            value,
-            format!(
-                "clicks_per_second must be from {least:.6} to {most}{}",
-                for_mode(mode)
-            ),
-        )
-    })
-}
-
-/// `interval` when `mode` may run at it: not below the mode's floor, nor
-/// outside the range every interval has.
-fn for_mode_interval(interval: Duration, mode: Mode) -> Option<Interval> {
-    Some(interval)
-        .filter(|interval| *interval >= mode.interval_floor())
-        .and_then(Interval::new)
-}
-
-/// The shortest and longest interval for `mode`, in whole milliseconds.
-fn bounds_ms(mode: Mode) -> (u64, u64) {
-    let ms = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
-    (ms(mode.interval_floor()), ms(INTERVAL_MAX))
-}
-
-fn for_mode(mode: Mode) -> &'static str {
-    match mode {
-        Mode::DoubleClick => " for a double click, which fits two clicks in each interval",
-        _ => "",
-    }
-}
-
-fn jitter_percent(value: &Spanned<i64>) -> Result<Jitter, Invalid> {
-    u8::try_from(*value.get_ref())
-        .ok()
-        .and_then(Jitter::new)
-        .ok_or_else(|| {
-            at(
-                value,
-                format!("jitter_percent must be from 0 to {JITTER_MAX_PERCENT}"),
-            )
-        })
 }
