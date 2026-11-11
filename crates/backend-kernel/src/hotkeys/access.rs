@@ -7,6 +7,7 @@ use auto_clicker_core::hotkeys::{Bindings, HotkeyStatus, Unavailable};
 use auto_clicker_core::recording::RecordingSlot;
 
 use super::node::Paths;
+use super::watch::Watch;
 use super::{Reader, Setup, own_paths};
 use crate::DeviceIdentity;
 
@@ -26,8 +27,14 @@ pub fn keyboard_access(bindings: Bindings, own: &[DeviceIdentity]) -> HotkeyStat
     look(Paths::system(), bindings, own_paths(own))
 }
 
-/// [`keyboard_access`] on the nodes in `paths`.
+/// [`keyboard_access`] on the nodes in `paths`. It starts a watch on the
+/// directory as the reader does, so a watch the reader could not start
+/// either (no inotify instance left) counts as [`Unavailable::WatchFailed`].
 pub(super) fn look(paths: Paths, bindings: Bindings, own: Vec<PathBuf>) -> HotkeyStatus {
+    let _watch = match Watch::new(&paths.dev) {
+        Ok(watch) => watch,
+        Err(err) => return HotkeyStatus::Unavailable(Unavailable::WatchFailed(err.to_string())),
+    };
     let setup = Setup {
         bindings,
         own,
