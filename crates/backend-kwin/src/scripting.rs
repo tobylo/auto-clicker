@@ -28,7 +28,6 @@ pub(crate) const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 
 const SCRIPTING_PATH: &str = "/Scripting";
 const SCRIPTING: &str = "org.kde.kwin.Scripting";
-const SCRIPT: &str = "org.kde.kwin.Script";
 
 /// Why a call failed, as the log says it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,8 +61,16 @@ pub(crate) trait Scripting {
     /// Loads the file at `path` under `script`'s plugin name; its id.
     async fn load(&self, owner: &str, path: &Path, script: Script) -> Result<i32, CallError>;
 
-    /// Runs the loaded script `id`. KWin answers once the script has run.
-    async fn run(&self, owner: &str, id: i32) -> Result<(), CallError>;
+    /// Starts every loaded script that is not running: the one just loaded
+    /// among them. Not `run` on the id `load` gave: KWin numbers a script
+    /// by how many are loaded, so after an unload the id can be one a
+    /// running script holds, and its `/Scripting/Script<id>` then runs that
+    /// one again while the new script never runs (KWin 6.8.2,
+    /// `src/scripting/scripting.cpp:815`). `start` also brings KWin's own
+    /// packaged scripts in line with its config, as System Settings does
+    /// when applied, and answers before the script has run; it reports
+    /// under its token when it does.
+    async fn start(&self, owner: &str) -> Result<(), CallError>;
 }
 
 /// `call`, failing when it takes longer than [`CALL_TIMEOUT`].
@@ -172,14 +179,8 @@ impl Scripting for Bus {
             .await
     }
 
-    async fn run(&self, owner: &str, id: i32) -> Result<(), CallError> {
-        let path = format!("{SCRIPTING_PATH}/Script{id}");
-        let target = Target {
-            owner,
-            path: &path,
-            interface: SCRIPT,
-        };
-        self.call(target, "run", &()).await
+    async fn start(&self, owner: &str) -> Result<(), CallError> {
+        self.call(Target::scripting(owner), "start", &()).await
     }
 }
 

@@ -2,7 +2,7 @@
 //! calls are trusted from, and the current layout.
 //!
 //! Loading a script is: unload its plugin name, remove that script's files,
-//! write a new file, load it and run it. An unload that fails ends the load
+//! write a new file, load it and start it. An unload that fails ends the load
 //! there (KWin refuses a name that is still loaded) and is tried again
 //! before the next load and at exit, so a failure is never forgotten. A
 //! script's files stay until it is unloaded, and the start sweeps any a
@@ -49,7 +49,7 @@ impl<S: Scripting> Session<S> {
                 script.plugin()
             )));
         }
-        bounded(self.scripting.run(owner, id)).await
+        bounded(self.scripting.start(owner)).await
     }
 
     /// Unloads `script` and removes its files.

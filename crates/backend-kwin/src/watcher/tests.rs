@@ -62,8 +62,8 @@ struct State {
     failing_unloads: usize,
     /// Every call from now on never answers.
     hanging: bool,
-    /// `run` never answers, once the script has run and reported.
-    hanging_run: bool,
+    /// `start` never answers, once the script has run and reported.
+    hanging_start: bool,
     /// KWin refuses to load this plugin.
     refused: Option<&'static str>,
     /// What a script reports as it runs; nothing when `None`.
@@ -71,6 +71,8 @@ struct State {
     pointer: &'static str,
     /// The scripts loaded, by id: plugin and file.
     loaded: Vec<(&'static str, PathBuf)>,
+    /// How many of `loaded` have been started.
+    started: usize,
     /// The token each run script carried, by plugin, newest last.
     tokens: Vec<(&'static str, Token)>,
     receiver: Option<Rc<Receiver>>,
@@ -95,7 +97,7 @@ impl FakeKwin {
         Ok(())
     }
 
-    /// The script reports as it runs, before KWin answers `run`.
+    /// The script reports as it runs, before KWin answers `start`.
     fn script_runs(&self, plugin: &'static str, path: &PathBuf) {
         let source = fs::read_to_string(path).unwrap();
         let token = source.split('"').nth(1).unwrap().to_owned();
@@ -160,11 +162,18 @@ impl Scripting for FakeKwin {
         })
     }
 
-    async fn run(&self, _owner: &str, id: i32) -> Result<(), CallError> {
-        let (plugin, path) = self.with(|s| s.loaded[usize::try_from(id).unwrap()].clone());
-        self.call(Run(plugin)).await?;
-        self.script_runs(plugin, &path);
-        if self.with(|s| s.hanging_run) {
+    /// Starts what was loaded since the last start, as KWin does.
+    async fn start(&self, _owner: &str) -> Result<(), CallError> {
+        let new = self.with(|s| {
+            let new = s.loaded[s.started..].to_vec();
+            s.started = s.loaded.len();
+            new
+        });
+        for (plugin, path) in new {
+            self.call(Run(plugin)).await?;
+            self.script_runs(plugin, &path);
+        }
+        if self.with(|s| s.hanging_start) {
             pending::<()>().await;
         }
         Ok(())
@@ -445,8 +454,8 @@ async fn reports_reach_the_recorder_in_order_and_at_once_while_kwin_hangs() {
         h.start(inbox).await;
         h.calls();
         // The position script runs and reports, but KWin never answers
-        // `run`: the load stays in flight.
-        h.kwin.with(|s| s.hanging_run = true);
+        // `start`: the load stays in flight.
+        h.kwin.with(|s| s.hanging_start = true);
         h.record().await;
         assert_eq!(h.calls(), LOAD_POSITION);
         let token = h.newest_token(POSITION);
