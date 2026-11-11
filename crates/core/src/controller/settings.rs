@@ -22,9 +22,7 @@ use super::capture::Pending;
 use super::{Controller, InputReader, Platform, State};
 use crate::config::{Config, ConfigFile, Draft, Field, Refusal, SaveError, Saved, check};
 use crate::hotkeys::{Action, Bindings, Capture, Modifiers};
-use crate::window::{
-    Answer, Ask, Confirm, MAX_PROBLEMS, Outcome, Request, ShownHotkeys, WindowView, bounded,
-};
+use crate::window::{Answer, Ask, Confirm, Outcome, Request, ShownHotkeys, WindowView};
 
 /// A settings window's link to the controller. The controller drops it to
 /// end the window's session; the window's side ends it by closing
@@ -101,16 +99,21 @@ impl Settings {
 /// is opening.
 pub(super) fn next_event(settings: &mut Settings) -> impl Future<Output = WindowEvent> + '_ {
     poll_fn(move |cx| {
-        if let Poll::Ready(Some(link)) = settings.openings.poll_recv(cx) {
-            return Poll::Ready(WindowEvent::Opened(link));
+        // What the window open asked comes first: a window that sent a save
+        // and closed has it handled before a new window takes its place.
+        if let Some(window) = &mut settings.window
+            && let Poll::Ready(request) = window.requests.poll_recv(cx)
+        {
+            return Poll::Ready(match request {
+                Some(request) => WindowEvent::Request(request),
+                None => WindowEvent::Closed,
+            });
         }
-        let Some(window) = &mut settings.window else {
-            return Poll::Pending;
-        };
-        window.requests.poll_recv(cx).map(|request| match request {
-            Some(request) => WindowEvent::Request(request),
-            None => WindowEvent::Closed,
-        })
+        match settings.openings.poll_recv(cx) {
+            Poll::Ready(Some(link)) => Poll::Ready(WindowEvent::Opened(link)),
+            // The controller holds an opener itself, so this never ends.
+            Poll::Ready(None) | Poll::Pending => Poll::Pending,
+        }
     })
 }
 
@@ -272,14 +275,10 @@ impl<P: Platform> Controller<P> {
                 toggle_playback: self.shown_hotkey(Action::TogglePlayback),
             },
             no_recording: self.no_recording(),
-            problems: self
-                .problems()
-                .iter()
-                .take(MAX_PROBLEMS)
-                .map(|problem| bounded(problem))
-                .collect(),
+            problems: self.problems(),
             answer: self.settings.answer.clone(),
-        };
+        }
+        .bounded();
         window.view.send_if_modified(|shown| {
             let changed = shown.as_ref() != Some(&view);
             if changed {
