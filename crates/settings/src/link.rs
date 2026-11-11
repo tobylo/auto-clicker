@@ -17,8 +17,16 @@ pub struct Link {
 impl Link {
     /// The socket on standard input, and a second handle to it for
     /// reading; an error when standard input is no socket.
+    ///
+    /// The socket moves off standard input, which then reads /dev/null: a
+    /// program the window starts (a browser for the About tab's link)
+    /// inherits standard input, and holding the socket open it would keep
+    /// the daemon from seeing the window close. The handles kept are closed
+    /// on exec.
     pub fn from_stdin() -> io::Result<(Link, UnixStream)> {
-        Link::from_fd(io::stdin().as_fd().try_clone_to_owned()?)
+        let link = Link::from_fd(io::stdin().as_fd().try_clone_to_owned()?)?;
+        rustix::stdio::dup2_stdin(std::fs::File::open("/dev/null")?)?;
+        Ok(link)
     }
 
     /// The socket `fd`, and a second handle to it; an error when it is no
@@ -82,6 +90,34 @@ mod tests {
     use auto_clicker_core::window::Ask;
 
     use super::*;
+
+    /// Set in the test's own copy, which runs with a socket on its
+    /// standard input.
+    const CHILD: &str = "AUTO_CLICKER_SETTINGS_LINK_CHILD";
+
+    #[test]
+    fn the_socket_leaves_standard_input() {
+        if std::env::var_os(CHILD).is_some() {
+            let (link, _reader) = Link::from_stdin().unwrap();
+            let stdin = std::fs::File::from(io::stdin().as_fd().try_clone_to_owned().unwrap());
+            assert!(stdin.metadata().unwrap().file_type().is_char_device());
+            let ask = Ask::Capture(Capture::Key);
+            link.send(&Request { id: 7, ask }).unwrap();
+            return;
+        }
+        let (ours, theirs) = UnixStream::pair().unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["link::tests::the_socket_leaves_standard_input", "--exact"])
+            .env(CHILD, "1")
+            .stdin(std::os::fd::OwnedFd::from(theirs))
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        // The child's handles are all closed, so the request ends the read.
+        let ids: Vec<u64> = read_requests(ours).iter().map(|r| r.id).collect();
+        assert_eq!(ids, [7]);
+    }
 
     #[test]
     fn only_a_socket_is_taken() {

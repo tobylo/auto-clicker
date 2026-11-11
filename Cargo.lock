@@ -362,6 +362,7 @@ name = "auto-clicker-settings"
 version = "0.1.0"
 dependencies = [
  "auto-clicker-core",
+ "rustix 1.1.6",
  "slint",
  "slint-build",
 ]
