@@ -440,7 +440,7 @@ async fn losing_the_input_reader_stops_and_saves_or_cancels_at_once() {
             "gone".to_owned(),
         )))
     };
-    let why = "hotkeys stopped: watching for keyboards failed: gone";
+    let why = "hotkeys stopped: watching for keyboards failed: gone; restart the program";
     local(async {
         let d = daemon(Mode::Click).await;
         d.record_hotkey().await;

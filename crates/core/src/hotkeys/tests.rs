@@ -552,7 +552,7 @@ fn unavailable_hotkeys_say_why() {
         [
             "hotkeys are unavailable: no keyboard found",
             "hotkeys are unavailable: keyboards cannot be read; add your user to the input group and log in again",
-            "hotkeys stopped: watching for keyboards failed: no such directory",
+            "hotkeys stopped: watching for keyboards failed: no such directory; restart the program",
         ]
     );
 }
