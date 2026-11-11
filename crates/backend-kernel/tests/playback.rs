@@ -212,6 +212,7 @@ async fn a_recording_replays_through_real_devices_with_its_timing() {
     let (stop, stopped) = oneshot::channel::<()>();
     let reader = read_input(
         InputSources {
+            capture: None,
             bindings: bindings(),
             own: &[],
             feed: slot.feed(),

@@ -64,6 +64,8 @@ pub(crate) struct Role {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Wanted<'a> {
     pub(crate) bindings: &'a Bindings,
+    /// A capture runs: every keyboard counts as one with a hotkey key.
+    pub(crate) capture: bool,
     /// A recording runs: recordable devices are wanted too.
     pub(crate) recording: bool,
 }
@@ -131,23 +133,30 @@ fn classify(file: File, paths: &Paths, own: &[PathBuf], wanted: Wanted<'_>) -> i
         return Ok(Node::Ours);
     }
     let device = RawDevice::from_fd(file.into())?;
-    let Some(role) = decide(capabilities(&device, wanted.bindings), wanted.recording) else {
+    let Some(role) = decide(capabilities(&device, wanted), wanted.recording) else {
         return Ok(Node::NotWanted);
     };
     use_monotonic_clock(device.as_fd())?;
     Ok(Node::Device(Box::new(device.into_event_stream()?), role))
 }
 
-fn capabilities(device: &RawDevice, bindings: &Bindings) -> Capabilities {
+/// Whether a device is read for hotkeys: it has a bound key or a modifier
+/// (`bound`), or a capture runs and it has any key a hotkey can use.
+fn hotkey_device(bound: bool, capture: bool, any_key: bool) -> bool {
+    bound || (capture && any_key)
+}
+
+fn capabilities(device: &RawDevice, wanted: Wanted<'_>) -> Capabilities {
     let Some(keys) = device.supported_keys() else {
         return Capabilities::default();
     };
     let has = |code| keys.contains(KeyCode(code));
     let relative = device.supported_relative_axes();
     let has_axis = |axis| relative.is_some_and(|axes| axes.contains(axis));
+    let any_key = Key::CODES.into_iter().any(has);
     Capabilities {
-        hotkey_keys: bindings.wants_device(has),
-        keys: Key::CODES.into_iter().any(has),
+        hotkey_keys: hotkey_device(wanted.bindings.wants_device(has), wanted.capture, any_key),
+        keys: any_key,
         mouse: has(BTN_LEFT)
             && has_axis(RelativeAxisCode::REL_X)
             && has_axis(RelativeAxisCode::REL_Y),
@@ -205,6 +214,25 @@ fn input_device(paths: &Paths, device_number: u64) -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_capture_reads_every_keyboard_and_otherwise_only_hotkey_ones() {
+        // (bound, capture, any key) and whether it is read for hotkeys.
+        let cases = [
+            ((true, false, true), true),
+            ((false, false, true), false),
+            ((false, true, true), true),
+            ((false, true, false), false),
+            ((true, true, false), true),
+        ];
+        for ((bound, capture, any_key), read) in cases {
+            assert_eq!(
+                hotkey_device(bound, capture, any_key),
+                read,
+                "{bound} {capture} {any_key}"
+            );
+        }
+    }
 
     #[test]
     fn unplugged_devices_are_gone_and_other_errors_are_not() {

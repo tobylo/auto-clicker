@@ -22,7 +22,11 @@ struct Script {
 }
 
 impl Desktop for Script {
-    async fn session(&mut self, send: &mut dyn FnMut(HotkeyEvent)) -> String {
+    async fn session(
+        &mut self,
+        send: &mut dyn FnMut(HotkeyEvent),
+        _commands: &mut ReaderCommands,
+    ) -> String {
         let n = {
             let mut started = self.started.borrow_mut();
             *started += 1;
@@ -45,6 +49,7 @@ impl Desktop for Script {
 /// A running reader: owner changes go in, events come out.
 struct Reader {
     owners: Option<mpsc::UnboundedSender<bool>>,
+    commands: mpsc::UnboundedSender<ReaderCommand>,
     events: Rc<RefCell<Vec<HotkeyEvent>>>,
     started: Rc<RefCell<usize>>,
     task: tokio::task::JoinHandle<()>,
@@ -60,11 +65,12 @@ impl Reader {
             started: started.clone(),
         };
         let sink = events.clone();
+        let (commands, mut received) = ReaderCommands::channel();
         let task = tokio::task::spawn_local(async move {
             let changes = futures_util::stream::unfold(changes, |mut changes| async {
                 changes.recv().await.map(|change| (change, changes))
             });
-            run(&mut script, changes.boxed_local(), |event| {
+            run(&mut script, changes.boxed_local(), &mut received, |event| {
                 sink.borrow_mut().push(event);
             })
             .await;
@@ -72,6 +78,7 @@ impl Reader {
         settle().await;
         Reader {
             owners: Some(owners),
+            commands,
             events,
             started,
             task,
@@ -195,7 +202,11 @@ async fn sessions_cut_short_by_a_service_change_count_as_failed_too() {
         // service changing hands again.
         struct NeverBinds(Rc<RefCell<usize>>);
         impl Desktop for NeverBinds {
-            async fn session(&mut self, _send: &mut dyn FnMut(HotkeyEvent)) -> String {
+            async fn session(
+                &mut self,
+                _send: &mut dyn FnMut(HotkeyEvent),
+                _commands: &mut ReaderCommands,
+            ) -> String {
                 *self.0.borrow_mut() += 1;
                 pending().await
             }
@@ -204,7 +215,11 @@ async fn sessions_cut_short_by_a_service_change_count_as_failed_too() {
         let mut desktop = NeverBinds(started.clone());
         let changes = futures_util::stream::iter(std::iter::repeat_n(true, 64));
         let mut events = Vec::new();
-        run(&mut desktop, changes, |event| events.push(event)).await;
+        let (_commands, mut received) = ReaderCommands::channel();
+        run(&mut desktop, changes, &mut received, |event| {
+            events.push(event)
+        })
+        .await;
         assert_eq!(*started.borrow(), 0, "the changes were all queued first");
         assert_eq!(events.len(), usize::try_from(MAX_FAILED_IN_A_ROW).unwrap());
     })
@@ -259,6 +274,64 @@ async fn the_reader_ends_when_the_bus_can_no_longer_be_watched() {
             ),
             "{events:?}"
         );
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn between_sessions_a_request_for_the_settings_is_answered_at_once() {
+    local(async {
+        let r = Reader::start(vec![Plan::Fails("declined")]).await;
+        assert_eq!(r.take(), [lost("declined")]);
+        r.commands
+            .send(ReaderCommand::ConfigureShortcuts {
+                operation: 7,
+                activation_token: None,
+            })
+            .unwrap();
+        settle().await;
+        assert_eq!(
+            r.take(),
+            [HotkeyEvent::Configured {
+                operation: 7,
+                result: Err(NOT_BOUND.to_owned())
+            }]
+        );
+        assert_eq!(r.sessions(), 1, "no session is opened for it");
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn while_a_session_binds_a_request_for_the_settings_is_answered_at_once() {
+    local(async {
+        let (commands, mut received) = ReaderCommands::channel();
+        let (bound, binding) = tokio::sync::oneshot::channel::<&str>();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        let task = tokio::task::spawn_local(async move {
+            let mut send = |event| sink.borrow_mut().push(event);
+            unbound(binding, &mut received, &mut send).await
+        });
+        settle().await;
+        commands
+            .send(ReaderCommand::ConfigureShortcuts {
+                operation: 3,
+                activation_token: None,
+            })
+            .unwrap();
+        settle().await;
+        let not_bound = HotkeyEvent::Configured {
+            operation: 3,
+            result: Err(NOT_BOUND.to_owned()),
+        };
+        assert_eq!(
+            events.borrow_mut().drain(..).collect::<Vec<_>>(),
+            [not_bound]
+        );
+        bound.send("bound").unwrap();
+        settle().await;
+        assert_eq!(task.await.unwrap(), Ok("bound"));
     })
     .await;
 }

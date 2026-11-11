@@ -18,6 +18,7 @@
 //! it will run ([`Job`]), and a run of either kind is one [`Running`]: what
 //! stops one stops the other.
 
+mod capture;
 mod desktop;
 mod hotkeys;
 mod playback;
@@ -38,7 +39,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Instant, sleep_until};
 
-pub use hotkeys::{HotkeyReader, HotkeySender};
+pub use hotkeys::{HotkeyReader, HotkeySender, ReaderCommand, ReaderCommands};
 pub use screen::{LayoutSignal, LayoutWatch};
 pub use session::{Blocked, SessionFacts};
 pub use settings::{WindowLink, WindowOpener};
@@ -46,10 +47,11 @@ pub use view::{Activity, Hotkey, Listed, NoRecording, Route, Routes, View, descr
 
 use crate::clicker::run;
 use crate::config::Config;
-use crate::hotkeys::{Action, Binding, Bindings, HotkeyEvent, HotkeyStatus, Unavailable};
+use crate::hotkeys::{Action, Binding, Bindings, Capture, HotkeyEvent, HotkeyStatus, Unavailable};
 use crate::input::{Input, InputBackend, InputError};
 use crate::recording::{FileName, Layout, LocalTime, RecordingFeed, RecordingSlot};
 use crate::run::{Ended, RunEnd, Signals};
+use crate::window::{CaptureEnd, Outcome};
 use hotkeys::HotkeySource;
 use playback::Playing;
 use screen::LayoutSource;
@@ -240,6 +242,12 @@ pub struct ReadInput {
     pub send: HotkeySender,
     /// Where what the devices do goes while a recording runs.
     pub feed: RecordingFeed,
+    /// Capture this instead of matching `bindings`: a reader of the
+    /// keyboards then reads every keyboard and fires no hotkey. Only a
+    /// reader of the keyboards is ever started to capture.
+    pub capture: Option<Capture>,
+    /// What the controller asks of the reader while it runs.
+    pub commands: ReaderCommands,
 }
 
 /// What a start will run once it begins.
@@ -585,6 +593,11 @@ impl<P: Platform> Controller<P> {
 
     /// Handles one message; `false` for [`Message::Quit`].
     fn message(&mut self, message: Message) -> bool {
+        // Before anything it may start: a capture's end starts the reader
+        // again, which must know the devices while they are still here.
+        if capture::ends_capture(&message) {
+            self.end_capture(Outcome::CaptureEnded(CaptureEnd::Interrupted));
+        }
         match message {
             Message::Start => self.start_from_tray(),
             Message::Stop => self.stop_run(),
@@ -622,6 +635,8 @@ impl<P: Platform> Controller<P> {
             HotkeyEvent::ReleaseLost => self.release_lost(),
             HotkeyEvent::Status(status) => self.hotkey_status_changed(status),
             HotkeyEvent::Triggers(triggers) => self.triggers_changed(triggers),
+            HotkeyEvent::Captured(captured) => self.captured(captured),
+            HotkeyEvent::Configured { operation, result } => self.configured(operation, result),
         }
     }
 
@@ -699,10 +714,13 @@ impl<P: Platform> Controller<P> {
         if let HotkeyStatus::Unavailable(why @ Unavailable::WatchFailed(_)) = &status {
             self.input_lost(why.to_string());
         }
+        let ended = status.clone();
         self.hotkey_status = Some(status);
         if unavailable {
             self.cancel_release("hotkeys stopped working");
         }
+        // Last: it starts the reader again, which reports anew.
+        self.pending_status(&ended);
     }
 
     /// The clicking hotkey: starts after its modifiers come up, cancels a
@@ -812,6 +830,7 @@ impl<P: Platform> Controller<P> {
     }
 
     fn deadline(&mut self) {
+        self.pending_expired();
         let now = Instant::now();
         match self.state {
             State::Countdown(deadline, _) if now >= deadline => {
@@ -819,8 +838,8 @@ impl<P: Platform> Controller<P> {
                     self.begin_run(job);
                 }
             }
-            // Its deadline is the only time a release wait wakes by itself.
-            State::Release(..) => self.release_expired(),
+            // The settings window's deadlines wake the controller too.
+            State::Release(deadline, _) if now >= deadline => self.release_expired(),
             State::RecordCountdown(deadline) if now >= deadline => self.begin_recording(None),
             State::Recording(limit) if now >= limit => self.recording_limit_reached(),
             // A second of a countdown passed; the view shows it.
@@ -831,13 +850,16 @@ impl<P: Platform> Controller<P> {
     /// The next time the controller must wake by itself: the end of a wait,
     /// the next whole second of a countdown, or a recording's time limit.
     fn next_deadline(&self) -> Option<Instant> {
-        match self.state {
+        let state = match self.state {
             State::Countdown(deadline, _) | State::RecordCountdown(deadline) => {
                 Some(next_second(deadline, Instant::now()))
             }
             State::Release(deadline, _) | State::Recording(deadline) => Some(deadline),
             State::Idle | State::Opening(_) | State::Running(_) => None,
-        }
+        };
+        // What the settings window waits on ends by its own deadline,
+        // whatever else goes on.
+        state.into_iter().chain(self.settings.deadline()).min()
     }
 
     /// Starts `job`, or waits for the devices to open first when no devices
@@ -1003,15 +1025,19 @@ impl<P: Platform> Controller<P> {
             input,
             recording,
             config,
+            settings,
             ..
         } = self;
         let feed = recording.feed();
         let bindings = config.hotkeys;
-        self.hotkeys = HotkeySource::start(|send| {
+        let capture = settings.capturing();
+        self.hotkeys = HotkeySource::start(|send, commands| {
             let reading = ReadInput {
                 bindings,
                 send,
                 feed,
+                capture,
+                commands,
             };
             platform.read_input(input.as_ref(), reading)
         });

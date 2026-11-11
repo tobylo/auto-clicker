@@ -25,7 +25,8 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use auto_clicker_core::hotkeys::{
-    Bindings, DeviceId, HotkeyEvent, HotkeyStatus, KeyEvent, Matcher, Reaction, Unavailable,
+    Bindings, Capture, DeviceId, HotkeyEvent, HotkeyStatus, KeyEvent, Matcher, Reaction,
+    Unavailable,
 };
 use auto_clicker_core::recording::{KeyInput, Recorder, RecordingFeed};
 use evdev::raw_stream::EventStream;
@@ -65,6 +66,7 @@ pub async fn read_input(
 ) {
     let setup = Setup {
         bindings: sources.bindings,
+        capture: sources.capture,
         own: own_paths(sources.own),
         feed: sources.feed,
     };
@@ -80,6 +82,9 @@ fn own_paths(own: &[DeviceIdentity]) -> Vec<PathBuf> {
 pub struct InputSources<'a> {
     /// The hotkeys to match.
     pub bindings: Bindings,
+    /// Capture this instead: read every keyboard, fire no hotkey, and
+    /// report the first chord as [`HotkeyEvent::Captured`].
+    pub capture: Option<Capture>,
     /// Every virtual device this program has open, never read.
     pub own: &'a [DeviceIdentity],
     /// Where a recording in progress is fed.
@@ -89,6 +94,7 @@ pub struct InputSources<'a> {
 /// The reader's setup, with its own devices by sysfs path.
 struct Setup {
     bindings: Bindings,
+    capture: Option<Capture>,
     own: Vec<PathBuf>,
     feed: RecordingFeed,
 }
@@ -232,6 +238,8 @@ struct Reading {
 struct Reader<S> {
     paths: Paths,
     bindings: Bindings,
+    /// It captures: every keyboard is read for it.
+    capture: bool,
     own: Vec<PathBuf>,
     feed: RecordingFeed,
     send: S,
@@ -246,6 +254,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
     fn new(paths: Paths, setup: Setup, send: S) -> Self {
         let Setup {
             bindings,
+            capture,
             own,
             feed,
         } = setup;
@@ -256,7 +265,8 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
             feed,
             send,
             registry: Registry::default(),
-            matcher: Matcher::new(bindings),
+            matcher: capture.map_or_else(|| Matcher::new(bindings), Matcher::capturing),
+            capture: capture.is_some(),
             devices: Vec::new(),
             next_id: 0,
             reported: None,
@@ -296,6 +306,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
         let path = self.paths.dev.join(name);
         let wanted = Wanted {
             bindings: &self.bindings,
+            capture: self.capture,
             recording: self.feed.recording(),
         };
         let opened = match node::open(&path, &self.paths, &self.own, wanted) {
