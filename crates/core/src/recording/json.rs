@@ -258,9 +258,16 @@ struct File {
     name: String,
     created: String,
     duration_us: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     layout: Option<Vec<RawOutput>>,
     events: Vec<RawEvent>,
+}
+
+/// A field that is there holds its value: `null` is not a layout.
+fn present<'de, D: de::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<RawOutput>>, D::Error> {
+    Vec::deserialize(deserializer).map(Some)
 }
 
 /// One screen as the file has it, checked by [`Output::new`].
