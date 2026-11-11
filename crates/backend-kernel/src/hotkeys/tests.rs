@@ -100,6 +100,7 @@ where
     let feed = RecordingSlot::new().feed();
     let setup = Setup {
         bindings: Bindings::default(),
+        capture: None,
         own: Vec::new(),
         feed,
     };

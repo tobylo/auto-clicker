@@ -195,6 +195,7 @@ async fn records_stand_in_devices_but_never_the_programs_own() {
     let (stop, stopped) = oneshot::channel::<()>();
     let reader = read_input(
         InputSources {
+            capture: None,
             bindings: bindings(),
             own: &identities,
             feed: slot.feed(),

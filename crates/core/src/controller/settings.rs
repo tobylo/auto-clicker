@@ -16,11 +16,12 @@ use std::future::{Future, poll_fn};
 use std::task::Poll;
 
 use tokio::sync::{mpsc, watch};
+use tokio::time::Instant;
 
-use super::hotkeys::HotkeySource;
+use super::capture::Pending;
 use super::{Controller, InputReader, Platform, State};
 use crate::config::{Config, ConfigFile, Draft, Field, Refusal, SaveError, Saved, check};
-use crate::hotkeys::{Action, Bindings, Modifiers};
+use crate::hotkeys::{Action, Bindings, Capture, Modifiers};
 use crate::window::{
     Answer, Ask, Confirm, MAX_PROBLEMS, Outcome, Request, ShownHotkeys, WindowView, bounded,
 };
@@ -49,7 +50,9 @@ pub(super) struct Settings {
     openings: mpsc::UnboundedReceiver<WindowLink>,
     window: Option<WindowLink>,
     /// The answer to the window's last request.
-    answer: Option<Answer>,
+    pub(super) answer: Option<Answer>,
+    /// What the window waits on: a capture, or the desktop's settings.
+    pub(super) pending: Option<Pending>,
 }
 
 /// What happened with the settings window.
@@ -70,7 +73,18 @@ impl Settings {
             openings,
             window: None,
             answer: None,
+            pending: None,
         }
+    }
+
+    /// What the reader captures now, if anything.
+    pub(super) fn capturing(&self) -> Option<Capture> {
+        self.pending.as_ref().and_then(Pending::capture)
+    }
+
+    /// When the pending request ends by itself, if one is pending.
+    pub(super) fn deadline(&self) -> Option<Instant> {
+        self.pending.as_ref().map(Pending::deadline)
     }
 }
 
@@ -106,20 +120,30 @@ impl<P: Platform> Controller<P> {
     pub(super) fn window_event(&mut self, event: WindowEvent) {
         match event {
             WindowEvent::Opened(link) => {
+                self.end_pending();
                 self.settings.window = Some(link);
                 self.settings.answer = None;
             }
-            WindowEvent::Closed => self.settings.window = None,
+            WindowEvent::Closed => {
+                self.end_pending();
+                self.settings.window = None;
+            }
             WindowEvent::Request(Request { id, ask }) => {
                 let outcome = match ask {
                     Ask::Save {
                         settings,
                         replace,
                         without_modifier,
-                    } => self.save_settings(&settings, replace, &without_modifier),
+                    } => Some(self.save_settings(&settings, replace, &without_modifier)),
+                    Ask::Capture(capture) => self.start_capture(id, capture),
+                    Ask::ConfigureShortcuts { activation_token } => {
+                        self.configure_shortcuts(id, activation_token)
+                    }
                 };
-                let outcome = outcome.bounded();
-                self.settings.answer = Some(Answer { id, outcome });
+                if let Some(outcome) = outcome {
+                    let outcome = outcome.bounded();
+                    self.settings.answer = Some(Answer { id, outcome });
+                }
             }
         }
     }
@@ -159,9 +183,12 @@ impl<P: Platform> Controller<P> {
         outcome
     }
 
-    /// Whether nothing goes on: no run, start or recording, and no open.
-    fn settled(&self) -> bool {
-        matches!(self.state, State::Idle) && self.opening.is_none()
+    /// Whether nothing goes on: no run, start or recording, no open, and
+    /// nothing the window waits on.
+    pub(super) fn settled(&self) -> bool {
+        matches!(self.state, State::Idle)
+            && self.opening.is_none()
+            && self.settings.pending.is_none()
     }
 
     /// `config` when the daemon as it runs now may take it; else why not.
@@ -215,9 +242,7 @@ impl<P: Platform> Controller<P> {
         self.config_error = None;
         if saved.hotkeys != self.config.hotkeys {
             self.config.hotkeys = saved.hotkeys;
-            // The reader in use goes first: two never read at once.
-            self.hotkeys = HotkeySource::none();
-            self.start_reader();
+            self.restart_reader();
         }
         self.settings.saved = saved;
     }

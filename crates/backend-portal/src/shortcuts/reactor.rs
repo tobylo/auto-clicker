@@ -3,6 +3,7 @@
 use std::future::pending;
 use std::pin::pin;
 
+use auto_clicker_core::controller::{ReaderCommand, ReaderCommands};
 use auto_clicker_core::hotkeys::{
     Action, DESKTOP_RELEASE_PAUSE, HotkeyEvent, HotkeyStatus, Trigger, Triggers,
 };
@@ -113,16 +114,34 @@ impl Session {
 enum Wake {
     Signal(Option<Signal>),
     ReleaseDue,
+    Command(ReaderCommand),
+}
+
+/// What a bound session serves with: its signals, the controller's
+/// commands, and how it opens the desktop's settings for its shortcuts,
+/// with an activation token if there is one.
+pub(super) struct Served<'a, S, C> {
+    pub(super) signals: S,
+    pub(super) commands: &'a mut ReaderCommands,
+    pub(super) configure: C,
 }
 
 /// Serves a session bound with `triggers` until it is lost: reports the
-/// triggers and that hotkeys work, then every hotkey `signals` brings.
-/// Returns why the session ended.
-pub(super) async fn serve(
+/// triggers and that hotkeys work, then every hotkey its signals bring, and
+/// answers each command. Returns why the session ended.
+pub(super) async fn serve<C>(
     triggers: Triggers,
-    signals: impl Stream<Item = Signal>,
+    served: Served<'_, impl Stream<Item = Signal>, C>,
     send: &mut dyn FnMut(HotkeyEvent),
-) -> String {
+) -> String
+where
+    C: AsyncFnMut(Option<String>) -> Result<(), String>,
+{
+    let Served {
+        signals,
+        commands,
+        mut configure,
+    } = served;
     send(HotkeyEvent::Triggers(triggers.clone()));
     send(HotkeyEvent::Status(HotkeyStatus::Available));
     let mut session = Session {
@@ -137,9 +156,13 @@ pub(super) async fn serve(
             biased;
             signal = signals.next() => Wake::Signal(signal),
             () = due(session.release_at) => Wake::ReleaseDue,
+            command = commands.next() => Wake::Command(command),
         };
         let event = match wake {
             Wake::ReleaseDue => Some(session.release_due()),
+            Wake::Command(ReaderCommand::ConfigureShortcuts { activation_token }) => {
+                Some(HotkeyEvent::Configured(configure(activation_token).await))
+            }
             Wake::Signal(Some(Signal::Activated(id))) => session.activated(&id),
             Wake::Signal(Some(Signal::Deactivated(_))) => {
                 session.deactivated(Instant::now());

@@ -58,10 +58,33 @@ fn every_answer_reads_back_as_sent() {
         Outcome::Confirm(Confirm::Replace(Stale::Changed)),
         Outcome::Confirm(Confirm::Replace(Stale::Unusable)),
         Outcome::Confirm(Confirm::WithoutModifier(vec![Action::ToggleRecording])),
+        Outcome::CapturedHotkey(Binding::parse("Ctrl+F9").unwrap()),
+        Outcome::CapturedKey(57),
+        Outcome::CaptureEnded(CaptureEnd::TimedOut),
+        Outcome::Configured,
+        Outcome::Unavailable("no keyboard".to_owned()),
     ];
     for outcome in outcomes {
         let answer = Answer { id: 1, outcome };
         assert_eq!(parse::<Answer>(&body(&answer)).unwrap(), answer);
+    }
+}
+
+#[test]
+fn every_request_reads_back_as_sent() {
+    let asks = [
+        Ask::Capture(Capture::Hotkey),
+        Ask::Capture(Capture::Key),
+        Ask::ConfigureShortcuts {
+            activation_token: Some("token".to_owned()),
+        },
+        Ask::ConfigureShortcuts {
+            activation_token: None,
+        },
+    ];
+    for ask in asks {
+        let request = Request { id: 4, ask };
+        assert_eq!(parse::<Request>(&body(&request)).unwrap(), request);
     }
 }
 
