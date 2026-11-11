@@ -474,16 +474,16 @@ impl<P: Platform> Controller<P> {
     /// The next thing to handle. Branches are tried in order, so what was
     /// asked for comes before what it would prevent: a queued Stop or lock
     /// before the hotkey events, the run's next action and the deadlines;
-    /// hotkey events (a stop) and a changed layout (which stops a playback
-    /// using positions) before the run. The reader goes last: kept busy by a
-    /// flood of key events, it spends tokio's budget, and anything polled
-    /// after it would wait. The layout watcher goes just before it, for the
-    /// same reason: it is busy while the pointer moves, and a recorder that
-    /// waits 20 ms for late reports must get them before that. Everything
-    /// else is cheap to poll. (A due
-    /// timer and a queued message cannot be made ready in one poll on the
-    /// paused clock, so the tests pin the reader's place and the outcomes,
-    /// not every tie.)
+    /// hotkey events (a stop) and the screen layout before the run. The
+    /// layout watcher reads what KWin reported and fires its signal in the
+    /// same poll, so a change already received stops a playback using
+    /// positions before its next event. The watcher is busy only while a
+    /// recording moves the pointer, when nothing plays, and drains far
+    /// faster than reports come. The reader goes last: kept busy by a flood
+    /// of key events, it spends tokio's budget, and anything polled after it
+    /// would wait. Everything else is cheap to poll. (A due timer and a
+    /// queued message cannot be made ready in one poll on the paused clock,
+    /// so the tests pin the reader's place and the outcomes, not every tie.)
     async fn next_wake(&mut self) -> Wake<P::Backend> {
         let deadline = self.next_deadline();
         let Controller {
@@ -499,12 +499,12 @@ impl<P: Platform> Controller<P> {
             biased;
             message = inbox.recv() => Wake::Message(message.unwrap_or(Message::Quit)),
             event = hotkeys::received(&mut hotkeys.events) => Wake::Hotkey(event),
+            never = hotkeys::drive(&mut screen.watch) => match never {},
             () = screen.signal.fired() => Wake::LayoutChanged,
             wake = run_wake(state) => wake,
             opened = open_end(opening) => Wake::Opened(opened),
             () = sleep_until_some(deadline) => Wake::Deadline,
             () = recording.filled() => Wake::RecordingFull,
-            never = hotkeys::drive(&mut screen.watch) => match never {},
             never = hotkeys::drive(&mut hotkeys.reader) => match never {},
         }
     }
