@@ -371,6 +371,46 @@ async fn a_reader_that_never_answers_is_given_up_on_and_one_thing_at_a_time() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn an_answer_the_controller_gets_to_only_at_the_deadline_is_not_taken() {
+    local(async {
+        let mut s = desktop_setup().await;
+        let id = s.window.send(&s.d, configure(None)).await;
+        tokio::time::advance(Duration::from_secs(60)).await;
+        s.d.hotkey(answered(1, Ok(()))).await;
+        let failed = Some(Outcome::Failed(
+            "the desktop did not open its settings".to_owned(),
+        ));
+        assert_eq!(s.window.answer_to(id), failed);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_desktops_shortcuts_going_away_ends_the_wait_for_their_settings() {
+    local(async {
+        let mut s = desktop_setup().await;
+        let id = s.window.send(&s.d, configure(None)).await;
+        let gone = Unavailable::Desktop("the session closed".to_owned());
+        s.d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(gone.clone())))
+            .await;
+        assert_eq!(
+            s.window.answer_to(id),
+            Some(Outcome::Failed(gone.to_string()))
+        );
+        // Nothing is pending any more: the next request goes to the reader.
+        let next = s.window.send(&s.d, configure(None)).await;
+        assert_eq!(s.window.answer_to(next), None);
+        let asked = |operation| ReaderCommand::ConfigureShortcuts {
+            operation,
+            activation_token: None,
+        };
+        assert_eq!(command(&s.d).await, Some(asked(1)));
+        assert_eq!(command(&s.d).await, Some(asked(2)));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn an_answer_for_a_window_since_gone_is_not_taken_for_the_next_one() {
     local(async {
         let s = desktop_setup().await;

@@ -678,7 +678,7 @@ impl<P: Platform> Controller<P> {
             self.cancel_release("hotkeys stopped working");
         }
         // Last: it starts the reader again, which reports anew.
-        self.capture_status(&ended);
+        self.pending_status(&ended);
     }
 
     /// The clicking hotkey: starts after its modifiers come up, cancels a

@@ -22,8 +22,8 @@ use auto_clicker_core::input::InputError;
 use futures_util::{Stream, StreamExt, stream};
 use tokio::time::timeout;
 
-use super::Desktop;
 use super::reactor::{Listed, Served, Signal, bound_triggers, id_of, serve};
+use super::{Desktop, unbound};
 use crate::session::{APP_ID, CALL_TIMEOUT, DIALOG_TIMEOUT, Portal};
 
 /// The longest list of shortcuts a signal may carry.
@@ -52,7 +52,7 @@ impl Desktop for PortalShortcuts {
         send: &mut dyn FnMut(HotkeyEvent),
         commands: &mut ReaderCommands,
     ) -> String {
-        match bind(self.bindings).await {
+        match unbound(bind(self.bindings), commands, send).await {
             Ok(bound) => {
                 let triggers = bound_triggers(&bound.listed);
                 let (proxy, session) = (&bound.proxy, &bound.session);
