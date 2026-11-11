@@ -7,9 +7,10 @@
 //! controller that ignored a stop would still be waiting for its deadline.
 
 use std::fmt;
-use std::future::{Future, pending};
+use std::future::{Future, pending, poll_fn};
 use std::io;
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
@@ -79,6 +80,8 @@ struct Record {
     layout: Option<Layout>,
     /// What each layout watcher was given: its feed and its signal.
     watches: Vec<(RecordingFeed, LayoutSignal)>,
+    /// How often the layout watchers were polled.
+    watch_polls: usize,
 }
 
 #[derive(Clone, Default)]
@@ -282,7 +285,11 @@ impl Platform for FakePlatform {
 
     fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
         self.0.with(|r| r.watches.push((feed, changed)));
-        Box::pin(pending())
+        let shared = self.0.clone();
+        Box::pin(poll_fn(move |_| {
+            shared.with(|r| r.watch_polls += 1);
+            Poll::Pending
+        }))
     }
 
     fn input_reader(&self) -> InputReader {

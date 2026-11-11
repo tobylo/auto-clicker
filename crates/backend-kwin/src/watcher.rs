@@ -84,6 +84,9 @@ pub(crate) struct Watcher<S> {
     /// The position script may be loaded: a load was sent and no unload
     /// has succeeded since.
     position_loaded: bool,
+    /// The position script's layout report still counts: no layout report
+    /// was lost since it was loaded, so it is not older than one that was.
+    layout_from_position: bool,
     job: Option<Job>,
 }
 
@@ -101,6 +104,7 @@ impl<S: Scripting + 'static> Watcher<S> {
             layout_due: false,
             position: Next::Nothing,
             position_loaded: false,
+            layout_from_position: false,
             job: None,
         }
     }
@@ -216,10 +220,15 @@ impl<S: Scripting + 'static> Watcher<S> {
     }
 
     /// A layout report was lost: the layout is unknown until the layout
-    /// script, loaded again, reports it.
+    /// script, loaded again, reports it. The old load's token ends at once,
+    /// so what it queued before the loss cannot bring an older layout back
+    /// while a call to KWin holds up the new load.
     fn layout_dropped(&mut self) {
+        self.layout_token = None;
+        self.layout_from_position = false;
         self.set_layout(None);
         self.layout_due = self.owner.is_some();
+        self.publish_trust();
     }
 
     fn report(&mut self, report: Report) {
@@ -292,6 +301,7 @@ impl<S: Scripting + 'static> Watcher<S> {
             Script::Position => {
                 self.position_token = Some(token.clone());
                 self.position_loaded = true;
+                self.layout_from_position = true;
             }
         }
         self.publish_trust();
@@ -300,14 +310,18 @@ impl<S: Scripting + 'static> Watcher<S> {
     }
 
     /// Whether a layout report with `token` is taken: from the layout
-    /// script, or from the position script while a layout script runs. A
+    /// script, or from the position script while a layout script runs and
+    /// no layout report was lost since the position script was loaded. A
     /// layout only the position script reported would stay after the
-    /// recording with nothing to see it change.
+    /// recording with nothing to see it change; and one it queued before a
+    /// lost report is older than what was lost.
     fn takes_layout_from(&self, token: &Token) -> bool {
         let Some(layout) = &self.layout_token else {
             return false;
         };
-        token == layout || self.position_token.as_ref() == Some(token)
+        let from_position =
+            self.layout_from_position && self.position_token.as_ref() == Some(token);
+        token == layout || from_position
     }
 
     /// Tells the receiver whom to accept calls from now.

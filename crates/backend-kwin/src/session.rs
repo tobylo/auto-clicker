@@ -75,14 +75,32 @@ impl<S: Scripting> Session<S> {
         }
     }
 
-    /// At exit: unloads both scripts from the KWin last seen, if any, within
-    /// one call's deadline. Without KWin nothing is loaded, and only files
-    /// are left to remove.
+    /// At exit: unloads both scripts from the KWin last seen, or, when the
+    /// watcher never saw one (the daemon failed to start after it claimed
+    /// its name), from KWin's owner now, which may still hold what a crashed
+    /// daemon left. Without KWin nothing is loaded, and only files are left
+    /// to remove.
     pub(crate) async fn exit(&self) {
-        let owner = self.owner.borrow().clone();
+        let seen = self.owner.borrow().clone();
+        let owner = match seen {
+            Some(owner) => Some(owner),
+            None => self.owner_now().await,
+        };
         match owner {
             Some(owner) => self.unload_all(&owner).await,
             None => self.sweep(None),
+        }
+    }
+
+    /// Who owns `org.kde.KWin` now; `None` when nobody does or the bus
+    /// cannot tell.
+    async fn owner_now(&self) -> Option<String> {
+        match bounded(self.scripting.follow_owner()).await {
+            Ok((owner, _changes)) => owner,
+            Err(err) => {
+                eprintln!("auto-clicker: cannot ask who runs KWin: {}", err.0);
+                None
+            }
         }
     }
 

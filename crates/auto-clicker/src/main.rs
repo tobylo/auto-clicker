@@ -52,8 +52,17 @@ async fn daemon() -> ExitCode {
         Err(status) => return status,
     };
     // Only now, with the name claimed, may anything clean up after an
-    // earlier daemon: a second one never touches its scripts.
+    // earlier daemon: a second one never touches its scripts. However this
+    // one ends from here on, it unloads them.
     let kwin = serve_kwin(&name).await;
+    let status = run(name, &kwin).await;
+    kwin.exit().await;
+    status
+}
+
+/// Starts the controller on the configured output and runs it until it
+/// ends.
+async fn run(name: instance::Claim, kwin: &Kwin) -> ExitCode {
     let (config, config_error) = load_config();
     let hotkeys = Hotkeys {
         route: config.input.hotkeys,
@@ -78,7 +87,7 @@ async fn daemon() -> ExitCode {
                 hotkeys,
                 kwin: kwin.clone(),
             };
-            serve(platform, start, name, &kwin).await
+            serve(platform, start, name).await
         }
         OutputRoute::Portal => {
             let output = PortalOutput::new(token_path());
@@ -99,7 +108,7 @@ async fn daemon() -> ExitCode {
                 hotkeys,
                 kwin: kwin.clone(),
             };
-            serve(platform, start, name, &kwin).await
+            serve(platform, start, name).await
         }
     }
 }
@@ -114,23 +123,15 @@ struct Start<P: Platform> {
     config_error: Option<String>,
 }
 
-/// Runs a controller on `platform` until it ends, then unloads what it
-/// loaded into `kwin`.
-async fn serve<P: Platform>(
-    platform: P,
-    start: Start<P>,
-    name: instance::Claim,
-    kwin: &Kwin,
-) -> ExitCode {
-    let status = match connect(platform, start, name).await {
+/// Runs a controller on `platform` until it ends.
+async fn serve<P: Platform>(platform: P, start: Start<P>, name: instance::Claim) -> ExitCode {
+    match connect(platform, start, name).await {
         Ok(controller) => {
             controller.run().await;
             ExitCode::SUCCESS
         }
         Err(status) => status,
-    };
-    kwin.exit().await;
-    status
+    }
 }
 
 /// Receives from KWin on the claimed name; without it, recordings get no

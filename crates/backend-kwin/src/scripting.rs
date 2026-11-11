@@ -188,3 +188,18 @@ fn utf8(path: &Path) -> Result<&str, CallError> {
     path.to_str()
         .ok_or_else(|| CallError(format!("{} is not UTF-8", path.display())))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    use super::*;
+
+    #[test]
+    fn a_path_that_is_not_utf8_is_not_sent() {
+        let path = Path::new(OsStr::from_bytes(b"/run/user/1000/auto-clicker/\xff.js"));
+        assert!(utf8(path).is_err());
+        assert_eq!(utf8(Path::new("/run/a.js")), Ok("/run/a.js"));
+    }
+}
