@@ -2,7 +2,15 @@
 // reads them back for a save; every text the window shows is here, under
 // @tr, so the bundled translations cover it all.
 
-import { AboutSlint, Button, CheckBox, ComboBox, GroupBox, LineEdit, SpinBox, TabWidget, ScrollView, Palette } from "std-widgets.slint";
+import { AboutSlint, Button, CheckBox, ComboBox, GroupBox, LineEdit, ListView, SpinBox, TabWidget, ScrollView, Palette } from "std-widgets.slint";
+
+// One recording in the list.
+export struct RecordingRow {
+    name: string,
+    when: string,
+    // The one the playback hotkey plays.
+    current: bool,
+}
 
 // Texts Rust builds messages from.
 export global Texts {
@@ -37,6 +45,13 @@ export global Texts {
     public pure function unreadable(field: string) -> string { @tr("{}: cannot be read", field) }
     public pure function captured-hotkey(keys: string) -> string { @tr("Captured {}; save to keep it.", keys) }
     public pure function captured-key(key: string) -> string { @tr("Key set to {}; save to keep it.", key) }
+    public pure function renamed() -> string { @tr("Renamed.") }
+    public pure function deleted() -> string { @tr("Deleted.") }
+    public pure function chosen() -> string { @tr("The playback hotkey plays this recording now.") }
+    public pure function playing() -> string { @tr("Playing.") }
+    public pure function delete-question(name: string) -> string { @tr("Delete {} for good? It cannot be undone.", name) }
+    public pure function no-name() -> string { @tr("(the name cannot be read)") }
+    public pure function more-recordings(count: string) -> string { @tr("{} older recordings are not listed.", count) }
 }
 
 component Row inherits HorizontalLayout {
@@ -82,6 +97,11 @@ export component SettingsWindow inherits Window {
     in-out property <string> speed-text;
     in-out property <bool> plays-forever;
     in-out property <string> plays-text: "1";
+    // Recordings
+    in property <[RecordingRow]> recordings;
+    in property <string> more-recordings;
+    in-out property <int> selected: -1;
+    in-out property <string> recording-name;
     // State
     in property <bool> idle;
     // The window may send a request: nothing waits on an answer, and no
@@ -100,6 +120,11 @@ export component SettingsWindow inherits Window {
     callback configure-shortcuts();
     callback confirm();
     callback dismiss();
+    callback select-recording(int);
+    callback rename-recording();
+    callback delete-recording();
+    callback choose-recording();
+    callback play-recording();
 
     VerticalLayout {
         padding: 12px;
@@ -302,6 +327,86 @@ export component SettingsWindow inherits Window {
                     if root.no-recording != "": Text {
                         text: root.no-recording;
                         wrap: word-wrap;
+                    }
+                    Text {
+                        text: @tr("Speed and plays apply from the next playback once saved. Changes to the recordings below apply at once.");
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: @tr("Recordings, newest first; ✓ marks the one the playback hotkey plays");
+                        font-weight: 600;
+                    }
+                    if root.recordings.length == 0: Text {
+                        text: @tr("No recordings yet.");
+                    }
+                    ListView {
+                        min-height: 180px;
+                        vertical-stretch: 1;
+                        for recording[index] in root.recordings: Rectangle {
+                            height: 28px;
+                            background: index == root.selected ? Palette.selection-background : transparent;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                spacing: 8px;
+                                Text {
+                                    text: recording.current ? "✓" : "";
+                                    min-width: 16px;
+                                    vertical-alignment: center;
+                                    color: index == root.selected ? Palette.selection-foreground : Palette.foreground;
+                                }
+                                Text {
+                                    text: recording.name;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                    color: index == root.selected ? Palette.selection-foreground : Palette.foreground;
+                                }
+                                Text {
+                                    text: recording.when;
+                                    vertical-alignment: center;
+                                    color: index == root.selected ? Palette.selection-foreground : Palette.foreground;
+                                }
+                            }
+                            TouchArea {
+                                clicked => { root.select-recording(index); }
+                            }
+                        }
+                    }
+                    if root.more-recordings != "": Text {
+                        text: root.more-recordings;
+                        wrap: word-wrap;
+                    }
+                    Row {
+                        label: @tr("Name");
+                        LineEdit {
+                            enabled: root.selected >= 0 && !root.waiting;
+                            text <=> root.recording-name;
+                        }
+                        Button {
+                            text: @tr("Rename");
+                            enabled: root.selected >= 0 && root.idle && root.may-ask;
+                            clicked => { root.rename-recording(); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Button {
+                            text: @tr("Play");
+                            enabled: root.selected >= 0 && root.idle && root.may-ask;
+                            clicked => { root.play-recording(); }
+                        }
+                        Button {
+                            text: @tr("Play with the hotkey");
+                            enabled: root.selected >= 0 && root.idle && root.may-ask;
+                            clicked => { root.choose-recording(); }
+                        }
+                        Button {
+                            text: @tr("Delete…");
+                            enabled: root.selected >= 0 && root.idle && root.may-ask;
+                            clicked => { root.delete-recording(); }
+                        }
                     }
                 }
             }
