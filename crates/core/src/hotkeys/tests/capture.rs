@@ -43,8 +43,10 @@ fn modifiers_alone_capture_no_hotkey() {
 #[test]
 fn a_bound_hotkey_is_captured_and_does_not_fire() {
     let mut matcher = Matcher::capturing(Capture::Hotkey);
-    let sent = feed(&mut matcher, &[down(A, LEFTCTRL), down(A, F6)]);
-    assert_eq!(sent, got(Captured::Hotkey(binding("Ctrl+F6"))));
+    // Ctrl+Shift+F6 starts and stops clicking by default.
+    let steps = [down(A, LEFTCTRL), down(A, LEFTSHIFT), down(A, F6)];
+    let sent = feed(&mut matcher, &steps);
+    assert_eq!(sent, got(Captured::Hotkey(binding("Ctrl+Shift+F6"))));
 }
 
 #[test]
