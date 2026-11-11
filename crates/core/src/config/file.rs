@@ -133,9 +133,23 @@ fn write_error(err: io::Error, place: Place) -> SaveError {
 /// Writes the file, creating its directory first if it is missing.
 fn write(path: &Path, contents: &[u8], place: Place) -> io::Result<Result<(), Unsynced>> {
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
+        create_dir_durably(dir)?;
     }
     atomic_save(path, contents, place)
+}
+
+/// Creates `dir` and any missing parents, and flushes each new directory's
+/// entry in its parent, so a power loss cannot take the directory and the
+/// file in it after a save said it was on disk.
+fn create_dir_durably(dir: &Path) -> io::Result<()> {
+    let missing: Vec<&Path> = dir.ancestors().take_while(|dir| !dir.exists()).collect();
+    std::fs::create_dir_all(dir)?;
+    for created in missing.iter().rev() {
+        if let Some(parent) = created.parent() {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

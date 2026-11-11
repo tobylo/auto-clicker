@@ -474,7 +474,10 @@ impl<P: Platform> Controller<P> {
     /// before the hotkey events, the run's next action and the deadlines;
     /// hotkey events (a stop) before the run. The reader goes last: kept busy
     /// by a flood of key events, it spends tokio's budget, and anything
-    /// polled after it would wait. Everything else is cheap to poll. (A due
+    /// polled after it would wait. Everything else is cheap to poll. A
+    /// settings window cannot flood: its requests come through a bounded
+    /// queue that a task on this thread fills only while the controller
+    /// waits, after it polled every branch. (A due
     /// timer and a queued message cannot be made ready in one poll on the
     /// paused clock, so the tests pin the reader's place and the outcomes,
     /// not every tie.)

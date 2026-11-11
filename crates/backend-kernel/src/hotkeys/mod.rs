@@ -303,15 +303,22 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
             Node::Failed(why) => Opened::Failed(why),
         };
         let read_now = match opened {
-            Opened::Reading(id, role) if role.record && self.feed.recording() => Some(id),
+            Opened::Reading(id, role) if self.read_on_open(role) => Some(id),
             _ => None,
         };
         self.registry.record(name, opened);
-        // While recording, the recorder learns at once what a device just
-        // opened holds.
+        // What a device just opened holds counts at once: for the matcher,
+        // a modifier held since before (a reader started again while the
+        // user holds Ctrl), and while recording, for the recorder.
         if let Some(id) = read_now {
             self.read_state(id);
         }
+    }
+
+    /// Whether what a device holds is read as it opens: for the matcher,
+    /// on a hotkey keyboard, and for the recorder, while recording.
+    fn read_on_open(&self, role: Role) -> bool {
+        role.hotkeys || (role.record && self.feed.recording())
     }
 
     fn add(&mut self, name: &OsStr, stream: Box<EventStream>, role: Role) -> Opened {
@@ -389,8 +396,8 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
         }
     }
 
-    /// Reads what a device holds now, after lost events or as a recording
-    /// starts, and tells the matcher (a hotkey keyboard's) and the recorder
+    /// Reads what a device holds now, as it opens, after lost events or as a
+    /// recording starts, and tells the matcher (a hotkey keyboard's) and the recorder
     /// (a recordable device's). Every event read from it before is older
     /// than the read, and dropped.
     fn read_state(&mut self, id: DeviceId) {
