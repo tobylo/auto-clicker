@@ -117,6 +117,7 @@ mod tests {
             play_hotkey: Hotkey::Desktop(Some("Meta+P".to_owned())),
             playback: config.playback,
             recordings: Arc::from([]),
+            current: None,
             playing: None,
             notice: None,
             problems: Vec::new(),

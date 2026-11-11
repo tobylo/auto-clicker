@@ -23,6 +23,7 @@ mod desktop;
 mod hotkeys;
 mod playback;
 mod recording;
+mod recordings;
 mod screen;
 mod session;
 mod settings;
@@ -40,6 +41,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Instant, sleep_until};
 
 pub use hotkeys::{HotkeyReader, HotkeySender, ReaderCommand, ReaderCommands};
+pub use recordings::WINDOW_RECORDINGS;
 pub use screen::{LayoutSignal, LayoutWatch};
 pub use session::{Blocked, SessionFacts};
 pub use settings::{WindowLink, WindowOpener};
@@ -54,6 +56,7 @@ use crate::run::{Ended, RunEnd, Signals};
 use crate::window::{CaptureEnd, Outcome};
 use hotkeys::HotkeySource;
 use playback::Playing;
+use recordings::Shelf;
 use screen::LayoutSource;
 
 /// How long a start from the hotkey waits for the hotkey's modifiers to come
@@ -405,13 +408,8 @@ pub struct Controller<P: Platform> {
     /// When the tray menu last opened during the recording, on the event
     /// clock.
     menu_opened: Option<Duration>,
-    /// The newest recordings, as last listed.
-    recordings: Arc<[Listed]>,
-    /// Why the recordings could not be listed.
-    recordings_error: Option<String>,
-    /// The recording the playback hotkey plays: the last one recorded or
-    /// played. `None` until then, which means the newest.
-    current: Option<FileName>,
+    /// The recordings, and the one the playback hotkey plays.
+    shelf: Shelf,
 }
 
 impl<P: Platform> Controller<P> {
@@ -444,6 +442,7 @@ impl<P: Platform> Controller<P> {
             ),
             playback: config.playback,
             recordings: Arc::from([]),
+            current: None,
             playing: None,
             notice: None,
             problems: Vec::new(),
@@ -470,9 +469,7 @@ impl<P: Platform> Controller<P> {
             rng: fastrand::Rng::new(),
             recording: RecordingSlot::new(),
             menu_opened: None,
-            recordings: Arc::from([]),
-            recordings_error: None,
-            current: None,
+            shelf: Shelf::default(),
         };
         let links = Links {
             send,
@@ -497,6 +494,7 @@ impl<P: Platform> Controller<P> {
         self.start_layout_watch();
         self.start_reader();
         loop {
+            self.relist_when_due();
             self.publish();
             let wake = self.next_wake().await;
             if !self.handle(wake) {
@@ -1054,7 +1052,8 @@ impl<P: Platform> Controller<P> {
             no_recording: self.no_recording(),
             play_hotkey: self.shown_hotkey(Action::TogglePlayback),
             playback: self.config.playback,
-            recordings: Arc::clone(&self.recordings),
+            recordings: Arc::clone(&self.shelf.listed),
+            current: self.shelf.shown_current(),
             playing: self.playing().map(str::to_owned),
             notice: self.notice.clone(),
             problems: self.problems(),
@@ -1104,7 +1103,8 @@ impl<P: Platform> Controller<P> {
             .as_ref()
             .map(|err| format!("Clicking cannot start: {err}"));
         let recordings = self
-            .recordings_error
+            .shelf
+            .error
             .as_ref()
             .map(|err| format!("The recordings cannot be listed: {err}"));
         [
@@ -1113,6 +1113,7 @@ impl<P: Platform> Controller<P> {
             blocked,
             input,
             recordings,
+            self.shelf.current_error.clone(),
         ]
         .into_iter()
         .flatten()

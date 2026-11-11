@@ -57,16 +57,21 @@ impl Unsynced {
 /// that failed (the outer error: `path` is untouched) from one that is in
 /// place but not flushed to disk (the inner one).
 pub fn atomic_save(path: &Path, contents: &[u8], place: Place) -> io::Result<Result<(), Unsynced>> {
+    atomic_save_with(path, |out| out.write_all(contents), place)
+}
+
+/// [`atomic_save`] of what `write` writes, streamed to the temporary file
+/// rather than held whole in memory.
+pub fn atomic_save_with(
+    path: &Path,
+    write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
+    place: Place,
+) -> io::Result<Result<(), Unsynced>> {
     let dir = parent_dir(path)?;
-    let placed = write_then_place(
-        dir,
-        path,
-        |out| out.write_all(contents),
-        |temp| match place {
-            Place::Replace => fs::rename(temp, path).map(|()| path.to_path_buf()),
-            Place::New => place_new(temp, std::slice::from_ref(&path.to_path_buf())),
-        },
-    )?;
+    let placed = write_then_place(dir, path, write, |temp| match place {
+        Place::Replace => fs::rename(temp, path).map(|()| path.to_path_buf()),
+        Place::New => place_new(temp, std::slice::from_ref(&path.to_path_buf())),
+    })?;
     Ok(placed.map(drop))
 }
 

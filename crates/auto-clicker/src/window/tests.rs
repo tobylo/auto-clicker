@@ -78,6 +78,7 @@ fn view() -> WindowView {
         },
         no_recording: None,
         problems: Vec::new(),
+        recordings: Default::default(),
         answer: None,
     }
 }
