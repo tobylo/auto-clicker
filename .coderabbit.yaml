@@ -3,3 +3,8 @@ reviews:
   high_level_summary: false
   high_level_summary_in_walkthrough: true
   poem: false
+  # Review a PR's opening push only. Later reviews are asked for with
+  # `@coderabbitai review` (AGENTS.md, "The PR"), since every automatic
+  # review of a push draws on the plan's hourly allowance.
+  auto_review:
+    auto_incremental_review: false
