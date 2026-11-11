@@ -46,15 +46,15 @@ pub(super) struct Shelf {
 
 impl Shelf {
     /// The listed recording the hotkey plays: the current one, or the
-    /// newest when there is none.
+    /// newest when there is none or its file is gone. A current recording
+    /// that is not listed while older ones are left out is taken to be one
+    /// of those: it plays, and no listed one is marked.
     pub(super) fn shown_current(&self) -> Option<FileName> {
+        let listed = |file: &FileName| self.listed.iter().any(|listed| listed.file == *file);
         match &self.current {
-            Some(current) => self
-                .listed
-                .iter()
-                .any(|listed| listed.file == *current)
-                .then(|| current.clone()),
-            None => self.listed.first().map(|listed| listed.file.clone()),
+            Some(current) if listed(current) => Some(current.clone()),
+            Some(_) if self.total > self.listed.len() => None,
+            _ => self.listed.first().map(|listed| listed.file.clone()),
         }
     }
 
