@@ -119,8 +119,9 @@ fn no_access(err: &InputError) -> bool {
 /// The route for hotkeys: `keyboards` looks at the keyboards, `offered`
 /// checks the desktop's shortcuts. Each runs only when the route needs it.
 ///
-/// Only keyboards that may not be read send `auto` to the desktop: with no
-/// keyboard plugged in yet, the kernel's reader waits for one.
+/// Only keyboards that may not be read, or a `/dev/input` the reader could
+/// not watch, send `auto` to the desktop: with no keyboard plugged in yet,
+/// the kernel's reader waits for one.
 pub async fn choose_hotkeys<F>(
     route: HotkeyRoute,
     keyboards: impl FnOnce() -> HotkeyStatus,
@@ -133,8 +134,10 @@ where
         HotkeyRoute::Kernel => InputReader::Devices,
         HotkeyRoute::Portal => InputReader::Desktop,
         HotkeyRoute::Auto => {
-            let denied = HotkeyStatus::Unavailable(Unavailable::NoPermission);
-            if keyboards() != denied {
+            if !matches!(
+                keyboards(),
+                HotkeyStatus::Unavailable(Unavailable::NoPermission | Unavailable::WatchFailed(_))
+            ) {
                 return InputReader::Devices;
             }
             match offered().await {

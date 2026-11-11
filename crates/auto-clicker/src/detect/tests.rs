@@ -191,7 +191,9 @@ async fn auto_hotkeys_read_the_keyboards_unless_they_may_not_be_read() {
         (Nodes::Unreadable, Portal::Unavailable, Devices, true),
         // No keyboard yet: the reader waits for one.
         (Nodes::Missing, Portal::Offered, Devices, false),
-        (Nodes::Unlisted, Portal::Offered, Devices, false),
+        // The reader could not watch for keyboards: it would stop at once.
+        (Nodes::Unlisted, Portal::Offered, Desktop, true),
+        (Nodes::Unlisted, Portal::Unavailable, Devices, true),
     ];
     for (nodes, portal, reader, asked) in cases {
         let got = hotkeys(HotkeyRoute::Auto, nodes, portal).await;
