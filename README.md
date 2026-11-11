@@ -171,10 +171,10 @@ repeat = 1                    # how many times it plays, or "until_stopped"
 
 Clicks and hotkeys each take one of two routes: the kernel's (`/dev/uinput` for clicks, the keyboards in `/dev/input` for hotkeys) or Plasma's portals (remote input for clicks, its own shortcuts for hotkeys). The program picks each at start, and the tooltip names the two it uses, such as "Clicks through /dev/uinput, hotkeys from the desktop's shortcuts".
 
-- `auto`, the default, takes the kernel's route where the program has access and the portal otherwise. For clicks, that is `/dev/uinput`, which the package's rule opens to the person at the screen; Plasma's remote input only where `/dev/uinput` cannot be opened. For hotkeys, the keyboards when the user is in the `input` group; Plasma's shortcuts when no keyboard may be read. A gamepad or other device that can be read does not count: only a keyboard does. With no keyboard plugged in at start, the program waits for one.
+- `auto`, the default, takes the kernel's route where the program has access and the portal otherwise. For clicks, that is `/dev/uinput`, which the package's rule opens to the person at the screen; Plasma's remote input only where `/dev/uinput` cannot be opened. For hotkeys, the keyboards when one with the hotkey keys can be read (the `input` group gives that); Plasma's shortcuts when the keyboards may not be read. A gamepad or other device that can be read does not count: only a keyboard does. With no keyboard plugged in at start, the program waits for one.
 - `kernel` or `portal` uses that route whatever the access. Without access, the program keeps running, and the tooltip says why and what to do.
 - The two settings are independent. After installing as above without the `input` group, `auto` clicks through `/dev/uinput` with no prompt and takes the hotkeys from Plasma's shortcuts.
-- The route is chosen once, at start. After joining the `input` group or changing `[input]`, log in again or restart the program.
+- The route is chosen once, at start. After changing `[input]`, restart the program. A new `input` group membership reaches programs only after a new login: log out and in again, or restart the computer.
 
 | Feature | Set by | `kernel` | `portal` |
 | --- | --- | --- | --- |
@@ -192,7 +192,7 @@ The portal needs the package's `io.github.tobylo.AutoClicker.desktop`: Plasma ke
 
 ## Hotkeys
 
-With `hotkeys = "kernel"`, or `"auto"` with the `input` group, hotkeys work in every window, fullscreen games included, because the program reads the keyboards directly. Mice are read only while recording, so the program sleeps while you play. That needs read access to `/dev/input`: the user must be in the `input` group (see [Install](#install)). When no keyboard can be read, the program keeps running and the tray says why; without the `input` group, Record is greyed out too.
+With `hotkeys = "kernel"`, or `"auto"` where a keyboard can be read, hotkeys work in every window, fullscreen games included, because the program reads the keyboards directly. Mice are read only while recording, so the program sleeps while you play. That needs read access to `/dev/input`: the user must be in the `input` group (see [Install](#install)). When no keyboard can be read, the program keeps running and the tray says why; without the `input` group, Record is greyed out too.
 
 The keyboards are only read, never taken over, so the game also gets the hotkey. The defaults are free in stock Plasma, and Minecraft does nothing on F6, F7 or F8; a hotkey Plasma also uses (Ctrl+F7 is its "Toggle Present Windows (Window class)") would do both things at once. In Minecraft, Ctrl is sprint and Shift is sneak: pressing Ctrl+Shift+F6 also does both for a moment. Pick a hotkey the game ignores if that gets in the way.
 
@@ -210,7 +210,7 @@ Licensed under either of the [Apache License, Version 2.0](LICENSE-APACHE) or th
 
 ## Hotkeys through the portal
 
-With `hotkeys = "portal"`, or `"auto"` without the `input` group, the program reads no keyboard: it registers its three shortcuts with Plasma (the GlobalShortcuts portal), and Plasma tells it when one is pressed, in every window and in fullscreen games. The first time the program starts this way, Plasma shows a dialog listing the shortcuts; accept it. The program asks for the hotkeys in `[hotkeys]` then, for those on a function key (F1 to F24); any other starts without a key, for you to set in System Settings.
+With `hotkeys = "portal"`, or `"auto"` where no keyboard may be read, the program reads no keyboard: it registers its three shortcuts with Plasma (the GlobalShortcuts portal), and Plasma tells it when one is pressed, in every window and in fullscreen games. The first time the program starts this way, Plasma shows a dialog listing the shortcuts; accept it. The program asks for the hotkeys in `[hotkeys]` then, for those on a function key (F1 to F24); any other starts without a key, for you to set in System Settings.
 
 From then on Plasma owns the hotkeys, and `[hotkeys]` in the config has no further effect on this route. Change them in System Settings, under Keyboard, Shortcuts, "Auto Clicker". A change takes effect at once, without a restart, and the tray's tooltip shows the hotkeys as Plasma reports them.
 
