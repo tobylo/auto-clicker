@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use super::{Playback, Speed};
+use super::{Motion, Playback, Speed};
 use crate::clicker::Repeat;
 use crate::input::{Held, Input, InputBackend, InputError};
 use crate::recording::Change;
@@ -20,8 +20,12 @@ use crate::run::{Ended, Interrupted, RunEnd, Signals, Waiter, finish};
 /// it from running.
 const BATCH: u32 = 256;
 
-/// Plays `playback` until it has played as often as its settings say, a
-/// signal fires, or a write fails.
+/// Plays `playback` with `motion` until it has played as often as its
+/// settings say, a signal fires, or a write fails.
+///
+/// With [`Motion::Positions`], the recording's positions are absolute moves
+/// across that layout, in its plan's order; with [`Motion::Relative`] they
+/// are left out and every relative move is sent.
 ///
 /// Each event fires at the run's start plus its time in the recording
 /// divided by the speed; in a later round, the rounds before it are added
@@ -42,6 +46,7 @@ const BATCH: u32 = 256;
 pub async fn play<B, S, D>(
     mut input: Input<B>,
     playback: &Playback,
+    motion: &Motion,
     signals: Signals<S, D>,
 ) -> RunEnd<B>
 where
@@ -52,6 +57,7 @@ where
     let mut session = Session {
         input: &mut input,
         playback,
+        motion,
         waiter: Waiter {
             stop: pin!(signals.stop),
             shutdown: pin!(signals.shutdown),
@@ -90,6 +96,7 @@ impl Schedule {
 struct Session<'a, B: InputBackend, S, D> {
     input: &'a mut Input<B>,
     playback: &'a Playback,
+    motion: &'a Motion,
     waiter: Waiter<'a, S, D>,
     /// How many events in a row were already due when their turn came.
     due_in_a_row: u32,
@@ -132,7 +139,7 @@ where
             return Ok(Some(ended));
         }
         let playback = self.playback;
-        for event in playback.recording.events() {
+        for event in playback.steps(self.motion) {
             if let Some(ended) = self.wait_for(schedule.at(round, event.at)).await {
                 return Ok(Some(ended));
             }
@@ -172,6 +179,10 @@ where
             Change::Release(Held::Key(key)) => self.input.release_key(key),
             Change::Move { dx, dy } => self.input.move_relative(dx, dy),
             Change::Wheel(notches) => self.input.scroll(notches),
+            Change::Position(point) => match self.motion {
+                Motion::Positions(layout) => self.input.move_absolute(layout.absolute(point)),
+                Motion::Relative => Ok(()),
+            },
         }
     }
 }

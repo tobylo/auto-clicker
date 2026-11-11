@@ -780,3 +780,11 @@ fn a_tray_stop_with_no_click_cuts_nothing() {
     );
     assert_eq!(recording.duration_us(), 5_100_000);
 }
+
+#[test]
+fn the_events_and_the_reserve_make_up_the_largest_file() {
+    assert_eq!(EVENT_BUDGET + FILE_RESERVE, MAX_FILE_BYTES);
+}
+
+#[path = "recorder_position_tests.rs"]
+mod positions;
