@@ -11,7 +11,7 @@
 //! The window's session ends when the window's end of the socket closes
 //! (it exited, after every request it sent was read), when it sends a line
 //! that does not parse or stops reading for [`WRITE_TIME`], and when the
-//! controller ends it, as it does when the keeper ends. Each way drops the
+//! controller ends it, and at once when the keeper ends. Each way drops the
 //! window's process, which kills it if it still runs; tokio reaps it.
 
 use std::io;
@@ -63,11 +63,21 @@ struct Opening {
 }
 
 /// A window that runs: where to ask it to come to the front, and its
-/// session. Dropping it closes the raise channel, which ends the session,
-/// and with it the window.
+/// session, which kills it when dropped.
 struct Running {
     raise: mpsc::UnboundedSender<()>,
-    session: JoinHandle<()>,
+    session: Aborting,
+}
+
+/// A task aborted when dropped: the session, wherever it waits (a write to
+/// a window that stopped reading, or its last requests), and with it the
+/// window, which is killed when its process is dropped.
+struct Aborting(JoinHandle<()>);
+
+impl Drop for Aborting {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 async fn keeper(opening: Opening, mut asked: mpsc::UnboundedReceiver<()>) {
@@ -87,7 +97,7 @@ async fn keeper(opening: Opening, mut asked: mpsc::UnboundedReceiver<()>) {
 /// one opens.
 fn chosen(running: Option<Running>, opening: &Opening) -> Option<Running> {
     match running {
-        Some(window) if !window.session.is_finished() => {
+        Some(window) if !window.session.0.is_finished() => {
             // The window may already be closing; then nothing comes to the
             // front, and the next choice opens one.
             let _ = window.raise.send(());
@@ -101,8 +111,8 @@ fn chosen(running: Option<Running>, opening: &Opening) -> Option<Running> {
 async fn finished(running: &mut Option<Running>) {
     match running {
         Some(window) => {
-            // A panicked session ended just the same.
-            let _ = (&mut window.session).await;
+            // An aborted or panicked session ended just the same.
+            let _ = (&mut window.session.0).await;
         }
         None => std::future::pending().await,
     }
@@ -119,7 +129,10 @@ fn open(opening: &Opening) -> Option<Running> {
             let (raise, raised) = mpsc::unbounded_channel();
             let opener = opening.opener.clone();
             let session = tokio::spawn(session(opener, child, socket, raised));
-            Some(Running { raise, session })
+            Some(Running {
+                raise,
+                session: Aborting(session),
+            })
         }
         Err(err) => {
             eprintln!("auto-clicker: could not open the settings window: {err}");
