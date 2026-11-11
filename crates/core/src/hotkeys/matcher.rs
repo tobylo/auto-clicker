@@ -141,16 +141,23 @@ impl Matcher {
         self.lose_release_if(true)
     }
 
-    /// Replaces what a device holds with what it reports holding `now`,
-    /// after its events were lost.
+    /// Replaces what a device holds with what it reports holding `now`:
+    /// after its events were lost, or as it is opened. A read that changes
+    /// nothing the matcher knew, of a device whose events were not lost
+    /// (a keyboard just opened holding no modifier), leaves older presses
+    /// queued on other devices free to fire.
     pub fn resync(&mut self, device: DeviceId, held: impl Fn(u16) -> bool, now: Duration) {
         let keys = MODIFIER_CODES
             .iter()
             .enumerate()
             .filter(|&(_, &code)| held(code))
             .fold(0, |keys, (index, _)| keys | 1 << index);
+        let lost = self.unread.contains(&device);
         self.unread.retain(|unread| *unread != device);
-        self.cutoff = self.cutoff.max(now);
+        let before = self.take(device);
+        if lost || keys != before {
+            self.cutoff = self.cutoff.max(now);
+        }
         self.update(device, |_| keys);
     }
 

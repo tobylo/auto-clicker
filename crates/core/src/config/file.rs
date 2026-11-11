@@ -83,12 +83,13 @@ impl ConfigFile {
     /// symbolic link is saved through: the file it points to is replaced.
     pub fn save(&mut self, config: &Config, replace: bool) -> Result<Saved, SaveError> {
         let path = self.path.as_deref().ok_or(SaveError::NoPath)?;
-        if !replace && let Some(stale) = self.stale(path) {
+        // Resolved once: the file checked is the file written.
+        let target = target_of(path).map_err(SaveError::Write)?;
+        if !replace && let Some(stale) = self.stale(&target) {
             return Err(SaveError::Stale(stale));
         }
         let place = placement(&self.seen, replace);
         let text = render(config);
-        let target = target_of(path).map_err(SaveError::Write)?;
         let written =
             write(&target, text.as_bytes(), place).map_err(|err| write_error(err, place))?;
         // In place, flushed or not: the file holds this now.
