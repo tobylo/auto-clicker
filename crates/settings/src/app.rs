@@ -212,15 +212,11 @@ impl App {
         };
         w.set_more_recordings(more);
         let place = shelf::place(&view.recordings, self.selected.as_ref());
-        if place.is_none() {
+        if place < 0 {
             self.selected = None;
             w.set_recording_name(SharedString::new());
         }
-        w.set_selected(
-            place
-                .and_then(|place| i32::try_from(place).ok())
-                .unwrap_or(-1),
-        );
+        w.set_selected(place);
     }
 
     /// The user picked the recording at `index` in the list: its name goes
@@ -249,11 +245,10 @@ impl App {
         let Some(file) = self.selected.clone() else {
             return;
         };
-        let label = self
-            .last
-            .as_ref()
-            .and_then(|view| view.recordings.listed.iter().find(|l| l.file == file))
-            .map_or_else(|| file.label(), |listed| listed.label.clone());
+        let label = self.last.as_ref().map_or_else(
+            || file.label(),
+            |view| shelf::label(&view.recordings, &file),
+        );
         match self.state.recording(file, label, action) {
             Some(request) => self.send(&request),
             None => self.show_question(),
@@ -381,7 +376,7 @@ fn recording_text(texts: &Texts<'_>, outcome: &RecordingOutcome) -> SharedString
         RecordingOutcome::Deleted => texts.invoke_deleted(),
         RecordingOutcome::Chosen => texts.invoke_chosen(),
         RecordingOutcome::Playing => texts.invoke_playing(),
-        RecordingOutcome::NotDone(why) => why.into(),
+        RecordingOutcome::NotDone(why) | RecordingOutcome::Unsynced(why) => why.into(),
     }
 }
 

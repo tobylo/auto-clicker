@@ -29,12 +29,21 @@ pub fn rows(view: &RecordingsView) -> Vec<Row> {
         .collect()
 }
 
-/// Where the recording `selected` is in `view`'s list, if it is there.
-pub fn place(view: &RecordingsView, selected: Option<&FileName>) -> Option<usize> {
-    let selected = selected?;
+/// Where the recording `selected` is in `view`'s list, as Slint takes it:
+/// -1 when it is not there.
+pub fn place(view: &RecordingsView, selected: Option<&FileName>) -> i32 {
+    selected
+        .and_then(|selected| view.listed.iter().position(|l| l.file == *selected))
+        .and_then(|place| i32::try_from(place).ok())
+        .unwrap_or(-1)
+}
+
+/// What the list calls `file`, as a question about it names it.
+pub fn label(view: &RecordingsView, file: &FileName) -> String {
     view.listed
         .iter()
-        .position(|listed| listed.file == *selected)
+        .find(|listed| listed.file == *file)
+        .map_or_else(|| file.label(), |listed| listed.label.clone())
 }
 
 /// The recording at `index` in `view`'s list; `None` for a place that holds
@@ -86,10 +95,18 @@ mod tests {
     #[test]
     fn a_selection_follows_its_recording_and_ends_when_it_is_gone() {
         let selected = file(9);
-        assert_eq!(place(&view(&[10, 9], None), Some(&selected)), Some(1));
-        assert_eq!(place(&view(&[11, 10, 9], None), Some(&selected)), Some(2));
-        assert_eq!(place(&view(&[11, 10], None), Some(&selected)), None);
-        assert_eq!(place(&view(&[9], None), None), None);
+        assert_eq!(place(&view(&[10, 9], None), Some(&selected)), 1);
+        assert_eq!(place(&view(&[11, 10, 9], None), Some(&selected)), 2);
+        assert_eq!(place(&view(&[11, 10], None), Some(&selected)), -1);
+        assert_eq!(place(&view(&[9, 8], None), None), -1);
+    }
+
+    #[test]
+    fn a_question_names_the_recording_it_is_about() {
+        let listed = view(&[10, 9], None);
+        assert_eq!(label(&listed, &file(10)), "Day 10 (2026-11-10 18:04:05)");
+        assert_eq!(label(&listed, &file(9)), "Recording 2026-11-09 18:04:05");
+        assert_eq!(label(&listed, &file(8)), "Recording 2026-11-08 18:04:05");
     }
 
     #[test]

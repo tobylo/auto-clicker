@@ -179,17 +179,21 @@ pub struct Listing {
     pub newest: Vec<Found>,
     /// Every file with a recording's name, listed or not.
     pub total: usize,
+    /// Whether the folder holds the file the listing was asked about,
+    /// listed or not.
+    pub holds: bool,
 }
 
 /// The newest recordings in `dir`, newest first, at most `limit`: the files
 /// with a recording's name, by name, which is the local time each was made
 /// (in the hour the clocks go back, that order can differ from the true
 /// one). Only the start of each listed file is read, for its name. A folder
-/// that does not exist yet holds none.
+/// that does not exist yet holds none. Whether it holds `asked`, listed or
+/// not, comes from the same read of the folder.
 ///
 /// # Errors
 /// The folder is a symlink or cannot be read.
-pub fn list(dir: &Path, limit: usize) -> io::Result<Listing> {
+pub fn list(dir: &Path, limit: usize, asked: Option<&FileName>) -> io::Result<Listing> {
     let folder = match open_folder(dir) {
         Ok(folder) => folder,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Listing::default()),
@@ -197,12 +201,14 @@ pub fn list(dir: &Path, limit: usize) -> io::Result<Listing> {
     };
     let mut newest = Vec::new();
     let mut total: usize = 0;
+    let mut holds = false;
     for entry in fs::read_dir(held_path(&folder))? {
         let name = entry?.file_name();
         let Some(file) = name.to_str().and_then(FileName::parse) else {
             continue;
         };
         total = total.saturating_add(1);
+        holds |= asked == Some(&file);
         newest.push(file);
         // However many files there are, only about `limit` names are kept.
         if newest.len() >= limit.saturating_mul(2).saturating_add(64) {
@@ -217,7 +223,11 @@ pub fn list(dir: &Path, limit: usize) -> io::Result<Listing> {
             file,
         })
         .collect();
-    Ok(Listing { newest, total })
+    Ok(Listing {
+        newest,
+        total,
+        holds,
+    })
 }
 
 /// Sorts `names` newest first and drops all but the first `limit`.
@@ -393,15 +403,17 @@ mod tests {
     }
 
     #[test]
-    fn a_listing_reads_each_listed_files_name_and_no_other_file() {
+    fn a_listing_reads_each_listed_files_name_and_tells_whether_it_holds_one_asked_about() {
         let dir = TempDir::new();
         let saved = save(dir.path(), &sample()).unwrap();
         let file = name(saved.file_name().unwrap().to_str().unwrap());
-        // Older than the limit lets in: its start is never read.
+        // Older than the limit lets in.
         fs::write(dir.path().join("2020-01-01_00-00-00.000.json"), b"").unwrap();
         // A file that does not start as a recording has no name.
         fs::write(dir.path().join("2030-01-01_00-00-00.000.json"), b"[]").unwrap();
-        let found = list(dir.path(), 2).unwrap();
+        let old = name("2020-01-01_00-00-00.000.json");
+        let found = list(dir.path(), 2, Some(&old)).unwrap();
+        assert!(found.holds);
         assert_eq!(found.total, 3);
         assert_eq!(
             found.newest,
@@ -416,6 +428,9 @@ mod tests {
                 },
             ]
         );
+        let gone = name("2021-01-01_00-00-00.000.json");
+        assert!(!list(dir.path(), 2, Some(&gone)).unwrap().holds);
+        assert!(!list(dir.path(), 2, None).unwrap().holds);
     }
 
     #[test]
@@ -462,7 +477,7 @@ mod tests {
         fs::create_dir(dir.path().join("2024-01-01_00-00-00.000.json")).unwrap();
 
         let listed = |limit| -> Vec<String> {
-            let found = list(dir.path(), limit).unwrap();
+            let found = list(dir.path(), limit, None).unwrap();
             assert_eq!(found.total, 6);
             found
                 .newest
@@ -492,7 +507,7 @@ mod tests {
             let file = format!("2026-11-09_18-{:02}-{:02}.000.json", n / 60, n % 60);
             fs::write(dir.path().join(file), b"").unwrap();
         }
-        let found = list(dir.path(), 3).unwrap();
+        let found = list(dir.path(), 3, None).unwrap();
         assert_eq!(found.total, 500);
         let listed: Vec<String> = found
             .newest
@@ -507,7 +522,7 @@ mod tests {
     fn a_missing_folder_lists_nothing_and_a_symlink_is_an_error() {
         let root = TempDir::new();
         assert_eq!(
-            list(&root.path().join("none"), 10).unwrap(),
+            list(&root.path().join("none"), 10, None).unwrap(),
             Listing::default()
         );
 
@@ -516,10 +531,10 @@ mod tests {
         fs::write(real.join("2026-11-09_18-04-05.123.json"), b"").unwrap();
         let link = root.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
-        let err = list(&link, 10).unwrap_err();
+        let err = list(&link, 10, None).unwrap_err();
         assert_eq!(err.raw_os_error(), Some(libc::ENOTDIR), "{err}");
         // A file in the folder's place is an error too, not an empty list.
-        let err = list(&real.join("2026-11-09_18-04-05.123.json"), 10).unwrap_err();
+        let err = list(&real.join("2026-11-09_18-04-05.123.json"), 10, None).unwrap_err();
         assert_eq!(err.raw_os_error(), Some(libc::ENOTDIR), "{err}");
     }
 

@@ -92,6 +92,7 @@ fn every_answer_reads_back_as_sent() {
         Outcome::Recording(RecordingOutcome::Chosen),
         Outcome::Recording(RecordingOutcome::Playing),
         Outcome::Recording(RecordingOutcome::NotDone("Not renamed: gone".to_owned())),
+        Outcome::Recording(RecordingOutcome::Unsynced("Deleted, but …".to_owned())),
     ];
     for outcome in outcomes {
         let answer = Answer { id: 1, outcome };
@@ -244,6 +245,7 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
         Outcome::Failed(worst.clone()),
         Outcome::SavedUnsynced(worst.clone()),
         Outcome::Recording(RecordingOutcome::NotDone(worst.clone())),
+        Outcome::Recording(RecordingOutcome::Unsynced(worst.clone())),
     ] {
         let answer = Answer {
             id: 1,

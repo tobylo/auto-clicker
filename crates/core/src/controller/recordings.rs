@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::{Controller, LISTED_RECORDINGS, Listed, Platform, State};
-use crate::recording::{ChangeError, CurrentFile, FileName, delete, list, rename};
+use crate::recording::{ChangeError, Changed, CurrentFile, FileName, delete, list, rename};
 use crate::window::{Outcome, RecordingAction, RecordingOutcome, RecordingsView};
 
 /// How many recordings the settings window lists, newest first. While it is
@@ -31,6 +31,8 @@ pub(super) struct Shelf {
     pub(super) listed: Arc<[Listed]>,
     /// How many recordings there were when they were listed.
     total: usize,
+    /// The last listing found no file for the current recording.
+    current_gone: bool,
     /// Why the recordings could not be listed.
     pub(super) error: Option<String>,
     /// The recording the playback hotkey plays: the one last chosen,
@@ -40,6 +42,9 @@ pub(super) struct Shelf {
     file: CurrentFile,
     /// Why the current recording could not be read at start, or kept.
     pub(super) current_error: Option<String>,
+    /// The state file holds the current recording: it was read from there,
+    /// or written there.
+    kept: bool,
     /// A settings window opened and has not been given its longer list yet.
     relist: bool,
 }
@@ -47,13 +52,12 @@ pub(super) struct Shelf {
 impl Shelf {
     /// The listed recording the hotkey plays: the current one, or the
     /// newest when there is none or its file is gone. A current recording
-    /// that is not listed while older ones are left out is taken to be one
-    /// of those: it plays, and no listed one is marked.
+    /// older than the list plays too, and then no listed one is marked.
     pub(super) fn shown_current(&self) -> Option<FileName> {
         let listed = |file: &FileName| self.listed.iter().any(|listed| listed.file == *file);
         match &self.current {
             Some(current) if listed(current) => Some(current.clone()),
-            Some(_) if self.total > self.listed.len() => None,
+            Some(_) if !self.current_gone => None,
             _ => self.listed.first().map(|listed| listed.file.clone()),
         }
     }
@@ -75,7 +79,10 @@ impl<P: Platform> Controller<P> {
     /// until a recording is chosen, made or played.
     pub fn keep_current_file(&mut self, file: CurrentFile) {
         match file.read() {
-            Ok(current) => self.shelf.current = current,
+            Ok(current) => {
+                self.shelf.current = current;
+                self.shelf.kept = true;
+            }
             Err(err) => {
                 self.shelf.current_error = Some(format!(
                     "The recording the playback hotkey plays could not be read, so it plays \
@@ -87,13 +94,17 @@ impl<P: Platform> Controller<P> {
     }
 
     /// Makes `file` the current recording, and keeps it for the next start
-    /// when it changed.
+    /// unless the state file holds it already.
     pub(super) fn make_current(&mut self, file: &FileName) {
-        if self.shelf.current.as_ref() == Some(file) {
+        if self.shelf.current.as_ref() == Some(file) && self.shelf.kept {
             return;
         }
         self.shelf.current = Some(file.clone());
-        self.shelf.current_error = self.shelf.file.write(file).err().map(|err| {
+        // It is listed, played or just saved.
+        self.shelf.current_gone = false;
+        let written = self.shelf.file.write(file);
+        self.shelf.kept = written.is_ok();
+        self.shelf.current_error = written.err().map(|err| {
             format!(
                 "The recording the playback hotkey plays could not be kept for the next start: \
                  {err}"
@@ -143,14 +154,16 @@ impl<P: Platform> Controller<P> {
         } else {
             LISTED_RECORDINGS
         };
+        let current = self.shelf.current.as_ref();
         let found = match self.platform.recordings_dir() {
-            Some(dir) => list(&dir, limit),
+            Some(dir) => list(&dir, limit, current),
             None => Ok(Default::default()),
         };
         self.shelf.relist = false;
         self.shelf.error = found.as_ref().err().map(ToString::to_string);
         let found = found.unwrap_or_default();
         self.shelf.total = found.total;
+        self.shelf.current_gone = self.shelf.current.is_some() && !found.holds;
         let listed: Vec<Listed> = found
             .newest
             .into_iter()
@@ -175,14 +188,19 @@ impl<P: Platform> Controller<P> {
         Outcome::Recording(match action {
             RecordingAction::Rename { name } => {
                 let renamed = self.change(|dir| rename(dir, file, name));
-                done(renamed, RecordingOutcome::Renamed, "Not renamed")
+                done(
+                    renamed,
+                    RecordingOutcome::Renamed,
+                    ["Renamed", "Not renamed"],
+                )
             }
             RecordingAction::Delete => {
                 let deleted = self.change(|dir| delete(dir, file));
-                if deleted.is_ok() && self.shelf.current.as_ref() == Some(file) {
-                    self.shelf.current = None;
-                }
-                done(deleted, RecordingOutcome::Deleted, "Not deleted")
+                done(
+                    deleted,
+                    RecordingOutcome::Deleted,
+                    ["Deleted", "Not deleted"],
+                )
             }
             RecordingAction::Choose => {
                 self.make_current(file);
@@ -197,8 +215,8 @@ impl<P: Platform> Controller<P> {
     /// list too.
     fn change(
         &mut self,
-        change: impl FnOnce(&Path) -> Result<(), ChangeError>,
-    ) -> Result<(), ChangeError> {
+        change: impl FnOnce(&Path) -> Result<Changed, ChangeError>,
+    ) -> Result<Changed, ChangeError> {
         let changed = match self.platform.recordings_dir() {
             Some(dir) => change(&dir),
             None => Err(ChangeError::Missing),
@@ -220,10 +238,48 @@ impl<P: Platform> Controller<P> {
     }
 }
 
-/// `ok` when `changed` went through, else what `not` says about why not.
-fn done(changed: Result<(), ChangeError>, ok: RecordingOutcome, not: &str) -> RecordingOutcome {
+/// `ok` when `changed` went through and reached the disk; else a sentence
+/// that starts with `done` or `not`.
+fn done(
+    changed: Result<Changed, ChangeError>,
+    ok: RecordingOutcome,
+    [done, not]: [&str; 2],
+) -> RecordingOutcome {
     match changed {
-        Ok(()) => ok,
+        Ok(Changed::Synced) => ok,
+        Ok(Changed::Unsynced(err)) => RecordingOutcome::Unsynced(format!(
+            "{done}, but it may not survive a power loss: {err}"
+        )),
         Err(err) => RecordingOutcome::NotDone(format!("{not}: {err}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::*;
+
+    #[test]
+    fn a_change_says_whether_it_was_done_and_whether_it_reached_the_disk() {
+        let said = |changed| {
+            done(
+                changed,
+                RecordingOutcome::Deleted,
+                ["Deleted", "Not deleted"],
+            )
+        };
+        assert_eq!(said(Ok(Changed::Synced)), RecordingOutcome::Deleted);
+        let unsynced = Changed::Unsynced(io::Error::other("no flush"));
+        assert_eq!(
+            said(Ok(unsynced)),
+            RecordingOutcome::Unsynced(
+                "Deleted, but it may not survive a power loss: no flush".to_owned()
+            )
+        );
+        assert_eq!(
+            said(Err(ChangeError::Missing)),
+            RecordingOutcome::NotDone("Not deleted: the file is no longer there".to_owned())
+        );
     }
 }

@@ -18,8 +18,9 @@ fn a_rename_rewrites_the_name_in_the_same_file_and_leaves_nothing_else() {
     let dir = TempDir::new();
     let (file, _) = saved(&dir);
 
-    rename(dir.path(), &file, "Farm loop".to_owned()).unwrap();
+    let changed = rename(dir.path(), &file, "Farm loop".to_owned()).unwrap();
 
+    assert!(matches!(changed, Changed::Synced), "{changed:?}");
     let renamed = load(dir.path(), &file).unwrap();
     assert_eq!(renamed.name(), "Farm loop");
     assert_eq!(renamed, sample().renamed("Farm loop".to_owned()).unwrap());
@@ -90,8 +91,9 @@ fn a_delete_removes_the_file_and_a_second_finds_it_gone() {
     let dir = TempDir::new();
     let (file, _) = saved(&dir);
 
-    delete(dir.path(), &file).unwrap();
+    let changed = delete(dir.path(), &file).unwrap();
 
+    assert!(matches!(changed, Changed::Synced), "{changed:?}");
     assert!(dir.entries().is_empty());
     let err = delete(dir.path(), &file).unwrap_err();
     assert!(matches!(err, ChangeError::Missing), "{err:?}");
@@ -136,4 +138,22 @@ fn a_symlink_in_the_folders_place_is_refused() {
         assert!(matches!(err, ChangeError::Failed(_)), "{err:?}");
     }
     assert!(path.exists());
+}
+
+#[test]
+fn a_rename_that_would_outgrow_what_a_load_reads_leaves_the_old_file_whole() {
+    let dir = TempDir::new();
+    let (file, path) = saved(&dir);
+    let before = fs::read(&path).unwrap();
+    let size = u64::try_from(before.len()).unwrap();
+    // The same length of name fits exactly; one character more does not.
+    let same = "x".repeat(sample().name().chars().count());
+    rename_capped(dir.path(), &file, same.clone(), size).unwrap();
+    let err = rename_capped(dir.path(), &file, format!("{same}y"), size).unwrap_err();
+    assert!(
+        err.to_string().contains("would be larger than 256 MiB"),
+        "{err}"
+    );
+    assert_eq!(load(dir.path(), &file).unwrap().name(), same);
+    assert_eq!(dir.entries(), [file.as_str()]);
 }

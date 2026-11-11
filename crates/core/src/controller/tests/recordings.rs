@@ -315,9 +315,9 @@ async fn a_current_recording_that_is_gone_marks_the_newest_and_one_older_than_th
         assert_eq!(s.hotkey_plays().await, Some(label("17:00:00")));
         drop(s);
 
-        // Gone, with every recording listed: the newest is marked, and plays.
+        // Gone, with older ones still left out of the list: the newest is
+        // marked, and plays.
         fs::remove_file(recordings.path().join(files[0].as_str())).unwrap();
-        fs::remove_file(recordings.path().join(files[1].as_str())).unwrap();
         let s = setup(shared_over(&recordings), config(0), &state, false).await;
         assert_eq!(s.d.view().current.as_ref(), Some(&files[11]));
         assert_eq!(s.hotkey_plays().await, Some(label("17:11:00")));
@@ -402,6 +402,12 @@ async fn a_current_recording_that_cannot_be_kept_is_used_and_shown_as_a_problem(
             "{problems:?}"
         );
         assert_eq!(s.hotkey_plays().await, Some(label("18:00:00")));
+
+        // Once it can be written, choosing the same one again keeps it.
+        fs::remove_dir(&s.current).unwrap();
+        s.ask(&files[0], RecordingAction::Choose).await;
+        assert_eq!(s.kept(), format!("{}\n", files[0]));
+        assert!(s.d.view().problems.is_empty());
     })
     .await;
 }

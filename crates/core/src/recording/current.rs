@@ -163,6 +163,13 @@ mod tests {
     }
 
     #[test]
+    fn the_environment_names_the_path() {
+        let from =
+            CurrentFile::from_env(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"));
+        assert_eq!(CurrentFile::of_environment(), from);
+    }
+
+    #[test]
     fn a_written_recording_reads_back_from_a_private_file() {
         let dir = TempDir::new();
         let (current, path) = in_dir(&dir);
@@ -203,7 +210,11 @@ mod tests {
             (b"../2026-11-09_18-04-05.123.json", false),
             (b"", false),
             (b"\xff\xfe", false),
-            (&[b'x'; 65], false),
+            // Only the start is read: a name followed by more is none.
+            (
+                b"2026-11-09_18-04-05.123.json\n                                   x",
+                false,
+            ),
         ];
         for (bytes, reads) in cases {
             fs::write(&path, bytes).unwrap();
@@ -215,6 +226,16 @@ mod tests {
         }
     }
 
+    /// `current`'s read, which must end within a few seconds.
+    fn read_at_once(current: &CurrentFile) -> io::Result<Option<FileName>> {
+        let current = current.clone();
+        let (send, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || send.send(current.read()));
+        received
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the read waited")
+    }
+
     #[test]
     fn a_symlink_a_fifo_or_a_folder_is_refused_at_once() {
         let dir = TempDir::new();
@@ -223,17 +244,21 @@ mod tests {
         let target = dir.path().join("target");
         fs::write(&target, "2026-11-09_18-04-05.123.json\n").unwrap();
         std::os::unix::fs::symlink(&target, &path).unwrap();
-        assert!(current.read().is_err());
+        let err = read_at_once(&current).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::ELOOP), "{err}");
         fs::remove_file(&path).unwrap();
         let made = std::process::Command::new("mkfifo")
             .arg(&path)
             .status()
             .unwrap();
         assert!(made.success());
-        assert!(current.read().is_err());
+        let not_a_file = |read: io::Result<Option<FileName>>| {
+            read.unwrap_err().to_string() == "it is not a regular file"
+        };
+        assert!(not_a_file(read_at_once(&current)));
         fs::remove_file(&path).unwrap();
         fs::create_dir(&path).unwrap();
-        assert!(current.read().is_err());
+        assert!(not_a_file(read_at_once(&current)));
     }
 
     #[test]

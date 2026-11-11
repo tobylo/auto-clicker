@@ -111,7 +111,13 @@ mod tests {
         assert!(made.success());
         let missing = FileName::parse("2026-01-04_00-00-00.000.json").unwrap();
         for file in [link, folder_in_place, fifo, missing] {
-            assert_eq!(name(&folder, &file), None, "{file}");
+            // At once: a FIFO is never waited on.
+            let held = folder.try_clone().unwrap();
+            let (send, received) = std::sync::mpsc::channel();
+            let asked = file.clone();
+            std::thread::spawn(move || send.send(name(&held, &asked)));
+            let read = received.recv_timeout(std::time::Duration::from_secs(5));
+            assert_eq!(read.expect("the read waited"), None, "{file}");
         }
     }
 }
