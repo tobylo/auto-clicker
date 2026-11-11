@@ -14,6 +14,7 @@
 //! is open the desktop shows that remote input is active. When the session
 //! ends, the compositor releases whatever its devices still held.
 
+mod answer;
 mod eis;
 mod layout;
 mod offered;

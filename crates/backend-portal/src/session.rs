@@ -30,7 +30,11 @@ use ashpd::{AppID, PortalError};
 use auto_clicker_core::input::InputError;
 use tokio::time::timeout;
 
+use crate::answer::{refused, version};
 use crate::token::{self, RestoreToken};
+
+/// The interface clicks go through.
+const REMOTE_DESKTOP: &str = "org.freedesktop.portal.RemoteDesktop";
 
 /// The program's app id: the desktop file the package installs.
 pub const APP_ID: &str = "io.github.tobylo.AutoClicker";
@@ -87,12 +91,7 @@ impl Portal {
             ashpd::register_host_app_with_connection(connection.clone(), app_id),
         )
         .await?
-        .map_err(|err| {
-            InputError::PortalUnavailable(format!(
-                "could not register the app id {APP_ID} ({err}); is the package's \
-                 {APP_ID}.desktop file installed?"
-            ))
-        })?;
+        .map_err(registration_failed)?;
         Ok(Portal { connection })
     }
 
@@ -124,7 +123,8 @@ impl Portal {
         )
         .await?
         .map_err(|err| portal_error("RemoteDesktop", err))?;
-        check_version(proxy.version())?;
+        // Read again without ashpd, which takes a failed read for version 1.
+        check_version(version(&self.connection, REMOTE_DESKTOP).await?)?;
         Ok(proxy)
     }
 
@@ -271,8 +271,28 @@ fn check_version(version: u32) -> Result<(), InputError> {
     }
 }
 
+/// Why `Registry.Register` failed: the portal's answer that it cannot
+/// register the program, most often for want of the desktop file, or a
+/// call that got no answer and may work later.
+fn registration_failed(err: ashpd::Error) -> InputError {
+    let refusal = |why: &dyn std::fmt::Display| {
+        InputError::PortalUnavailable(format!(
+            "could not register the app id {APP_ID} ({why}); is the package's {APP_ID}.desktop \
+             file installed?"
+        ))
+    };
+    match err {
+        ashpd::Error::Zbus(err) => match zbus::fdo::Error::from(err) {
+            err if refused(&err) => refusal(&err),
+            err => InputError::Portal(format!("Registry.Register: {err}")),
+        },
+        ashpd::Error::PortalNotFound(_) => refusal(&"the desktop has no portal registry"),
+        other => InputError::Portal(format!("Registry.Register: {other}")),
+    }
+}
+
 /// Runs a portal call with [`CALL_TIMEOUT`].
-async fn call<T>(what: &str, future: impl Future<Output = T>) -> Result<T, InputError> {
+pub(crate) async fn call<T>(what: &str, future: impl Future<Output = T>) -> Result<T, InputError> {
     timeout(CALL_TIMEOUT, future).await.map_err(|_| {
         InputError::Portal(format!(
             "{what}: no answer within {} s",
@@ -377,6 +397,29 @@ mod tests {
     fn a_cancelled_dialog_is_not_allowed() {
         let err = portal_error("Start", ashpd::Error::Response(ResponseError::Cancelled));
         assert!(matches!(err, InputError::NotAllowed), "{err:?}");
+    }
+
+    #[test]
+    fn a_refused_registration_is_unavailable_and_a_lost_one_is_not() {
+        let fdo = |err| ashpd::Error::Zbus(zbus::Error::FDO(Box::new(err)));
+        let failed = registration_failed(fdo(zbus::fdo::Error::Failed(
+            "App info not found".to_owned(),
+        )));
+        assert!(
+            matches!(&failed, InputError::PortalUnavailable(why) if why.contains(".desktop")),
+            "{failed:?}"
+        );
+        let lost = registration_failed(fdo(zbus::fdo::Error::NoReply("gone".to_owned())));
+        assert!(matches!(lost, InputError::Portal(_)), "{lost:?}");
+        let cut = registration_failed(ashpd::Error::Zbus(zbus::Error::InterfaceNotFound));
+        assert!(matches!(cut, InputError::Portal(_)), "{cut:?}");
+        let name =
+            zbus::names::OwnedInterfaceName::try_from("org.freedesktop.host.portal.Registry")
+                .unwrap();
+        let absent = registration_failed(ashpd::Error::PortalNotFound(name));
+        assert!(matches!(absent, InputError::PortalUnavailable(_)));
+        let io = registration_failed(ashpd::Error::NoResponse);
+        assert!(matches!(io, InputError::Portal(_)));
     }
 
     #[test]
