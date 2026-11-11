@@ -110,8 +110,8 @@ pub(crate) struct Watcher<S> {
     sweep_due: bool,
     layout_due: Due,
     position: Next,
-    /// The position script may be loaded: a load was sent and no unload
-    /// has succeeded since.
+    /// The position script may be loaded: a load was sent, or a crashed
+    /// daemon's may still run, and no unload has succeeded since.
     position_loaded: bool,
     /// The position script's layout report still counts: no layout report
     /// was lost since it was loaded, so it is not older than one that was.
@@ -405,7 +405,9 @@ impl<S: Scripting + 'static> Watcher<S> {
         let mut loads_position = false;
         let job: Job = if mem::take(&mut self.sweep_due) {
             // The position unload counts as any other: a crashed daemon's
-            // script that stays loaded is tried again after the back-off.
+            // script that stays loaded is tried again after the back-off,
+            // or unloaded when a recording that starts meanwhile stops.
+            self.position_loaded = true;
             Box::pin(async move {
                 let (_, position) = tokio::join!(
                     session.unload_logged(&owner, Script::Layout),

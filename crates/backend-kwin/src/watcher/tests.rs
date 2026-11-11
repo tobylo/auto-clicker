@@ -1155,3 +1155,25 @@ async fn a_position_script_loaded_during_a_layout_back_off_reports_no_layout() {
     })
     .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_recording_during_the_starts_layout_load_keeps_a_failed_sweep_unload() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        // The sweep's position unload fails, and the layout load that
+        // follows stays in flight while a recording starts and stops.
+        h.kwin.with(|s| {
+            s.failing_unloads = 1;
+            s.failing_plugin = Some(POSITION);
+            s.hanging_start = true;
+        });
+        h.start(inbox).await;
+        h.record().await;
+        h.stop().await;
+        h.kwin.with(|s| s.hanging_start = false);
+        h.calls();
+        after(crate::scripting::CALL_TIMEOUT).await;
+        assert_eq!(h.calls(), [Unload(POSITION)]);
+    })
+    .await;
+}
