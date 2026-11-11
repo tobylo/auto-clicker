@@ -1,5 +1,6 @@
+use auto_clicker_core::config::RouteName;
 use auto_clicker_core::config::{Config, Refusal};
-use auto_clicker_core::controller::Hotkey;
+use auto_clicker_core::controller::{Hotkey, Routes};
 use auto_clicker_core::hotkeys::Binding;
 use auto_clicker_core::window::{Answer, ShownHotkeys};
 
@@ -9,6 +10,7 @@ fn view(settings: Draft, answer: Option<Answer>) -> WindowView {
     let config = Config::default();
     WindowView {
         running: settings.input,
+        routes: Routes::default(),
         settings,
         activity: Activity::Idle,
         hotkeys: ShownHotkeys {
@@ -233,11 +235,14 @@ fn a_captured_hotkey_is_kept_for_the_next_save_and_a_key_is_noted() {
 
 #[test]
 fn the_view_says_whether_idle_where_hotkeys_come_from_and_what_waits_for_a_restart() {
-    let mut portal = defaults();
-    portal.input.hotkeys = RouteName::Portal;
-    let mut shown = view(portal.clone(), None);
+    // `auto` in the config, and the desktop's shortcuts picked at start.
+    let mut shown = view(defaults(), None);
+    assert_eq!(shown.running.hotkeys, RouteName::Auto);
+    shown.routes.hotkeys = Route::Portal;
     assert!(idle(&shown) && desktop_hotkeys(&shown) && !routes_pending(&shown));
-    shown.running.hotkeys = RouteName::Kernel;
+    // The keyboards picked, and the config changed since the start.
+    shown.routes.hotkeys = Route::Kernel;
+    shown.settings.input.hotkeys = RouteName::Portal;
     shown.activity = Activity::Clicking;
     assert!(!idle(&shown) && !desktop_hotkeys(&shown) && routes_pending(&shown));
 }

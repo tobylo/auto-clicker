@@ -41,6 +41,11 @@ fn panel_only() -> Layout {
 /// pointer at (2744, 720) on DP-1 at the start; with no positions, a
 /// version 1 recording of the same keys.
 fn store(shared: &Shared, with_positions: bool) -> FileName {
+    store_with(shared, with_positions, &[])
+}
+
+/// The same, with `extra` positions too.
+fn store_with(shared: &Shared, with_positions: bool, extra: &[Event]) -> FileName {
     let held = recordable(W).unwrap();
     let mut events = vec![
         Event {
@@ -61,6 +66,8 @@ fn store(shared: &Shared, with_positions: bool) -> FileName {
                 change: at(2_744, 720),
             },
         );
+        events.extend_from_slice(extra);
+        events.sort_by_key(|event| event.at);
         Recording::with_positions(
             "stored".into(),
             created,
@@ -196,6 +203,129 @@ async fn a_layout_change_stops_a_playback_using_positions_at_once() {
             assert_eq!((d.activity(), d.notice()), (Activity::Idle, why.to_owned()));
             assert_eq!(d.shared.calls().last(), Some(&w(PressState::Up)));
         }
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_layout_watchers_signal_stops_a_playback_using_positions_at_once() {
+    local(async {
+        let (d, file) = daemon_playing(Some(two_screens()), true).await;
+        let watches = d.shared.with(|r| r.watches.len());
+        assert_eq!(watches, 1, "one watcher, started once");
+        d.play_file_until_w_is_down(&file).await;
+        let asked = Instant::now();
+        d.set_layout(Some(panel_only()));
+        d.shared.with(|r| r.watches[0].1.changed());
+        d.settle().await;
+        assert!(asked.elapsed() < HELD_FOR / 10, "{:?}", asked.elapsed());
+        let why = "Playback stopped: the screen layout changed";
+        assert_eq!((d.activity(), d.notice()), (Activity::Idle, why.to_owned()));
+        assert_eq!(d.shared.calls().last(), Some(&w(PressState::Up)));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_layout_change_is_handled_before_a_playback_event_due_with_it() {
+    local(async {
+        let shared = Shared::default();
+        shared.with(|r| {
+            r.recordings = Some(Arc::new(TempDir::new()));
+            r.layout = Some(two_screens());
+        });
+        let later = Event {
+            at: 300_000,
+            change: at(3_000, 720),
+        };
+        let file = store_with(&shared, true, &[later]);
+        let config = Config {
+            tray_start_delay: Duration::ZERO,
+            ..Config::default()
+        };
+        let d = daemon_with(config, shared, true).await;
+        d.play_file_until_w_is_down(&file).await;
+        // The watcher fires its signal at 250 ms, and the position at
+        // 300 ms is due on the same turn of the clock: the change wins.
+        d.set_layout(Some(panel_only()));
+        let signal = d.shared.with(|r| r.watches[0].1.clone());
+        // W went down 20 ms into the run.
+        let at_250 = Instant::now() + ms(230);
+        tokio::task::spawn_local(async move {
+            tokio::time::sleep_until(at_250).await;
+            signal.changed();
+        });
+        d.settle().await;
+        tokio::time::advance(ms(400)).await;
+        d.settle().await;
+        let why = "Playback stopped: the screen layout changed";
+        assert_eq!((d.activity(), d.notice()), (Activity::Idle, why.to_owned()));
+        let moves = d.shared.calls();
+        let moves = moves
+            .iter()
+            .filter(|call| matches!(call, Call::MoveAbsolute(_)));
+        assert_eq!(moves.count(), 1, "the later position played");
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_layout_the_watcher_has_queued_is_taken_before_a_playback_event_due_with_it() {
+    local(async {
+        let shared = Shared::default();
+        shared.with(|r| {
+            r.recordings = Some(Arc::new(TempDir::new()));
+            r.layout = Some(two_screens());
+        });
+        let later = Event {
+            at: 300_000,
+            change: at(3_000, 720),
+        };
+        let file = store_with(&shared, true, &[later]);
+        let config = Config {
+            tray_start_delay: Duration::ZERO,
+            ..Config::default()
+        };
+        let d = daemon_with(config, shared, true).await;
+        d.play_file_until_w_is_down(&file).await;
+        // A report of the change waits in the watcher's queue, unread, when
+        // the position at 300 ms falls due: the change wins.
+        d.shared.with(|r| r.queued_layout = Some(panel_only()));
+        tokio::time::advance(ms(400)).await;
+        d.settle().await;
+        let why = "Playback stopped: the screen layout changed";
+        assert_eq!((d.activity(), d.notice()), (Activity::Idle, why.to_owned()));
+        let moves = d.shared.calls();
+        let moves = moves
+            .iter()
+            .filter(|call| matches!(call, Call::MoveAbsolute(_)));
+        assert_eq!(moves.count(), 1, "the later position played");
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_layout_watcher_feeds_the_recording_the_controller_starts() {
+    local(async {
+        let shared = Shared::default();
+        shared.with(|r| r.layout = Some(two_screens()));
+        let config = Config {
+            tray_start_delay: Duration::ZERO,
+            ..Config::default()
+        };
+        let d = daemon_with(config, shared, true).await;
+        assert!(
+            d.shared.with(|r| r.watch_polls) > 0,
+            "the watcher is driven"
+        );
+        let feed = d.shared.with(|r| r.watches[0].0.clone());
+        assert!(!feed.recording());
+        d.send(Message::Record).await;
+        d.settle().await;
+        assert!(feed.recording());
+        d.send(Message::StopRecording).await;
+        d.settle().await;
+        assert!(!feed.recording());
     })
     .await;
 }

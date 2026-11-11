@@ -30,7 +30,11 @@ use ashpd::{AppID, PortalError};
 use auto_clicker_core::input::InputError;
 use tokio::time::timeout;
 
+use crate::answer::version;
 use crate::token::{self, RestoreToken};
+
+/// The interface clicks go through.
+const REMOTE_DESKTOP: &str = "org.freedesktop.portal.RemoteDesktop";
 
 /// The program's app id: the desktop file the package installs.
 pub const APP_ID: &str = "io.github.tobylo.AutoClicker";
@@ -87,12 +91,7 @@ impl Portal {
             ashpd::register_host_app_with_connection(connection.clone(), app_id),
         )
         .await?
-        .map_err(|err| {
-            InputError::PortalUnavailable(format!(
-                "could not register the app id {APP_ID} ({err}); is the package's \
-                 {APP_ID}.desktop file installed?"
-            ))
-        })?;
+        .map_err(registration_failed)?;
         Ok(Portal { connection })
     }
 
@@ -124,7 +123,9 @@ impl Portal {
         )
         .await?
         .map_err(|err| portal_error("RemoteDesktop", err))?;
-        check_version(proxy.version())?;
+        // Read again without ashpd, which takes a failed read for version 1.
+        let found = version(&self.connection, REMOTE_DESKTOP).await?;
+        usable(found, proxy.version())?;
         Ok(proxy)
     }
 
@@ -271,8 +272,53 @@ fn check_version(version: u32) -> Result<(), InputError> {
     }
 }
 
+/// Whether a proxy that read the version as `cached` serves a portal whose
+/// version is `found`. ashpd checks its own reading before each versioned
+/// call, so a proxy that failed to read it would refuse `ConnectToEIS`
+/// after the session had started: such a proxy is a failed call, and the
+/// next start makes a new one.
+fn usable(found: u32, cached: u32) -> Result<(), InputError> {
+    check_version(found)?;
+    if cached < MIN_VERSION {
+        return Err(InputError::Portal(
+            "RemoteDesktop: its version could not be read; try again".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Why `Registry.Register` failed. Only a desktop without the registry is
+/// sure to stay so. The portal answers every other failure with one
+/// generic error, whether the desktop file is missing or a lookup that may
+/// work next time failed, so those count as a failed call: the portal
+/// route keeps trying and says what to check.
+fn registration_failed(err: ashpd::Error) -> InputError {
+    let why = match err {
+        ashpd::Error::PortalNotFound(_) => {
+            return InputError::PortalUnavailable(
+                "the desktop has no portal registry, so the app id cannot be registered".to_owned(),
+            );
+        }
+        ashpd::Error::Zbus(err) => match zbus::fdo::Error::from(err) {
+            err @ (zbus::fdo::Error::ServiceUnknown(_)
+            | zbus::fdo::Error::UnknownInterface(_)
+            | zbus::fdo::Error::UnknownMethod(_)) => {
+                return InputError::PortalUnavailable(format!(
+                    "the desktop has no portal registry ({err})"
+                ));
+            }
+            err => err.to_string(),
+        },
+        other => other.to_string(),
+    };
+    InputError::Portal(format!(
+        "could not register the app id {APP_ID} ({why}); is the package's {APP_ID}.desktop \
+         file installed?"
+    ))
+}
+
 /// Runs a portal call with [`CALL_TIMEOUT`].
-async fn call<T>(what: &str, future: impl Future<Output = T>) -> Result<T, InputError> {
+pub(crate) async fn call<T>(what: &str, future: impl Future<Output = T>) -> Result<T, InputError> {
     timeout(CALL_TIMEOUT, future).await.map_err(|_| {
         InputError::Portal(format!(
             "{what}: no answer within {} s",
@@ -377,6 +423,57 @@ mod tests {
     fn a_cancelled_dialog_is_not_allowed() {
         let err = portal_error("Start", ashpd::Error::Response(ResponseError::Cancelled));
         assert!(matches!(err, InputError::NotAllowed), "{err:?}");
+    }
+
+    #[test]
+    fn a_proxy_that_misread_the_version_is_a_failed_call() {
+        let outcome = |found, cached| match usable(found, cached) {
+            Ok(()) => "usable",
+            Err(InputError::PortalUnavailable(_)) => "unavailable",
+            Err(_) => "failed call",
+        };
+        let cases = [
+            ((2, 2), "usable"),
+            ((1, 1), "unavailable"),
+            ((1, 2), "unavailable"),
+            ((2, 1), "failed call"),
+        ];
+        for ((found, cached), expected) in cases {
+            assert_eq!(outcome(found, cached), expected, "{found} {cached}");
+        }
+    }
+
+    #[test]
+    fn only_a_missing_registry_makes_registration_unavailable() {
+        let fdo = |err| ashpd::Error::Zbus(zbus::Error::FDO(Box::new(err)));
+        // The portal's one answer for a missing desktop file and for a
+        // lookup that may work next time.
+        let failed = registration_failed(fdo(zbus::fdo::Error::Failed(
+            "App info not found".to_owned(),
+        )));
+        assert!(
+            matches!(&failed, InputError::Portal(why) if why.contains(".desktop")),
+            "{failed:?}"
+        );
+        let lost = registration_failed(fdo(zbus::fdo::Error::NoReply("gone".to_owned())));
+        assert!(matches!(lost, InputError::Portal(_)), "{lost:?}");
+        let cut = registration_failed(ashpd::Error::Zbus(zbus::Error::InterfaceNotFound));
+        assert!(matches!(cut, InputError::Portal(_)), "{cut:?}");
+        let io = registration_failed(ashpd::Error::NoResponse);
+        assert!(matches!(io, InputError::Portal(_)));
+        let name =
+            zbus::names::OwnedInterfaceName::try_from("org.freedesktop.host.portal.Registry")
+                .unwrap();
+        let absent = [
+            ashpd::Error::PortalNotFound(name),
+            fdo(zbus::fdo::Error::ServiceUnknown("no portal".to_owned())),
+            fdo(zbus::fdo::Error::UnknownInterface("Registry".to_owned())),
+            fdo(zbus::fdo::Error::UnknownMethod("Register".to_owned())),
+        ];
+        for err in absent {
+            let got = registration_failed(err);
+            assert!(matches!(got, InputError::PortalUnavailable(_)), "{got:?}");
+        }
     }
 
     #[test]

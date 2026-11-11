@@ -93,6 +93,14 @@ impl Reader {
         }
     }
 
+    /// Waits for the reader's first status, which it sends once it has
+    /// looked at every device there was at its start.
+    async fn scanned(&mut self) {
+        let first = timeout(DEVICE_TIMEOUT, self.received.recv()).await;
+        let first = first.expect("no status came").expect("the reader ended");
+        assert!(matches!(first, HotkeyEvent::Status(_)), "{first:?}");
+    }
+
     /// Presses Ctrl+F24 on `keyboard` until it fires, which also shows the
     /// reader has opened the keyboard: a new device takes a moment.
     async fn fires_from(&mut self, keyboard: &mut Keyboard) {
@@ -187,12 +195,16 @@ async fn a_capture_reads_every_keyboard_but_the_programs_own() {
         // A keyboard with no bound key and no modifier, read only to capture.
         let mut keyboard = Keyboard::new("auto-clicker test letters", &[KEY_A]);
         let a = Key::from_name("a").unwrap();
+        // The program's own keyboard was there at the start, so the reader
+        // has passed over it once it has looked: A from it is never
+        // captured.
+        reader.scanned().await;
+        input.press_key(a).unwrap();
+        input.release_key(a).unwrap();
+        reader.stays_quiet().await;
         let deadline = Instant::now() + DEVICE_TIMEOUT;
         loop {
             assert!(Instant::now() < deadline, "A was never captured");
-            // The program's own keyboard first: never captured.
-            input.press_key(a).unwrap();
-            input.release_key(a).unwrap();
             keyboard.key(KEY_A, 1);
             keyboard.key(KEY_A, 0);
             if let Some(event) = reader.next_hotkey(Duration::from_millis(200)).await {

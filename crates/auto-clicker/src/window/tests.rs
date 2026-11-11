@@ -68,6 +68,7 @@ fn view() -> WindowView {
     let shown = |binding| auto_clicker_core::controller::Hotkey::Bound(binding);
     WindowView {
         running: draft.input,
+        routes: auto_clicker_core::controller::Routes::default(),
         settings: draft,
         activity: Activity::Idle,
         hotkeys: ShownHotkeys {

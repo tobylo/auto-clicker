@@ -120,6 +120,7 @@ mod tests {
             playing: None,
             notice: None,
             problems: Vec::new(),
+            routes: auto_clicker_core::controller::Routes::default(),
         }
     }
 

@@ -248,7 +248,7 @@ export component SettingsWindow inherits Window {
                         label: @tr("Hotkeys come from");
                         ComboBox {
                             enabled: !root.waiting;
-                            model: [@tr("The keyboards (needs the input group)"), @tr("Plasma's shortcuts")];
+                            model: [@tr("Picked at start"), @tr("The keyboards (needs the input group)"), @tr("Plasma's shortcuts")];
                             current-index <=> root.hotkeys-route;
                         }
                     }
@@ -256,7 +256,7 @@ export component SettingsWindow inherits Window {
                         label: @tr("Clicks and keys go through");
                         ComboBox {
                             enabled: !root.waiting;
-                            model: [@tr("/dev/uinput"), @tr("Plasma's remote input")];
+                            model: [@tr("Picked at start"), @tr("/dev/uinput"), @tr("Plasma's remote input")];
                             current-index <=> root.output-route;
                         }
                     }

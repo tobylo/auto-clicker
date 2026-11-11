@@ -1,6 +1,7 @@
 //! The controller's platforms: uinput devices or the desktop's portal for
 //! output, and on either the hotkeys from the keyboards or from the
-//! desktop's shortcuts, with the clocks and directory recordings need.
+//! desktop's shortcuts, the screen layout and the pointer from KWin, and the
+//! clocks and directory recordings need.
 
 use std::future::pending;
 use std::path::PathBuf;
@@ -9,38 +10,32 @@ use std::time::Duration;
 use auto_clicker_backend_kernel::{
     DeviceIdentity, InputSources, KernelBackend, local_time, monotonic_now, read_input,
 };
+use auto_clicker_backend_kwin::Kwin;
 use auto_clicker_backend_portal::{PortalBackend, PortalOutput, read_shortcuts};
-use auto_clicker_core::config::HotkeyRoute;
 use auto_clicker_core::controller::{
-    HotkeyReader, InputLifetime, InputLoss, InputReader, OpenInput, Platform, ReadInput,
+    HotkeyReader, InputLifetime, InputLoss, InputReader, LayoutSignal, LayoutWatch, OpenInput,
+    Platform, ReadInput, Route,
 };
 use auto_clicker_core::input::Input;
-use auto_clicker_core::recording::{LocalTime, recordings_dir};
+use auto_clicker_core::recording::{Layout, LocalTime, RecordingFeed, recordings_dir};
 
-/// Where hotkeys come from, on either output.
+/// Where hotkeys come from, on either output: the reader detection picked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Hotkeys {
-    pub route: HotkeyRoute,
+    pub reader: InputReader,
 }
 
 impl Hotkeys {
-    fn reader(self) -> InputReader {
-        match self.route {
-            HotkeyRoute::Kernel => InputReader::Devices,
-            HotkeyRoute::Portal => InputReader::Desktop,
-        }
-    }
-
-    /// Starts the reader of this route. Only the keyboard reader has
+    /// Starts the reader. Only the keyboard reader has
     /// devices of the program's `own` to leave out, a recording to feed and
     /// keys to capture; the desktop's is asked for the bindings at its first
     /// bind, and opens the desktop's settings when the controller asks.
     fn read(self, own: Vec<DeviceIdentity>, reading: ReadInput) -> HotkeyReader {
-        match self.route {
-            HotkeyRoute::Kernel => evdev_reader(own, reading),
+        match self.reader {
+            InputReader::Devices => evdev_reader(own, reading),
             // The controller stops the reader by dropping it, which closes
             // the desktop's session.
-            HotkeyRoute::Portal => {
+            InputReader::Desktop => {
                 let ReadInput {
                     bindings,
                     send,
@@ -57,6 +52,7 @@ impl Hotkeys {
 
 pub struct Kernel {
     pub hotkeys: Hotkeys,
+    pub kwin: Kwin,
 }
 
 impl Platform for Kernel {
@@ -94,7 +90,15 @@ impl Platform for Kernel {
     }
 
     fn input_reader(&self) -> InputReader {
-        self.hotkeys.reader()
+        self.hotkeys.reader
+    }
+
+    fn layout(&self) -> Option<Layout> {
+        self.kwin.layout()
+    }
+
+    fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
+        self.kwin.watch(feed, changed)
     }
 }
 
@@ -102,12 +106,15 @@ impl Platform for Kernel {
 pub struct Portal {
     pub output: PortalOutput,
     pub hotkeys: Hotkeys,
+    pub kwin: Kwin,
 }
 
 impl Platform for Portal {
     type Backend = PortalBackend;
 
     const LIFETIME: InputLifetime = InputLifetime::PerRun;
+
+    const OUTPUT: Route = Route::Portal;
 
     fn open_input(&mut self) -> OpenInput<PortalBackend> {
         Box::pin(self.output.open())
@@ -130,7 +137,7 @@ impl Platform for Portal {
     }
 
     fn input_reader(&self) -> InputReader {
-        self.hotkeys.reader()
+        self.hotkeys.reader
     }
 
     /// libei's devices live inside the compositor and have no evdev node,
@@ -141,6 +148,14 @@ impl Platform for Portal {
         reading: ReadInput,
     ) -> HotkeyReader {
         self.hotkeys.read(Vec::new(), reading)
+    }
+
+    fn layout(&self) -> Option<Layout> {
+        self.kwin.layout()
+    }
+
+    fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
+        self.kwin.watch(feed, changed)
     }
 }
 
@@ -173,36 +188,39 @@ mod tests {
 
     use super::*;
 
-    fn hotkeys(route: HotkeyRoute) -> Hotkeys {
-        Hotkeys { route }
+    fn hotkeys(reader: InputReader) -> Hotkeys {
+        Hotkeys { reader }
     }
 
     #[test]
-    fn the_hotkey_route_is_the_readers_on_either_output() {
-        for (route, reader) in [
-            (HotkeyRoute::Kernel, InputReader::Devices),
-            (HotkeyRoute::Portal, InputReader::Desktop),
-        ] {
+    fn the_picked_reader_is_the_readers_on_either_output() {
+        for reader in [InputReader::Devices, InputReader::Desktop] {
             let kernel = Kernel {
-                hotkeys: hotkeys(route),
+                hotkeys: hotkeys(reader),
+                kwin: Kwin::none(),
             };
             let portal = Portal {
                 output: PortalOutput::new(None),
-                hotkeys: hotkeys(route),
+                hotkeys: hotkeys(reader),
+                kwin: Kwin::none(),
             };
             assert_eq!(kernel.input_reader(), reader);
             assert_eq!(portal.input_reader(), reader);
         }
+        assert_eq!(Kernel::OUTPUT, Route::Kernel);
+        assert_eq!(Portal::OUTPUT, Route::Portal);
     }
 
     #[test]
     fn the_clocks_and_directory_are_the_backends_and_cores() {
         let kernel = Kernel {
-            hotkeys: hotkeys(HotkeyRoute::Kernel),
+            hotkeys: hotkeys(InputReader::Devices),
+            kwin: Kwin::none(),
         };
         let portal = Portal {
             output: PortalOutput::new(None),
-            hotkeys: hotkeys(HotkeyRoute::Portal),
+            hotkeys: hotkeys(InputReader::Desktop),
+            kwin: Kwin::none(),
         };
         for (clock, local, dir) in [
             (
