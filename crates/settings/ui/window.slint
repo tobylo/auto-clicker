@@ -173,11 +173,19 @@ export component SettingsWindow inherits Window {
                         }
                         if root.position-fixed: Row {
                             label: @tr("Point, 0 to 65535 across all screens");
+                            Text {
+                                text: @tr("X");
+                                vertical-alignment: center;
+                            }
                             SpinBox {
                                 enabled: !root.waiting;
                                 minimum: 0;
                                 maximum: 65535;
                                 value <=> root.position-x;
+                            }
+                            Text {
+                                text: @tr("Y");
+                                vertical-alignment: center;
                             }
                             SpinBox {
                                 enabled: !root.waiting;
