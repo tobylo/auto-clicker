@@ -34,7 +34,9 @@ export global Texts {
     public pure function action-playback() -> string { @tr("Play or stop the recording") }
     public pure function not-set() -> string { @tr("not set") }
     public pure function not-reported() -> string { @tr("not reported yet") }
-    public pure function not-a-number(field: string) -> string { @tr("{}: not a number", field) }
+    public pure function unreadable(field: string) -> string { @tr("{}: cannot be read", field) }
+    public pure function captured-hotkey(keys: string) -> string { @tr("Captured {}; save to keep it.", keys) }
+    public pure function captured-key(key: string) -> string { @tr("Key set to {}; save to keep it.", key) }
 }
 
 component Row inherits HorizontalLayout {
@@ -61,12 +63,12 @@ export component SettingsWindow inherits Window {
     in-out property <int> interval-unit;
     in-out property <int> jitter;
     in-out property <int> button;
-    in property <string> key-name;
+    in-out property <string> key-text;
     in-out property <bool> position-fixed;
     in-out property <int> position-x;
     in-out property <int> position-y;
     in-out property <bool> repeat-forever;
-    in-out property <int> repeat-count: 1;
+    in-out property <string> repeat-text: "1";
     // Hotkeys
     in property <string> hotkey-clicking;
     in property <string> hotkey-recording;
@@ -79,9 +81,12 @@ export component SettingsWindow inherits Window {
     // Playback
     in-out property <string> speed-text;
     in-out property <bool> plays-forever;
-    in-out property <int> plays-count: 1;
+    in-out property <string> plays-text: "1";
     // State
     in property <bool> idle;
+    // The window may send a request: nothing waits on an answer, and no
+    // question is open.
+    in property <bool> may-ask;
     in property <bool> waiting;
     in property <string> message;
     in property <bool> message-is-error;
@@ -142,14 +147,13 @@ export component SettingsWindow inherits Window {
                             }
                         }
                         Row {
-                            label: @tr("Key");
-                            Text {
-                                text: root.key-name;
-                                vertical-alignment: center;
+                            label: @tr("Key, a name or a key code");
+                            LineEdit {
+                                text <=> root.key-text;
                             }
-                            Button {
+                            if !root.desktop-hotkeys: Button {
                                 text: @tr("Change…");
-                                enabled: root.idle && !root.waiting && !root.desktop-hotkeys;
+                                enabled: root.idle && root.may-ask;
                                 clicked => { root.capture-key(); }
                             }
                         }
@@ -180,11 +184,10 @@ export component SettingsWindow inherits Window {
                                 text: @tr("Until stopped");
                                 checked <=> root.repeat-forever;
                             }
-                            SpinBox {
+                            LineEdit {
                                 enabled: !root.repeat-forever;
-                                minimum: 1;
-                                maximum: 1000000;
-                                value <=> root.repeat-count;
+                                input-type: number;
+                                text <=> root.repeat-text;
                             }
                         }
                         Row {
@@ -217,7 +220,7 @@ export component SettingsWindow inherits Window {
                         }
                         if !root.desktop-hotkeys: Button {
                             text: @tr("Change…");
-                            enabled: root.idle && !root.waiting;
+                            enabled: root.idle && root.may-ask;
                             clicked => { root.capture-hotkey(index); }
                         }
                     }
@@ -227,7 +230,7 @@ export component SettingsWindow inherits Window {
                     }
                     if root.desktop-hotkeys: Button {
                         text: @tr("Change in System Settings");
-                        enabled: !root.waiting;
+                        enabled: root.may-ask;
                         clicked => { root.configure-shortcuts(); }
                     }
                     Row {
@@ -269,11 +272,10 @@ export component SettingsWindow inherits Window {
                             text: @tr("Until stopped");
                             checked <=> root.plays-forever;
                         }
-                        SpinBox {
+                        LineEdit {
                             enabled: !root.plays-forever;
-                            minimum: 1;
-                            maximum: 1000000;
-                            value <=> root.plays-count;
+                            input-type: number;
+                            text <=> root.plays-text;
                         }
                     }
                     if root.no-recording != "": Text {
@@ -310,6 +312,7 @@ export component SettingsWindow inherits Window {
             Button {
                 text: @tr("Yes");
                 primary: true;
+                enabled: !root.waiting;
                 clicked => { root.confirm(); }
             }
             Button {
@@ -329,7 +332,7 @@ export component SettingsWindow inherits Window {
             Button {
                 text: @tr("Save");
                 primary: true;
-                enabled: root.idle && !root.waiting && root.confirm-text == "";
+                enabled: root.idle && root.may-ask;
                 clicked => { root.save(); }
             }
         }

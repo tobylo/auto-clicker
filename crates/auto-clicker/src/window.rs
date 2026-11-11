@@ -43,9 +43,22 @@ const QUEUED_REQUESTS: usize = 4;
 /// returns is a choice of Settings in the tray. The keeper ends, and kills
 /// the window, when every sender is gone.
 pub fn keep(opener: WindowOpener) -> mpsc::UnboundedSender<()> {
+    let program = program().map_err(|err| err.to_string());
+    keep_with(Opening { opener, program })
+}
+
+/// [`keep`], opening windows as `opening` says.
+fn keep_with(opening: Opening) -> mpsc::UnboundedSender<()> {
     let (open, asked) = mpsc::unbounded_channel();
-    tokio::spawn(keeper(opener, asked));
+    tokio::spawn(keeper(opening, asked));
     open
+}
+
+/// How a window opens: the program, or why it cannot be found, and where
+/// its link to the controller goes.
+struct Opening {
+    opener: WindowOpener,
+    program: Result<PathBuf, String>,
 }
 
 /// A window that runs: where to ask it to come to the front, and its
@@ -64,12 +77,12 @@ impl Drop for Aborting {
     }
 }
 
-async fn keeper(opener: WindowOpener, mut asked: mpsc::UnboundedReceiver<()>) {
+async fn keeper(opening: Opening, mut asked: mpsc::UnboundedReceiver<()>) {
     let mut running: Option<Running> = None;
     loop {
         tokio::select! {
             choice = asked.recv() => match choice {
-                Some(()) => running = chosen(running.take(), &opener),
+                Some(()) => running = chosen(running.take(), &opening),
                 None => return,
             },
             () = finished(&mut running) => running = None,
@@ -79,7 +92,7 @@ async fn keeper(opener: WindowOpener, mut asked: mpsc::UnboundedReceiver<()>) {
 
 /// Settings was chosen: the window that runs comes to the front, or a new
 /// one opens.
-fn chosen(running: Option<Running>, opener: &WindowOpener) -> Option<Running> {
+fn chosen(running: Option<Running>, opening: &Opening) -> Option<Running> {
     match running {
         Some(window) if !window.session.0.is_finished() => {
             // The window may already be closing; then nothing comes to the
@@ -87,7 +100,7 @@ fn chosen(running: Option<Running>, opener: &WindowOpener) -> Option<Running> {
             let _ = window.raise.send(());
             Some(window)
         }
-        _ => open(opener),
+        _ => open(opening),
     }
 }
 
@@ -103,11 +116,16 @@ async fn finished(running: &mut Option<Running>) {
 }
 
 /// Starts a window and its session; `None`, saying why, when it cannot.
-fn open(opener: &WindowOpener) -> Option<Running> {
-    match spawn() {
+fn open(opening: &Opening) -> Option<Running> {
+    let spawned = match &opening.program {
+        Ok(program) => spawn(program),
+        Err(why) => Err(io::Error::other(why.clone())),
+    };
+    match spawned {
         Ok((child, socket)) => {
             let (raise, raised) = mpsc::unbounded_channel();
-            let session = tokio::spawn(session(opener.clone(), child, socket, raised));
+            let opener = opening.opener.clone();
+            let session = tokio::spawn(session(opener, child, socket, raised));
             Some(Running {
                 raise,
                 session: Aborting(session),
@@ -133,18 +151,31 @@ fn program() -> io::Result<PathBuf> {
 /// input, and returns it with the other end. Both ends close on exec: the
 /// window gets its end as file descriptor 0 alone, and no other program the
 /// daemon might start gets either.
-fn spawn() -> io::Result<(Child, UnixStream)> {
+///
+/// The window gets `DISPLAY` only when it names a display on this machine:
+/// its toolkit's clipboard speaks X11, and a display on another host would
+/// be a network connection, which the program never opens.
+fn spawn(program: &std::path::Path) -> io::Result<(Child, UnixStream)> {
     let (ours, theirs) = std::os::unix::net::UnixStream::pair()?;
-    let mut command = Command::new(program()?);
+    let mut command = Command::new(program);
     command
         .stdin(Stdio::from(OwnedFd::from(theirs)))
         .kill_on_drop(true);
+    if !local_display(std::env::var_os("DISPLAY").as_deref()) {
+        command.env_remove("DISPLAY");
+    }
     let child = command.spawn()?;
     // The command keeps a copy of the window's end until dropped; with it
     // gone, the window's end closes when the window does.
     drop(command);
     ours.set_nonblocking(true)?;
     Ok((child, UnixStream::from_std(ours)?))
+}
+
+/// Whether `display` names an X display on this machine (":1"), which is
+/// reached through a Unix socket; "host:0" is one over the network.
+fn local_display(display: Option<&std::ffi::OsStr>) -> bool {
+    display.is_some_and(|display| display.as_encoded_bytes().first() == Some(&b':'))
 }
 
 /// One window's session: links it to the controller and carries requests

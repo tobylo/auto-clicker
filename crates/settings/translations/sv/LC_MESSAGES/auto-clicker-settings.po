@@ -89,8 +89,14 @@ msgstr "inte vald"
 msgid "not reported yet"
 msgstr "inte rapporterad än"
 
-msgid "{}: not a number"
-msgstr "{}: inget tal"
+msgid "{}: cannot be read"
+msgstr "{}: går inte att läsa"
+
+msgid "Captured {}; save to keep it."
+msgstr "Fångade {}; spara för att behålla den."
+
+msgid "Key set to {}; save to keep it."
+msgstr "Tangenten blev {}; spara för att behålla den."
 
 msgid "Auto clicker settings"
 msgstr "Inställningar för autoklickaren"
@@ -142,6 +148,9 @@ msgstr "Bakåt"
 
 msgid "Forward"
 msgstr "Framåt"
+
+msgid "Key, a name or a key code"
+msgstr "Tangent, ett namn eller en tangentkod"
 
 msgid "Change…"
 msgstr "Ändra…"

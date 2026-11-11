@@ -77,6 +77,9 @@ mod tests {
             ("sv_SE.UTF-8", Language::Swedish),
             ("sv_FI@euro", Language::Swedish),
             ("sv", Language::Swedish),
+            ("sv.UTF-8", Language::Swedish),
+            ("sv@euro", Language::Swedish),
+            ("svenska", Language::English),
             ("en_US.UTF-8", Language::English),
             ("svx_YZ", Language::English),
             ("de_DE.UTF-8", Language::English),
@@ -84,6 +87,12 @@ mod tests {
             assert_eq!(language(&[("LANG", name)]), expected, "{name}");
         }
         assert_eq!(language(&[]), Language::English);
+    }
+
+    #[test]
+    fn each_language_has_the_code_its_translations_are_filed_under() {
+        assert_eq!(Language::English.code(), "en");
+        assert_eq!(Language::Swedish.code(), "sv");
     }
 
     #[test]

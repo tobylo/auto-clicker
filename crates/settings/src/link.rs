@@ -18,7 +18,12 @@ impl Link {
     /// The socket on standard input, and a second handle to it for
     /// reading; an error when standard input is no socket.
     pub fn from_stdin() -> io::Result<(Link, UnixStream)> {
-        let fd = io::stdin().as_fd().try_clone_to_owned()?;
+        Link::from_fd(io::stdin().as_fd().try_clone_to_owned()?)
+    }
+
+    /// The socket `fd`, and a second handle to it; an error when it is no
+    /// socket.
+    fn from_fd(fd: std::os::fd::OwnedFd) -> io::Result<(Link, UnixStream)> {
         let file = std::fs::File::from(fd);
         if !file.metadata()?.file_type().is_socket() {
             return Err(io::Error::other(
@@ -77,6 +82,14 @@ mod tests {
     use auto_clicker_core::window::Ask;
 
     use super::*;
+
+    #[test]
+    fn only_a_socket_is_taken() {
+        let (ours, _theirs) = UnixStream::pair().unwrap();
+        assert!(Link::from_fd(std::os::fd::OwnedFd::from(ours)).is_ok());
+        let file = std::fs::File::open("/dev/null").unwrap();
+        assert!(Link::from_fd(std::os::fd::OwnedFd::from(file)).is_err());
+    }
 
     #[test]
     fn requests_go_out_one_line_each() {

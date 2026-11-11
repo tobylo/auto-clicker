@@ -2,12 +2,12 @@
 //! the daemon last sent, the hotkeys and key captured since, the request it
 //! waits on, and what each answer means for what it shows.
 
-use auto_clicker_core::config::{Draft, Field, RouteName, Stale};
+use auto_clicker_core::config::{Draft, Field, HotkeysDraft, RouteName, Stale};
 use auto_clicker_core::controller::Activity;
 use auto_clicker_core::hotkeys::{Action, Capture};
 use auto_clicker_core::window::{Ask, CaptureEnd, Confirm, Outcome, Request, WindowView};
 
-use crate::model::{Fields, NotANumber, with_hotkey};
+use crate::model::{Fields, Unreadable, with_hotkey};
 
 /// What a capture is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,9 +27,13 @@ pub enum Note {
     Refused(Field, String),
     Unavailable(String),
     Capturing(Target),
+    /// A hotkey was captured, as it is written; it is kept on a save.
+    CapturedHotkey(String),
+    /// The clicker's key was captured: its code.
+    CapturedKey(u16),
     CaptureEnded(CaptureEnd),
     Configured,
-    NotANumber(NotANumber),
+    Unreadable(Unreadable),
 }
 
 impl Note {
@@ -37,7 +41,7 @@ impl Note {
     pub fn is_error(&self) -> bool {
         matches!(
             self,
-            Note::Failed(_) | Note::Refused(..) | Note::Unavailable(_) | Note::NotANumber(_)
+            Note::Failed(_) | Note::Refused(..) | Note::Unavailable(_) | Note::Unreadable(_)
         )
     }
 }
@@ -49,10 +53,9 @@ pub enum Question {
     WithoutModifier(Vec<Action>),
 }
 
-/// A save, and what the user agreed to for it.
-#[derive(Clone, Debug, PartialEq)]
-struct Save {
-    draft: Draft,
+/// What the user agreed to for a save.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Agreed {
     replace: bool,
     without_modifier: Vec<Action>,
 }
@@ -60,7 +63,7 @@ struct Save {
 /// What the window waits on.
 #[derive(Clone, Debug, PartialEq)]
 enum Asked {
-    Save(Save),
+    Save(Agreed),
     Capture(Target),
     Configure,
 }
@@ -69,7 +72,7 @@ enum Asked {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Shown {
     /// New settings to fill the fields with: the saved ones changed.
-    pub fields: Option<Fields>,
+    pub fields: Option<Draft>,
     /// A line to show, when an answer came.
     pub note: Option<Note>,
 }
@@ -79,11 +82,11 @@ pub struct Shown {
 pub struct State {
     /// The settings the daemon last sent.
     saved: Option<Draft>,
-    /// The hotkeys and the clicker's key to save, captured since.
-    keys: Option<Draft>,
+    /// The hotkeys to save: as sent, or as captured since.
+    hotkeys: Option<HotkeysDraft>,
     next_id: u64,
     asked: Option<(u64, Asked)>,
-    question: Option<(Question, Save)>,
+    question: Option<(Question, Agreed)>,
 }
 
 impl State {
@@ -92,8 +95,8 @@ impl State {
         let mut shown = Shown::default();
         if self.saved.as_ref() != Some(&view.settings) {
             self.saved = Some(view.settings.clone());
-            self.keys = Some(view.settings.clone());
-            shown.fields = Some(Fields::from_draft(&view.settings));
+            self.hotkeys = Some(view.settings.hotkeys.clone());
+            shown.fields = Some(view.settings.clone());
         }
         let answered = view.answer.as_ref().and_then(|answer| {
             let (id, _) = self.asked.as_ref()?;
@@ -117,18 +120,15 @@ impl State {
             Outcome::Unavailable(why) => Note::Unavailable(why),
             Outcome::Confirm(confirm) => return self.ask(confirm, asked),
             Outcome::CapturedHotkey(binding) => {
-                self.captured(asked, |keys, target| match target {
-                    Target::Hotkey(action) => {
-                        keys.hotkeys = with_hotkey(&keys.hotkeys, action, binding.to_string());
-                    }
-                    Target::Key => keys.clicker.key = binding.key().code(),
-                });
-                return None;
+                let text = binding.to_string();
+                if let (Asked::Capture(Target::Hotkey(action)), Some(hotkeys)) =
+                    (asked, &mut self.hotkeys)
+                {
+                    *hotkeys = with_hotkey(hotkeys, action, text.clone());
+                }
+                Note::CapturedHotkey(text)
             }
-            Outcome::CapturedKey(code) => {
-                self.captured(asked, |keys, _| keys.clicker.key = code);
-                return None;
-            }
+            Outcome::CapturedKey(code) => Note::CapturedKey(code),
             Outcome::CaptureEnded(why) => Note::CaptureEnded(why),
             Outcome::Configured => Note::Configured,
         })
@@ -136,21 +136,15 @@ impl State {
 
     /// Keeps a question a save asked, to ask the user.
     fn ask(&mut self, confirm: Confirm, asked: Asked) -> Option<Note> {
-        let Asked::Save(save) = asked else {
+        let Asked::Save(agreed) = asked else {
             return None;
         };
         let question = match confirm {
             Confirm::Replace(stale) => Question::Replace(stale),
             Confirm::WithoutModifier(actions) => Question::WithoutModifier(actions),
         };
-        self.question = Some((question, save));
+        self.question = Some((question, agreed));
         None
-    }
-
-    fn captured(&mut self, asked: Asked, set: impl FnOnce(&mut Draft, Target)) {
-        if let (Asked::Capture(target), Some(keys)) = (asked, &mut self.keys) {
-            set(keys, target);
-        }
     }
 
     /// The question to show, if a save asked one.
@@ -163,33 +157,39 @@ impl State {
         self.asked.is_some()
     }
 
-    /// The hotkeys and key to show: as captured, before a save.
-    pub fn keys(&self) -> Option<&Draft> {
-        self.keys.as_ref()
+    /// The hotkeys to show: as captured, before a save.
+    pub fn hotkeys(&self) -> Option<&HotkeysDraft> {
+        self.hotkeys.as_ref()
     }
 
-    /// A save of `fields`; what is wrong instead, when a number is not one.
-    /// `None` before the daemon sent the settings: there is nothing to save
-    /// yet.
-    pub fn save(&mut self, fields: &Fields) -> Option<Result<Request, NotANumber>> {
-        let draft = fields.to_draft(self.keys.as_ref()?);
-        Some(draft.map(|draft| {
-            self.send_save(Save {
-                draft,
-                replace: false,
-                without_modifier: Vec::new(),
-            })
-        }))
+    /// Whether the user may ask something now: the settings came, nothing
+    /// waits on an answer and no question is open.
+    pub fn may_ask(&self) -> bool {
+        self.hotkeys.is_some() && self.asked.is_none() && self.question.is_none()
     }
 
-    /// The user said yes to the question: the save again, agreeing to it.
-    pub fn agree(&mut self) -> Option<Request> {
-        let (question, mut save) = self.question.take()?;
-        match question {
-            Question::Replace(_) => save.replace = true,
-            Question::WithoutModifier(actions) => save.without_modifier.extend(actions),
+    /// A save of `fields`; which field cannot be read instead, if one
+    /// cannot. `None` while the user may not ask anything.
+    pub fn save(&mut self, fields: &Fields) -> Option<Result<Request, Unreadable>> {
+        if !self.may_ask() {
+            return None;
         }
-        Some(self.send_save(save))
+        self.send_save(fields, Agreed::default())
+    }
+
+    /// The user said yes to the question: a save of the fields as they are
+    /// now, agreeing to it. `None` with no question open, or while an
+    /// answer is still awaited.
+    pub fn agree(&mut self, fields: &Fields) -> Option<Result<Request, Unreadable>> {
+        if self.asked.is_some() {
+            return None;
+        }
+        let (question, mut agreed) = self.question.take()?;
+        match question {
+            Question::Replace(_) => agreed.replace = true,
+            Question::WithoutModifier(actions) => agreed.without_modifier.extend(actions),
+        }
+        self.send_save(fields, agreed)
     }
 
     /// The user said no: nothing is saved.
@@ -197,30 +197,44 @@ impl State {
         self.question = None;
     }
 
-    /// A capture for `target`.
-    pub fn capture(&mut self, target: Target) -> Request {
+    /// A capture for `target`; `None` while the user may not ask anything.
+    pub fn capture(&mut self, target: Target) -> Option<Request> {
+        if !self.may_ask() {
+            return None;
+        }
         let capture = match target {
             Target::Hotkey(_) => Capture::Hotkey,
             Target::Key => Capture::Key,
         };
-        self.send(Ask::Capture(capture), Asked::Capture(target))
+        Some(self.send(Ask::Capture(capture), Asked::Capture(target)))
     }
 
-    /// A request for the desktop's shortcut settings.
-    pub fn configure(&mut self) -> Request {
+    /// A request for the desktop's shortcut settings; `None` while the user
+    /// may not ask anything.
+    pub fn configure(&mut self) -> Option<Request> {
+        if !self.may_ask() {
+            return None;
+        }
         let ask = Ask::ConfigureShortcuts {
             activation_token: None,
         };
-        self.send(ask, Asked::Configure)
+        Some(self.send(ask, Asked::Configure))
     }
 
-    fn send_save(&mut self, save: Save) -> Request {
-        let ask = Ask::Save {
-            settings: save.draft.clone(),
-            replace: save.replace,
-            without_modifier: save.without_modifier.clone(),
-        };
-        self.send(ask, Asked::Save(save))
+    fn send_save(
+        &mut self,
+        fields: &Fields,
+        agreed: Agreed,
+    ) -> Option<Result<Request, Unreadable>> {
+        let draft = fields.to_draft(self.hotkeys.as_ref()?);
+        Some(draft.map(|settings| {
+            let ask = Ask::Save {
+                settings,
+                replace: agreed.replace,
+                without_modifier: agreed.without_modifier.clone(),
+            };
+            self.send(ask, Asked::Save(agreed))
+        }))
     }
 
     fn send(&mut self, ask: Ask, asked: Asked) -> Request {
