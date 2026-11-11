@@ -87,6 +87,10 @@ pub struct State {
     next_id: u64,
     asked: Option<(u64, Asked)>,
     question: Option<(Question, Agreed)>,
+    /// The settings the window last sent in a save: when the daemon sends
+    /// them back as saved, the fields already show them, and any edit made
+    /// since stays.
+    submitted: Option<Draft>,
 }
 
 impl State {
@@ -95,8 +99,10 @@ impl State {
         let mut shown = Shown::default();
         if self.saved.as_ref() != Some(&view.settings) {
             self.saved = Some(view.settings.clone());
-            self.hotkeys = Some(view.settings.hotkeys.clone());
-            shown.fields = Some(view.settings.clone());
+            if self.submitted.as_ref() != Some(&view.settings) {
+                self.hotkeys = Some(view.settings.hotkeys.clone());
+                shown.fields = Some(view.settings.clone());
+            }
         }
         let answered = view.answer.as_ref().and_then(|answer| {
             let (id, _) = self.asked.as_ref()?;
@@ -157,6 +163,11 @@ impl State {
         self.asked.is_some()
     }
 
+    /// Whether the window waits on the answer to a save.
+    pub fn saving(&self) -> bool {
+        matches!(self.asked, Some((_, Asked::Save(_))))
+    }
+
     /// The hotkeys to show: as captured, before a save.
     pub fn hotkeys(&self) -> Option<&HotkeysDraft> {
         self.hotkeys.as_ref()
@@ -180,16 +191,23 @@ impl State {
     /// The user said yes to the question: a save of the fields as they are
     /// now, agreeing to it. `None` with no question open, or while an
     /// answer is still awaited.
+    /// Fields that cannot be read keep the question open, for the user to
+    /// correct them and say yes again.
     pub fn agree(&mut self, fields: &Fields) -> Option<Result<Request, Unreadable>> {
         if self.asked.is_some() {
             return None;
         }
-        let (question, mut agreed) = self.question.take()?;
+        let (question, agreed) = self.question.as_ref()?;
+        let mut agreed = agreed.clone();
         match question {
             Question::Replace(_) => agreed.replace = true,
             Question::WithoutModifier(actions) => agreed.without_modifier.extend(actions),
         }
-        self.send_save(fields, agreed)
+        let sent = self.send_save(fields, agreed);
+        if matches!(sent, Some(Ok(_))) {
+            self.question = None;
+        }
+        sent
     }
 
     /// The user said no: nothing is saved.
@@ -228,6 +246,7 @@ impl State {
     ) -> Option<Result<Request, Unreadable>> {
         let draft = fields.to_draft(self.hotkeys.as_ref()?);
         Some(draft.map(|settings| {
+            self.submitted = Some(settings.clone());
             let ask = Ask::Save {
                 settings,
                 replace: agreed.replace,

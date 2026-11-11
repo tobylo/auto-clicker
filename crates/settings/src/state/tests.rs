@@ -235,3 +235,49 @@ fn the_view_says_whether_idle_where_hotkeys_come_from_and_what_waits_for_a_resta
     shown.activity = Activity::Clicking;
     assert!(!idle(&shown) && !desktop_hotkeys(&shown) && routes_pending(&shown));
 }
+
+#[test]
+fn a_save_coming_back_keeps_what_was_edited_since_and_other_changes_refill() {
+    let mut state = started();
+    let mut edited = fields();
+    edited.tray_delay = 7;
+    let request = state.save(&edited).unwrap().unwrap();
+    assert!(state.saving());
+    let Ask::Save { settings, .. } = request.ask else {
+        panic!("{request:?}");
+    };
+    let answer = Answer {
+        id: request.id,
+        outcome: Outcome::Saved,
+    };
+    let back = state.view(&view(settings.clone(), Some(answer)));
+    assert_eq!(
+        back,
+        Shown {
+            fields: None,
+            note: Some(Note::Saved)
+        }
+    );
+    assert!(!state.saving());
+    // Settings saved some other way fill the fields.
+    let mut other = settings;
+    other.tray_start_delay = 9;
+    assert_eq!(state.view(&view(other.clone(), None)).fields, Some(other));
+}
+
+#[test]
+fn a_yes_with_a_field_that_cannot_be_read_keeps_the_question() {
+    let mut state = started();
+    let first = saved(&mut state);
+    answered(
+        &mut state,
+        first.id,
+        Outcome::Confirm(Confirm::Replace(Stale::Changed)),
+    );
+    let mut wrong = fields();
+    wrong.speed_text = "fast".to_owned();
+    assert_eq!(state.agree(&wrong), Some(Err(Unreadable::Speed)));
+    assert_eq!(state.question(), Some(&Question::Replace(Stale::Changed)));
+    assert!(state.agree(&fields()).unwrap().is_ok());
+    assert_eq!(state.question(), None);
+}
