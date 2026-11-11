@@ -206,16 +206,6 @@ fn read_after_loss(stream: &mut EventStream) -> io::Result<AttributeSet<KeyCode>
     stream.device().get_key_state()
 }
 
-/// Why the reader reads what a device holds.
-#[derive(Clone, Copy)]
-enum Read {
-    /// It was just opened: none of its events were read or dropped.
-    Opened,
-    /// Again, dropping the events it had queued: after lost events, or as a
-    /// recording starts.
-    Again,
-}
-
 /// Where and when an event came from.
 #[derive(Clone, Copy)]
 struct Origin {
@@ -321,7 +311,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
         // a modifier held since before (a reader started again while the
         // user holds Ctrl), and while recording, for the recorder.
         if let Some(id) = read_now {
-            self.read_state(id, Read::Opened);
+            self.read_state(id);
         }
     }
 
@@ -374,7 +364,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
                 let reaction = self.matcher.events_lost(id);
                 self.send_reaction(reaction);
             }
-            Step::Resync => self.read_state(id, Read::Again),
+            Step::Resync => self.read_state(id),
             Step::Lost | Step::Nothing => {}
         }
     }
@@ -407,10 +397,10 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
     }
 
     /// Reads what a device holds now, as it opens, after lost events or as a
-    /// recording starts, and tells the matcher (a hotkey keyboard's) and the
-    /// recorder (a recordable device's). Every event read from it before is
-    /// older than the read, and dropped.
-    fn read_state(&mut self, id: DeviceId, read: Read) {
+    /// recording starts, and tells the matcher (a hotkey keyboard's) and the recorder
+    /// (a recordable device's). Every event read from it before is older
+    /// than the read, and dropped.
+    fn read_state(&mut self, id: DeviceId) {
         let Some(device) = self.devices.iter_mut().find(|device| device.id == id) else {
             return;
         };
@@ -424,10 +414,8 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
                 // Only a hotkey keyboard's read moves the matcher's cutoff:
                 // a mouse opened for a recording must not hold back a
                 // hotkey pressed just before.
-                match read {
-                    _ if !role.hotkeys => {}
-                    Read::Opened => self.matcher.opened(id, held, now),
-                    Read::Again => self.matcher.resync(id, held, now),
+                if role.hotkeys {
+                    self.matcher.resync(id, held, now);
                 }
                 if role.record {
                     self.feed.with(|recorder| recorder.resync(id, held, now));

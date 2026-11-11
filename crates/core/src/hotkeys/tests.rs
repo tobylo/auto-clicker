@@ -148,8 +148,6 @@ enum Step {
     /// The device was read again after lost events at a time, holding these
     /// keys.
     Read(DeviceId, &'static [u16], u64),
-    /// The device was opened holding these keys at this time.
-    Opened(DeviceId, &'static [u16], u64),
 }
 
 /// Later than every out-of-order change in these tests.
@@ -192,10 +190,6 @@ fn feed(matcher: &mut Matcher, steps: &[Step]) -> Vec<HotkeyEvent> {
                 Step::Lost(device) => matcher.events_lost(device),
                 Step::Read(device, held, now) => {
                     matcher.resync(device, |code| held.contains(&code), ms(now));
-                    Reaction::default()
-                }
-                Step::Opened(device, held, now) => {
-                    matcher.opened(device, |code| held.contains(&code), ms(now));
                     Reaction::default()
                 }
             };
@@ -429,23 +423,11 @@ fn a_press_older_than_a_read_after_lost_events_never_fires() {
 }
 
 #[test]
-fn a_keyboard_opened_holding_nothing_lets_an_older_press_fire() {
-    // B's Ctrl+F6 is queued while A is plugged in and opened: A holds
-    // nothing, so nothing B's press is matched against changed.
-    let sent = run(&[
-        at(300, down(B, LEFTCTRL)),
-        Step::Opened(A, &[], 500),
-        at(450, down(B, F6)),
-    ]);
-    assert_eq!(sent, [Fired(Action::ToggleClicking)]);
-}
-
-#[test]
 fn a_keyboard_opened_holding_a_modifier_blocks_an_older_press() {
-    // A is opened holding Ctrl at 500; B's F6 from 450 may have come
-    // before that Ctrl went down.
+    // A is opened and read holding Ctrl at 500; B's F6 from 450 may have
+    // come before that Ctrl went down.
     let sent = run(&[
-        Step::Opened(A, &[LEFTCTRL], 500),
+        Step::Read(A, &[LEFTCTRL], 500),
         at(450, down(B, F6)),
         down(B, F6),
     ]);
@@ -454,9 +436,9 @@ fn a_keyboard_opened_holding_a_modifier_blocks_an_older_press() {
 
 #[test]
 fn a_press_older_than_a_read_that_dropped_queued_events_never_fires() {
-    // A's queued Shift down and up are dropped as a recording starts and A
-    // is read again holding nothing, as before. B's F6 from 450 came while
-    // Shift was down.
+    // A's queued Shift down and up are dropped as A is read (opened, or as
+    // a recording starts) holding nothing, as before. B's F6 from 450 came
+    // while Shift was down.
     let sent = run(&[
         down(B, LEFTCTRL),
         Step::Read(A, &[], 500),
