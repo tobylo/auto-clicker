@@ -125,16 +125,6 @@ fn the_window_is_the_program_beside_the_daemon() {
     assert_eq!(program.parent(), std::env::current_exe().unwrap().parent());
 }
 
-#[test]
-fn only_a_display_on_this_machine_reaches_the_window() {
-    use std::ffi::OsStr;
-    assert!(local_display(Some(OsStr::new(":1"))));
-    assert!(local_display(Some(OsStr::new(":0.0"))));
-    assert!(!local_display(Some(OsStr::new("remote-host:0"))));
-    assert!(!local_display(Some(OsStr::new(""))));
-    assert!(!local_display(None));
-}
-
 /// A directory of its own under the system's temporary one, removed when
 /// dropped.
 struct Scratch(PathBuf);
@@ -157,29 +147,26 @@ impl Drop for Scratch {
     }
 }
 
-/// A stand-in for the window: notes its pid, and reads its standard input
-/// until the daemon closes it.
+/// A stand-in for the window: notes its pid and whether it got `DISPLAY`
+/// beside itself (in `window.pids`, so no path is written into the
+/// script), and reads its standard input until the daemon closes it.
 fn stand_in(dir: &std::path::Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let program = dir.join("window");
-    let pids = dir.join("pids");
-    std::fs::write(
-        &program,
-        format!(
-            "#!/bin/sh\necho $$ >> '{}'\nexec cat > /dev/null\n",
-            pids.display()
-        ),
-    )
-    .unwrap();
+    let script = "#!/bin/sh\necho \"$$ ${DISPLAY-none}\" >> \"$0.pids\"\nexec cat > /dev/null\n";
+    std::fs::write(&program, script).unwrap();
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     program
 }
 
-/// The pid the n-th window (from 0) noted, once it has.
+/// The pid the n-th window (from 0) noted, once it has; it got no
+/// `DISPLAY`.
 async fn pid(dir: &std::path::Path, n: usize) -> u32 {
     for _ in 0..100 {
-        let noted = std::fs::read_to_string(dir.join("pids")).unwrap_or_default();
-        if let Some(pid) = noted.lines().nth(n) {
+        let noted = std::fs::read_to_string(dir.join("window.pids")).unwrap_or_default();
+        if let Some(line) = noted.lines().nth(n) {
+            let (pid, display) = line.split_once(' ').unwrap();
+            assert_eq!(display, "none", "the window got DISPLAY");
             return pid.parse().unwrap();
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

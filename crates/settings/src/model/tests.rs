@@ -82,19 +82,25 @@ fn the_hotkeys_come_from_the_captures_not_the_fields() {
 }
 
 #[test]
-fn the_key_is_a_name_in_any_case_or_a_code() {
+fn the_key_is_a_name_in_any_case_or_a_code_after_a_hash() {
     let shown = draft(|_| {});
     let mut fields = Fields::from_draft(&shown, '.');
     assert_eq!(fields.key_text, "space");
-    for (written, code) in [("F13", 183), ("leftshift", 42), (" 113 ", 113), ("W", 17)] {
+    let keys = [
+        ("F13", 183),
+        ("leftshift", 42),
+        ("W", 17),
+        // A digit is the key of that digit, not the code.
+        ("1", 2),
+        ("#1", 1),
+        (" #113 ", 113),
+    ];
+    for (written, code) in keys {
         fields.key_text = written.to_owned();
-        assert_eq!(
-            fields.to_draft(&shown.hotkeys).unwrap().clicker.key,
-            code,
-            "{written}"
-        );
+        let read = fields.to_draft(&shown.hotkeys).unwrap();
+        assert_eq!(read.clicker.key, code, "{written}");
     }
-    for unreadable in ["", "no such key", "70000", "-1"] {
+    for unreadable in ["", "no such key", "113", "#70000", "#-1", "#"] {
         fields.key_text = unreadable.to_owned();
         assert_eq!(
             fields.to_draft(&shown.hotkeys),
@@ -189,7 +195,8 @@ fn hotkeys_and_keys_show_as_the_user_knows_them() {
     );
     assert_eq!(hotkey_text(&Hotkey::Desktop(None), "-", "?"), "?");
     assert_eq!(key_text(57), "space");
-    assert_eq!(key_text(113), "113");
+    assert_eq!(key_text(113), "#113");
+    assert_eq!(key_text(2), "1");
 }
 
 #[test]

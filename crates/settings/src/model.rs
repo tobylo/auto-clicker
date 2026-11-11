@@ -151,13 +151,18 @@ pub fn hotkey_text(hotkey: &Hotkey, not_set: &str, not_reported: &str) -> String
     }
 }
 
-/// The clicker's key as the window shows it: its name, or its code.
+/// The clicker's key as the window shows it: its name, or its code after
+/// [`CODE`].
 pub fn key_text(code: u16) -> String {
     match Key::new(code).and_then(Key::name) {
         Some(name) => name.to_owned(),
-        None => code.to_string(),
+        None => format!("{CODE}{code}"),
     }
 }
+
+/// What marks a key code in the key field: "#113". Without it, "1" is the
+/// key named 1, not code 1.
+pub const CODE: char = '#';
 
 /// The hotkeys of `hotkeys` with `action`'s (0 to 2, in the window's
 /// order) replaced by `binding`.
@@ -192,14 +197,15 @@ fn decimal_text(value: f64, separator: char) -> String {
     value.to_string().replace('.', &separator.to_string())
 }
 
-/// The key `text` names: a key name in any letter case, or a key code.
-/// The daemon checks a code is one.
+/// The key `text` names: a key name in any letter case, or a key code
+/// after [`CODE`]. The daemon checks a code is one.
 fn key_code(text: &str) -> Result<u16, Unreadable> {
     let text = text.trim();
-    Key::from_name(&text.to_ascii_lowercase())
-        .map(Key::code)
-        .or_else(|| text.parse().ok())
-        .ok_or(Unreadable::Key)
+    let read = match text.strip_prefix(CODE) {
+        Some(code) => code.trim().parse().ok(),
+        None => Key::from_name(&text.to_ascii_lowercase()).map(Key::code),
+    };
+    read.ok_or(Unreadable::Key)
 }
 
 fn count_fields(count: CountDraft) -> (bool, String) {
