@@ -4,28 +4,33 @@
 //! is gone.
 
 use auto_clicker_core::controller::Listed;
-use auto_clicker_core::recording::FileName;
+use auto_clicker_core::recording::{FileName, MAX_NAME_CHARS};
 use auto_clicker_core::window::RecordingsView;
 
-/// One row: the name, when it was made, and whether the playback hotkey
-/// plays it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Row {
-    /// `None` when the name cannot be read.
-    pub name: Option<String>,
-    pub when: String,
-    pub current: bool,
-}
-
-/// The rows for `view`.
-pub fn rows(view: &RecordingsView) -> Vec<Row> {
+/// One line for each listed recording: a ✓ on the one the playback hotkey
+/// plays, its name (`no_name` when that cannot be read) and when it was
+/// made.
+pub fn lines(view: &RecordingsView, no_name: &str) -> Vec<String> {
     view.listed
         .iter()
-        .map(|listed| Row {
-            name: listed.name.clone(),
-            when: listed.file.when(),
-            current: view.current.as_ref() == Some(&listed.file),
+        .map(|listed| {
+            let mark = if view.current.as_ref() == Some(&listed.file) {
+                "✓ "
+            } else {
+                ""
+            };
+            let name = listed.name.as_deref().unwrap_or(no_name);
+            format!("{mark}{name} — {}", listed.file.when())
         })
+        .collect()
+}
+
+/// `text`, typed as a new name, cut to one character more than a name may
+/// have: the daemon refuses it and says why, and the request always fits a
+/// line, however much was pasted.
+pub fn sendable_name(text: &str) -> String {
+    text.chars()
+        .take(MAX_NAME_CHARS.saturating_add(1))
         .collect()
 }
 
@@ -72,24 +77,26 @@ mod tests {
     }
 
     #[test]
-    fn rows_show_the_name_when_it_reads_and_mark_the_current_one() {
-        let shown = rows(&view(&[10, 9], Some(9)));
+    fn lines_show_the_name_when_it_reads_and_mark_the_current_one() {
         assert_eq!(
-            shown,
+            lines(&view(&[10, 9], Some(9)), "(no name)"),
             [
-                Row {
-                    name: Some("Day 10".to_owned()),
-                    when: "2026-11-10 18:04:05".to_owned(),
-                    current: false,
-                },
-                Row {
-                    name: None,
-                    when: "2026-11-09 18:04:05".to_owned(),
-                    current: true,
-                },
+                "Day 10 — 2026-11-10 18:04:05",
+                "✓ (no name) — 2026-11-09 18:04:05",
             ]
         );
-        assert!(rows(&view(&[10], None)).iter().all(|row| !row.current));
+        assert!(
+            lines(&view(&[10], None), "-")
+                .iter()
+                .all(|line| !line.starts_with('✓'))
+        );
+    }
+
+    #[test]
+    fn a_name_is_sent_cut_just_past_what_a_recording_may_have() {
+        assert_eq!(sendable_name("Farm loop"), "Farm loop");
+        let long = "å".repeat(1_000_000);
+        assert_eq!(sendable_name(&long).chars().count(), MAX_NAME_CHARS + 1);
     }
 
     #[test]

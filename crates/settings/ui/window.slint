@@ -2,15 +2,7 @@
 // reads them back for a save; every text the window shows is here, under
 // @tr, so the bundled translations cover it all.
 
-import { AboutSlint, Button, CheckBox, ComboBox, GroupBox, LineEdit, ListView, SpinBox, TabWidget, ScrollView, Palette } from "std-widgets.slint";
-
-// One recording in the list.
-export struct RecordingRow {
-    name: string,
-    when: string,
-    // The one the playback hotkey plays.
-    current: bool,
-}
+import { AboutSlint, Button, CheckBox, ComboBox, GroupBox, LineEdit, SpinBox, StandardListView, TabWidget, ScrollView, Palette } from "std-widgets.slint";
 
 // Texts Rust builds messages from.
 export global Texts {
@@ -98,7 +90,7 @@ export component SettingsWindow inherits Window {
     in-out property <bool> plays-forever;
     in-out property <string> plays-text: "1";
     // Recordings
-    in property <[RecordingRow]> recordings;
+    in property <[StandardListViewItem]> recordings;
     in property <string> more-recordings;
     in-out property <int> selected: -1;
     in-out property <string> recording-name;
@@ -339,39 +331,13 @@ export component SettingsWindow inherits Window {
                     if root.recordings.length == 0: Text {
                         text: @tr("No recordings yet.");
                     }
-                    ListView {
+                    // Arrow keys move the selection, as a click does.
+                    StandardListView {
                         min-height: 180px;
                         vertical-stretch: 1;
-                        for recording[index] in root.recordings: Rectangle {
-                            height: 28px;
-                            background: index == root.selected ? Palette.selection-background : transparent;
-                            HorizontalLayout {
-                                padding-left: 6px;
-                                padding-right: 6px;
-                                spacing: 8px;
-                                Text {
-                                    text: recording.current ? "✓" : "";
-                                    min-width: 16px;
-                                    vertical-alignment: center;
-                                    color: index == root.selected ? Palette.selection-foreground : Palette.foreground;
-                                }
-                                Text {
-                                    text: recording.name;
-                                    horizontal-stretch: 1;
-                                    overflow: elide;
-                                    vertical-alignment: center;
-                                    color: index == root.selected ? Palette.selection-foreground : Palette.foreground;
-                                }
-                                Text {
-                                    text: recording.when;
-                                    vertical-alignment: center;
-                                    color: index == root.selected ? Palette.selection-foreground : Palette.foreground;
-                                }
-                            }
-                            TouchArea {
-                                clicked => { root.select-recording(index); }
-                            }
-                        }
+                        model: root.recordings;
+                        current-item <=> root.selected;
+                        current-item-changed(index) => { root.select-recording(index); }
                     }
                     if root.more-recordings != "": Text {
                         text: root.more-recordings;

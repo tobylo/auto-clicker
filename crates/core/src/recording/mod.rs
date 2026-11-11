@@ -60,7 +60,7 @@ pub const MAX_DURATION: Duration = Duration::from_secs(60 * 60);
 const MAX_DURATION_US: u64 = 60 * 60 * 1_000_000;
 
 /// The longest name a recording may have, in characters.
-const MAX_NAME_CHARS: usize = 200;
+pub const MAX_NAME_CHARS: usize = 200;
 
 /// What happened at one moment of a recording.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

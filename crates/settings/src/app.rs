@@ -11,13 +11,13 @@ use auto_clicker_core::recording::FileName;
 use auto_clicker_core::window::{
     CaptureEnd, RecordingAction, RecordingOutcome, Request, Update, WindowView,
 };
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecModel};
 
 use crate::link::Link;
 use crate::model::{Fields, Unreadable, hotkey_text, key_text};
 use crate::shelf;
 use crate::state::{self, Note, Question, State, Target};
-use crate::ui::{RecordingRow, SettingsWindow, Texts};
+use crate::ui::{SettingsWindow, Texts};
 
 /// The window, its link to the daemon and its state.
 pub struct App {
@@ -94,6 +94,7 @@ impl App {
         if let Some(settings) = &shown.fields {
             self.load(&Fields::from_draft(settings, self.decimal));
         }
+        let relisted = self.last.as_ref().map(|last| &last.recordings) != Some(&view.recordings);
         self.last = Some(view.clone());
         let w = &self.window;
         w.set_idle(state::idle(view));
@@ -107,7 +108,9 @@ impl App {
                 .into(),
         );
         w.set_problems(view.problems.join("\n").into());
-        self.show_recordings(view);
+        if relisted {
+            self.show_recordings(view);
+        }
         self.show_hotkeys();
         if let Some(note) = shown.note {
             self.note(&note);
@@ -192,18 +195,15 @@ impl App {
     }
 
     /// Shows the recordings, keeping the selected one selected while it is
-    /// listed.
+    /// listed. Only for a changed list: a new model resets where the list
+    /// is scrolled to.
     fn show_recordings(&mut self, view: &WindowView) {
         let w = &self.window;
         let texts = w.global::<Texts>();
         let no_name = texts.invoke_no_name();
-        let rows: Vec<RecordingRow> = shelf::rows(&view.recordings)
+        let rows: Vec<StandardListViewItem> = shelf::lines(&view.recordings, &no_name)
             .into_iter()
-            .map(|row| RecordingRow {
-                name: row.name.map_or_else(|| no_name.clone(), SharedString::from),
-                when: row.when.into(),
-                current: row.current,
-            })
+            .map(|line| StandardListViewItem::from(SharedString::from(line)))
             .collect();
         w.set_recordings(ModelRc::new(VecModel::from(rows)));
         let more = match view.recordings.more {
@@ -236,7 +236,7 @@ impl App {
     }
 
     fn rename(&mut self) {
-        let name = self.window.get_recording_name().to_string();
+        let name = shelf::sendable_name(&self.window.get_recording_name());
         self.recording(RecordingAction::Rename { name });
     }
 
