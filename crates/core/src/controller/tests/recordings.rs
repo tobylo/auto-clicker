@@ -375,6 +375,26 @@ async fn a_new_recording_a_play_from_the_tray_and_a_choice_in_the_window_make_it
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_choice_of_a_recording_gone_since_the_list_was_read_marks_the_newest() {
+    local(async {
+        let (shared, files) = shared_with(&["18:00:00", "18:01:00"]);
+        let state = TempDir::new();
+        let mut s = setup(shared, config(0), &state, true).await;
+        s.ask(&files[0], RecordingAction::Choose).await;
+        fs::remove_file(folder(&s.d.shared).join(files[0].as_str())).unwrap();
+
+        // Asked twice, as a window that had not seen it go would.
+        for _ in 0..2 {
+            s.ask(&files[0], RecordingAction::Choose).await;
+            assert_eq!(s.d.view().current.as_ref(), Some(&files[1]));
+            assert_eq!(s.tray(), [label("18:01:00")]);
+        }
+        assert_eq!(s.hotkey_plays().await, Some(label("18:01:00")));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_state_file_is_written_only_when_the_current_recording_changes() {
     local(async {
         let (shared, files) = shared_with(&["18:00:00", "18:01:00"]);

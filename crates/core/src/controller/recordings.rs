@@ -96,7 +96,7 @@ impl<P: Platform> Controller<P> {
     /// Makes `file` the current recording, and keeps it for the next start
     /// unless the state file holds it already.
     pub(super) fn make_current(&mut self, file: &FileName) {
-        // It is listed, played or just saved.
+        // It was just played or saved; a choice lists again after this.
         self.shelf.current_gone = false;
         if self.shelf.current.as_ref() == Some(file) && self.shelf.kept {
             return;
@@ -204,6 +204,8 @@ impl<P: Platform> Controller<P> {
             }
             RecordingAction::Choose => {
                 self.make_current(file);
+                // The list shows whether its file is still there.
+                self.list_recordings();
                 RecordingOutcome::Chosen
             }
             RecordingAction::Play => self.play_from_window(file),
