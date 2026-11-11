@@ -667,3 +667,58 @@ fn a_report_delivered_after_a_click_it_came_before_keeps_the_first_after_the_cli
         [(1_900, at(1, 0)), (2_100, at(2, 0)), (2_200, at(3, 0))]
     );
 }
+
+#[test]
+fn a_position_goes_before_a_click_at_its_own_time() {
+    let mut recorder = positioned();
+    recorder.motion(t(0), 1, 0);
+    recorder.key(MOUSE, KeyInput::press(button_code(LEFT)), t(2_000));
+    report(&mut recorder, 2_000, 1, 0);
+    recorder.key(MOUSE, KeyInput::release(button_code(LEFT)), t(9_000));
+    assert_eq!(
+        events_at(recorder, t(10_000)),
+        [
+            (0, moved(1, 0)),
+            (2_000, at(1, 0)),
+            (2_000, press(LEFT)),
+            (9_000, release(LEFT)),
+        ]
+    );
+}
+
+#[test]
+fn a_position_goes_after_the_move_at_its_own_time() {
+    let mut recorder = positioned();
+    recorder.motion(t(2_000), 10, 0);
+    recorder.key(MOUSE, KeyInput::press(button_code(LEFT)), t(3_000));
+    // The move's report, stamped as the move, fed after the press.
+    report(&mut recorder, 2_000, 110, 0);
+    recorder.key(MOUSE, KeyInput::release(button_code(LEFT)), t(9_000));
+    assert_eq!(
+        events_at(recorder, t(10_000)),
+        [
+            (2_000, moved(10, 0)),
+            (2_000, at(110, 0)),
+            (3_000, press(LEFT)),
+            (9_000, release(LEFT)),
+        ]
+    );
+}
+
+#[test]
+fn reports_at_one_time_keep_their_order() {
+    let mut recorder = positioned();
+    recorder.motion(t(0), 1, 0);
+    recorder.key(MOUSE, KeyInput::press(button_code(LEFT)), t(1_000));
+    report(&mut recorder, 2_000, 1, 0);
+    report(&mut recorder, 2_000, 2, 0);
+    report(&mut recorder, 2_100, 3, 0);
+    recorder.key(MOUSE, KeyInput::release(button_code(LEFT)), t(9_000));
+    let positions: Vec<_> = events_at(recorder, t(10_000))
+        .into_iter()
+        .filter(|(_, change)| matches!(change, Change::Position(_)))
+        .collect();
+    // The first after the press stays; the second opens a millisecond that
+    // the third replaces.
+    assert_eq!(positions, [(2_000, at(1, 0)), (2_100, at(3, 0))]);
+}
