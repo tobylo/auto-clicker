@@ -9,10 +9,10 @@
 
 use std::fmt;
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
 
-use super::library::{FileName, LoadError, load_in};
+use super::library::{FileName, LoadError, MAX_FILE_BYTES, load_in};
 use super::store::{held_path, named, open_folder};
 use super::{InvalidRecording, check_name};
 use crate::fs::{Place, atomic_save_with};
@@ -43,16 +43,33 @@ impl fmt::Display for ChangeError {
 
 impl std::error::Error for ChangeError {}
 
+/// A change that was made: on disk, or in place but with its folder not
+/// flushed, so a power loss could undo it, whole.
+#[derive(Debug)]
+pub enum Changed {
+    Synced,
+    Unsynced(io::Error),
+}
+
 /// Renames the recording `file` in `dir` to `name`: reads and checks it
 /// whole, and replaces it with the same recording under the new name, in
-/// the same file. The name is checked before the file is read.
-///
-/// A replacement that is in place but whose folder could not be flushed
-/// counts as done: a power loss could bring back the old file, whole.
+/// the same file. The name is checked before the file is read. The new
+/// file may be no larger than a load reads ([`MAX_FILE_BYTES`]), or the
+/// recording could no longer be played.
 ///
 /// # Errors
 /// See [`ChangeError`].
-pub fn rename(dir: &Path, file: &FileName, name: String) -> Result<(), ChangeError> {
+pub fn rename(dir: &Path, file: &FileName, name: String) -> Result<Changed, ChangeError> {
+    rename_capped(dir, file, name, MAX_FILE_BYTES)
+}
+
+/// [`rename`], writing at most `cap` bytes.
+fn rename_capped(
+    dir: &Path,
+    file: &FileName,
+    name: String,
+    cap: u64,
+) -> Result<Changed, ChangeError> {
     check_name(&name).map_err(ChangeError::Refused)?;
     let folder = open(dir)?;
     let recording = load_in(&folder, file).map_err(|err| match err {
@@ -61,10 +78,46 @@ pub fn rename(dir: &Path, file: &FileName, name: String) -> Result<(), ChangeErr
     })?;
     let renamed = recording.renamed(name).map_err(ChangeError::Refused)?;
     let path = held_path(&folder).join(file.as_str());
-    // In place but not flushed: done, as the doc says.
-    let _unsynced = atomic_save_with(&path, |out| renamed.write_json(out), Place::Replace)
-        .map_err(|err| failed(&folder, dir, "written", &err))?;
-    Ok(())
+    let write = |out: &mut dyn Write| renamed.write_json(&mut Capped { out, left: cap });
+    match atomic_save_with(&path, write, Place::Replace) {
+        Ok(Ok(())) => Ok(Changed::Synced),
+        Ok(Err(unsynced)) => Ok(Changed::Unsynced(named(
+            &folder,
+            dir,
+            &unsynced.into_error(),
+        ))),
+        Err(err) => Err(failed(&folder, dir, "written", &err)),
+    }
+}
+
+/// A writer that refuses to take more than `left` bytes more.
+struct Capped<'a> {
+    out: &'a mut dyn Write,
+    left: u64,
+}
+
+impl Write for Capped<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let fits = u64::try_from(bytes.len()).is_ok_and(|len| len <= self.left);
+        if !fits {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                format!(
+                    "the renamed recording would be larger than {} MiB",
+                    MAX_FILE_BYTES / (1024 * 1024)
+                ),
+            ));
+        }
+        let written = self.out.write(bytes)?;
+        self.left = self
+            .left
+            .saturating_sub(u64::try_from(written).unwrap_or(u64::MAX));
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.out.flush()
+    }
 }
 
 /// Deletes the recording `file` in `dir`, for good.
@@ -72,17 +125,17 @@ pub fn rename(dir: &Path, file: &FileName, name: String) -> Result<(), ChangeErr
 /// # Errors
 /// [`ChangeError::Missing`] when it is already gone; [`ChangeError::Failed`]
 /// when it cannot be removed.
-pub fn delete(dir: &Path, file: &FileName) -> Result<(), ChangeError> {
+pub fn delete(dir: &Path, file: &FileName) -> Result<Changed, ChangeError> {
     let folder = open(dir)?;
     match fs::remove_file(held_path(&folder).join(file.as_str())) {
         Ok(()) => {}
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Err(ChangeError::Missing),
         Err(err) => return Err(failed(&folder, dir, "deleted", &err)),
     }
-    // The file is gone. Should flushing the folder fail, a power loss could
-    // bring it back whole, which is no worse than not deleting it.
-    let _ = folder.sync_all();
-    Ok(())
+    Ok(match folder.sync_all() {
+        Ok(()) => Changed::Synced,
+        Err(err) => Changed::Unsynced(err),
+    })
 }
 
 /// Opens the recordings folder, refusing a symlink in its place.

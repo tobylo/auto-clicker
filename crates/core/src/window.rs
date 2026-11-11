@@ -206,6 +206,9 @@ pub enum RecordingOutcome {
     Chosen,
     /// Its countdown began, or it plays.
     Playing,
+    /// Done, but it may not survive a power loss, as a whole sentence:
+    /// "Deleted, but …".
+    Unsynced(String),
     /// Nothing changed, and why, as a whole sentence: "Not renamed: …".
     NotDone(String),
 }
@@ -248,6 +251,9 @@ impl Outcome {
             Outcome::SavedUnsynced(why) => Outcome::SavedUnsynced(bounded(&why)),
             Outcome::Recording(RecordingOutcome::NotDone(why)) => {
                 Outcome::Recording(RecordingOutcome::NotDone(bounded(&why)))
+            }
+            Outcome::Recording(RecordingOutcome::Unsynced(why)) => {
+                Outcome::Recording(RecordingOutcome::Unsynced(bounded(&why)))
             }
             other => other,
         }

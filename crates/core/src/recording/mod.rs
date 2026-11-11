@@ -39,7 +39,7 @@ pub use current::CurrentFile;
 pub use json::event_bytes;
 pub use layout::{Layout, MAX_OUTPUTS, Output, Point, Rect};
 pub use library::{FileName, Found, Listing, LoadError, MAX_FILE_BYTES, list, load};
-pub use manage::{ChangeError, delete, rename};
+pub use manage::{ChangeError, Changed, delete, rename};
 pub use recorder::{Ending, KeyInput, Recorder};
 pub use store::{recordings_dir, save};
 pub use tap::{RecordingFeed, RecordingSlot};
