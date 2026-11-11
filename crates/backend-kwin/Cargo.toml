@@ -1,0 +1,30 @@
+[package]
+name = "auto-clicker-backend-kwin"
+description = "KWin backend of auto-clicker: the screen layout and the pointer's position from KWin scripts"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+auto-clicker-core = { path = "../core" }
+# The tokens baked into each load; already a dependency of the daemon.
+fastrand = "2.5.0"
+# `StreamExt` for the stream of KWin's owner changes; already in the tree.
+futures-util = { version = "0.3.34", default-features = false }
+# The private script directory without `unsafe`: `openat`, `fstat` and
+# `geteuid`. Already in the tree with these features.
+rustix = { version = "1.0.7", default-features = false, features = ["std", "fs", "process"] }
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "time", "sync", "macros"] }
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+auto-clicker-core = { path = "../core", features = ["fake"] }
+tokio = { version = "1.54.1", features = ["rt", "time", "sync", "macros", "test-util", "net"] }
+# A peer-to-peer connection stands in for the session bus in the receiver's
+# tests; `p2p` adds only `uuid/v4`, and uuid is already in the tree.
+zbus = { version = "5.19.0", default-features = false, features = ["tokio", "p2p"] }
