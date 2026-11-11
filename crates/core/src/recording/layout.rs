@@ -30,8 +30,9 @@ pub struct Rect {
 }
 
 /// One output (a screen): its rectangle in logical pixels and its scale in
-/// thousandths (1.25 is 1250). The scale is kept, never compared: logical
-/// positions do not depend on it.
+/// thousandths (1.25 is 1250). The scale is stored, but whether positions
+/// still fit a layout never depends on it ([`Layout::same_screens`],
+/// [`Layout::keeps`]): logical positions do not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Output {
     rect: Rect,
@@ -125,6 +126,19 @@ impl Layout {
     pub fn keeps(&self, used: &[Output]) -> bool {
         used.iter()
             .all(|wanted| self.outputs.iter().any(|output| output.rect == wanted.rect))
+    }
+
+    /// Whether `other` has the same screens in the same places and sizes,
+    /// whatever their scales: positions mean the same on both.
+    pub fn same_screens(&self, other: &Layout) -> bool {
+        let rects = |layout: &Layout| {
+            layout
+                .outputs
+                .iter()
+                .map(|output| output.rect)
+                .collect::<Vec<_>>()
+        };
+        rects(self) == rects(other)
     }
 
     /// The bounding box's width and height, both at least 1.
@@ -227,6 +241,30 @@ mod tests {
         ];
         for ((x, y), on) in cases {
             assert_eq!(layout.holds(Point { x, y }), on, "{x},{y}");
+        }
+    }
+
+    #[test]
+    fn the_same_screens_compare_rectangles_and_not_scale() {
+        let layout = two_screens();
+        let rescaled = Layout::new(vec![
+            Output::new(rect(0, 0, 2048, 1280), 1250).unwrap(),
+            Output::new(rect(2048, 0, 3440, 1440), 2000).unwrap(),
+        ])
+        .unwrap();
+        assert!(layout.same_screens(&rescaled));
+        let cases = [
+            Layout::new(vec![output(0, 0, 2048, 1280)]).unwrap(),
+            Layout::new(vec![output(0, 0, 2048, 1280), output(2048, 0, 3440, 1441)]).unwrap(),
+            Layout::new(vec![
+                output(0, 0, 2048, 1280),
+                output(2048, 0, 3440, 1440),
+                output(0, 1280, 10, 10),
+            ])
+            .unwrap(),
+        ];
+        for other in cases {
+            assert!(!layout.same_screens(&other), "{other:?}");
         }
     }
 

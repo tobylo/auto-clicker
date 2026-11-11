@@ -24,6 +24,15 @@ fn w(state: PressState) -> Call {
     Call::Key(Key::new(W).unwrap(), state)
 }
 
+/// The two screens with the panel at scale 1.5.
+fn rescaled() -> Layout {
+    Layout::new(vec![
+        screen([0, 0, 2048, 1280], 1500),
+        screen([2048, 0, 3440, 1440], 1000),
+    ])
+    .unwrap()
+}
+
 fn panel_only() -> Layout {
     Layout::new(vec![screen([0, 0, 2048, 1280], 1250)]).unwrap()
 }
@@ -142,6 +151,7 @@ async fn positions_that_cannot_play_fall_back_and_say_why() {
         ] {
             let (d, file) = daemon_playing(layout, true).await;
             d.play_file_until_w_is_down(&file).await;
+            assert!(why.notice().starts_with("Playing with relative motion: "));
             assert_eq!(d.notice(), why.notice());
             assert_eq!(d.shared.calls(), [w(PressState::Down)]);
         }
@@ -196,8 +206,10 @@ async fn a_relative_playback_or_an_unchanged_layout_carries_on() {
             // Relative only: no positions, or positions that fell back.
             (Some(two_screens()), false, None),
             (None, true, Some(two_screens())),
-            // Told of a change that left the layout as it was.
+            // Told of a change that left the layout as it was, or changed
+            // only a scale.
             (Some(two_screens()), true, Some(two_screens())),
+            (Some(two_screens()), true, Some(rescaled())),
         ];
         for (layout, with_positions, now) in cases {
             let (d, file) = daemon_playing(layout, with_positions).await;

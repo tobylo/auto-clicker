@@ -118,7 +118,8 @@ fn pressed_keys(recording: &Recording) -> Arc<[Key]> {
 
 impl<P: Platform> Controller<P> {
     /// The layout changed or became unknown: a playback moving to positions
-    /// on another layout stops, and says why.
+    /// on another layout stops, and says why. The layout is read as it is
+    /// now: a change undone before this runs leaves the positions right.
     pub(super) fn layout_changed(&mut self) {
         let State::Running(running) = &self.state else {
             return;
@@ -127,7 +128,7 @@ impl<P: Platform> Controller<P> {
             return;
         };
         let why = match self.platform.layout() {
-            Some(current) if current == *used => return,
+            Some(current) if current.same_screens(used) => return,
             Some(_) => "the screen layout changed",
             None => "the screen layout is no longer known",
         };

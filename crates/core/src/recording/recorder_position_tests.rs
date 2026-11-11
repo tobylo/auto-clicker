@@ -158,6 +158,8 @@ fn a_click_read_late_before_an_open_position_makes_it_the_first_after_the_click(
     // Made at 1.9 ms, read after the position at 2 ms.
     recorder.key(MOUSE, KeyInput::press(button_code(LEFT)), t(1_900));
     report(&mut recorder, 2_300, 2, 0);
+    // A millisecond of its own: the next one replaces it.
+    report(&mut recorder, 2_400, 3, 0);
     recorder.key(MOUSE, KeyInput::release(button_code(LEFT)), t(9_000));
     assert_eq!(
         events_at(recorder, t(10_000)),
@@ -165,10 +167,101 @@ fn a_click_read_late_before_an_open_position_makes_it_the_first_after_the_click(
             (0, moved(1, 0)),
             (1_900, press(LEFT)),
             (2_000, at(1, 0)),
-            (2_300, at(2, 0)),
+            (2_400, at(3, 0)),
             (9_000, release(LEFT)),
         ]
     );
+}
+
+#[test]
+fn a_click_read_late_inside_a_millisecond_keeps_the_position_before_it() {
+    let mut recorder = positioned();
+    recorder.motion(t(0), 1, 0);
+    report(&mut recorder, 2_000, 1, 0);
+    report(&mut recorder, 2_200, 2, 0);
+    report(&mut recorder, 2_600, 3, 0);
+    // Made at 2.1 ms, read after all three: 2 ms is the last before it and
+    // 2.2 ms the first after it, so both stay.
+    click(&mut recorder, [2_100, 9_000]);
+    assert_eq!(
+        events_at(recorder, t(10_000)),
+        [
+            (0, moved(1, 0)),
+            (2_000, at(1, 0)),
+            (2_100, press(LEFT)),
+            (2_200, at(2, 0)),
+            (2_600, at(3, 0)),
+            (9_000, release(LEFT)),
+        ]
+    );
+}
+
+#[test]
+fn a_wheel_turn_read_late_inside_a_millisecond_keeps_the_position_before_it() {
+    let mut recorder = positioned();
+    recorder.motion(t(0), 1, 0);
+    report(&mut recorder, 2_000, 1, 0);
+    report(&mut recorder, 2_200, 2, 0);
+    recorder.wheel(t(2_100), 1);
+    click(&mut recorder, [5_000, 6_000]);
+    let events = events_at(recorder, t(7_000));
+    assert!(events.contains(&(2_000, at(1, 0))), "{events:?}");
+    assert!(events.contains(&(2_200, at(2, 0))), "{events:?}");
+}
+
+#[test]
+fn motion_read_late_before_the_first_position_keeps_it_at_its_time() {
+    let mut recorder = positioned();
+    report(&mut recorder, 1_000, 10, 20);
+    // Made before the report, read after it: the report already holds it.
+    recorder.motion(t(500), 1, 0);
+    click(&mut recorder, [4_000, 5_000]);
+    assert_eq!(
+        events_at(recorder, t(6_000)),
+        [
+            (500, moved(1, 0)),
+            (1_000, at(10, 20)),
+            (4_000, press(LEFT)),
+            (5_000, release(LEFT)),
+        ]
+    );
+}
+
+#[test]
+fn positions_wait_for_late_input_twenty_milliseconds_at_most() {
+    let mut recorder = positioned();
+    recorder.motion(t(0), 1, 0);
+    report(&mut recorder, 2_000, 1, 0);
+    report(&mut recorder, 2_200, 2, 0);
+    // A report 20 ms on places those two: they merge.
+    report(&mut recorder, 22_200, 3, 0);
+    click(&mut recorder, [2_100, 30_000]);
+    assert_eq!(
+        events_at(recorder, t(31_000)),
+        [
+            (0, moved(1, 0)),
+            (2_100, press(LEFT)),
+            (2_200, at(2, 0)),
+            (22_200, at(3, 0)),
+            (30_000, release(LEFT)),
+        ]
+    );
+}
+
+#[test]
+fn a_layout_differing_only_in_scale_keeps_positions() {
+    let mut recorder = positioned();
+    recorder.motion(t(0), 1, 0);
+    let rescaled = Layout::new(vec![
+        screen([0, 0, 2048, 1280], 1000),
+        screen([2048, 0, 3440, 1440], 1500),
+    ])
+    .unwrap();
+    recorder.position(t(1_000), Point { x: 1, y: 0 }, Some(&rescaled));
+    click(&mut recorder, [2_000, 3_000]);
+    let recording = finish_at(recorder, t(4_000));
+    assert_eq!(recording.layout(), Some(&two_screens()));
+    assert_eq!(recording.events()[1].change, at(1, 0));
 }
 
 #[test]
