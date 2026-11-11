@@ -101,16 +101,21 @@ impl Settings {
 /// is opening.
 pub(super) fn next_event(settings: &mut Settings) -> impl Future<Output = WindowEvent> + '_ {
     poll_fn(move |cx| {
-        if let Poll::Ready(Some(link)) = settings.openings.poll_recv(cx) {
-            return Poll::Ready(WindowEvent::Opened(link));
+        // What the window open asked comes first: a window that sent a save
+        // and closed has it handled before a new window takes its place.
+        if let Some(window) = &mut settings.window
+            && let Poll::Ready(request) = window.requests.poll_recv(cx)
+        {
+            return Poll::Ready(match request {
+                Some(request) => WindowEvent::Request(request),
+                None => WindowEvent::Closed,
+            });
         }
-        let Some(window) = &mut settings.window else {
-            return Poll::Pending;
-        };
-        window.requests.poll_recv(cx).map(|request| match request {
-            Some(request) => WindowEvent::Request(request),
-            None => WindowEvent::Closed,
-        })
+        match settings.openings.poll_recv(cx) {
+            Poll::Ready(Some(link)) => Poll::Ready(WindowEvent::Opened(link)),
+            // The controller holds an opener itself, so this never ends.
+            Poll::Ready(None) | Poll::Pending => Poll::Pending,
+        }
     })
 }
 

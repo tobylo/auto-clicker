@@ -17,10 +17,10 @@ impl Language {
     }
 
     /// The language the locale variables `get` gives, as gettext reads
-    /// them: the first entry of the list in `LANGUAGE` that the program has
-    /// text in (English, or Swedish), when a locale other than "C" is set;
-    /// otherwise the first of `LC_ALL`, `LC_MESSAGES` and `LANG` that is set
-    /// and not empty.
+    /// them. With a locale other than "C" set, a `LANGUAGE` list decides:
+    /// its first entry the program has text in (English, or Swedish), or
+    /// English when it has none. Otherwise the first of `LC_ALL`,
+    /// `LC_MESSAGES` and `LANG` that is set and not empty decides.
     pub fn from_variables(get: impl Fn(&str) -> Option<OsString>) -> Language {
         let set = |name: &str| get(name).filter(|value| !value.is_empty());
         let locale = ["LC_ALL", "LC_MESSAGES", "LANG"].into_iter().find_map(set);
@@ -28,13 +28,18 @@ impl Language {
             matches!(locale.to_str(), Some("C" | "POSIX"))
                 || locale.to_str().is_some_and(|l| l.starts_with("C."))
         });
-        let listed = set("LANGUAGE")
-            .filter(|_| !plain)
-            .and_then(|list| list.to_str().and_then(first_known));
-        listed.unwrap_or_else(|| match locale {
+        // A list with nothing the program has text in means untranslated
+        // text, as gettext has it: the locale does not decide then.
+        if let Some(list) = set("LANGUAGE").filter(|_| !plain) {
+            return list
+                .to_str()
+                .and_then(first_known)
+                .unwrap_or(Language::English);
+        }
+        match locale {
             Some(name) if is_swedish(&name) => Language::Swedish,
             _ => Language::English,
-        })
+        }
     }
 
     /// The code the translations are filed under.
@@ -147,7 +152,7 @@ mod tests {
         let c_first = [("LANG", sv), ("LANGUAGE", "de:C:sv")];
         assert_eq!(language(&c_first), Language::English);
         let neither = [("LANG", sv), ("LANGUAGE", "de:fr")];
-        assert_eq!(language(&neither), Language::Swedish);
+        assert_eq!(language(&neither), Language::English);
         // LANGUAGE is not read under the C locale.
         assert_eq!(
             language(&[("LANG", "C.UTF-8"), ("LANGUAGE", "sv")]),

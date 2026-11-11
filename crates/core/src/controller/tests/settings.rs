@@ -237,6 +237,23 @@ async fn a_window_that_keeps_asking_holds_up_neither_a_run_nor_a_stop() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_save_queued_by_a_window_that_closed_is_handled_before_a_new_window() {
+    local(async {
+        let s = setup().await;
+        let Window { requests, .. } = s.window;
+        let ask = save(draft(hold_right), Agreed::default());
+        requests.send(Request { id: 1, ask }).await.unwrap();
+        drop(requests);
+        // A new window comes before the controller looked at the old one.
+        let second = Window::open(&s.opener);
+        s.d.settle().await;
+        assert_eq!(on_the_file(&s.path), draft(hold_right).to_config().ok());
+        assert!(!second.ended());
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_window_that_closes_its_side_is_let_go_and_quit_lets_go_of_any() {
     local(async {
         let s = setup().await;

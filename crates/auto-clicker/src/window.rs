@@ -191,9 +191,16 @@ async fn session(
         // Not on the window's exit: a window that sends a save and closes
         // at once has its end of the socket closed by then, and the
         // requests it sent before are read first, up to the end.
-        tokio::select! {
-            () = read_requests(BufReader::new(read), requests) => {}
-            () = write_updates(&mut write, &mut views, &mut raised) => {}
+        let reading = read_requests(BufReader::new(read), requests);
+        tokio::pin!(reading);
+        let stopped = tokio::select! {
+            () = &mut reading => None,
+            stopped = write_updates(&mut write, &mut views, &mut raised) => Some(stopped),
+        };
+        // A window that stopped reading may have sent requests before it
+        // closed: they are still read, up to the end of the socket.
+        if stopped == Some(Stopped::WindowGone) {
+            let _ = timeout(REAP_TIME, reading).await;
         }
     }
     end(&mut child).await;
@@ -230,19 +237,28 @@ async fn read_requests(mut read: impl AsyncBufRead + Unpin, requests: mpsc::Send
     }
 }
 
+/// Why the updates stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stopped {
+    /// The controller ended the session.
+    ControllerGone,
+    /// The window stopped reading, or closed its end.
+    WindowGone,
+}
+
 /// Writes each view the controller publishes, and each request to come to
 /// the front, until the controller ends the session or the window stops
-/// reading.
+/// reading; says which.
 async fn write_updates(
     write: &mut (impl AsyncWrite + Unpin),
     views: &mut watch::Receiver<Option<auto_clicker_core::window::WindowView>>,
     raised: &mut mpsc::UnboundedReceiver<()>,
-) {
+) -> Stopped {
     loop {
         let update = tokio::select! {
             changed = views.changed() => {
                 if changed.is_err() {
-                    return;
+                    return Stopped::ControllerGone;
                 }
                 match views.borrow_and_update().clone() {
                     Some(view) => Update::View(Box::new(view)),
@@ -251,17 +267,17 @@ async fn write_updates(
             }
             raise = raised.recv() => match raise {
                 Some(()) => Update::Raise,
-                None => return,
+                None => return Stopped::ControllerGone,
             },
         };
         let Ok(bytes) = line(&update) else {
-            return;
+            return Stopped::ControllerGone;
         };
         if !matches!(
             timeout(WRITE_TIME, write.write_all(&bytes)).await,
             Ok(Ok(()))
         ) {
-            return;
+            return Stopped::WindowGone;
         }
     }
 }

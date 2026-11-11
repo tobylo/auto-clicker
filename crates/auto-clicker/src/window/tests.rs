@@ -88,7 +88,7 @@ async fn views_and_raises_are_written_until_the_controller_ends_it() {
     let (raise, mut raised) = mpsc::unbounded_channel();
     let writing = tokio::spawn(async move {
         let mut ours = ours;
-        write_updates(&mut ours, &mut views, &mut raised).await;
+        write_updates(&mut ours, &mut views, &mut raised).await
     });
     let mut lines = BufReader::new(theirs).lines();
     view_sender.send_replace(Some(view()));
@@ -101,10 +101,11 @@ async fn views_and_raises_are_written_until_the_controller_ends_it() {
     let second = lines.next_line().await.unwrap().unwrap();
     assert_eq!(parse::<Update>(second.as_bytes()).unwrap(), Update::Raise);
     drop(view_sender);
-    timeout(Duration::from_secs(5), writing)
+    let stopped = timeout(Duration::from_secs(5), writing)
         .await
         .expect("writing ended")
         .unwrap();
+    assert_eq!(stopped, Stopped::ControllerGone);
 }
 
 #[tokio::test(start_paused = true)]
@@ -114,8 +115,28 @@ async fn a_window_that_stops_reading_is_let_go_after_the_write_time() {
     let (_raise, mut raised) = mpsc::unbounded_channel();
     view_sender.send_replace(Some(view()));
     let start = tokio::time::Instant::now();
-    write_updates(&mut ours, &mut views, &mut raised).await;
+    let stopped = write_updates(&mut ours, &mut views, &mut raised).await;
+    assert_eq!(stopped, Stopped::WindowGone);
     assert_eq!(start.elapsed(), WRITE_TIME);
+}
+
+#[tokio::test]
+async fn updates_say_whether_the_window_or_the_controller_went() {
+    // The window closed its end: a write fails.
+    let (mut ours, theirs) = duplex(16);
+    drop(theirs);
+    let (view_sender, mut views) = watch::channel(None);
+    let (_raise, mut raised) = mpsc::unbounded_channel();
+    view_sender.send_replace(Some(view()));
+    let stopped = write_updates(&mut ours, &mut views, &mut raised).await;
+    assert_eq!(stopped, Stopped::WindowGone);
+    // The controller ended the session.
+    let (mut ours, _theirs) = duplex(MAX_LINE);
+    let (view_sender, mut views) = watch::channel(None);
+    let (_raise, mut raised) = mpsc::unbounded_channel();
+    drop(view_sender);
+    let stopped = write_updates(&mut ours, &mut views, &mut raised).await;
+    assert_eq!(stopped, Stopped::ControllerGone);
 }
 
 #[test]

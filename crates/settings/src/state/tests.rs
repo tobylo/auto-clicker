@@ -46,6 +46,30 @@ fn saved(state: &mut State) -> Request {
     state.save(&fields()).unwrap().unwrap()
 }
 
+/// Checks that `state` sends nothing the user asks: no save, capture or
+/// request for the desktop's settings.
+fn asks_nothing(state: &mut State) {
+    assert!(!state.may_ask());
+    let asked = (
+        state.save(&fields()),
+        state.capture(Target::Hotkey(0)),
+        state.configure(),
+    );
+    assert_eq!(asked, (None, None, None));
+}
+
+/// The save a request asks for: its settings, and what it agreed to.
+fn save_of(request: Request) -> (Draft, bool, Vec<Action>) {
+    match request.ask {
+        Ask::Save {
+            settings,
+            replace,
+            without_modifier,
+        } => (settings, replace, without_modifier),
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
 fn the_fields_fill_when_the_saved_settings_change_and_only_then() {
     let mut state = started();
@@ -58,21 +82,15 @@ fn the_fields_fill_when_the_saved_settings_change_and_only_then() {
 
 #[test]
 fn nothing_is_asked_before_the_settings_came() {
-    let mut state = State::default();
-    assert!(!state.may_ask());
-    assert_eq!(state.save(&fields()), None);
-    assert_eq!(state.capture(Target::Key), None);
-    assert_eq!(state.configure(), None);
+    asks_nothing(&mut State::default());
 }
 
 #[test]
 fn a_save_waits_for_its_own_answer_and_nothing_else_is_asked_meanwhile() {
     let mut state = started();
     let request = saved(&mut state);
-    assert!(state.waiting() && !state.may_ask());
-    assert_eq!(state.save(&fields()), None);
-    assert_eq!(state.capture(Target::Hotkey(0)), None);
-    assert_eq!(state.configure(), None);
+    assert!(state.waiting());
+    asks_nothing(&mut state);
     // An answer to some other request is not this one's.
     assert_eq!(
         answered(&mut state, request.id + 1, Outcome::Saved).note,
@@ -136,34 +154,22 @@ fn a_question_blocks_other_requests_and_a_yes_saves_the_fields_as_they_are_now()
         None
     );
     assert_eq!(state.question(), Some(&Question::Replace(Stale::Changed)));
-    assert!(!state.may_ask());
-    assert_eq!(state.capture(Target::Key), None);
+    asks_nothing(&mut state);
     let mut now = fields();
     now.tray_delay = 7;
     let again = state.agree(&now).unwrap().unwrap();
-    let Ask::Save {
-        settings, replace, ..
-    } = &again.ask
-    else {
-        panic!("{again:?}");
-    };
-    assert!(*replace);
-    assert_eq!(settings.tray_start_delay, 7);
+    let again_id = again.id;
+    let (settings, replace, _) = save_of(again);
+    assert!(replace && settings.tray_start_delay == 7);
     assert_eq!(state.question(), None);
     // The second question comes on top of the first agreement.
     let plain = Confirm::WithoutModifier(vec![Action::TogglePlayback]);
-    answered(&mut state, again.id, Outcome::Confirm(plain));
-    let last = state.agree(&now).unwrap().unwrap();
-    let Ask::Save {
-        replace,
-        without_modifier,
-        ..
-    } = last.ask
-    else {
-        panic!("{last:?}");
-    };
-    assert!(replace);
-    assert_eq!(without_modifier, [Action::TogglePlayback]);
+    answered(&mut state, again_id, Outcome::Confirm(plain));
+    let (_, replace, without_modifier) = save_of(state.agree(&now).unwrap().unwrap());
+    assert_eq!(
+        (replace, without_modifier),
+        (true, vec![Action::TogglePlayback])
+    );
 }
 
 #[test]
@@ -273,6 +279,6 @@ fn a_yes_with_a_field_that_cannot_be_read_keeps_the_question() {
     wrong.speed_text = "fast".to_owned();
     assert_eq!(state.agree(&wrong), Some(Err(Unreadable::Speed)));
     assert_eq!(state.question(), Some(&Question::Replace(Stale::Changed)));
-    assert!(state.agree(&fields()).unwrap().is_ok());
-    assert_eq!(state.question(), None);
+    let agreed = state.agree(&fields());
+    assert!(matches!(agreed, Some(Ok(_))) && state.question().is_none());
 }
