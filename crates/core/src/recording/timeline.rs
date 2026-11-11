@@ -16,15 +16,14 @@
 //!   one would pass the budget, the timeline is full and takes nothing more.
 //!
 //! The last three rules depend on which input events come before a
-//! position, and an input event can be read after positions stamped later
-//! than it. So a position waits ("pending") until its place among the input
-//! events is final, and the rules are applied in time order. A position's
-//! place is final once an input event at or after its time is written,
-//! since no input event goes before that one; or once a report, a press,
-//! a release or a wheel turn [`SETTLE_US`] later is read, which bounds how
-//! many positions and wheel turns wait. An input event
-//! read later than that still goes in time order, but the positions around
-//! it may already have been merged.
+//! position, and neither path is in order with the other: an input event
+//! can be read late, and a position report is stamped when it arrives but
+//! fed to the recorder later (the watcher, R03b). So positions and wheel
+//! turns wait ("pending") and the rules are applied in time order to what
+//! is [`SETTLE_US`] older than the newest thing read: an input event, a
+//! report or a wheel turn. Writing an input event proves nothing about the
+//! reports before it. Anything read later than that still goes in time
+//! order, but the positions around it may already have been merged.
 
 use std::collections::VecDeque;
 
@@ -138,19 +137,19 @@ impl Timeline {
     }
 
     /// Writes an input event at `at`, or at the last input event's time if
-    /// that is later. The positions up to it are placed first.
+    /// that is later. What waited [`SETTLE_US`] before it is placed.
     pub(super) fn input(&mut self, at: u64, change: Change) {
         let at = at.max(self.last_input_at);
         if !self.reserve(event_bytes(change)) {
             return;
         }
-        self.settle(at);
         let index = self.events.partition_point(|other| other.at <= at);
         self.events.insert(index, Event { at, change });
         self.last_input_at = at;
         if matches!(change, Change::Press(_) | Change::Release(_)) {
             self.event_read(at);
         }
+        self.settle(at.saturating_sub(SETTLE_US));
     }
 
     /// A press, release or wheel turn at `at` was read: it ends the
@@ -274,9 +273,10 @@ impl Timeline {
         true
     }
 
-    /// Inserts a position after every event at or before its time.
+    /// Inserts a position after every event before its time, and before
+    /// the input events at its time, as [`Timeline::settle`] orders them.
     fn insert(&mut self, event: Event) {
-        let index = self.events.partition_point(|other| other.at <= event.at);
+        let index = self.events.partition_point(|other| other.at < event.at);
         self.events.insert(index, event);
         self.positioned = true;
     }
