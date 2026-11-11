@@ -91,7 +91,7 @@ impl Label {
         let gaps = text.chars().count().saturating_sub(1) as f32;
         let span = text.chars().map(advance).sum::<f32>() + gaps * GAP;
         let height = (HEIGHT * side).min(WIDTH * side / span).floor();
-        let pixels = |share: f32| (share * height).round().max(1.0);
+        let pixels = |share: f32| (share * height).round();
         let (gap, thickness) = (pixels(GAP), pixels(THICKNESS));
         let widths: Vec<f32> = text.chars().map(|c| pixels(advance(c))).collect();
         let total = widths.iter().sum::<f32>() + gaps * gap;
@@ -217,7 +217,7 @@ impl Cell {
     /// A lowercase "m" in the lower half: a bar and three legs, thinner
     /// than a digit's strokes so that the gaps between them show.
     fn minutes(&self) -> Vec<Rect> {
-        let stroke = (self.thickness * 0.7).round().max(1.0);
+        let stroke = (self.thickness * 0.7).round();
         let top = self.middle();
         let leg = self.y + self.height - top;
         let centre = self.x + ((self.width - stroke) / 2.0).round();
@@ -324,6 +324,7 @@ impl Samples {
     /// out of all, the colour from those that do.
     fn argb(&self) -> [u8; 4] {
         let all = u32::from(SAMPLES * SAMPLES);
+        // Averages of bytes, and a share of 255: never past a byte.
         let byte = |value: u32| u8::try_from(value).unwrap_or(u8::MAX);
         match self.sum.map(|total| total.checked_div(self.count)) {
             [Some(r), Some(g), Some(b)] => {
@@ -473,6 +474,40 @@ mod tests {
     ];
 
     #[test]
+    fn a_pixel_averages_its_samples_on_the_tile() {
+        let mut samples = Samples::default();
+        assert_eq!(samples.argb(), [0; 4]);
+        for _ in 0..4 {
+            samples.add(WHITE);
+            samples.add(Rgb(0x01, 0x02, 0x03));
+        }
+        // Half the samples on the tile, half of those white.
+        assert_eq!(samples.argb(), [0x7f, 0x80, 0x80, 0x81]);
+        for _ in 0..8 {
+            samples.add(WHITE);
+        }
+        assert_eq!(samples.argb()[0], 0xff);
+    }
+
+    #[test]
+    fn the_tile_rounds_its_corners_on_a_circle() {
+        // 64 px, so the radius is 14, as in the themed icons.
+        let scene = Scene::new(&text(""), CLICKING, 64.0);
+        for (x, y, on) in [
+            (0.5, 0.5, false),
+            (2.0, 2.0, false),
+            (5.0, 5.0, true),
+            (14.0, 0.5, true),
+            (0.5, 14.0, true),
+            (62.0, 62.0, false),
+            (59.0, 59.0, true),
+            (32.0, 32.0, true),
+        ] {
+            assert_eq!(scene.on_tile(Point { x, y }), on, "({x}, {y})");
+        }
+    }
+
+    #[test]
     fn a_digit_lights_its_segments_and_leaves_the_rest_dark() {
         for size in SIZES {
             for (digit, lit) in LIT.iter().enumerate() {
@@ -537,6 +572,8 @@ mod tests {
                 around.bottom - around.y
             };
             assert!(height("7") >= height("88"), "{size} px");
+            // Never the full height: the tile shows above and below.
+            assert!(height("7") <= HEIGHT * side, "{size} px");
             assert!(height("88") >= 0.6 * side, "{size} px");
         }
     }
@@ -554,8 +591,8 @@ mod tests {
             bottom,
         } = bounds(&rects);
         assert!(
-            left >= 0.0 && right <= side,
-            "{shown} at {size} px: {left}..{right}"
+            left >= 0.0 && right <= side && top >= 0.0 && bottom <= side,
+            "{shown} at {size} px: {left}..{right}, {top}..{bottom}"
         );
         assert!((left - (side - right)).abs() <= 1.0, "{shown} at {size} px");
         assert!((top - (side - bottom)).abs() <= 1.0, "{shown} at {size} px");
@@ -593,15 +630,29 @@ mod tests {
             thickness: 3.0,
         };
         let rects = cell.minutes();
-        let lit = |x: f32, y: f32| rects.iter().any(|r| r.contains(Point { x, y }));
-        // Nothing in the upper half; the bar at the middle.
-        assert!(!lit(7.0, 4.0));
-        assert!(lit(7.0, cell.middle() + 0.5));
-        // Three legs to the bottom, with gaps between them.
-        let row: Vec<bool> = (0..14).map(|x| lit(x as f32 + 0.5, 19.5)).collect();
-        let legs = row.windows(2).filter(|w| w[1] && !w[0]).count() + usize::from(row[0]);
-        assert_eq!(legs, 3, "{row:?}");
-        assert!(row[0] && row[13]);
+        let lit = |x: usize, y: usize| {
+            let point = Point {
+                x: x as f32 + 0.5,
+                y: y as f32 + 0.5,
+            };
+            rects.iter().any(|r| r.contains(point))
+        };
+        let lit_in = |pixels: Vec<(usize, usize)>| -> Vec<usize> {
+            pixels
+                .into_iter()
+                .enumerate()
+                .filter(|&(_, (x, y))| lit(x, y))
+                .map(|(index, _)| index)
+                .collect()
+        };
+        // The middle bar starts halfway down, less half its thickness.
+        assert_eq!(cell.middle(), 8.0);
+        // Between the legs, only the bar: two pixels, 0.7 of the stroke.
+        let column = lit_in((0..20).map(|y| (3, y)).collect());
+        assert_eq!(column, [8, 9]);
+        // Three legs as thick as the bar: left, centred and right.
+        let row = lit_in((0..14).map(|x| (x, 19)).collect());
+        assert_eq!(row, [0, 1, 6, 7, 12, 13]);
     }
 
     #[test]
