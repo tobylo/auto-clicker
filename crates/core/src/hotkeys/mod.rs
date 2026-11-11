@@ -135,7 +135,10 @@ impl fmt::Display for Unavailable {
                 write!(f, "hotkeys are unavailable: a keyboard cannot be read: {error}")
             }
             Unavailable::WatchFailed(error) => {
-                write!(f, "hotkeys stopped: watching for keyboards failed: {error}")
+                write!(
+                    f,
+                    "hotkeys stopped: watching for keyboards failed: {error}; restart the program"
+                )
             }
             Unavailable::Desktop(why) => write!(f, "hotkeys are unavailable: {why}"),
         }

@@ -118,8 +118,8 @@ pub enum NoRecording {
     /// The desktop delivers the hotkeys (`hotkeys = "portal"`): nothing
     /// reads the keyboards and mice a recording is made of.
     DesktopHotkeys,
-    /// The keyboards cannot be read or watched. The tooltip lists this as a
-    /// problem already, with what to do.
+    /// The user may not read the keyboards, or watching for them failed. The
+    /// tooltip lists this as a problem already, with what to do.
     Keyboards(Unavailable),
 }
 
@@ -540,7 +540,7 @@ mod tests {
             (
                 NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned())),
                 "Record (needs a restart)",
-                "hotkeys stopped: watching for keyboards failed: gone",
+                "hotkeys stopped: watching for keyboards failed: gone; restart the program",
             ),
         ];
         for (no_recording, label, refusal) in cases {
