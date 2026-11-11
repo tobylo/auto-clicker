@@ -182,14 +182,6 @@ impl<P: Platform> Controller<P> {
         Some(refusal.to_string())
     }
 
-    /// Why a recording cannot start on this platform, if it cannot.
-    pub(super) fn recording_refusal(&self) -> Option<&'static str> {
-        (self.platform.input_reader() == InputReader::Desktop).then_some(
-            "recording reads the keyboards and mice, which hotkeys = \"portal\" does not; set \
-             hotkeys = \"kernel\" under [input] in the config, which needs the input group",
-        )
-    }
-
     pub(super) fn shown_hotkey(&self, action: Action) -> Hotkey {
         shown_hotkey(self.config.hotkeys, self.desktop.as_ref(), action)
     }
