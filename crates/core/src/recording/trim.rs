@@ -13,8 +13,8 @@
 //!    tail (the click on the icon, then the click on the menu item), or the
 //!    only one.
 //!
-//! The trip also takes the motion leading up to its first press, back to the
-//! event before that motion. Everything from there on is cut; the recording
+//! The trip also takes the motion leading up to its first press, and the
+//! positions among it, back to the event before that motion. Everything from there on is cut; the recording
 //! ends where the trip began. A key event is never cut: a press before it
 //! cannot be the trip's, since the trip has no key in it.
 
@@ -50,7 +50,7 @@ pub fn tray_cut(events: &[Event], menu_opened: Option<u64>) -> usize {
         .unwrap_or_default()
         .iter()
         .rev()
-        .take_while(|event| matches!(event.change, Change::Move { .. }))
+        .take_while(|event| matches!(event.change, Change::Move { .. } | Change::Position(_)))
         .count();
     first.saturating_sub(motion_before)
 }

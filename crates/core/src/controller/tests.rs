@@ -75,6 +75,8 @@ struct Record {
     no_local_time: bool,
     /// The reader gets its hotkeys from the desktop.
     desktop_reader: bool,
+    /// The screen layout the platform reports; unknown when `None`.
+    layout: Option<Layout>,
 }
 
 #[derive(Clone, Default)]
@@ -270,6 +272,10 @@ impl Platform for FakePlatform {
     fn recordings_dir(&self) -> Option<PathBuf> {
         self.0
             .with(|r| r.recordings.as_ref().map(|dir| dir.path().to_path_buf()))
+    }
+
+    fn layout(&self) -> Option<Layout> {
+        self.0.with(|r| r.layout.clone())
     }
 
     fn input_reader(&self) -> InputReader {
@@ -1135,4 +1141,5 @@ fn the_countdown_wakes_on_each_whole_second_and_then_the_deadline() {
 mod desktop;
 mod per_run;
 mod playback;
+mod positions;
 mod recording;

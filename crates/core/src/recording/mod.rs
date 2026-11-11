@@ -8,16 +8,22 @@
 //! the input reader sees, [`store`] saves it, and [`library`] lists and
 //! reads what was saved.
 //!
+//! A recording may also hold where the pointer was ([`Change::Position`])
+//! and the screen layout those positions lie on ([`Layout`]): both or
+//! neither.
+//!
 //! Key data stays inside a recording: [`Recording`]'s `Debug` shows how many
 //! events it holds, not which, and no error here names a key.
 
 mod codes;
 mod created;
 mod json;
+mod layout;
 mod library;
 mod recorder;
 mod store;
 mod tap;
+mod timeline;
 mod trim;
 
 use std::collections::BTreeSet;
@@ -26,6 +32,8 @@ use std::time::Duration;
 
 pub use codes::{name as code_name, parse as parse_code, recordable};
 pub use created::{Created, LocalTime};
+pub use json::event_bytes;
+pub use layout::{Layout, MAX_OUTPUTS, Output, Point, Rect};
 pub use library::{FileName, LoadError, MAX_FILE_BYTES, list, load};
 pub use recorder::{Ending, KeyInput, Recorder};
 pub use store::{recordings_dir, save};
@@ -33,8 +41,12 @@ pub use tap::{RecordingFeed, RecordingSlot};
 
 use crate::input::Held;
 
-/// The format version this program writes and reads.
+/// The format version of a recording without positions. This program
+/// writes it for such a recording, so older builds still read it.
 pub const VERSION: u64 = 1;
+
+/// The format version of a recording with positions and their layout.
+pub const VERSION_POSITIONS: u64 = 2;
 
 /// The longest recording: a recording stops and saves when it reaches this.
 pub const MAX_DURATION: Duration = Duration::from_secs(60 * 60);
@@ -58,6 +70,8 @@ pub enum Change {
     /// Whole wheel notches, summed over up to a millisecond; positive
     /// scrolls up.
     Wheel(i32),
+    /// Where the pointer was, on the recording's layout.
+    Position(Point),
 }
 
 /// One change, `at` microseconds after the recording started.
@@ -67,12 +81,21 @@ pub struct Event {
     pub change: Change,
 }
 
+/// A recording's events with the layout their positions lie on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Track {
+    pub layout: Layout,
+    pub events: Vec<Event>,
+}
+
 /// A checked recording.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Recording {
     name: String,
     created: Created,
     duration_us: u64,
+    /// The screens the positions lie on; `None` when there are none.
+    layout: Option<Layout>,
     events: Vec<Event>,
 }
 
@@ -107,8 +130,49 @@ impl Recording {
     /// than the duration or earlier than the one before it; a key or button
     /// has no name ([`recordable`]); a press finds its key already down, a
     /// release finds it up, or something is still down at the end; a move
-    /// or wheel event changes nothing.
+    /// or wheel event changes nothing; an event is a position (which needs
+    /// [`Recording::with_positions`]).
     pub fn new(
+        name: String,
+        created: Created,
+        duration_us: u64,
+        events: Vec<Event>,
+    ) -> Result<Recording, InvalidRecording> {
+        check_positions(&events, None)?;
+        Recording::build(name, created, duration_us, events)
+    }
+
+    /// A recording with positions on its track's layout.
+    ///
+    /// # Errors
+    /// As [`Recording::new`], and: no event is a position, or a position
+    /// lies on no output of the layout.
+    pub fn with_positions(
+        name: String,
+        created: Created,
+        duration_us: u64,
+        track: Track,
+    ) -> Result<Recording, InvalidRecording> {
+        let Track { layout, events } = track;
+        check_positions(&events, Some(&layout))?;
+        let positioned = events
+            .iter()
+            .any(|event| matches!(event.change, Change::Position(_)));
+        if !positioned {
+            return Err(InvalidRecording::new(
+                "the recording has a layout but no positions",
+            ));
+        }
+        let recording = Recording::build(name, created, duration_us, events)?;
+        Ok(Recording {
+            layout: Some(layout),
+            ..recording
+        })
+    }
+
+    /// Checks everything but the positions, which the caller checked; with
+    /// no layout.
+    fn build(
         name: String,
         created: Created,
         duration_us: u64,
@@ -125,6 +189,7 @@ impl Recording {
             name,
             created,
             duration_us,
+            layout: None,
             events,
         })
     }
@@ -150,6 +215,12 @@ impl Recording {
     pub fn events(&self) -> &[Event] {
         &self.events
     }
+
+    /// The screens the positions lie on; `None` for a recording without
+    /// positions.
+    pub fn layout(&self) -> Option<&Layout> {
+        self.layout.as_ref()
+    }
 }
 
 impl fmt::Debug for Recording {
@@ -159,6 +230,7 @@ impl fmt::Debug for Recording {
             .field("name", &self.name)
             .field("created", &self.created)
             .field("duration_us", &self.duration_us)
+            .field("layout", &self.layout)
             .field("events", &self.events.len())
             .finish()
     }
@@ -179,6 +251,22 @@ fn check_name(name: &str) -> Result<(), InvalidRecording> {
         ));
     }
     Ok(())
+}
+
+/// Whether every position in `events` lies on `layout`; none may without
+/// one.
+fn check_positions(events: &[Event], layout: Option<&Layout>) -> Result<(), InvalidRecording> {
+    let off = events.iter().position(|event| match event.change {
+        Change::Position(point) => !layout.is_some_and(|layout| layout.holds(point)),
+        _ => false,
+    });
+    match off {
+        Some(index) => Err(InvalidRecording::at(
+            index,
+            "is a position on no screen of the recording's layout",
+        )),
+        None => Ok(()),
+    }
 }
 
 fn check_events(events: &[Event], duration_us: u64) -> Result<(), InvalidRecording> {
@@ -220,12 +308,15 @@ fn check_change(change: Change, down: &mut BTreeSet<Held>) -> Result<(), &'stati
         Change::Release(held) => down.remove(&named(held)?),
         Change::Move { dx, dy } => dx != 0 || dy != 0,
         Change::Wheel(notches) => notches != 0,
+        // Checked against the layout by `check_positions`.
+        Change::Position(_) => true,
     };
     fine.then_some(()).ok_or(match change {
         Change::Press(_) => "presses a key or button that is already down",
         Change::Release(_) => "releases a key or button that is not down",
         Change::Move { .. } => "moves by nothing",
         Change::Wheel(_) => "turns the wheel by nothing",
+        Change::Position(_) => "is a position on no screen of the recording's layout",
     })
 }
 
