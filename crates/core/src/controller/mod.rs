@@ -23,6 +23,7 @@ mod hotkeys;
 mod playback;
 mod recording;
 mod session;
+mod settings;
 mod view;
 
 use std::future::{Future, pending, poll_fn};
@@ -38,11 +39,12 @@ use tokio::time::{Instant, sleep_until};
 
 pub use hotkeys::{HotkeyReader, HotkeySender};
 pub use session::{Blocked, SessionFacts};
+pub use settings::{WindowLink, WindowOpener};
 pub use view::{Activity, Hotkey, Listed, NoRecording, View, describe};
 
 use crate::clicker::run;
 use crate::config::Config;
-use crate::hotkeys::{Action, Binding, HotkeyEvent, HotkeyStatus, Unavailable};
+use crate::hotkeys::{Action, Binding, Bindings, HotkeyEvent, HotkeyStatus, Unavailable};
 use crate::input::{Input, InputBackend, InputError};
 use crate::recording::{FileName, Layout, LocalTime, RecordingFeed, RecordingSlot};
 use crate::run::{Ended, RunEnd, Signals};
@@ -168,9 +170,8 @@ pub trait Platform {
         InputReader::Devices
     }
 
-    /// Starts reading input, ignoring the devices of `own` (none when it is
-    /// `None`): hotkeys go to `send`, and while a recording runs, what the
-    /// devices do goes to `feed`. The controller drops a reader of devices
+    /// Starts reading input for `reading`, ignoring the devices of `own`
+    /// (none when it is `None`). The controller drops a reader of devices
     /// before it opens kept devices again, so no such reader runs while
     /// devices it does not know about exist.
     ///
@@ -180,8 +181,7 @@ pub trait Platform {
     fn read_input(
         &mut self,
         own: Option<&Input<Self::Backend>>,
-        send: HotkeySender,
-        feed: RecordingFeed,
+        reading: ReadInput,
     ) -> HotkeyReader;
 
     /// Now, on the clock input events are stamped with (the monotonic
@@ -201,6 +201,17 @@ pub trait Platform {
     fn layout(&self) -> Option<Layout> {
         None
     }
+}
+
+/// What an input reader reads for, and where it says what it saw.
+pub struct ReadInput {
+    /// The hotkeys. A reader of the desktop's shortcuts asks the desktop for
+    /// them at its first bind only.
+    pub bindings: Bindings,
+    /// Where hotkey events go.
+    pub send: HotkeySender,
+    /// Where what the devices do goes while a recording runs.
+    pub feed: RecordingFeed,
 }
 
 /// What a start will run once it begins.
@@ -314,6 +325,7 @@ enum Wake<B: InputBackend> {
     InputLost(InputError),
     Opened(Result<Input<B>, InputError>),
     Hotkey(HotkeyEvent),
+    Window(settings::WindowEvent),
     Deadline,
     RecordingFull,
 }
@@ -322,8 +334,12 @@ enum Wake<B: InputBackend> {
 /// with [`Controller::run`].
 pub struct Controller<P: Platform> {
     platform: P,
+    /// What it runs with: the config at start, and of a later save what is
+    /// in use yet (see [`settings`]).
     config: Config,
     config_error: Option<String>,
+    /// The config file and the settings window.
+    settings: settings::Settings,
     inbox: mpsc::UnboundedReceiver<Message>,
     view: watch::Sender<View>,
     state: State<P::Backend>,
@@ -396,6 +412,7 @@ impl<P: Platform> Controller<P> {
             platform,
             config,
             config_error,
+            settings: settings::Settings::new(config),
             inbox,
             view,
             state: State::Idle,
@@ -457,7 +474,10 @@ impl<P: Platform> Controller<P> {
     /// before the hotkey events, the run's next action and the deadlines;
     /// hotkey events (a stop) before the run. The reader goes last: kept busy
     /// by a flood of key events, it spends tokio's budget, and anything
-    /// polled after it would wait. Everything else is cheap to poll. (A due
+    /// polled after it would wait. Everything else is cheap to poll. A
+    /// settings window cannot flood: its requests come through a bounded
+    /// queue that a task on this thread fills only while the controller
+    /// waits, after it polled every branch. (A due
     /// timer and a queued message cannot be made ready in one poll on the
     /// paused clock, so the tests pin the reader's place and the outcomes,
     /// not every tie.)
@@ -469,12 +489,14 @@ impl<P: Platform> Controller<P> {
             hotkeys,
             opening,
             recording,
+            settings,
             ..
         } = self;
         tokio::select! {
             biased;
             message = inbox.recv() => Wake::Message(message.unwrap_or(Message::Quit)),
             event = hotkeys::received(&mut hotkeys.events) => Wake::Hotkey(event),
+            event = settings::next_event(settings) => Wake::Window(event),
             wake = run_wake(state) => wake,
             opened = open_end(opening) => Wake::Opened(opened),
             () = sleep_until_some(deadline) => Wake::Deadline,
@@ -512,6 +534,7 @@ impl<P: Platform> Controller<P> {
             Wake::InputLost(err) => self.devices_lost(err),
             Wake::Opened(opened) => self.opened(opened),
             Wake::Hotkey(event) => self.hotkey(event),
+            Wake::Window(event) => self.window_event(event),
             Wake::Deadline => self.deadline(),
             Wake::RecordingFull => self.recording_full(),
         }
@@ -925,10 +948,19 @@ impl<P: Platform> Controller<P> {
             platform,
             input,
             recording,
+            config,
             ..
         } = self;
         let feed = recording.feed();
-        self.hotkeys = HotkeySource::start(|send| platform.read_input(input.as_ref(), send, feed));
+        let bindings = config.hotkeys;
+        self.hotkeys = HotkeySource::start(|send| {
+            let reading = ReadInput {
+                bindings,
+                send,
+                feed,
+            };
+            platform.read_input(input.as_ref(), reading)
+        });
         self.hotkey_status = None;
     }
 
@@ -953,6 +985,7 @@ impl<P: Platform> Controller<P> {
             }
             changed
         });
+        self.publish_window();
     }
 
     fn activity(&self) -> Activity {
