@@ -2,8 +2,8 @@
 //! the daemon last sent, the hotkeys and key captured since, the request it
 //! waits on, and what each answer means for what it shows.
 
-use auto_clicker_core::config::{Draft, Field, HotkeysDraft, RouteName, Stale};
-use auto_clicker_core::controller::Activity;
+use auto_clicker_core::config::{Draft, Field, HotkeysDraft, Stale};
+use auto_clicker_core::controller::{Activity, Route};
 use auto_clicker_core::hotkeys::{Action, Capture};
 use auto_clicker_core::window::{Ask, CaptureEnd, Confirm, Outcome, Request, WindowView};
 
@@ -261,9 +261,10 @@ pub fn idle(view: &WindowView) -> bool {
     view.activity == Activity::Idle
 }
 
-/// Whether the desktop delivers the hotkeys now.
+/// Whether the desktop delivers the hotkeys now: the route the daemon
+/// picked at its start, whatever the config named (`auto` included).
 pub fn desktop_hotkeys(view: &WindowView) -> bool {
-    view.running.hotkeys == RouteName::Portal
+    view.routes.hotkeys == Route::Portal
 }
 
 /// Whether the saved routes differ from those the daemon runs on: they

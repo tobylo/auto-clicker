@@ -346,7 +346,7 @@ mod tests {
     use std::sync::Arc;
 
     use auto_clicker_core::config::Config;
-    use auto_clicker_core::controller::{Hotkey, Listed, NoRecording};
+    use auto_clicker_core::controller::{Hotkey, Listed, NoRecording, Route, Routes};
     use auto_clicker_core::hotkeys::Unavailable;
     use auto_clicker_core::recording::FileName;
 
@@ -367,6 +367,7 @@ mod tests {
             .collect();
         View {
             activity,
+            routes: Routes::default(),
             settings: config.clicker,
             hotkey: Hotkey::Bound(config.hotkeys.toggle_clicking),
             record_hotkey: Hotkey::Bound(config.hotkeys.toggle_recording),
@@ -742,9 +743,9 @@ mod tests {
             .collect();
         assert_eq!(
             lines[2],
-            "Recording is unavailable with hotkeys = \"portal\": nothing reads the keyboards \
-             and mice. Set hotkeys = \"kernel\" under [input] in the config; that needs the \
-             input group."
+            "Recording is unavailable with the desktop's shortcuts: nothing reads the \
+             keyboards and mice. It needs the input group, and hotkeys = \"auto\" or \
+             \"kernel\" under [input] in the config."
         );
         assert!(
             !lines.iter().any(|line| line.contains("starts recording")),
@@ -754,6 +755,44 @@ mod tests {
             lines.last().map(String::as_str),
             Some("Not recording: &lt;why&gt;")
         );
+    }
+
+    #[test]
+    fn the_tooltip_names_the_route_of_each_job() {
+        let cases = [
+            (
+                Route::Kernel,
+                Route::Kernel,
+                "Clicks through /dev/uinput, hotkeys from the keyboards",
+            ),
+            (
+                Route::Kernel,
+                Route::Portal,
+                "Clicks through /dev/uinput, hotkeys from the desktop's shortcuts",
+            ),
+            (
+                Route::Portal,
+                Route::Kernel,
+                "Clicks through the desktop's remote input, hotkeys from the keyboards",
+            ),
+            (
+                Route::Portal,
+                Route::Portal,
+                "Clicks through the desktop's remote input, hotkeys from the desktop's \
+                 shortcuts",
+            ),
+        ];
+        for (output, hotkeys, line) in cases {
+            let shown = View {
+                routes: Routes { output, hotkeys },
+                ..view(Activity::Idle)
+            };
+            let body = tooltip_body(&shown);
+            let lines: Vec<&str> = body.split("<br/>").collect();
+            // After the hotkeys, before the notice, which stays escaped.
+            assert_eq!(lines[4], line, "{body}");
+            assert_eq!(lines[5], "a &lt;b&gt; &amp; c", "{body}");
+        }
     }
 
     #[test]

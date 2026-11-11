@@ -10,13 +10,14 @@ After=graphical-session.target
 Type=exec
 ExecStart=/usr/bin/auto-clicker
 # Exit statuses: 0 after Quit, SIGTERM or SIGINT; 3 when another copy runs in
-# this session; 77 when /dev/uinput cannot be used. Restarting fixes neither
-# 3 nor 77. Any other failure restarts after 5 s, backing off to 5 min.
+# this session, which restarting does not fix. Any other failure restarts
+# after 5 s, backing off to 5 min. Without access to /dev/uinput or the
+# keyboards, the daemon keeps running and the tray says why.
 Restart=on-failure
 RestartSec=5s
 RestartSteps=5
 RestartMaxDelaySec=5min
-RestartPreventExitStatus=3 77
+RestartPreventExitStatus=3
 # The daemon reaches the session and system buses through Unix sockets only.
 # IPAddressDeny= would be ignored here: a user manager cannot set up the
 # firewall it needs.

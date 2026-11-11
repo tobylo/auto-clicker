@@ -7,9 +7,10 @@
 //! controller that ignored a stop would still be waiting for its deadline.
 
 use std::fmt;
-use std::future::{Future, pending};
+use std::future::{Future, pending, poll_fn};
 use std::io;
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
@@ -86,6 +87,16 @@ struct Record {
     open_gate: Option<tokio::sync::oneshot::Sender<()>>,
     /// The screen layout the platform reports; unknown when `None`.
     layout: Option<Layout>,
+    /// What each layout watcher was given: its feed and its signal.
+    watches: Vec<(RecordingFeed, LayoutSignal)>,
+    /// How often the layout watchers were polled.
+    watch_polls: usize,
+    /// A layout the watcher has received and takes when it is next polled,
+    /// as a report waiting in its queue.
+    queued_layout: Option<Layout>,
+    /// Devices closed (dropped): their id, and how many device calls had
+    /// been made by then.
+    closed: Vec<(usize, usize)>,
 }
 
 #[derive(Clone, Default)]
@@ -102,6 +113,10 @@ impl Shared {
 
     fn calls(&self) -> Vec<Call> {
         self.with(|r| r.calls.iter().map(|&(_, _, call)| call).collect())
+    }
+
+    fn closed(&self) -> Vec<(usize, usize)> {
+        self.with(|r| r.closed.clone())
     }
 
     /// The calls made to the devices opened n-th (0: those given at start).
@@ -170,6 +185,16 @@ struct Devices {
     id: usize,
     inner: FakeBackend,
     shared: Shared,
+}
+
+impl Drop for Devices {
+    fn drop(&mut self) {
+        let id = self.id;
+        self.shared.with(|r| {
+            let calls = r.calls.len();
+            r.closed.push((id, calls));
+        });
+    }
 }
 
 impl fmt::Debug for Devices {
@@ -298,6 +323,26 @@ impl Platform for FakePlatform {
 
     fn layout(&self) -> Option<Layout> {
         self.0.with(|r| r.layout.clone())
+    }
+
+    fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
+        self.0.with(|r| r.watches.push((feed, changed.clone())));
+        let shared = self.0.clone();
+        Box::pin(poll_fn(move |_| {
+            let taken = shared.with(|r| {
+                r.watch_polls += 1;
+                let queued = r.queued_layout.take();
+                let taken = queued.is_some();
+                if taken {
+                    r.layout = queued;
+                }
+                taken
+            });
+            if taken {
+                changed.changed();
+            }
+            Poll::Pending
+        }))
     }
 
     fn input_reader(&self) -> InputReader {
@@ -801,6 +846,30 @@ async fn quit_while_a_click_is_down_releases_it() {
         // The hold inside the click is not waited out.
         assert_eq!(Instant::now(), before);
         assert_eq!(d.shared.calls(), [LEFT_DOWN, LEFT_UP]);
+    })
+    .await;
+}
+
+/// A route changes with a restart, so leaving the old one is quitting:
+/// everything its devices hold is released first, then they close, at once.
+/// The order is the input guard's: it releases before its backend drops,
+/// whoever released before it.
+#[tokio::test(start_paused = true)]
+async fn quitting_releases_everything_before_the_kept_devices_close() {
+    local(async {
+        let d = daemon(Mode::HoldButton).await;
+        d.press_hotkey().await;
+        d.shared.hotkey(HotkeyEvent::ModifiersReleased);
+        d.settle().await;
+        assert_eq!(d.shared.calls(), [LEFT_DOWN]);
+        assert!(d.shared.closed().is_empty());
+        let before = Instant::now();
+        d.inbox.send(Message::Quit).unwrap();
+        timeout(secs(1), d.task).await.unwrap().unwrap();
+        assert_eq!(Instant::now(), before, "no time passed");
+        assert_eq!(d.shared.calls(), [LEFT_DOWN, LEFT_UP]);
+        // The devices given at start closed after both calls.
+        assert_eq!(d.shared.closed(), [(0, 2)]);
     })
     .await;
 }

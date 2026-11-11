@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::names::{ButtonName, ModeName, RouteName};
-use super::{Config, HotkeyRoute, InputSettings, check};
+use super::{Config, InputSettings, check};
 use crate::clicker::{ClickerSettings, Interval, Mode, Position, Repeat};
 use crate::hotkeys::{Action, Binding, Bindings};
 use crate::input::AbsolutePosition;
@@ -141,7 +141,7 @@ impl Draft {
             let reason = check::bound_twice(hotkeys.binding(later));
             return Err(Refusal::new(Field::Hotkey(later), reason));
         }
-        if input.hotkeys == HotkeyRoute::Kernel
+        if input.hotkeys.may_read_keyboards()
             && let Some((action, reason)) = check::on_the_clicker_key(&hotkeys, &clicker)
         {
             return Err(Refusal::new(Field::Hotkey(action), reason));

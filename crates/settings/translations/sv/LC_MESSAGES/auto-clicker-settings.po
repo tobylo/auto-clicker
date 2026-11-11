@@ -182,6 +182,9 @@ msgstr "Plasma levererar snabbtangenterna, så de väljs i Systeminställningar,
 msgid "Change in System Settings"
 msgstr "Ändra i Systeminställningar"
 
+msgid "Picked at start"
+msgstr "Väljs vid start"
+
 msgid "Hotkeys come from"
 msgstr "Snabbtangenterna kommer från"
 

@@ -28,7 +28,7 @@ const BUTTONS: [ButtonName; 5] = [
 ];
 
 /// The routes in the order the window lists them.
-const ROUTES: [RouteName; 2] = [RouteName::Kernel, RouteName::Portal];
+const ROUTES: [RouteName; 3] = [RouteName::Auto, RouteName::Kernel, RouteName::Portal];
 
 /// What the window's fields hold, as the window's widgets take it.
 #[derive(Clone, Debug, PartialEq)]
@@ -129,8 +129,8 @@ impl Fields {
             },
             hotkeys: hotkeys.clone(),
             input: InputDraft {
-                output: chosen(&ROUTES, self.output_route, RouteName::Kernel),
-                hotkeys: chosen(&ROUTES, self.hotkeys_route, RouteName::Kernel),
+                output: chosen(&ROUTES, self.output_route, RouteName::Auto),
+                hotkeys: chosen(&ROUTES, self.hotkeys_route, RouteName::Auto),
             },
             playback: PlaybackDraft {
                 speed: decimal(&self.speed_text, Unreadable::Speed)?,

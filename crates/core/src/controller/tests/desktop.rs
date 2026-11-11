@@ -405,6 +405,7 @@ async fn recording_is_refused_while_the_desktop_delivers_the_hotkeys() {
             let d = desktop_daemon(ClickerSettings::default()).await;
             // Unavailable from the first view on, before the desktop reports.
             assert_eq!(d.view().no_recording, Some(NoRecording::DesktopHotkeys));
+            assert_eq!(d.view().routes.hotkeys, Route::Portal);
             d.hotkey(defaults()).await;
             if from_hotkey {
                 d.hotkey(HotkeyEvent::Fired(Action::ToggleRecording)).await;
@@ -414,7 +415,7 @@ async fn recording_is_refused_while_the_desktop_delivers_the_hotkeys() {
             assert_eq!(d.activity(), Activity::Idle, "{from_hotkey}");
             assert_eq!(
                 d.notice(),
-                "Not recording: recording is unavailable with hotkeys = \"portal\""
+                "Not recording: recording is unavailable with the desktop's shortcuts"
             );
             assert_eq!(d.view().no_recording, Some(NoRecording::DesktopHotkeys));
             sleep(secs(10)).await;

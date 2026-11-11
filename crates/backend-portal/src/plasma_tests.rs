@@ -317,6 +317,17 @@ async fn clicks_through_the_portal_into_a_real_window() {
 }
 
 #[tokio::test]
+#[ignore = "needs Plasma 6.8 and the installed desktop file; run by hand"]
+async fn plasma_offers_its_shortcuts_without_a_dialog() {
+    // No session opens, so nothing shows; the check ends well within its
+    // own deadlines.
+    let offered = timeout(Duration::from_secs(30), crate::shortcuts_offered())
+        .await
+        .expect("the check did not end in time");
+    assert!(offered.is_ok(), "{:?}", offered.err());
+}
+
+#[tokio::test]
 #[ignore = "needs Plasma 6.8, the installed desktop file and shortcuts already accepted; opens System Settings; run by hand"]
 async fn the_desktops_shortcut_settings_open_for_a_bound_session() {
     use auto_clicker_core::controller::{ReaderCommand, ReaderCommands};
