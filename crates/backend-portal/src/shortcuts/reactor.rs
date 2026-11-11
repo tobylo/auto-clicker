@@ -1,7 +1,9 @@
 //! One bound session: turning the portal's signals into hotkey events.
 
-use std::future::pending;
+use std::future::{Future, pending, poll_fn};
+use std::pin::Pin;
 use std::pin::pin;
+use std::task::Poll;
 
 use auto_clicker_core::controller::{ReaderCommand, ReaderCommands};
 use auto_clicker_core::hotkeys::{
@@ -115,7 +117,34 @@ enum Wake {
     Signal(Option<Signal>),
     ReleaseDue,
     Command(ReaderCommand),
+    /// The call opening the desktop's settings for this operation ended.
+    Configured(u64, Result<(), String>),
 }
+
+/// The call opening the desktop's settings, while it runs, and the
+/// operation it answers.
+type Configuring<'a> = Option<(u64, Pin<Box<dyn Future<Output = Result<(), String>> + 'a>>)>;
+
+/// The end of the call in flight; never resolves while none is.
+fn configure_end<'a>(
+    configuring: &'a mut Configuring<'_>,
+) -> impl Future<Output = (u64, Result<(), String>)> + 'a {
+    poll_fn(move |cx| {
+        let Some((operation, call)) = configuring else {
+            return Poll::Pending;
+        };
+        let operation = *operation;
+        call.as_mut().poll(cx).map(|result| {
+            *configuring = None;
+            (operation, result)
+        })
+    })
+}
+
+/// What answers a request for the desktop's settings while another is
+/// still being opened; the controller asks one at a time, so only a
+/// controller that gave up on the first one sees it.
+pub(super) const STILL_OPENING: &str = "the desktop's settings are still being opened";
 
 /// What a bound session serves with: its signals, the controller's
 /// commands, and how it opens the desktop's settings for its shortcuts,
@@ -128,20 +157,23 @@ pub(super) struct Served<'a, S, C> {
 
 /// Serves a session bound with `triggers` until it is lost: reports the
 /// triggers and that hotkeys work, then every hotkey its signals bring, and
-/// answers each command. Returns why the session ended.
+/// answers each command. The call a command makes runs beside the hotkeys,
+/// so a stop pressed meanwhile is not held up; it ends with the session.
+/// Returns why the session ended.
 pub(super) async fn serve<C>(
     triggers: Triggers,
     served: Served<'_, impl Stream<Item = Signal>, C>,
     send: &mut dyn FnMut(HotkeyEvent),
 ) -> String
 where
-    C: AsyncFnMut(Option<String>) -> Result<(), String>,
+    C: AsyncFn(Option<String>) -> Result<(), String>,
 {
     let Served {
         signals,
         commands,
-        mut configure,
+        configure,
     } = served;
+    let mut configuring: Configuring<'_> = None;
     send(HotkeyEvent::Triggers(triggers.clone()));
     send(HotkeyEvent::Status(HotkeyStatus::Available));
     let mut session = Session {
@@ -156,13 +188,29 @@ where
             biased;
             signal = signals.next() => Wake::Signal(signal),
             () = due(session.release_at) => Wake::ReleaseDue,
+            (operation, result) = configure_end(&mut configuring) => {
+                Wake::Configured(operation, result)
+            }
             command = commands.next() => Wake::Command(command),
         };
         let event = match wake {
             Wake::ReleaseDue => Some(session.release_due()),
-            Wake::Command(ReaderCommand::ConfigureShortcuts { activation_token }) => {
-                Some(HotkeyEvent::Configured(configure(activation_token).await))
+            Wake::Configured(operation, result) => {
+                Some(HotkeyEvent::Configured { operation, result })
             }
+            Wake::Command(ReaderCommand::ConfigureShortcuts {
+                operation,
+                activation_token,
+            }) => match configuring {
+                Some(_) => Some(HotkeyEvent::Configured {
+                    operation,
+                    result: Err(STILL_OPENING.to_owned()),
+                }),
+                None => {
+                    configuring = Some((operation, Box::pin(configure(activation_token))));
+                    None
+                }
+            },
             Wake::Signal(Some(Signal::Activated(id))) => session.activated(&id),
             Wake::Signal(Some(Signal::Deactivated(_))) => {
                 session.deactivated(Instant::now());

@@ -53,6 +53,8 @@ pub(super) struct Settings {
     pub(super) answer: Option<Answer>,
     /// What the window waits on: a capture, or the desktop's settings.
     pub(super) pending: Option<Pending>,
+    /// The number the next request to the reader gets.
+    operations: u64,
 }
 
 /// What happened with the settings window.
@@ -74,7 +76,14 @@ impl Settings {
             window: None,
             answer: None,
             pending: None,
+            operations: 0,
         }
+    }
+
+    /// A number no earlier request to the reader had.
+    pub(super) fn next_operation(&mut self) -> u64 {
+        self.operations = self.operations.wrapping_add(1);
+        self.operations
     }
 
     /// What the reader captures now, if anything.

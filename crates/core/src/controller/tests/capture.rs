@@ -243,17 +243,47 @@ async fn no_capture_starts_while_anything_goes_on() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn no_capture_starts_without_readable_keyboards() {
+async fn the_capture_reader_finds_out_whether_a_keyboard_can_be_read() {
     local(async {
         let mut s = setup().await;
-        let denied = Unavailable::NoPermission;
-        s.d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(
-            denied.clone(),
-        )))
-        .await;
+        // The hotkeys' reader found none with a hotkey key: a capture reads
+        // more, so it starts, and ends as soon as its reader finds none.
+        let none = Unavailable::NoKeyboard;
+        let status = HotkeyEvent::Status(HotkeyStatus::Unavailable(none.clone()));
+        s.d.hotkey(status.clone()).await;
+        let id = capturing(&mut s).await;
+        s.d.hotkey(status).await;
+        assert_eq!(
+            s.window.answer_to(id),
+            Some(Outcome::Unavailable(none.to_string()))
+        );
+        assert!(hotkeys_back(&s.d));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_capture_starts_while_the_session_may_not_be_read() {
+    local(async {
+        let mut s = setup().await;
+        s.d.send(Message::Session(Some(Blocked::Locked))).await;
         let asked = s.window.ask(&s.d, Ask::Capture(Capture::Hotkey)).await;
-        assert_eq!(asked, Outcome::Unavailable(denied.to_string()));
+        assert_eq!(asked, Outcome::Unavailable(Blocked::Locked.to_string()));
         assert!(captures(&s.d).iter().all(Option::is_none));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_key_the_controller_gets_to_only_at_the_deadline_is_not_taken() {
+    local(async {
+        let mut s = setup().await;
+        let id = capturing(&mut s).await;
+        tokio::time::advance(CAPTURE_TIME).await;
+        s.d.hotkey(HotkeyEvent::Captured(Captured::Hotkey(ctrl_f9())))
+            .await;
+        assert_eq!(s.window.answer_to(id), ended(CaptureEnd::TimedOut));
+        assert!(hotkeys_back(&s.d));
     })
     .await;
 }
@@ -284,6 +314,14 @@ async fn command(d: &Daemon) -> Option<ReaderCommand> {
     next
 }
 
+/// The reader's answer to operation `operation`.
+fn answered(operation: u64, result: Result<(), &str>) -> HotkeyEvent {
+    HotkeyEvent::Configured {
+        operation,
+        result: result.map_err(str::to_owned),
+    }
+}
+
 fn configure(token: Option<&str>) -> Ask {
     Ask::ConfigureShortcuts {
         activation_token: token.map(str::to_owned),
@@ -296,15 +334,15 @@ async fn the_desktops_settings_open_through_the_reader() {
         let mut s = desktop_setup().await;
         let id = s.window.send(&s.d, configure(Some("token-1"))).await;
         let asked = ReaderCommand::ConfigureShortcuts {
+            operation: 1,
             activation_token: Some("token-1".to_owned()),
         };
         assert_eq!(command(&s.d).await, Some(asked));
         assert_eq!(s.window.answer_to(id), None);
-        s.d.hotkey(HotkeyEvent::Configured(Ok(()))).await;
+        s.d.hotkey(answered(1, Ok(()))).await;
         assert_eq!(s.window.answer_to(id), Some(Outcome::Configured));
         let id = s.window.send(&s.d, configure(None)).await;
-        s.d.hotkey(HotkeyEvent::Configured(Err("refused".to_owned())))
-            .await;
+        s.d.hotkey(answered(2, Err("refused"))).await;
         assert_eq!(
             s.window.answer_to(id),
             Some(Outcome::Failed("refused".to_owned()))
@@ -326,8 +364,42 @@ async fn a_reader_that_never_answers_is_given_up_on_and_one_thing_at_a_time() {
         ));
         assert_eq!(s.window.answer_to(id), failed);
         // A late answer changes nothing.
-        s.d.hotkey(HotkeyEvent::Configured(Ok(()))).await;
+        s.d.hotkey(answered(1, Ok(()))).await;
         assert_eq!(s.window.answer_to(id), failed);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_answer_for_a_window_since_gone_is_not_taken_for_the_next_one() {
+    local(async {
+        let s = desktop_setup().await;
+        let mut first = s.window;
+        first.send(&s.d, configure(None)).await;
+        let mut second = Window::open(&s.opener);
+        s.d.settle().await;
+        let id = second.send(&s.d, configure(None)).await;
+        s.d.hotkey(answered(1, Ok(()))).await;
+        assert_eq!(second.answer_to(id), None);
+        s.d.hotkey(answered(2, Err("refused"))).await;
+        let refused = Some(Outcome::Failed("refused".to_owned()));
+        assert_eq!(second.answer_to(id), refused);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_wait_for_the_desktops_settings_leaves_a_hotkey_release_wait_its_own_deadline() {
+    local(async {
+        let mut s = desktop_setup().await;
+        s.window.send(&s.d, configure(None)).await;
+        sleep(Duration::from_secs(40)).await;
+        s.d.press_hotkey().await;
+        assert_eq!(s.d.activity(), Activity::WaitingForRelease);
+        sleep(Duration::from_secs(21)).await;
+        s.d.settle().await;
+        // The settings' deadline passed at 60 s; the release wait runs to 70 s.
+        assert_eq!(s.d.activity(), Activity::WaitingForRelease);
     })
     .await;
 }
@@ -345,6 +417,20 @@ async fn the_wait_for_the_desktops_settings_ends_during_a_run_too() {
             "the desktop did not open its settings".to_owned(),
         ));
         assert_eq!(s.window.answer_to(id), failed);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_countdowns_seconds_do_not_end_the_wait_for_the_desktops_settings() {
+    local(async {
+        let mut s = desktop_setup().await;
+        s.d.send(Message::Start).await;
+        let id = s.window.send(&s.d, configure(None)).await;
+        sleep(Duration::from_secs(2)).await;
+        s.d.settle().await;
+        assert!(matches!(s.d.activity(), Activity::StartingIn(_)));
+        assert_eq!(s.window.answer_to(id), None);
     })
     .await;
 }

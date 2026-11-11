@@ -26,7 +26,7 @@ use std::cell::Cell;
 use std::future::Future;
 use std::pin::pin;
 
-use auto_clicker_core::controller::ReaderCommands;
+use auto_clicker_core::controller::{ReaderCommand, ReaderCommands};
 use auto_clicker_core::hotkeys::{Bindings, HotkeyEvent, HotkeyStatus, Unavailable};
 use futures_util::{Stream, StreamExt};
 
@@ -143,8 +143,10 @@ impl<O: Stream<Item = bool> + Unpin> Waiting<'_, O> {
         loop {
             tokio::select! {
                 change = self.owners.next() => return change,
-                _ = self.commands.next() => {
-                    send(HotkeyEvent::Configured(Err(NOT_BOUND.to_owned())));
+                command = self.commands.next() => {
+                    let ReaderCommand::ConfigureShortcuts { operation, .. } = command;
+                    let result = Err(NOT_BOUND.to_owned());
+                    send(HotkeyEvent::Configured { operation, result });
                 }
             }
         }

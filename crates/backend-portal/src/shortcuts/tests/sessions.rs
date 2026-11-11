@@ -285,13 +285,17 @@ async fn between_sessions_a_request_for_the_settings_is_answered_at_once() {
         assert_eq!(r.take(), [lost("declined")]);
         r.commands
             .send(ReaderCommand::ConfigureShortcuts {
+                operation: 7,
                 activation_token: None,
             })
             .unwrap();
         settle().await;
         assert_eq!(
             r.take(),
-            [HotkeyEvent::Configured(Err(NOT_BOUND.to_owned()))]
+            [HotkeyEvent::Configured {
+                operation: 7,
+                result: Err(NOT_BOUND.to_owned())
+            }]
         );
         assert_eq!(r.sessions(), 1, "no session is opened for it");
     })

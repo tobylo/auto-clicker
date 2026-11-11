@@ -140,6 +140,12 @@ fn classify(file: File, paths: &Paths, own: &[PathBuf], wanted: Wanted<'_>) -> i
     Ok(Node::Device(Box::new(device.into_event_stream()?), role))
 }
 
+/// Whether a device is read for hotkeys: it has a bound key or a modifier
+/// (`bound`), or a capture runs and it has any key a hotkey can use.
+fn hotkey_device(bound: bool, capture: bool, any_key: bool) -> bool {
+    bound || (capture && any_key)
+}
+
 fn capabilities(device: &RawDevice, wanted: Wanted<'_>) -> Capabilities {
     let Some(keys) = device.supported_keys() else {
         return Capabilities::default();
@@ -149,7 +155,7 @@ fn capabilities(device: &RawDevice, wanted: Wanted<'_>) -> Capabilities {
     let has_axis = |axis| relative.is_some_and(|axes| axes.contains(axis));
     let any_key = Key::CODES.into_iter().any(has);
     Capabilities {
-        hotkey_keys: wanted.bindings.wants_device(has) || (wanted.capture && any_key),
+        hotkey_keys: hotkey_device(wanted.bindings.wants_device(has), wanted.capture, any_key),
         keys: any_key,
         mouse: has(BTN_LEFT)
             && has_axis(RelativeAxisCode::REL_X)
@@ -208,6 +214,25 @@ fn input_device(paths: &Paths, device_number: u64) -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_capture_reads_every_keyboard_and_otherwise_only_hotkey_ones() {
+        // (bound, capture, any key) and whether it is read for hotkeys.
+        let cases = [
+            ((true, false, true), true),
+            ((false, false, true), false),
+            ((false, true, true), true),
+            ((false, true, false), false),
+            ((true, true, false), true),
+        ];
+        for ((bound, capture, any_key), read) in cases {
+            assert_eq!(
+                hotkey_device(bound, capture, any_key),
+                read,
+                "{bound} {capture} {any_key}"
+            );
+        }
+    }
 
     #[test]
     fn unplugged_devices_are_gone_and_other_errors_are_not() {

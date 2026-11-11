@@ -33,9 +33,13 @@ impl HotkeySender {
 pub enum ReaderCommand {
     /// Open the desktop's settings for the program's shortcuts, raised with
     /// this activation token if there is one. A reader of the desktop's
-    /// shortcuts answers with [`HotkeyEvent::Configured`]; a reader of the
-    /// keyboards has nothing to open and ignores it.
-    ConfigureShortcuts { activation_token: Option<String> },
+    /// shortcuts answers with [`HotkeyEvent::Configured`], carrying
+    /// `operation`; a reader of the keyboards has nothing to open and
+    /// ignores it.
+    ConfigureShortcuts {
+        operation: u64,
+        activation_token: Option<String>,
+    },
 }
 
 /// Where a reader gets the controller's commands.

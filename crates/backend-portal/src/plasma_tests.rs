@@ -332,11 +332,12 @@ async fn the_desktops_shortcut_settings_open_for_a_bound_session() {
         let mut next = async || timeout(wait, received.recv()).await.unwrap().unwrap();
         while next().await != HotkeyEvent::Status(HotkeyStatus::Available) {}
         let configure = ReaderCommand::ConfigureShortcuts {
+            operation: 1,
             activation_token: None,
         };
         commands.send(configure).unwrap();
         loop {
-            if let HotkeyEvent::Configured(result) = next().await {
+            if let HotkeyEvent::Configured { result, .. } = next().await {
                 assert_eq!(result, Ok(()));
                 break;
             }

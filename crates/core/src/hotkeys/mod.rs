@@ -114,8 +114,12 @@ pub enum HotkeyEvent {
     Triggers(Triggers),
     /// What a reader started to capture got: once, then nothing more.
     Captured(Captured),
-    /// The desktop's shortcut settings were opened (`Ok`), or why not.
-    Configured(Result<(), String>),
+    /// The desktop's shortcut settings were opened (`Ok`), or why not, for
+    /// the command with this operation number.
+    Configured {
+        operation: u64,
+        result: Result<(), String>,
+    },
 }
 
 /// Whether hotkeys can be read: from a keyboard, or from the desktop.

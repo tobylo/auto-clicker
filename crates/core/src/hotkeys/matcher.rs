@@ -162,7 +162,7 @@ impl Matcher {
         let captured = (pressed && !self.captured && self.may_fire(event.time))
             .then(|| capture.press(event.code, self.modifiers()))
             .flatten();
-        self.captured |= captured.is_some();
+        self.captured = self.captured || captured.is_some();
         Reaction {
             captured,
             ..Reaction::default()

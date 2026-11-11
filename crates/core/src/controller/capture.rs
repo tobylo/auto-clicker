@@ -32,7 +32,10 @@ pub(super) struct Pending {
 #[derive(Clone, Copy)]
 enum Kind {
     Capture(Capture),
-    Configure,
+    /// The desktop's settings, asked of the reader as this operation: its
+    /// answer carries the number, so an answer to an earlier one, asked
+    /// for a window since gone, is not taken for it.
+    Configure(u64),
 }
 
 impl Pending {
@@ -44,7 +47,7 @@ impl Pending {
     pub(super) fn capture(&self) -> Option<Capture> {
         match self.kind {
             Kind::Capture(capture) => Some(capture),
-            Kind::Configure => None,
+            Kind::Configure(_) => None,
         }
     }
 }
@@ -74,7 +77,11 @@ impl<P: Platform> Controller<P> {
         None
     }
 
-    /// Why no capture can run now, if none can.
+    /// Why no capture can run now, if none can: the desktop delivers the
+    /// hotkeys, or the session may not be read (locked: an unlock password
+    /// is typed there). Whether a keyboard can be read is the capture
+    /// reader's to find out, since it reads more of them: it reports that
+    /// at once, which ends the capture.
     fn capture_refusal(&self) -> Option<String> {
         if self.platform.input_reader() == InputReader::Desktop {
             return Some(
@@ -83,11 +90,7 @@ impl<P: Platform> Controller<P> {
                     .to_owned(),
             );
         }
-        match &self.hotkey_status {
-            Some(HotkeyStatus::Unavailable(why)) => Some(why.to_string()),
-            _ if self.hotkeys.reader.is_none() => Some("the keyboards are not read".to_owned()),
-            _ => None,
-        }
+        self.blocked.as_ref().map(ToString::to_string)
     }
 
     /// Asks the reader to open the desktop's shortcut settings for request
@@ -113,7 +116,11 @@ impl<P: Platform> Controller<P> {
                 "the activation token is not one".to_owned(),
             ));
         }
-        let command = ReaderCommand::ConfigureShortcuts { activation_token };
+        let operation = self.settings.next_operation();
+        let command = ReaderCommand::ConfigureShortcuts {
+            operation,
+            activation_token,
+        };
         if !self.hotkeys.command(command) {
             return Some(Outcome::Unavailable(
                 "the desktop's shortcuts are not available".to_owned(),
@@ -123,14 +130,21 @@ impl<P: Platform> Controller<P> {
         self.settings.pending = Some(Pending {
             id,
             deadline,
-            kind: Kind::Configure,
+            kind: Kind::Configure(operation),
         });
         None
     }
 
-    /// The reader captured something.
+    /// The reader captured something. A result that comes at or after the
+    /// deadline (the controller was late to look) is not taken.
     pub(super) fn captured(&mut self, captured: Captured) {
+        let late = self
+            .settings
+            .pending
+            .as_ref()
+            .is_some_and(|pending| Instant::now() >= pending.deadline);
         let outcome = match captured {
+            _ if late => Outcome::CaptureEnded(CaptureEnd::TimedOut),
             Captured::Hotkey(binding) => Outcome::CapturedHotkey(binding),
             Captured::Key(key) => Outcome::CapturedKey(key.code()),
             Captured::Cancelled => Outcome::CaptureEnded(CaptureEnd::Cancelled),
@@ -139,9 +153,11 @@ impl<P: Platform> Controller<P> {
         self.end_capture(outcome);
     }
 
-    /// The reader answered a request to open the desktop's settings.
-    pub(super) fn configured(&mut self, result: Result<(), String>) {
-        let Some(pending) = self.settings.pending.take_if(|p| p.capture().is_none()) else {
+    /// The reader answered `operation`, a request to open the desktop's
+    /// settings; an answer to any other than the one pending is dropped.
+    pub(super) fn configured(&mut self, operation: u64, result: Result<(), String>) {
+        let ours = |p: &mut Pending| matches!(p.kind, Kind::Configure(asked) if asked == operation);
+        let Some(pending) = self.settings.pending.take_if(ours) else {
             return;
         };
         let outcome = match result {
@@ -158,21 +174,21 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    /// The pending request's deadline passed: it ends unanswered.
+    /// The pending request's deadline passed: it ends unanswered. Other
+    /// deadlines (a countdown's seconds) wake the controller too.
     pub(super) fn pending_expired(&mut self) {
-        let expired = self
-            .settings
-            .pending
-            .as_ref()
-            .map(|p| (p.deadline, p.capture()));
-        match expired {
-            Some((deadline, Some(_))) if Instant::now() >= deadline => {
-                self.end_capture(Outcome::CaptureEnded(CaptureEnd::TimedOut));
+        let Some(pending) = &self.settings.pending else {
+            return;
+        };
+        if Instant::now() < pending.deadline {
+            return;
+        }
+        match pending.kind {
+            Kind::Capture(_) => self.end_capture(Outcome::CaptureEnded(CaptureEnd::TimedOut)),
+            Kind::Configure(operation) => {
+                let why = "the desktop did not open its settings".to_owned();
+                self.configured(operation, Err(why));
             }
-            Some((deadline, None)) if Instant::now() >= deadline => {
-                self.configured(Err("the desktop did not open its settings".to_owned()));
-            }
-            _ => {}
         }
     }
 
