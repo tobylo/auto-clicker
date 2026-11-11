@@ -155,3 +155,20 @@ fn the_directorys_entry_is_flushed_on_every_save_not_only_the_first() {
     assert!(matches!(result, Ok(Saved::Unsynced(_))), "{result:?}");
     assert_eq!(Config::parse(&read(&path)).ok(), Some(changed()));
 }
+
+#[test]
+fn every_directory_on_the_path_is_flushed_on_every_save() {
+    let dir = TempDir::new();
+    let outer = dir.path().join("new");
+    let path = outer.join("auto-clicker").join("config.toml");
+    let mut file = Config::load(&path).file;
+    // Both levels are created; the outer one's entry cannot be flushed.
+    let first = with_mode(dir.path(), 0o300, || file.save(&changed(), false));
+    let Some(first) = first else { return };
+    assert!(matches!(first, Ok(Saved::Unsynced(_))), "{first:?}");
+    // The retry finds both levels there, and still flushes the outer one.
+    let retry = with_mode(dir.path(), 0o300, || file.save(&Config::default(), false));
+    assert!(matches!(retry, Some(Ok(Saved::Unsynced(_)))), "{retry:?}");
+    assert!(matches!(file.save(&changed(), false), Ok(Saved::Synced)));
+    assert_eq!(Config::parse(&read(&path)).ok(), Some(changed()));
+}
