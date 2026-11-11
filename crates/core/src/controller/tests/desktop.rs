@@ -287,21 +287,33 @@ async fn the_tray_shows_the_triggers_the_desktop_reports() {
         assert_eq!(d.view().hotkey, Hotkey::Desktop(None));
         let lines = d.view().details();
         assert!(!lines.iter().any(|line| line.contains("F6")), "{lines:?}");
-        d.hotkey(reported("Ctrl+Shift+F6", "", "Ctrl+Shift+F8"))
+        d.hotkey(reported("", "Ctrl+Shift+F7", "Ctrl+Shift+F8"))
             .await;
         let lines = d.view().details();
-        assert_eq!(lines[1], "Ctrl+Shift+F6 starts and stops clicking");
         assert!(
-            lines[2].starts_with("No hotkey starts recording"),
+            lines[1].starts_with("No hotkey starts and stops clicking"),
             "{lines:?}"
         );
-        // The user changes one in System Settings.
-        d.hotkey(reported("Meta+F11", "Ctrl+Shift+F7", "")).await;
+        // Recording is unavailable whatever its trigger.
+        assert!(
+            lines[2].starts_with("Recording is unavailable"),
+            "{lines:?}"
+        );
+        assert_eq!(
+            lines[3],
+            "Ctrl+Shift+F8 plays the last recording once, and stops it"
+        );
+        // The user changes them in System Settings.
+        d.hotkey(reported("Meta+F11", "", "")).await;
         let lines = d.view().details();
         assert_eq!(lines[1], "Meta+F11 starts and stops clicking");
-        assert_eq!(
-            lines[2],
-            "Ctrl+Shift+F7 starts recording, and stops and saves it"
+        assert!(
+            lines[2].starts_with("Recording is unavailable"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[3].starts_with("No hotkey plays the last recording"),
+            "{lines:?}"
         );
         d.press_hotkey().await;
         assert_eq!(
@@ -386,29 +398,31 @@ async fn losing_the_desktops_hotkeys_cancels_a_start_waiting_for_the_release() {
 
 #[tokio::test(start_paused = true)]
 async fn recording_is_refused_while_the_desktop_delivers_the_hotkeys() {
-    local(async {
-        let d = desktop_daemon(ClickerSettings::default()).await;
-        d.hotkey(defaults()).await;
-        for start in [
-            Message::Record,
-            // The recording hotkey, as the desktop delivers it.
-            Message::MenuOpened,
-        ] {
-            if start == Message::MenuOpened {
+    // From the tray, and from the recording hotkey as the desktop delivers
+    // it: each on a daemon of its own, so no notice is left from the other.
+    for from_hotkey in [false, true] {
+        local(async {
+            let d = desktop_daemon(ClickerSettings::default()).await;
+            // Unavailable from the first view on, before the desktop reports.
+            assert_eq!(d.view().no_recording, Some(NoRecording::DesktopHotkeys));
+            d.hotkey(defaults()).await;
+            if from_hotkey {
                 d.hotkey(HotkeyEvent::Fired(Action::ToggleRecording)).await;
             } else {
-                d.send(start).await;
+                d.send(Message::Record).await;
             }
-            assert_eq!(d.activity(), Activity::Idle);
-            let notice = d.notice();
-            assert!(
-                notice.starts_with("Not recording: recording reads the keyboards")
-                    && notice.contains("hotkeys = \"kernel\""),
-                "{notice}"
+            assert_eq!(d.activity(), Activity::Idle, "{from_hotkey}");
+            assert_eq!(
+                d.notice(),
+                "Not recording: recording is unavailable with hotkeys = \"portal\""
             );
-        }
-    })
-    .await;
+            assert_eq!(d.view().no_recording, Some(NoRecording::DesktopHotkeys));
+            sleep(secs(10)).await;
+            d.settle().await;
+            assert!(d.saved().is_empty());
+        })
+        .await;
+    }
 }
 
 #[tokio::test(start_paused = true)]

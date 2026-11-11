@@ -38,7 +38,7 @@ use tokio::time::{Instant, sleep_until};
 
 pub use hotkeys::{HotkeyReader, HotkeySender};
 pub use session::{Blocked, SessionFacts};
-pub use view::{Activity, Hotkey, Listed, View, describe};
+pub use view::{Activity, Hotkey, Listed, NoRecording, View, describe};
 
 use crate::clicker::run;
 use crate::config::Config;
@@ -380,6 +380,7 @@ impl<P: Platform> Controller<P> {
                 desktop.as_ref(),
                 Action::ToggleRecording,
             ),
+            no_recording: recording::no_recording(platform.input_reader(), None),
             play_hotkey: desktop::shown_hotkey(
                 config.hotkeys,
                 desktop.as_ref(),
@@ -937,6 +938,7 @@ impl<P: Platform> Controller<P> {
             settings: self.config.clicker,
             hotkey: self.shown_hotkey(Action::ToggleClicking),
             record_hotkey: self.shown_hotkey(Action::ToggleRecording),
+            no_recording: self.no_recording(),
             play_hotkey: self.shown_hotkey(Action::TogglePlayback),
             playback: self.config.playback,
             recordings: Arc::clone(&self.recordings),

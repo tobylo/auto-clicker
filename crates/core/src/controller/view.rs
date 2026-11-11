@@ -3,11 +3,12 @@
 //! The controller publishes a [`View`] after every change; the tray only
 //! reads it. The text is plain: a tray that renders markup escapes it.
 
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::clicker::{ClickerSettings, Mode, Position, Repeat};
-use crate::hotkeys::{Binding, DESKTOP_RELEASE_PAUSE};
+use crate::hotkeys::{Binding, DESKTOP_RELEASE_PAUSE, Unavailable};
 use crate::input::{Button, Key};
 use crate::playback::{PlaybackSettings, Speed};
 use crate::recording::{FileName, MAX_DURATION};
@@ -111,6 +112,54 @@ impl Hotkey {
     }
 }
 
+/// Why no recording can start here, whatever state the controller is in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NoRecording {
+    /// The desktop delivers the hotkeys (`hotkeys = "portal"`): nothing
+    /// reads the keyboards and mice a recording is made of.
+    DesktopHotkeys,
+    /// The user may not read the keyboards, or watching for them failed. The
+    /// tooltip lists this as a problem already, with what to do.
+    Keyboards(Unavailable),
+}
+
+/// The refusal on the desktop's hotkeys, after "Recording is".
+const WITH_DESKTOP_HOTKEYS: &str = "unavailable with hotkeys = \"portal\"";
+
+impl NoRecording {
+    /// What the tray's Record item reads: the item and why it is off.
+    pub fn label(&self) -> &'static str {
+        match self {
+            NoRecording::DesktopHotkeys => "Record (needs hotkeys = \"kernel\")",
+            NoRecording::Keyboards(Unavailable::NoPermission) => "Record (needs the input group)",
+            NoRecording::Keyboards(_) => "Record (needs a restart)",
+        }
+    }
+
+    /// The tooltip's line on it, in place of the recording hotkey's: none
+    /// where a problem line says why already.
+    fn line(&self) -> Option<String> {
+        match self {
+            NoRecording::DesktopHotkeys => Some(format!(
+                "Recording is {WITH_DESKTOP_HOTKEYS}: nothing reads the keyboards and mice. Set \
+                 hotkeys = \"kernel\" under [input] in the config; that needs the input group."
+            )),
+            NoRecording::Keyboards(_) => None,
+        }
+    }
+}
+
+/// Why a recording did not start, after "Not recording: ". The tooltip's
+/// own line or problem says what to do.
+impl fmt::Display for NoRecording {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NoRecording::DesktopHotkeys => write!(f, "recording is {WITH_DESKTOP_HOTKEYS}"),
+            NoRecording::Keyboards(why) => why.fmt(f),
+        }
+    }
+}
+
 /// Everything the tray shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
@@ -120,6 +169,9 @@ pub struct View {
     pub hotkey: Hotkey,
     /// The hotkey that starts and stops recording.
     pub record_hotkey: Hotkey,
+    /// Why no recording can start, if none can: the tray's Record item is
+    /// off then.
+    pub no_recording: Option<NoRecording>,
     /// The hotkey that starts and stops playback.
     pub play_hotkey: Hotkey,
     pub playback: PlaybackSettings,
@@ -167,10 +219,12 @@ impl View {
     pub fn details(&self) -> Vec<String> {
         let mut lines = vec![describe(&self.settings)];
         lines.extend(self.hotkey.line("starts and stops clicking"));
-        lines.extend(
-            self.record_hotkey
+        lines.extend(match &self.no_recording {
+            Some(no_recording) => no_recording.line(),
+            None => self
+                .record_hotkey
                 .line("starts recording, and stops and saves it"),
-        );
+        });
         lines.extend(self.play_hotkey.line(&format!(
             "plays the last recording {}, and stops it",
             describe_playback(&self.playback)
@@ -341,6 +395,7 @@ mod tests {
             settings: ClickerSettings::default(),
             hotkey: Hotkey::Bound(Binding::parse(hotkey).unwrap()),
             record_hotkey: Hotkey::Bound(Binding::parse("Ctrl+F7").unwrap()),
+            no_recording: None,
             play_hotkey: Hotkey::Bound(Binding::parse("Ctrl+Alt+F8").unwrap()),
             playback: PlaybackSettings::default(),
             recordings: Arc::from([]),
@@ -421,6 +476,77 @@ mod tests {
                 "two",
             ]
         );
+    }
+
+    #[test]
+    fn a_recording_that_cannot_start_replaces_the_recording_hotkeys_line() {
+        let portal = "Recording is unavailable with hotkeys = \"portal\": nothing reads the \
+                      keyboards and mice. Set hotkeys = \"kernel\" under [input] in the config; \
+                      that needs the input group.";
+        let keyboards = NoRecording::Keyboards(Unavailable::NoPermission);
+        let watch = NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned()));
+        // Every state of the hotkey, as the program or the desktop names it:
+        // none of them is offered for recording.
+        let hotkeys = [
+            Hotkey::Bound(Binding::parse("Ctrl+F7").unwrap()),
+            Hotkey::Desktop(None),
+            Hotkey::Desktop(Some(String::new())),
+            Hotkey::Desktop(Some("Ctrl+Shift+F7".to_owned())),
+        ];
+        for record_hotkey in hotkeys {
+            for (no_recording, line) in [
+                (NoRecording::DesktopHotkeys, Some(portal)),
+                // The problem line says why already.
+                (keyboards.clone(), None),
+                (watch.clone(), None),
+            ] {
+                let shown = View {
+                    record_hotkey: record_hotkey.clone(),
+                    no_recording: Some(no_recording.clone()),
+                    ..view(Activity::Idle, "Ctrl+F6")
+                };
+                let expected: Vec<&str> = [
+                    Some("Clicks the left button every 100 ms"),
+                    Some("Ctrl+F6 starts and stops clicking"),
+                    line,
+                    Some("Ctrl+Alt+F8 plays the last recording once, and stops it"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                assert_eq!(
+                    shown.details(),
+                    expected,
+                    "{record_hotkey:?} {no_recording:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn each_reason_has_its_label_and_refusal() {
+        let cases = [
+            (
+                NoRecording::DesktopHotkeys,
+                "Record (needs hotkeys = \"kernel\")",
+                "recording is unavailable with hotkeys = \"portal\"",
+            ),
+            (
+                NoRecording::Keyboards(Unavailable::NoPermission),
+                "Record (needs the input group)",
+                "hotkeys are unavailable: keyboards cannot be read; add your user to the input \
+                 group and log in again",
+            ),
+            (
+                NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned())),
+                "Record (needs a restart)",
+                "hotkeys stopped: watching for keyboards failed: gone; restart the program",
+            ),
+        ];
+        for (no_recording, label, refusal) in cases {
+            assert_eq!(no_recording.label(), label);
+            assert_eq!(no_recording.to_string(), refusal);
+        }
     }
 
     #[test]
