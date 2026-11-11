@@ -9,7 +9,8 @@
 
 use tokio::time::Instant;
 
-use super::{Controller, Platform, State};
+use super::view::NoRecording;
+use super::{Controller, InputReader, Platform, State};
 use crate::hotkeys::{Binding, HotkeyStatus, Unavailable};
 use crate::recording::{Created, Ending, MAX_DURATION, Recorder, Recording, save};
 
@@ -21,6 +22,24 @@ enum StoppedBy {
     /// The hotkey (the recorder trims it itself), the session, the time
     /// limit or quitting.
     Other,
+}
+
+/// Why no recording can start with the hotkeys read by `reader`, whose last
+/// status is `status`: the one answer both the refusal and the tray's Record
+/// item follow.
+pub(super) fn no_recording(
+    reader: InputReader,
+    status: Option<&HotkeyStatus>,
+) -> Option<NoRecording> {
+    if reader == InputReader::Desktop {
+        return Some(NoRecording::DesktopHotkeys);
+    }
+    match status {
+        Some(HotkeyStatus::Unavailable(
+            why @ (Unavailable::NoPermission | Unavailable::WatchFailed(_)),
+        )) => Some(NoRecording::Keyboards(why.clone())),
+        _ => None,
+    }
 }
 
 impl<P: Platform> Controller<P> {
@@ -112,19 +131,18 @@ impl<P: Platform> Controller<P> {
         if !self.session_allows("Not recording") {
             return false;
         }
-        if let Some(why) = self.recording_refusal() {
-            self.notice = Some(format!("Not recording: {why}"));
-            return false;
-        }
-        match &self.hotkey_status {
-            Some(HotkeyStatus::Unavailable(
-                why @ (Unavailable::NoPermission | Unavailable::WatchFailed(_)),
-            )) => {
+        match self.no_recording() {
+            Some(why) => {
                 self.notice = Some(format!("Not recording: {why}"));
                 false
             }
-            _ => true,
+            None => true,
         }
+    }
+
+    /// Why no recording can start here, if none can.
+    pub(super) fn no_recording(&self) -> Option<NoRecording> {
+        no_recording(self.platform.input_reader(), self.hotkey_status.as_ref())
     }
 
     /// Starts recording now. `started_by` is the hotkey that started it,

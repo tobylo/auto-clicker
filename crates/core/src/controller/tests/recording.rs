@@ -44,7 +44,7 @@ impl Daemon {
     }
 
     /// The saved recordings, oldest name first.
-    fn saved(&self) -> Vec<Recording> {
+    pub(super) fn saved(&self) -> Vec<Recording> {
         let dir = self.shared.with(|r| r.recordings.clone()).unwrap();
         dir.entries()
             .iter()
@@ -302,6 +302,54 @@ async fn recording_is_refused_while_clicking_and_clicking_while_recording() {
         d.settle().await;
         assert_eq!(d.activity(), Activity::Recording);
         assert_eq!(d.shared.calls(), [LEFT_DOWN, LEFT_UP]);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_view_says_recording_cannot_start_exactly_when_a_start_is_refused() {
+    let no_permission = Unavailable::NoPermission;
+    let watch_failed = Unavailable::WatchFailed("gone".to_owned());
+    let cases = [
+        (
+            HotkeyStatus::Unavailable(no_permission.clone()),
+            Some(NoRecording::Keyboards(no_permission)),
+        ),
+        (HotkeyStatus::Available, None),
+        // Recording reads the mice and later keyboards still.
+        (HotkeyStatus::Unavailable(Unavailable::NoKeyboard), None),
+        (
+            HotkeyStatus::Unavailable(Unavailable::ReadFailed("busy".to_owned())),
+            None,
+        ),
+        (
+            HotkeyStatus::Unavailable(Unavailable::Desktop("gone".to_owned())),
+            None,
+        ),
+        (
+            HotkeyStatus::Unavailable(watch_failed.clone()),
+            Some(NoRecording::Keyboards(watch_failed)),
+        ),
+    ];
+    local(async {
+        let d = daemon(Mode::Click).await;
+        assert_eq!(d.view().no_recording, None);
+        for (status, no_recording) in cases {
+            d.hotkey(HotkeyEvent::Status(status.clone())).await;
+            assert_eq!(d.view().no_recording, no_recording, "{status:?}");
+            d.send(Message::Record).await;
+            match &no_recording {
+                Some(why) => {
+                    assert_eq!(d.activity(), Activity::Idle, "{status:?}");
+                    assert_eq!(d.notice(), format!("Not recording: {why}"));
+                }
+                None => {
+                    assert!(d.activity().recording(), "{status:?}");
+                    d.send(Message::StopRecording).await;
+                }
+            }
+        }
+        assert!(d.saved().is_empty());
     })
     .await;
 }
