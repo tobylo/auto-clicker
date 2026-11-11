@@ -18,6 +18,11 @@
 //!   button recorded since. A modifier held longer (Ctrl held to sprint) is
 //!   kept, and released at the end. The recording hotkey also ends the
 //!   recording at its own time.
+//! - Positions ([`Recorder::position`]) are kept only while the current
+//!   layout is the recording's, at most one per millisecond, in time order
+//!   among the input events ([`super::timeline`]).
+//! - A recording stops by itself before its file would grow past
+//!   [`MAX_FILE_BYTES`], as it does at its time limit.
 //! - [`Recorder::finish`] trims the trip to the tray on a stop from the tray
 //!   menu (see [`super::trim`]), releases everything still down at the end,
 //!   and checks the result.
@@ -25,8 +30,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+use super::timeline::Timeline;
 use super::trim::tray_cut;
-use super::{Change, Created, Event, InvalidRecording, MAX_DURATION_US, Recording, codes};
+use super::{
+    Change, Created, Event, InvalidRecording, Layout, MAX_DURATION_US, MAX_FILE_BYTES, Point,
+    Recording, Track, codes,
+};
 use crate::hotkeys::{Action, Binding, Bindings, DeviceId, Modifier};
 use crate::input::{Button, Held, Key};
 
@@ -36,6 +45,14 @@ const MODIFIER_WINDOW_US: u64 = 1_000_000;
 
 /// How long motion and wheel are summed for.
 const BUCKET_US: u64 = 1_000;
+
+/// What a file holds besides its events, at most: the header with the
+/// longest name, 16 screens, and a release of every key and button at the
+/// end ([`release_all`]). The tests check it.
+const FILE_RESERVE: u64 = 64 * 1024;
+
+/// The bytes a recording's events may take in its file.
+const EVENT_BUDGET: u64 = MAX_FILE_BYTES - FILE_RESERVE;
 
 /// How a recording ended, as the controller saw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,10 +147,10 @@ pub struct Recorder {
     excluded: BTreeSet<(DeviceId, u16)>,
     /// When the recording hotkey stopped the recording.
     stopped_at: Option<u64>,
-    events: Vec<Event>,
+    /// The layout positions lie on: the current one at the start, if known.
+    layout: Option<Layout>,
+    timeline: Timeline,
     bucket: Option<Bucket>,
-    /// The time of the last event written; no event goes before it.
-    last_at: u64,
     /// What each device holds.
     devices: BTreeMap<DeviceId, BTreeSet<Held>>,
     /// How many devices hold each key or button that is down.
@@ -157,11 +174,51 @@ impl Recorder {
             start_chord: started_by.map(chord_codes).unwrap_or_default(),
             excluded: BTreeSet::new(),
             stopped_at: None,
-            events: Vec::new(),
+            layout: None,
+            timeline: Timeline::new(EVENT_BUDGET),
             bucket: None,
-            last_at: 0,
             devices: BTreeMap::new(),
             down: BTreeMap::new(),
+        }
+    }
+
+    /// The same recording, with positions on `layout`: the current layout
+    /// at its start.
+    #[must_use]
+    pub fn with_layout(self, layout: Layout) -> Recorder {
+        Recorder {
+            layout: Some(layout),
+            ..self
+        }
+    }
+
+    /// The same recording, whose events may take `budget` bytes in a file.
+    #[cfg(test)]
+    pub(crate) fn with_budget(self, budget: u64) -> Recorder {
+        Recorder {
+            timeline: Timeline::new(budget),
+            ..self
+        }
+    }
+
+    /// Whether the recording stopped itself because its file would grow too
+    /// large: it takes nothing more, and should be finished and saved.
+    pub fn is_full(&self) -> bool {
+        self.timeline.is_full()
+    }
+
+    /// The pointer at `point`, reported at `time` while the layout was
+    /// `current` (`None` when unknown). It is kept only when `current` is
+    /// the recording's layout and the point lies on it.
+    pub fn position(&mut self, time: Duration, point: Point, current: Option<&Layout>) {
+        let Some(at) = self.offset(time) else {
+            return;
+        };
+        let Some(layout) = &self.layout else {
+            return;
+        };
+        if current == Some(layout) && layout.holds(point) {
+            self.timeline.position(at, point);
         }
     }
 
@@ -197,6 +254,9 @@ impl Recorder {
 
     /// Relative pointer motion at `time`.
     pub fn motion(&mut self, time: Duration, dx: i32, dy: i32) {
+        if self.offset(time).is_some() {
+            self.timeline.motion_seen();
+        }
         self.add(
             time,
             Bucket {
@@ -291,9 +351,12 @@ impl Recorder {
             Ending::At(at) => (at, None),
             Ending::Tray { at, menu_opened } => (at, Some(menu_opened)),
         };
-        let stop = self.offset(at).unwrap_or(MAX_DURATION_US);
-        let mut end = self.stopped_at.unwrap_or(stop).max(self.last_at);
-        let mut events = self.events;
+        let stop = match self.timeline.is_full() {
+            true => 0,
+            false => self.offset(at).unwrap_or(MAX_DURATION_US),
+        };
+        let mut end = self.stopped_at.unwrap_or(stop).max(self.timeline.last_at());
+        let mut events = self.timeline.into_events();
         if let Some(opened) = menu_opened {
             let opened = opened.and_then(|time| offset_from(self.start, time));
             let cut = tray_cut(&events, opened);
@@ -303,16 +366,25 @@ impl Recorder {
             }
         }
         release_all(&mut events, end);
-        if events.is_empty() {
+        let is_position = |event: &Event| matches!(event.change, Change::Position(_));
+        if events.iter().all(is_position) {
             return Ok(None);
         }
-        Recording::new(self.created.default_name(), self.created, end, events).map(Some)
+        let name = self.created.default_name();
+        match self.layout.filter(|_| events.iter().any(is_position)) {
+            Some(layout) => {
+                let track = Track { layout, events };
+                Recording::with_positions(name, self.created, end, track)
+            }
+            None => Recording::new(name, self.created, end, events),
+        }
+        .map(Some)
     }
 
     /// Microseconds from the start to `time`; `None` once the recording
-    /// stopped or past its time limit.
+    /// stopped, is full, or past its time limit.
     fn offset(&self, time: Duration) -> Option<u64> {
-        if self.stopped_at.is_some() {
+        if self.stopped_at.is_some() || self.timeline.is_full() {
             return None;
         }
         offset_from(self.start, time)
@@ -331,7 +403,7 @@ impl Recorder {
             self.drop_chord_modifiers(binding, at);
         }
         if action == Action::ToggleRecording {
-            self.stopped_at = Some(at.max(self.last_at));
+            self.stopped_at = Some(at.max(self.timeline.last_input_at()));
         }
     }
 
@@ -340,12 +412,13 @@ impl Recorder {
     /// wheel and the binding's other modifiers recorded after its press.
     fn drop_chord_modifiers(&mut self, binding: Binding, at: u64) {
         let chord = modifier_codes(binding);
+        let events = self.timeline.events();
         let only_chord_since = |index: usize| {
-            self.events
+            events
                 .iter()
                 .skip(index.saturating_add(1))
                 .all(|event| match event.change {
-                    Change::Move { .. } | Change::Wheel(_) => true,
+                    Change::Move { .. } | Change::Wheel(_) | Change::Position(_) => true,
                     Change::Press(held) => chord.contains(&codes::code(held)),
                     Change::Release(_) => false,
                 })
@@ -355,18 +428,17 @@ impl Recorder {
             .filter_map(|&code| codes::recordable(code))
             .filter(|held| self.down.contains_key(held))
             .filter_map(|held| {
-                let index = self
-                    .events
+                let index = events
                     .iter()
                     .rposition(|event| event.change == Change::Press(held))?;
-                let event = self.events.get(index)?;
+                let event = events.get(index)?;
                 let recent = at.saturating_sub(event.at) <= MODIFIER_WINDOW_US;
                 (recent && only_chord_since(index)).then_some((index, held))
             })
             .collect();
         dropped.sort_unstable_by_key(|&(index, _)| std::cmp::Reverse(index));
         for (index, held) in dropped {
-            self.events.remove(index);
+            self.timeline.remove(index);
             self.down.remove(&held);
             for (&device, keys) in &mut self.devices {
                 if keys.remove(&held) {
@@ -420,7 +492,7 @@ impl Recorder {
         }
         self.flush();
         self.bucket = Some(Bucket {
-            at: at.max(self.last_at),
+            at: at.max(self.timeline.last_input_at()),
             ..amount
         });
     }
@@ -445,15 +517,13 @@ impl Recorder {
         }
     }
 
-    /// Writes a press or release after the motion before it; no event goes
-    /// before the one written last.
+    /// Writes a press or release after the motion before it; no input
+    /// event goes before the one written last.
     fn write(&mut self, at: u64, change: Change) {
         if matches!(change, Change::Press(_) | Change::Release(_)) {
             self.flush();
         }
-        let at = at.max(self.last_at);
-        self.events.push(Event { at, change });
-        self.last_at = at;
+        self.timeline.input(at, change);
     }
 }
 
@@ -492,7 +562,7 @@ fn release_all(events: &mut Vec<Event>, end: u64) {
             Change::Release(held) => {
                 down.remove(&held);
             }
-            Change::Move { .. } | Change::Wheel(_) => {}
+            Change::Move { .. } | Change::Wheel(_) | Change::Position(_) => {}
         }
     }
     events.extend(down.into_iter().map(|held| Event {

@@ -93,6 +93,14 @@ impl<P: Platform> Controller<P> {
         }
     }
 
+    /// The recording filled up: it stops and saves what it holds.
+    pub(super) fn recording_full(&mut self) {
+        if matches!(self.state, State::Recording(_)) && self.recording.is_full() {
+            let why = "Recording stopped: it reached the largest size a recording may have";
+            self.finish_recording(StoppedBy::Other, Some(why.to_owned()));
+        }
+    }
+
     pub(super) fn recording_limit_reached(&mut self) {
         let minutes = MAX_DURATION.as_secs() / 60;
         let why = format!("Recording stopped at its {minutes}-minute limit");
@@ -131,7 +139,10 @@ impl<P: Platform> Controller<P> {
             return;
         };
         let start = self.platform.event_clock();
-        let recorder = Recorder::new(self.config.hotkeys, start, created, started_by);
+        let mut recorder = Recorder::new(self.config.hotkeys, start, created, started_by);
+        if let Some(layout) = self.platform.layout() {
+            recorder = recorder.with_layout(layout);
+        }
         self.recording.start(recorder);
         self.menu_opened = None;
         self.notice = None;

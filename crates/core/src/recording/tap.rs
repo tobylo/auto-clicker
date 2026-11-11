@@ -10,11 +10,15 @@
 //! Each start and stop also bumps a counter the reader watches, so it opens
 //! the devices a recording reads (mice) only while one runs, and reads what
 //! every device holds when one starts.
+//!
+//! A recorder that fills up ([`Recorder::is_full`]) takes nothing more; the
+//! feed that filled it wakes the controller ([`RecordingSlot::filled`]),
+//! which stops and saves the recording, as at its time limit.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 use super::Recorder;
 
@@ -24,6 +28,7 @@ type Shared = Rc<RefCell<Option<Recorder>>>;
 pub struct RecordingSlot {
     recorder: Shared,
     changes: watch::Sender<u64>,
+    full: Rc<Notify>,
 }
 
 /// The input reader's side: what it feeds while a recording runs.
@@ -31,6 +36,7 @@ pub struct RecordingSlot {
 pub struct RecordingFeed {
     recorder: Shared,
     changes: watch::Receiver<u64>,
+    full: Rc<Notify>,
 }
 
 impl Default for RecordingSlot {
@@ -45,6 +51,7 @@ impl RecordingSlot {
         RecordingSlot {
             recorder: Rc::default(),
             changes: watch::Sender::new(0),
+            full: Rc::default(),
         }
     }
 
@@ -53,6 +60,7 @@ impl RecordingSlot {
         RecordingFeed {
             recorder: Rc::clone(&self.recorder),
             changes: self.changes.subscribe(),
+            full: Rc::clone(&self.full),
         }
     }
 
@@ -71,6 +79,21 @@ impl RecordingSlot {
         taken
     }
 
+    /// Whether the recording that runs is full.
+    pub fn is_full(&self) -> bool {
+        self.recorder
+            .borrow()
+            .as_ref()
+            .is_some_and(Recorder::is_full)
+    }
+
+    /// Waits until a feed may have filled the recorder; check
+    /// [`RecordingSlot::is_full`], since a wake can be left over from a
+    /// recording that has ended.
+    pub async fn filled(&self) {
+        self.full.notified().await;
+    }
+
     fn changed(&self) {
         self.changes
             .send_modify(|count| *count = count.wrapping_add(1));
@@ -87,6 +110,9 @@ impl RecordingFeed {
     pub fn with(&self, feed: impl FnOnce(&mut Recorder)) {
         if let Some(recorder) = self.recorder.borrow_mut().as_mut() {
             feed(recorder);
+            if recorder.is_full() {
+                self.full.notify_one();
+            }
         }
     }
 
@@ -137,6 +163,24 @@ mod tests {
             .unwrap();
         feed.with(|_| fed += 1);
         assert_eq!((fed, feed.recording()), (1, false));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_feed_that_fills_the_recorder_wakes_the_slot() {
+        let slot = RecordingSlot::new();
+        let feed = slot.feed();
+        slot.start(recorder().with_budget(0));
+        assert!(!slot.is_full());
+        let quiet = timeout(Duration::from_secs(1), slot.filled()).await;
+        assert!(quiet.is_err(), "woke before anything filled it");
+        feed.with(|recorder| recorder.wheel(Duration::from_millis(1), 1));
+        feed.with(|recorder| recorder.wheel(Duration::from_millis(5), 1));
+        timeout(Duration::from_secs(1), slot.filled())
+            .await
+            .unwrap();
+        assert!(slot.is_full());
+        drop(slot.take());
+        assert!(!slot.is_full());
     }
 
     #[tokio::test(start_paused = true)]

@@ -8,8 +8,15 @@
 //!
 //! Listing and loading run on the controller's own thread, like saving a
 //! recording, and only while idle, when nothing is pressed and nothing waits
-//! on a deadline. The largest recording there can be (an hour of movement
-//! at a thousand moves a second, 107 MB) loads in 0.22 s on the dev box.
+//! on a deadline. An hour of movement at a thousand moves a second (107 MB)
+//! loads in 0.22 s on the dev box, and the same hour with a position each
+//! millisecond (193 MB) in 0.39 s; no recording file is larger than
+//! 256 MiB.
+//!
+//! Whether a recording's positions are used is decided when its run begins,
+//! against the layout then, and the tray says why when they are not. A
+//! layout change while positions play stops the playback: they would land
+//! elsewhere.
 
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -23,8 +30,8 @@ use super::{
     Controller, Job, LISTED_RECORDINGS, Listed, PLAY_RELEASE_WAIT, Platform, RunFuture, State,
 };
 use crate::input::{Held, Input, InputBackend, Key};
-use crate::playback::{MIN_LOOP_LENGTH, Playback, play};
-use crate::recording::{Change, FileName, LoadError, Recording, list, load};
+use crate::playback::{MIN_LOOP_LENGTH, Motion, Playback, play};
+use crate::recording::{Change, FileName, Layout, LoadError, Recording, list, load};
 use crate::run::Signals;
 
 /// A recording about to play: loaded, checked, and named for the tray.
@@ -56,24 +63,43 @@ impl Playing {
         }
     }
 
-    /// What the tray says when it starts, if anything.
-    pub(super) fn start_notice(&self) -> Option<String> {
-        self.modifier_held.then(|| {
+    /// What the tray says when it starts on `layout`, the current one, if
+    /// anything.
+    pub(super) fn start_notice(&self, layout: Option<&Layout>) -> Option<String> {
+        let held = self.modifier_held.then(|| {
             format!(
                 "Playing although the hotkey was still held after {} s; its keys mix into what plays",
                 PLAY_RELEASE_WAIT.as_secs()
             )
-        })
+        });
+        let (_, fallback) = self.playback.motion(layout);
+        let fallback = fallback.map(|why| why.notice().to_owned());
+        match (held, fallback) {
+            (Some(held), Some(fallback)) => Some(format!("{held}. {fallback}")),
+            (held, fallback) => held.or(fallback),
+        }
     }
 
-    /// The run that plays it on `input`.
-    pub(super) fn run<B, S, D>(self, input: Input<B>, signals: Signals<S, D>) -> RunFuture<B>
+    /// The run that plays it on `input`, on `layout`, the current one; and
+    /// the layout it moves to positions on, if it does.
+    pub(super) fn run<B, S, D>(
+        self,
+        input: Input<B>,
+        layout: Option<&Layout>,
+        signals: Signals<S, D>,
+    ) -> (RunFuture<B>, Option<Layout>)
     where
         B: InputBackend + 'static,
         S: Future<Output = ()> + 'static,
         D: Future<Output = ()> + 'static,
     {
-        Box::pin(async move { play(input, &self.playback, signals).await })
+        let (motion, _) = self.playback.motion(layout);
+        let positions = match &motion {
+            Motion::Positions(layout) => Some(layout.clone()),
+            Motion::Relative => None,
+        };
+        let run = Box::pin(async move { play(input, &self.playback, &motion, signals).await });
+        (run, positions)
     }
 }
 
@@ -91,6 +117,23 @@ fn pressed_keys(recording: &Recording) -> Arc<[Key]> {
 }
 
 impl<P: Platform> Controller<P> {
+    /// The layout changed or became unknown: a playback moving to positions
+    /// on another layout stops, and says why.
+    pub(super) fn layout_changed(&mut self) {
+        let State::Running(running) = &self.state else {
+            return;
+        };
+        let Some(used) = &running.positions else {
+            return;
+        };
+        let why = match self.platform.layout() {
+            Some(current) if current == *used => return,
+            Some(_) => "the screen layout changed",
+            None => "the screen layout is no longer known",
+        };
+        self.stop(Some(format!("Playback stopped: {why}")));
+    }
+
     /// The playback hotkey while nothing plays: starts the current
     /// recording once the hotkey's modifiers come up. Clicking has to be
     /// stopped first, and while recording no hotkey but its own does

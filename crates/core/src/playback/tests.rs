@@ -95,7 +95,7 @@ async fn play_with(playback: &Playback, signals: AnySignals) -> Outcome {
     let start = Instant::now();
     // Every test run ends long before this; a run that never ends fails
     // here at once, since the paused clock jumps ahead.
-    let end = timeout(RUNAWAY, play(input, playback, signals))
+    let end = timeout(RUNAWAY, play(input, playback, &Motion::Relative, signals))
         .await
         .expect("the run never ended");
     Outcome {
@@ -286,7 +286,13 @@ async fn a_failed_write_ends_the_run_and_releases_what_is_held() {
     let w = crate::input::Key::new(W).unwrap();
     log.fail_once(Call::Key(w, PressState::Down));
 
-    let end = play(input, &playback(two, 1.0, times(1)), never()).await;
+    let end = play(
+        input,
+        &playback(two, 1.0, times(1)),
+        &Motion::Relative,
+        never(),
+    )
+    .await;
 
     assert!(
         matches!(end.result, Err(InputError::Write(_))),
@@ -315,7 +321,13 @@ async fn a_failed_release_at_the_end_closes_the_devices() {
     log.fail_once(LEFT_UP);
     log.fail_once(LEFT_UP);
 
-    let end = play(input, &playback(click(), 1.0, times(1)), never()).await;
+    let end = play(
+        input,
+        &playback(click(), 1.0, times(1)),
+        &Motion::Relative,
+        never(),
+    )
+    .await;
 
     // The recording's own release failed, and so did the one at the end.
     assert!(
@@ -347,7 +359,7 @@ async fn a_late_run_fires_what_is_due_in_order_and_keeps_later_deadlines() {
         .collect();
     let playback = playback(recording(100_000, &events), 1.0, times(1));
     let (input, calls, _) = timed_input();
-    let mut run = pin!(play(input, &playback, never()));
+    let mut run = pin!(play(input, &playback, &Motion::Relative, never()));
 
     // The run starts, then is not polled again for 50 ms.
     assert!(poll_once(run.as_mut()).await.is_pending());
@@ -373,7 +385,12 @@ async fn many_events_at_one_moment_hand_the_thread_back_between_batches() {
     let (input, calls, _) = timed_input();
     // Outside tokio's own task budget, which hands the thread back as well,
     // at its own count.
-    let mut run = pin!(unconstrained(play(input, &playback, never())));
+    let mut run = pin!(unconstrained(play(
+        input,
+        &playback,
+        &Motion::Relative,
+        never()
+    )));
 
     let mut fired = Vec::new();
     while poll_once(run.as_mut()).await.is_pending() {
@@ -413,7 +430,12 @@ async fn a_stop_lands_between_the_batches_of_one_moment() {
             Ended::ShutDown => signals(pending(), fired),
             _ => signals(fired, pending()),
         };
-        let mut run = pin!(unconstrained(play(input, &playback, signals)));
+        let mut run = pin!(unconstrained(play(
+            input,
+            &playback,
+            &Motion::Relative,
+            signals
+        )));
 
         assert!(poll_once(run.as_mut()).await.is_pending());
         fire.send(()).unwrap();
@@ -440,7 +462,7 @@ async fn a_stop_lands_between_the_batches_of_one_moment() {
 async fn dropping_the_run_mid_press_releases() {
     let (input, calls, _) = timed_input();
     let playback = playback(click(), 1.0, times(1));
-    let dropped = timeout(ms(20), play(input, &playback, never())).await;
+    let dropped = timeout(ms(20), play(input, &playback, &Motion::Relative, never())).await;
     assert!(dropped.is_err(), "the run was still going");
     assert_eq!(
         *calls.lock().unwrap(),
@@ -493,3 +515,5 @@ fn the_default_plays_once_at_the_recorded_speed() {
     );
     assert_eq!(Speed::default().thousandths(), 1000);
 }
+
+mod positions;

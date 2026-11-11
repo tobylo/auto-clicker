@@ -780,3 +780,6 @@ fn a_tray_stop_with_no_click_cuts_nothing() {
     );
     assert_eq!(recording.duration_us(), 5_100_000);
 }
+
+#[path = "recorder_position_tests.rs"]
+mod positions;

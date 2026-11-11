@@ -1,0 +1,325 @@
+//! Playing positions: the plan (which moves are sent, where a position goes
+//! around a click), the layout rule, and the absolute moves a run sends.
+
+use super::*;
+use crate::input::AbsolutePosition;
+use crate::recording::Track;
+use crate::recording::tests::positions::screen;
+use crate::recording::tests::positions::{at, two_screens};
+use crate::recording::{Layout, Output, Point};
+
+const MOVE: Change = Change::Move { dx: 5, dy: 0 };
+
+fn positioned(duration_us: u64, events: &[(u64, Change)]) -> Recording {
+    let events = events
+        .iter()
+        .map(|&(at, change)| Event { at, change })
+        .collect();
+    Recording::with_positions(
+        "test".into(),
+        created(),
+        duration_us,
+        Track {
+            layout: two_screens(),
+            events,
+        },
+    )
+    .unwrap()
+}
+
+fn once(recording: Recording) -> Playback {
+    playback(recording, 1.0, times(1))
+}
+
+/// The release that ends a fixture whose click stays down, at 90 ms.
+const LAST_RELEASE: (u64, Change) = (90_000, Change::Release(LEFT));
+
+/// What a run on the recording's own layout sends, as (time, change). A
+/// fixture that leaves the button down gets [`LAST_RELEASE`], which is left
+/// out of what this returns.
+fn planned(events: &[(u64, Change)]) -> Vec<(u64, Change)> {
+    let presses = events
+        .iter()
+        .filter(|(_, c)| *c == Change::Press(LEFT))
+        .count();
+    let releases = events
+        .iter()
+        .filter(|(_, c)| *c == Change::Release(LEFT))
+        .count();
+    let mut events = events.to_vec();
+    if presses > releases {
+        events.push(LAST_RELEASE);
+    }
+    let playback = once(positioned(100_000, &events));
+    let motion = Motion::Positions(two_screens());
+    playback
+        .steps(&motion)
+        .map(|e| (e.at, e.change))
+        .filter(|&step| step != LAST_RELEASE)
+        .collect()
+}
+
+fn output(x: u32, y: u32, width: u32, height: u32) -> Output {
+    screen([x, y, width, height], 1000)
+}
+
+fn layout(outputs: Vec<Output>) -> Layout {
+    Layout::new(outputs).unwrap()
+}
+
+#[test]
+fn a_move_a_position_follows_within_5_ms_is_covered_and_not_sent() {
+    let events = [
+        (0, MOVE),
+        (1_000, at(10, 10)),
+        (10_000, MOVE),
+        (15_000, at(20, 10)),
+        (30_000, MOVE),
+        (35_001, at(30, 10)),
+        (50_000, MOVE),
+    ];
+    assert_eq!(
+        planned(&events),
+        [
+            (1_000, at(10, 10)),
+            (15_000, at(20, 10)),
+            (30_000, MOVE),
+            (35_001, at(30, 10)),
+            (50_000, MOVE),
+        ]
+    );
+}
+
+#[test]
+fn a_press_release_or_wheel_turn_is_played_after_the_position_covering_the_move_before_it() {
+    for event in [Change::Press(LEFT), Change::Wheel(1)] {
+        let events = [(0, MOVE), (1_000, event), (2_500, at(10, 10))];
+        assert_eq!(
+            planned(&events),
+            [(1_000, at(10, 10)), (1_000, event)],
+            "{event:?}"
+        );
+    }
+    let events = [
+        (0, Change::Press(LEFT)),
+        (5_000, MOVE),
+        (6_000, Change::Release(LEFT)),
+        (7_900, at(10, 10)),
+    ];
+    assert_eq!(
+        planned(&events),
+        [
+            (0, Change::Press(LEFT)),
+            (6_000, at(10, 10)),
+            (6_000, Change::Release(LEFT)),
+        ]
+    );
+}
+
+#[test]
+fn a_position_later_than_the_delivery_delay_stays_and_the_move_is_sent() {
+    let events = [(0, MOVE), (1_000, Change::Press(LEFT)), (3_001, at(10, 10))];
+    assert_eq!(
+        planned(&events),
+        [(0, MOVE), (1_000, Change::Press(LEFT)), (3_001, at(10, 10))]
+    );
+    // At the delay exactly it still belongs before the press.
+    let events = [(0, MOVE), (1_000, Change::Press(LEFT)), (3_000, at(10, 10))];
+    assert_eq!(planned(&events)[0], (1_000, at(10, 10)));
+}
+
+#[test]
+fn a_move_against_an_edge_then_a_press_then_a_move_away() {
+    // The first move gives no report (the pointer is against an edge); the
+    // move after the press does, and its position is the next one.
+    let inside = [
+        (0, MOVE),
+        (1_000, Change::Press(LEFT)),
+        (1_500, MOVE),
+        (2_000, at(10, 10)),
+    ];
+    assert_eq!(
+        planned(&inside),
+        [(1_000, at(10, 10)), (1_000, Change::Press(LEFT))]
+    );
+    let outside = [
+        (0, MOVE),
+        (1_000, Change::Press(LEFT)),
+        (3_500, MOVE),
+        (4_000, at(10, 10)),
+    ];
+    assert_eq!(
+        planned(&outside),
+        [(0, MOVE), (1_000, Change::Press(LEFT)), (4_000, at(10, 10))]
+    );
+}
+
+#[test]
+fn a_position_goes_once_before_the_earliest_event_it_belongs_before() {
+    let events = [
+        (0, MOVE),
+        (500, Change::Press(LEFT)),
+        (700, MOVE),
+        (900, Change::Release(LEFT)),
+        (1_500, at(10, 10)),
+    ];
+    assert_eq!(
+        planned(&events),
+        [
+            (500, at(10, 10)),
+            (500, Change::Press(LEFT)),
+            (900, Change::Release(LEFT)),
+        ]
+    );
+}
+
+#[test]
+fn a_position_before_a_press_stays_before_it() {
+    let events = [
+        (0, MOVE),
+        (500, at(10, 10)),
+        (900, Change::Press(LEFT)),
+        (1_200, at(11, 10)),
+        (5_000, Change::Release(LEFT)),
+    ];
+    assert_eq!(
+        planned(&events),
+        [
+            (500, at(10, 10)),
+            (900, Change::Press(LEFT)),
+            (1_200, at(11, 10)),
+            (5_000, Change::Release(LEFT)),
+        ]
+    );
+}
+
+#[test]
+fn relative_motion_sends_every_move_and_no_position() {
+    let playback = once(positioned(
+        100_000,
+        &[
+            (0, MOVE),
+            (1_000, at(10, 10)),
+            (2_000, Change::Press(LEFT)),
+            (3_000, Change::Release(LEFT)),
+        ],
+    ));
+    let steps: Vec<_> = playback
+        .steps(&Motion::Relative)
+        .map(|e| (e.at, e.change))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            (0, MOVE),
+            (2_000, Change::Press(LEFT)),
+            (3_000, Change::Release(LEFT))
+        ]
+    );
+}
+
+/// A recording whose positions lie on the panel only.
+fn on_the_panel() -> Playback {
+    once(positioned(
+        100_000,
+        &[(0, at(10, 10)), (1_000, at(2_000, 1_200))],
+    ))
+}
+
+#[test]
+fn positions_play_while_the_screens_they_lie_on_are_unchanged() {
+    let playback = on_the_panel();
+    let panel = output(0, 0, 2048, 1280);
+    let cases = [
+        two_screens(),
+        // DP-1 gone, moved below or changed: the panel is what counts.
+        layout(vec![panel]),
+        layout(vec![panel, output(0, 1280, 1920, 1080)]),
+        layout(vec![panel, output(2048, 0, 1920, 1080)]),
+        // Its scale is not compared.
+        layout(vec![screen([0, 0, 2048, 1280], 2000)]),
+    ];
+    for current in cases {
+        let expected = Motion::Positions(current.clone());
+        assert_eq!(
+            playback.motion(Some(&current)),
+            (expected, None),
+            "{current:?}"
+        );
+    }
+}
+
+#[test]
+fn a_screen_a_position_lies_on_that_moved_resized_or_went_falls_back() {
+    let playback = once(positioned(
+        100_000,
+        &[(0, at(10, 10)), (1_000, at(3_000, 100))],
+    ));
+    let cases = [
+        // DP-1 left of the panel instead of right.
+        layout(vec![output(0, 0, 3440, 1440), output(3440, 0, 2048, 1280)]),
+        // DP-1 resized.
+        layout(vec![output(0, 0, 2048, 1280), output(2048, 0, 2560, 1440)]),
+        // DP-1 gone.
+        layout(vec![output(0, 0, 2048, 1280)]),
+    ];
+    for current in cases {
+        assert_eq!(
+            playback.motion(Some(&current)),
+            (Motion::Relative, Some(Fallback::Changed)),
+            "{current:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_layout_falls_back_and_a_recording_without_positions_says_nothing() {
+    assert_eq!(
+        on_the_panel().motion(None),
+        (Motion::Relative, Some(Fallback::Unknown))
+    );
+    let plain = once(click());
+    assert_eq!(plain.motion(None), (Motion::Relative, None));
+    assert_eq!(plain.motion(Some(&two_screens())), (Motion::Relative, None));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_sends_positions_as_absolute_moves_at_their_times() {
+    let playback = once(positioned(
+        10_000,
+        &[
+            (0, MOVE),
+            (1_000, at(2_744, 720)),
+            (2_000, Change::Press(LEFT)),
+            (3_000, Change::Release(LEFT)),
+            (4_000, MOVE),
+        ],
+    ));
+    let (input, calls, _) = timed_input();
+    let start = Instant::now();
+    let motion = Motion::Positions(two_screens());
+    let end = play(input, &playback, &motion, never()).await;
+    assert_eq!(end.result.unwrap(), Ended::Finished);
+    let calls = calls.lock().unwrap().clone();
+    let sent: Vec<Call> = calls.iter().map(|(_, call)| *call).collect();
+    assert_eq!(
+        sent,
+        [
+            Call::MoveAbsolute(AbsolutePosition { x: 32768, y: 32768 }),
+            LEFT_DOWN,
+            LEFT_UP,
+            Call::MoveRelative(5, 0),
+        ]
+    );
+    let late = calls[0].0.checked_sub(ms(1)).unwrap();
+    assert!(late <= TIMER, "{late:?} after {start:?}");
+}
+
+#[test]
+fn the_layout_maps_the_way_the_formula_says() {
+    let layout = two_screens();
+    assert_eq!(
+        layout.absolute(Point { x: 2_744, y: 720 }),
+        AbsolutePosition { x: 32768, y: 32768 }
+    );
+}
