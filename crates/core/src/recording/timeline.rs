@@ -69,6 +69,8 @@ pub(super) struct Timeline {
     /// Everything up to this time is applied.
     settled_to: u64,
     window: Window,
+    /// The time of the latest position placed.
+    last_placed: u64,
     /// The earliest time of motion read, if any.
     first_motion: Option<u64>,
     positioned: bool,
@@ -88,6 +90,7 @@ impl Timeline {
             boundaries: VecDeque::new(),
             settled_to: 0,
             window: Window::Closed,
+            last_placed: 0,
             first_motion: None,
             positioned: false,
             bytes: 0,
@@ -226,6 +229,12 @@ impl Timeline {
 
     /// Places a position whose place is final, by the rules above.
     fn place(&mut self, event: Event) {
+        // Fed more than 20 ms late, behind a position placed already: it
+        // goes in at its time and changes no millisecond.
+        if event.at < self.last_placed {
+            return self.insert(event);
+        }
+        self.last_placed = event.at;
         let moved = self.first_motion.is_some_and(|first| first <= event.at);
         if !self.positioned && !moved {
             return self.first_position(event.change);
@@ -328,6 +337,19 @@ mod tests {
         assert!(matches!(timeline.window, Window::Open { at: 100_000, .. }));
         timeline.event_read(100_000);
         assert_eq!(timeline.window, Window::AfterEvent);
+    }
+
+    #[test]
+    fn a_report_fed_too_late_replaces_no_newer_position() {
+        let mut timeline = Timeline::new(u64::MAX);
+        timeline.motion_read(0);
+        timeline.position(100_000, Point { x: 1, y: 1 });
+        timeline.position(120_000, Point { x: 2, y: 1 });
+        // 70 ms behind the newest report: placed at once, beside 100 ms.
+        timeline.position(50_000, Point { x: 3, y: 1 });
+        let placed: Vec<u64> = timeline.events.iter().map(|event| event.at).collect();
+        assert_eq!(placed, [50_000, 100_000]);
+        assert!(matches!(timeline.window, Window::Open { at: 100_000, .. }));
     }
 
     #[test]
