@@ -14,12 +14,15 @@ mod trigger;
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 pub use binding::{Binding, Modifier, Modifiers};
 pub use matcher::{DeviceId, KeyEvent, Matcher, Reaction};
 pub use trigger::{DESKTOP_RELEASE_PAUSE, Refusal, Trigger, Triggers};
 
 /// What a hotkey asks the controller to do.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Action {
     ToggleClicking,
     ToggleRecording,
@@ -55,6 +58,15 @@ impl Default for Bindings {
 }
 
 impl Bindings {
+    /// The binding of `action`.
+    pub fn binding(&self, action: Action) -> Binding {
+        match action {
+            Action::ToggleClicking => self.toggle_clicking,
+            Action::ToggleRecording => self.toggle_recording,
+            Action::TogglePlayback => self.toggle_playback,
+        }
+    }
+
     /// Every action and its binding.
     pub fn actions(&self) -> [(Action, Binding); 3] {
         [
@@ -107,7 +119,8 @@ pub enum HotkeyStatus {
 }
 
 /// Why hotkeys cannot be read.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Unavailable {
     /// No input device has a bound key or a modifier key.
     NoKeyboard,

@@ -7,15 +7,14 @@
 //! (`Spanned`), so those errors name the line too.
 
 use std::fmt;
-use std::num::NonZeroU32;
 
 use serde::Deserialize;
 use serde::de::{self, MapAccess, Visitor};
 use toml::Spanned;
 
-use super::{HotkeyRoute, OutputRoute};
-use crate::clicker::{Mode, Position, Repeat};
-use crate::input::{AbsolutePosition, Button, Key};
+use super::names::{ButtonName, ModeName, RouteName};
+use crate::clicker::{Position, Repeat};
+use crate::input::{AbsolutePosition, Key};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,31 +47,6 @@ pub(super) struct RawInput {
     pub(super) hotkeys: Option<RouteName>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum RouteName {
-    Kernel,
-    Portal,
-}
-
-impl From<RouteName> for OutputRoute {
-    fn from(name: RouteName) -> OutputRoute {
-        match name {
-            RouteName::Kernel => OutputRoute::Kernel,
-            RouteName::Portal => OutputRoute::Portal,
-        }
-    }
-}
-
-impl From<RouteName> for HotkeyRoute {
-    fn from(name: RouteName) -> HotkeyRoute {
-        match name {
-            RouteName::Kernel => HotkeyRoute::Kernel,
-            RouteName::Portal => HotkeyRoute::Portal,
-        }
-    }
-}
-
 /// `[hotkeys]`: each action's binding, such as "Ctrl+F6", parsed after the
 /// file so a bad one is reported at its line.
 #[derive(Debug, Default, Deserialize)]
@@ -94,50 +68,6 @@ pub(super) struct RawClicker {
     pub(super) key: Option<KeySpec>,
     pub(super) position: Option<PositionSpec>,
     pub(super) repeat: Option<RepeatSpec>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum ModeName {
-    Click,
-    DoubleClick,
-    HoldButton,
-    KeyRepeat,
-    HoldKey,
-}
-
-impl From<ModeName> for Mode {
-    fn from(name: ModeName) -> Mode {
-        match name {
-            ModeName::Click => Mode::Click,
-            ModeName::DoubleClick => Mode::DoubleClick,
-            ModeName::HoldButton => Mode::HoldButton,
-            ModeName::KeyRepeat => Mode::KeyRepeat,
-            ModeName::HoldKey => Mode::HoldKey,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum ButtonName {
-    Left,
-    Right,
-    Middle,
-    Back,
-    Forward,
-}
-
-impl From<ButtonName> for Button {
-    fn from(name: ButtonName) -> Button {
-        match name {
-            ButtonName::Left => Button::Left,
-            ButtonName::Right => Button::Right,
-            ButtonName::Middle => Button::Middle,
-            ButtonName::Back => Button::Side,
-            ButtonName::Forward => Button::Extra,
-        }
-    }
 }
 
 /// `key`: a key name, or a Linux key code for a key without one.
@@ -168,11 +98,7 @@ impl Visitor<'_> for KeyVisitor {
     }
 
     fn visit_i64<E: de::Error>(self, code: i64) -> Result<KeySpec, E> {
-        u16::try_from(code)
-            .ok()
-            .and_then(Key::new)
-            .map(KeySpec)
-            .ok_or_else(|| E::custom(format!("key code {code} is not from 1 to 248")))
+        super::check::key_code(code).map(KeySpec).map_err(E::custom)
     }
 }
 
@@ -279,15 +205,8 @@ impl Visitor<'_> for RepeatVisitor {
     }
 
     fn visit_i64<E: de::Error>(self, count: i64) -> Result<Repeat, E> {
-        u32::try_from(count)
-            .ok()
-            .and_then(NonZeroU32::new)
+        super::check::count(count)
             .map(Repeat::Times)
-            .ok_or_else(|| {
-                E::custom(format!(
-                    "repeat {count} is not from 1 to {}; use \"until_stopped\" to repeat until stopped",
-                    u32::MAX
-                ))
-            })
+            .map_err(E::custom)
     }
 }
