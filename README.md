@@ -83,7 +83,7 @@ Once installed and enabled, it starts at login and stays in the system tray (run
 - **Start clicking** counts down `tray_start_delay` seconds (5 by default), so you can switch to the game, then clicks. The icon's tooltip shows the seconds left. **Stop clicking** stops it, or cancels the countdown.
 - **Record** counts down the same way, then records what the mouse and keyboard do until **Stop recording**, and saves it. The icon turns red while recording. Where recording cannot start (with `hotkeys = "portal"`, without the `input` group, or after watching for keyboards failed), Record is greyed out and its label says what it needs, such as `Record (needs the input group)`; the tooltip says how to fix it.
 - **Play** lists the ten newest recordings, newest first. Choosing one counts down the same way, then plays it; **Stop playing** stops it, or cancels the countdown (see [Playing a recording](#playing-a-recording)).
-- **Settings** comes in a later version.
+- **Settings** opens the settings window (see [Settings window](#settings-window)).
 - **Quit** stops clicking and playback, lets go of everything it pressed, saves a recording in progress and exits.
 
 The hotkey (Ctrl+Shift+F6 by default) starts and stops clicking at once, without a countdown. A start waits until you let go of Ctrl and Shift, so the first click is a plain click and not Ctrl+Shift+click; if they are still held after 30 seconds, nothing starts and the tooltip says why.
@@ -129,9 +129,19 @@ Playback repeats what a recording holds, with its timing: each key, click, wheel
 - **Refusals.** Playback does not start while clicking or recording, and those do not start while a recording plays. A file that is missing, damaged or not a recording is not played: the tooltip says what is wrong with it, and nothing is pressed.
 - **Files.** Only files named the way the program names them appear in the Play menu. Recordings are never deleted by the program; a long one with much mouse movement can take tens of megabytes, so clear out the folder by hand now and then.
 
+## Settings window
+
+**Settings** in the tray's menu opens a window where you change every setting below without editing the file. It is a small program of its own, `auto-clicker-settings`, which the daemon starts and which exits when you close it, so the daemon stays as light as before while you play. Choosing Settings again while the window is open does not open a second one.
+
+- **Clicker** sets what a run does: the action, the interval (milliseconds between actions, or actions a second), jitter, the button, the key, where to click and how often. The key is picked by pressing it: choose **Change…** and press the key, or Esc to cancel. The fixed point is set as two numbers for now; picking it on the screen comes later.
+- **Hotkeys** shows the three hotkeys. To change one, choose **Change…** and press the new combination, such as Ctrl+Alt+F9, or Esc to cancel; the program's hotkeys do nothing while it waits, for up to 10 seconds. A hotkey without Ctrl, Shift, Alt or Meta fires on a plain key press, in games too, so the window asks before saving one. With `hotkeys = "portal"` Plasma owns the hotkeys: the window shows the ones Plasma reports, and **Change in System Settings** opens Plasma's shortcut settings for the program. This tab also sets where hotkeys come from and where clicks go, which apply after the program restarts.
+- **Playback** sets the speed and how many times a recording plays.
+
+**Save** checks the settings as the program checks the file, says what is wrong if something is, and writes the file. Saving waits until nothing is clicking, recording or playing. Saved hotkeys work at once; the other settings apply to the next start. If the file changed since the program read it, or could not be used, the window asks before replacing it. The window speaks Swedish when the system language is Swedish, and follows Plasma's light or dark colours.
+
 ## Configuration
 
-Settings live in `~/.config/auto-clicker/config.toml` (or under `$XDG_CONFIG_HOME`). Without the file, the defaults below apply; the program never writes it. If the file is invalid, the program runs on the defaults, leaves the file alone and reports the line and reason in the tray's tooltip. The file is read at start only: after editing it, restart the program (`systemctl --user restart auto-clicker`).
+Settings live in `~/.config/auto-clicker/config.toml` (or under `$XDG_CONFIG_HOME`). Without the file, the defaults below apply. The settings window manages the file: a save writes all of it anew, with every setting and without comments, so edit settings in the window, or edit the file and leave the window closed. A `config.toml` that is a symbolic link is saved through the link. If the file is invalid, the program runs on the defaults, leaves the file alone and reports the line and reason in the tray's tooltip. The program reads the file at start; after editing it by hand, restart the program (`systemctl --user restart auto-clicker`).
 
 ```toml
 version = 1

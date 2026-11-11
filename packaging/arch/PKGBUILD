@@ -13,7 +13,9 @@ pkgdesc='Auto clicker for KDE Plasma on Wayland, in the system tray'
 arch=(x86_64)
 url='https://github.com/tobylo/auto-clicker'
 license=('MIT OR Apache-2.0')
-depends=(glibc libgcc hicolor-icon-theme)
+# The settings window draws with OpenGL on Wayland (libglvnd, wayland,
+# libxkbcommon) and finds fonts through fontconfig.
+depends=(glibc libgcc hicolor-icon-theme fontconfig freetype2 wayland libxkbcommon libglvnd)
 makedepends=(cargo git)
 options=(!debug)
 
@@ -60,12 +62,16 @@ prepare() {
 build() {
   cd "$srcdir/auto-clicker"
   export CARGO_TARGET_DIR="$srcdir/auto-clicker/target"
+  # Two builds: the window's toolkit turns on zbus features the daemon has
+  # no use for, and one build would give the daemon's zbus those too.
   cargo build --release --frozen -p auto-clicker
+  cargo build --release --frozen -p auto-clicker-settings
 }
 
 package() {
   cd "$srcdir/auto-clicker"
-  install -Dm755 target/release/auto-clicker -t "$pkgdir/usr/bin"
+  install -Dm755 target/release/auto-clicker target/release/auto-clicker-settings \
+    -t "$pkgdir/usr/bin"
   install -Dm644 data/systemd/auto-clicker.service -t "$pkgdir/usr/lib/systemd/user"
   install -Dm644 data/udev/70-auto-clicker-uinput.rules -t "$pkgdir/usr/lib/udev/rules.d"
   install -Dm644 data/applications/io.github.tobylo.AutoClicker.desktop \
