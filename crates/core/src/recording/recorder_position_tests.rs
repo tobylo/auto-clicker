@@ -202,11 +202,26 @@ fn a_wheel_turn_read_late_inside_a_millisecond_keeps_the_position_before_it() {
     recorder.motion(t(0), 1, 0);
     report(&mut recorder, 2_000, 1, 0);
     report(&mut recorder, 2_200, 2, 0);
+    report(&mut recorder, 2_300, 3, 0);
     recorder.wheel(t(2_100), 1);
-    click(&mut recorder, [5_000, 6_000]);
-    let events = events_at(recorder, t(7_000));
-    assert!(events.contains(&(2_000, at(1, 0))), "{events:?}");
-    assert!(events.contains(&(2_200, at(2, 0))), "{events:?}");
+    // A report 20 ms on places the three before the turn is written: the
+    // turn still ends the millisecond between the first two, and the one
+    // after 2.2 ms opens a millisecond of its own.
+    report(&mut recorder, 22_300, 4, 0);
+    click(&mut recorder, [30_000, 31_000]);
+    let positions: Vec<_> = events_at(recorder, t(32_000))
+        .into_iter()
+        .filter(|(_, change)| matches!(change, Change::Position(_)))
+        .collect();
+    assert_eq!(
+        positions,
+        [
+            (2_000, at(1, 0)),
+            (2_200, at(2, 0)),
+            (2_300, at(3, 0)),
+            (22_300, at(4, 0)),
+        ]
+    );
 }
 
 #[test]
@@ -551,4 +566,64 @@ fn a_wheel_turn_ends_the_millisecond_when_it_is_read() {
             (2_500, at(4, 0)),
         ]
     );
+}
+
+#[test]
+fn two_wheel_turns_read_before_either_is_written_end_their_own_milliseconds() {
+    let mut recorder = positioned();
+    recorder.motion(t(0), 1, 0);
+    report(&mut recorder, 4_500, 1, 0);
+    recorder.wheel(t(5_000), 1);
+    report(&mut recorder, 5_200, 2, 0);
+    // A second turn, read while the first is still in its bucket.
+    recorder.wheel(t(10_000), 1);
+    click(&mut recorder, [30_000, 31_000]);
+    let positions: Vec<_> = events_at(recorder, t(32_000))
+        .into_iter()
+        .filter(|(_, change)| matches!(change, Change::Position(_)))
+        .collect();
+    assert_eq!(positions, [(4_500, at(1, 0)), (5_200, at(2, 0))]);
+}
+
+#[test]
+fn a_release_ends_the_millisecond() {
+    let mut recorder = positioned();
+    recorder.motion(t(0), 1, 0);
+    recorder.key(MOUSE, KeyInput::press(button_code(LEFT)), t(1_000));
+    report(&mut recorder, 5_900, 1, 0);
+    recorder.key(MOUSE, KeyInput::release(button_code(LEFT)), t(6_000));
+    report(&mut recorder, 6_300, 2, 0);
+    let events = events_at(recorder, t(7_000));
+    assert!(events.contains(&(5_900, at(1, 0))), "{events:?}");
+    assert!(events.contains(&(6_300, at(2, 0))), "{events:?}");
+}
+
+#[test]
+fn a_replaced_position_frees_the_bytes_it_counted() {
+    let position = event_bytes(at(1, 0));
+    let budget = event_bytes(moved(1, 0)) + 300 * position;
+    let mut recorder = positioned().with_budget(budget);
+    recorder.motion(t(0), 1, 0);
+    // 400 reports over 40 ms keep about 40 positions.
+    for n in 0..400 {
+        report(&mut recorder, 1_000 + n * 100, 1, 0);
+    }
+    assert!(!recorder.is_full());
+}
+
+#[test]
+fn a_chord_modifier_with_only_positions_since_is_still_left_out() {
+    let mut recorder = positioned();
+    recorder.key(KEYBOARD, KeyInput::press(CTRL), t(0));
+    recorder.motion(t(30_000), 1, 0);
+    report(&mut recorder, 31_000, 10, 20);
+    // Places the first report among the written events.
+    report(&mut recorder, 60_000, 11, 20);
+    let stop = KeyInput::press(F7).firing(Action::ToggleRecording);
+    recorder.key(KEYBOARD, stop, t(100_000));
+    let recording = finish_at(recorder, t(100_000));
+    let pressed = changes(&recording)
+        .iter()
+        .any(|(_, change)| matches!(change, Change::Press(_)));
+    assert!(!pressed, "{:?}", changes(&recording));
 }
