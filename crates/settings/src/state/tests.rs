@@ -237,32 +237,27 @@ fn the_view_says_whether_idle_where_hotkeys_come_from_and_what_waits_for_a_resta
 }
 
 #[test]
-fn a_save_coming_back_keeps_what_was_edited_since_and_other_changes_refill() {
+fn a_save_coming_back_fills_the_fields_as_the_daemon_saved_them() {
     let mut state = started();
     let mut edited = fields();
-    edited.tray_delay = 7;
+    edited.interval_unit = 1;
+    edited.interval_text = "20".to_owned();
     let request = state.save(&edited).unwrap().unwrap();
-    assert!(state.saving());
-    let Ask::Save { settings, .. } = request.ask else {
-        panic!("{request:?}");
-    };
+    // The daemon keeps whole milliseconds as such.
+    let mut saved = defaults();
+    saved.clicker.interval = auto_clicker_core::config::IntervalDraft::Ms(50);
     let answer = Answer {
         id: request.id,
         outcome: Outcome::Saved,
     };
-    let back = state.view(&view(settings.clone(), Some(answer)));
+    let back = state.view(&view(saved.clone(), Some(answer)));
     assert_eq!(
         back,
         Shown {
-            fields: None,
+            fields: Some(saved),
             note: Some(Note::Saved)
         }
     );
-    assert!(!state.saving());
-    // Settings saved some other way fill the fields.
-    let mut other = settings;
-    other.tray_start_delay = 9;
-    assert_eq!(state.view(&view(other.clone(), None)).fields, Some(other));
 }
 
 #[test]

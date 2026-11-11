@@ -8,9 +8,10 @@
 //! gets every view the controller publishes for it (see
 //! [`auto_clicker_core::window`]).
 //!
-//! The window's session ends when the window closes its end, sends a line
-//! that does not parse, stops reading for [`WRITE_TIME`], or exits, and
-//! when the controller ends it. Each way kills the window if it still runs,
+//! The window's session ends when the window's end of the socket closes
+//! (it exited, after every request it sent was read), when it sends a line
+//! that does not parse or stops reading for [`WRITE_TIME`], and when the
+//! controller ends it. Each way kills the window if it still runs,
 //! and waits [`REAP_TIME`] at most for it to go.
 
 use std::io;
@@ -187,10 +188,12 @@ async fn session(
     };
     if opener.send(link).is_ok() {
         let (read, mut write) = socket.into_split();
+        // Not on the window's exit: a window that sends a save and closes
+        // at once has its end of the socket closed by then, and the
+        // requests it sent before are read first, up to the end.
         tokio::select! {
             () = read_requests(BufReader::new(read), requests) => {}
             () = write_updates(&mut write, &mut views, &mut raised) => {}
-            _ = child.wait() => {}
         }
     }
     end(&mut child).await;

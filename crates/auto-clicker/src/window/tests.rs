@@ -240,3 +240,26 @@ async fn a_window_that_cannot_start_is_reported_and_tried_again() {
         );
     }
 }
+
+#[tokio::test]
+async fn a_request_sent_just_before_the_window_exits_still_reaches_the_controller() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new();
+    let program = scratch.0.join("window");
+    let request = String::from_utf8(capture(7)).unwrap();
+    // JSON has no single quote, so it sits in one safely.
+    let script = format!("#!/bin/sh\nprintf '%s' '{request}' >&0\nexit 0\n");
+    std::fs::write(&program, script).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (opener, mut links) = mpsc::unbounded_channel();
+    let open = keep_with(Opening {
+        opener,
+        program: Ok(program),
+    });
+    open.send(()).unwrap();
+    let mut link = next_link(&mut links).await;
+    let sent = timeout(Duration::from_secs(5), link.requests.recv())
+        .await
+        .expect("the request arrived");
+    assert_eq!(sent.map(|request| request.id), Some(7));
+}

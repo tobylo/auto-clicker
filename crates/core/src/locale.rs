@@ -47,9 +47,13 @@ impl Language {
 }
 
 /// The first language in a `LANGUAGE` list ("de:sv:en") the program has
-/// text in.
+/// text in; "C" is untranslated English.
 fn first_known(list: &str) -> Option<Language> {
     list.split(':').find_map(|name| {
+        // "C" ends the search in untranslated text, as in gettext.
+        if matches!(name, "C" | "POSIX") {
+            return Some(Language::English);
+        }
         let name = OsString::from(name);
         if is_swedish(&name) {
             Some(Language::Swedish)
@@ -140,6 +144,8 @@ mod tests {
         assert_eq!(language(&de_sv), Language::Swedish);
         let de_en = [("LANG", sv), ("LANGUAGE", "de:en_GB:sv")];
         assert_eq!(language(&de_en), Language::English);
+        let c_first = [("LANG", sv), ("LANGUAGE", "de:C:sv")];
+        assert_eq!(language(&c_first), Language::English);
         let neither = [("LANG", sv), ("LANGUAGE", "de:fr")];
         assert_eq!(language(&neither), Language::Swedish);
         // LANGUAGE is not read under the C locale.

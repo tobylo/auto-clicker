@@ -24,9 +24,6 @@ pub struct App {
     last: Option<WindowView>,
     /// The decimal separator of the window's language.
     decimal: char,
-    /// The user closed the window while a save awaited its answer: it
-    /// closes once the save is done.
-    closing: bool,
 }
 
 impl App {
@@ -38,7 +35,6 @@ impl App {
             state: State::default(),
             last: None,
             decimal,
-            closing: false,
         }));
         let on = |act: fn(&mut App)| {
             let app = Rc::downgrade(&app);
@@ -54,42 +50,12 @@ impl App {
         window.on_confirm(on(App::agree));
         window.on_dismiss(on(App::decline));
         let weak = Rc::downgrade(&app);
-        window
-            .window()
-            .on_close_requested(move || match weak.upgrade() {
-                Some(app) => app.borrow_mut().close_requested(),
-                None => slint::CloseRequestResponse::HideWindow,
-            });
-        let weak = Rc::downgrade(&app);
         window.on_capture_hotkey(move |action| {
             if let Some(app) = weak.upgrade() {
                 app.borrow_mut().capture(Target::Hotkey(action));
             }
         });
         app
-    }
-
-    /// The user closes the window. A save that awaits its answer would be
-    /// lost with it, so the window stays until the save is done.
-    fn close_requested(&mut self) -> slint::CloseRequestResponse {
-        if self.state.saving() {
-            self.closing = true;
-            slint::CloseRequestResponse::KeepWindowShown
-        } else {
-            slint::CloseRequestResponse::HideWindow
-        }
-    }
-
-    /// Closes the window if the user asked to while a save was awaited,
-    /// once it is saved; any other answer (a refusal, a question) stays to
-    /// be read.
-    fn close_if_asked(&mut self, note: &Note) {
-        if self.closing {
-            self.closing = false;
-            if matches!(note, Note::Saved | Note::SavedUnsynced(_)) {
-                let _ = slint::quit_event_loop();
-            }
-        }
     }
 
     /// Takes an update from the daemon.
@@ -125,7 +91,6 @@ impl App {
         self.show_hotkeys();
         if let Some(note) = shown.note {
             self.note(&note);
-            self.close_if_asked(&note);
         }
         self.show_question();
     }
