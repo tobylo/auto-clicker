@@ -11,7 +11,7 @@ use auto_clicker_core::window::{CaptureEnd, Request, Update, WindowView};
 use slint::{ComponentHandle, SharedString};
 
 use crate::link::Link;
-use crate::model::{Fields, NotANumber, hotkey_text, key_text};
+use crate::model::{Fields, Unreadable, hotkey_text, key_text};
 use crate::state::{self, Note, Question, State, Target};
 use crate::ui::{SettingsWindow, Texts};
 
@@ -20,15 +20,21 @@ pub struct App {
     window: SettingsWindow,
     link: Link,
     state: State,
+    /// The daemon's last view.
+    last: Option<WindowView>,
+    /// The decimal separator of the window's language.
+    decimal: char,
 }
 
 impl App {
     /// Connects the window's callbacks to a new app over `link`.
-    pub fn start(window: &SettingsWindow, link: Link) -> Rc<RefCell<App>> {
+    pub fn start(window: &SettingsWindow, link: Link, decimal: char) -> Rc<RefCell<App>> {
         let app = Rc::new(RefCell::new(App {
             window: window.clone_strong(),
             link,
             state: State::default(),
+            last: None,
+            decimal,
         }));
         let on = |act: fn(&mut App)| {
             let app = Rc::downgrade(&app);
@@ -58,6 +64,7 @@ impl App {
             Update::View(view) => self.view(&view),
             Update::Raise => {
                 // Best effort: KWin may leave the window where it is.
+                self.window.window().set_minimized(false);
                 let _ = self.window.show();
             }
         }
@@ -65,9 +72,10 @@ impl App {
 
     fn view(&mut self, view: &WindowView) {
         let shown = self.state.view(view);
-        if let Some(fields) = &shown.fields {
-            self.load(fields);
+        if let Some(settings) = &shown.fields {
+            self.load(&Fields::from_draft(settings, self.decimal));
         }
+        self.last = Some(view.clone());
         let w = &self.window;
         w.set_idle(state::idle(view));
         w.set_desktop_hotkeys(state::desktop_hotkeys(view));
@@ -80,7 +88,7 @@ impl App {
                 .into(),
         );
         w.set_problems(view.problems.join("\n").into());
-        self.show_keys(Some(view));
+        self.show_hotkeys();
         if let Some(note) = shown.note {
             self.note(&note);
         }
@@ -96,16 +104,17 @@ impl App {
         w.set_interval_unit(fields.interval_unit);
         w.set_jitter(fields.jitter);
         w.set_button(fields.button);
+        w.set_key_text(fields.key_text.as_str().into());
         w.set_position_fixed(fields.position_fixed);
         w.set_position_x(fields.position_x);
         w.set_position_y(fields.position_y);
         w.set_repeat_forever(fields.repeat_forever);
-        w.set_repeat_count(fields.repeat_count);
+        w.set_repeat_text(fields.repeat_text.as_str().into());
         w.set_output_route(fields.output_route);
         w.set_hotkeys_route(fields.hotkeys_route);
         w.set_speed_text(fields.speed_text.as_str().into());
         w.set_plays_forever(fields.plays_forever);
-        w.set_plays_count(fields.plays_count);
+        w.set_plays_text(fields.plays_text.as_str().into());
     }
 
     /// What the fields hold now.
@@ -118,37 +127,41 @@ impl App {
             interval_unit: w.get_interval_unit(),
             jitter: w.get_jitter(),
             button: w.get_button(),
+            key_text: w.get_key_text().to_string(),
             position_fixed: w.get_position_fixed(),
             position_x: w.get_position_x(),
             position_y: w.get_position_y(),
             repeat_forever: w.get_repeat_forever(),
-            repeat_count: w.get_repeat_count(),
+            repeat_text: w.get_repeat_text().to_string(),
             output_route: w.get_output_route(),
             hotkeys_route: w.get_hotkeys_route(),
             speed_text: w.get_speed_text().to_string(),
             plays_forever: w.get_plays_forever(),
-            plays_count: w.get_plays_count(),
+            plays_text: w.get_plays_text().to_string(),
         }
     }
 
-    /// Shows the hotkeys and the key: as captured, or as the desktop
-    /// reports them where it delivers the hotkeys.
-    fn show_keys(&self, view: Option<&WindowView>) {
+    /// Shows the hotkeys: as the desktop reports them where it delivers
+    /// them, else as captured since the last save.
+    fn show_hotkeys(&self) {
         let w = &self.window;
         let texts = w.global::<Texts>();
         let (not_set, not_reported) = (texts.invoke_not_set(), texts.invoke_not_reported());
-        let desktop = view.filter(|view| state::desktop_hotkeys(view));
-        let shown: [String; 3] = match (desktop, self.state.keys()) {
+        let desktop = self
+            .last
+            .as_ref()
+            .filter(|view| state::desktop_hotkeys(view));
+        let shown: [String; 3] = match (desktop, self.state.hotkeys()) {
             (Some(view), _) => [
                 &view.hotkeys.toggle_clicking,
                 &view.hotkeys.toggle_recording,
                 &view.hotkeys.toggle_playback,
             ]
             .map(|hotkey| hotkey_text(hotkey, &not_set, &not_reported)),
-            (None, Some(keys)) => [
-                keys.hotkeys.toggle_clicking.clone(),
-                keys.hotkeys.toggle_recording.clone(),
-                keys.hotkeys.toggle_playback.clone(),
+            (None, Some(hotkeys)) => [
+                hotkeys.toggle_clicking.clone(),
+                hotkeys.toggle_recording.clone(),
+                hotkeys.toggle_playback.clone(),
             ],
             (None, None) => return,
         };
@@ -156,35 +169,40 @@ impl App {
         w.set_hotkey_clicking(clicking.into());
         w.set_hotkey_recording(recording.into());
         w.set_hotkey_playback(playback.into());
-        if let Some(keys) = self.state.keys() {
-            w.set_key_name(key_text(keys.clicker.key).into());
-        }
     }
 
     fn save(&mut self) {
-        match self.state.save(&self.fields()) {
-            Some(Ok(request)) => self.send(&request),
-            Some(Err(field)) => self.note(&Note::NotANumber(field)),
-            None => {}
-        }
+        let asked = self.state.save(&self.fields());
+        self.sent(asked);
     }
 
     fn capture(&mut self, target: Target) {
-        let request = self.state.capture(target);
-        self.send(&request);
-        self.note(&Note::Capturing(target));
+        if let Some(request) = self.state.capture(target) {
+            self.send(&request);
+            self.note(&Note::Capturing(target));
+        }
     }
 
     fn configure(&mut self) {
-        let request = self.state.configure();
-        self.send(&request);
+        if let Some(request) = self.state.configure() {
+            self.send(&request);
+        }
     }
 
     fn agree(&mut self) {
-        if let Some(request) = self.state.agree() {
-            self.send(&request);
-        }
+        let asked = self.state.agree(&self.fields());
+        self.sent(asked);
         self.show_question();
+    }
+
+    /// Sends a save that could be made, or says which field could not be
+    /// read.
+    fn sent(&mut self, asked: Option<Result<Request, Unreadable>>) {
+        match asked {
+            Some(Ok(request)) => self.send(&request),
+            Some(Err(field)) => self.note(&Note::Unreadable(field)),
+            None => {}
+        }
     }
 
     fn decline(&mut self) {
@@ -199,15 +217,24 @@ impl App {
             let _ = slint::quit_event_loop();
             return;
         }
+        self.show_asking();
+    }
+
+    /// Whether the window waits on an answer, and may ask something.
+    fn show_asking(&self) {
         self.window.set_waiting(self.state.waiting());
+        self.window.set_may_ask(self.state.may_ask());
     }
 
     fn note(&self, note: &Note) {
         let texts = self.window.global::<Texts>();
         self.window.set_message(note_text(&texts, note));
         self.window.set_message_is_error(note.is_error());
-        self.window.set_waiting(self.state.waiting());
-        self.show_keys(None);
+        if let Note::CapturedKey(code) = note {
+            self.window.set_key_text(key_text(*code).into());
+        }
+        self.show_hotkeys();
+        self.show_asking();
     }
 
     fn show_question(&self) {
@@ -225,7 +252,7 @@ impl App {
             }
         };
         self.window.set_confirm_text(text);
-        self.window.set_waiting(self.state.waiting());
+        self.show_asking();
     }
 }
 
@@ -240,14 +267,19 @@ fn note_text(texts: &Texts<'_>, note: &Note) -> SharedString {
         Note::Unavailable(why) => texts.invoke_unavailable(why.into()),
         Note::Capturing(Target::Key) => texts.invoke_capturing_key(),
         Note::Capturing(Target::Hotkey(_)) => texts.invoke_capturing_hotkey(),
+        Note::CapturedHotkey(keys) => texts.invoke_captured_hotkey(keys.into()),
+        Note::CapturedKey(code) => texts.invoke_captured_key(key_text(*code).into()),
         Note::CaptureEnded(why) => capture_end(texts, *why),
         Note::Configured => texts.invoke_configured(),
-        Note::NotANumber(field) => {
+        Note::Unreadable(field) => {
             let name = match field {
-                NotANumber::Interval => texts.invoke_field_interval(),
-                NotANumber::Speed => texts.invoke_field_speed(),
+                Unreadable::Interval => texts.invoke_field_interval(),
+                Unreadable::Key => texts.invoke_field_key(),
+                Unreadable::Repeat => texts.invoke_field_repeat(),
+                Unreadable::Speed => texts.invoke_field_speed(),
+                Unreadable::Plays => texts.invoke_field_plays(),
             };
-            texts.invoke_not_a_number(name)
+            texts.invoke_unreadable(name)
         }
     }
 }

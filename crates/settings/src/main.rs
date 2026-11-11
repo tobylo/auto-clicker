@@ -54,8 +54,13 @@ fn main() -> ExitCode {
     };
     // English is the text as written; another language that has no
     // translation bundled shows English too.
-    let _ = slint::select_bundled_translation(Language::of_environment().code());
-    let app = App::start(&window, link);
+    let language = Language::of_environment();
+    let _ = slint::select_bundled_translation(language.code());
+    let decimal = match language {
+        Language::English => '.',
+        Language::Swedish => ',',
+    };
+    let app = App::start(&window, link, decimal);
     APP.with(|slot| *slot.borrow_mut() = Some(app));
     std::thread::spawn(move || {
         link::read_updates(reader, |update| {
@@ -81,4 +86,32 @@ fn main() -> ExitCode {
 fn fail(message: &str) -> ExitCode {
     eprintln!("auto-clicker-settings: {message}");
     ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every text the window shows has a Swedish translation: a missing one
+    /// would show English in a Swedish window.
+    #[test]
+    fn every_text_is_translated_to_swedish() {
+        let ui = include_str!("../ui/window.slint");
+        let po = include_str!("../translations/sv/LC_MESSAGES/auto-clicker-settings.po");
+        let texts: Vec<&str> = ui
+            .split("@tr(\"")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .collect();
+        assert!(texts.len() > 60, "{}", texts.len());
+        for text in texts {
+            let entry = format!("msgid \"{text}\"\nmsgstr \"");
+            let translated = po
+                .split(&entry)
+                .nth(1)
+                .and_then(|rest| rest.split('"').next());
+            assert!(
+                translated.is_some_and(|swedish| !swedish.is_empty()),
+                "{text}"
+            );
+        }
+    }
 }

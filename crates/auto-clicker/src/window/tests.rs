@@ -124,3 +124,132 @@ fn the_window_is_the_program_beside_the_daemon() {
     assert_eq!(program.file_name().unwrap(), PROGRAM);
     assert_eq!(program.parent(), std::env::current_exe().unwrap().parent());
 }
+
+#[test]
+fn only_a_display_on_this_machine_reaches_the_window() {
+    use std::ffi::OsStr;
+    assert!(local_display(Some(OsStr::new(":1"))));
+    assert!(local_display(Some(OsStr::new(":0.0"))));
+    assert!(!local_display(Some(OsStr::new("remote-host:0"))));
+    assert!(!local_display(Some(OsStr::new(""))));
+    assert!(!local_display(None));
+}
+
+/// A directory of its own under the system's temporary one, removed when
+/// dropped.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Scratch {
+        let dir = std::env::temp_dir().join(format!(
+            "auto-clicker-window-test-{}-{:016x}",
+            std::process::id(),
+            fastrand::u64(..)
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        Scratch(dir)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A stand-in for the window: notes its pid, and reads its standard input
+/// until the daemon closes it.
+fn stand_in(dir: &std::path::Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let program = dir.join("window");
+    let pids = dir.join("pids");
+    std::fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\necho $$ >> '{}'\nexec cat > /dev/null\n",
+            pids.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    program
+}
+
+/// The pid the n-th window (from 0) noted, once it has.
+async fn pid(dir: &std::path::Path, n: usize) -> u32 {
+    for _ in 0..100 {
+        let noted = std::fs::read_to_string(dir.join("pids")).unwrap_or_default();
+        if let Some(pid) = noted.lines().nth(n) {
+            return pid.parse().unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("window {n} never started");
+}
+
+/// Waits until process `pid` is gone (or only a zombie), 5 s at most.
+async fn gone(pid: u32) {
+    for _ in 0..100 {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let state = stat
+            .rsplit(')')
+            .next()
+            .and_then(|rest| rest.split_whitespace().next());
+        if matches!(state, None | Some("Z")) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("window {pid} is still running");
+}
+
+/// The next window's link to the controller, 5 s at most.
+async fn next_link(links: &mut mpsc::UnboundedReceiver<WindowLink>) -> WindowLink {
+    timeout(Duration::from_secs(5), links.recv())
+        .await
+        .expect("a window opened")
+        .unwrap()
+}
+
+#[tokio::test]
+async fn one_window_runs_at_a_time_and_none_outlives_its_session() {
+    let scratch = Scratch::new();
+    let (opener, mut links) = mpsc::unbounded_channel();
+    let program = Ok(stand_in(&scratch.0));
+    let open = keep_with(Opening { opener, program });
+    open.send(()).unwrap();
+    let first = next_link(&mut links).await;
+    // Chosen again: no second window.
+    open.send(()).unwrap();
+    assert!(
+        timeout(Duration::from_millis(300), links.recv())
+            .await
+            .is_err()
+    );
+    // The controller ends the session: the window goes, and the next
+    // choice opens a new one.
+    let first_pid = pid(&scratch.0, 0).await;
+    drop(first);
+    gone(first_pid).await;
+    open.send(()).unwrap();
+    let _second = next_link(&mut links).await;
+    let second_pid = pid(&scratch.0, 1).await;
+    // The daemon quits: the keeper ends, and the window with it.
+    drop(open);
+    gone(second_pid).await;
+}
+
+#[tokio::test]
+async fn a_window_that_cannot_start_is_reported_and_tried_again() {
+    let (opener, mut links) = mpsc::unbounded_channel();
+    let program = Err("nowhere".to_owned());
+    let open = keep_with(Opening { opener, program });
+    for _ in 0..2 {
+        open.send(()).unwrap();
+        assert!(
+            timeout(Duration::from_millis(200), links.recv())
+                .await
+                .is_err()
+        );
+    }
+}
