@@ -304,7 +304,7 @@ impl<S: Scripting + 'static> Watcher<S> {
 
     fn done(&mut self, done: Done) {
         match done {
-            Done::Loaded(_, Ok(())) => self.failures = 0,
+            Done::Loaded(_, Ok(())) => self.succeeded(),
             Done::Loaded(script, Err(err)) => {
                 log_failure("load", script, &err);
                 match script {
@@ -322,8 +322,8 @@ impl<S: Scripting + 'static> Watcher<S> {
                 self.publish_trust();
             }
             Done::Unloaded(Ok(())) => {
-                self.failures = 0;
                 self.position_loaded = false;
+                self.succeeded();
             }
             Done::Unloaded(Err(err)) => {
                 log_failure("unload", Script::Position, &err);
@@ -333,6 +333,20 @@ impl<S: Scripting + 'static> Watcher<S> {
                     self.position = Next::UnloadAfterBackOff;
                 }
             }
+        }
+    }
+
+    /// KWin answered: the count starts afresh, and a call given up on is
+    /// due again, since the other's failures may have spent its tries.
+    fn succeeded(&mut self) {
+        self.failures = 0;
+        if self.layout_given_up() {
+            self.layout_due = Due::Now;
+        }
+        let unload_given_up =
+            self.position_loaded && !self.feed.recording() && self.position == Next::Nothing;
+        if unload_given_up {
+            self.position = Next::Unload;
         }
     }
 

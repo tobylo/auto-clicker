@@ -1177,3 +1177,33 @@ async fn a_recording_during_the_starts_layout_load_keeps_a_failed_sweep_unload()
     })
     .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn an_unload_whose_tries_the_layout_spent_is_tried_again_once_kwin_answers() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        h.record().await;
+        h.kwin.with(|s| {
+            s.failing_unloads = 2;
+            s.failing_plugin = Some(POSITION);
+        });
+        h.stop().await;
+        h.kwin.with(|s| s.refused = Some(LAYOUT));
+        h.receiver.layout_dropped.notify_one();
+        settle().await;
+        // Both are tried after the first back-off and fail again: the
+        // unload's is the fourth failure, and it is given up on.
+        after(BACK_OFF[0]).await;
+        h.calls();
+        h.kwin.with(|s| s.refused = None);
+        after(BACK_OFF[2]).await;
+        assert_eq!(
+            h.calls(),
+            [LOAD_LAYOUT.as_slice(), &[Unload(POSITION)]].concat()
+        );
+        after(HOUR).await;
+        assert_eq!(h.calls(), []);
+    })
+    .await;
+}
