@@ -44,7 +44,9 @@ pub async fn read_shortcuts(
     mut commands: ReaderCommands,
     mut send: impl FnMut(HotkeyEvent),
 ) {
-    let owners = match portal::watch_owner().await {
+    // No session is bound while the watch starts: a request for the
+    // desktop's settings is answered at once.
+    let owners = match unbound(portal::watch_owner(), &mut commands, &mut send).await {
         Ok(owners) => owners,
         Err(why) => return send(unavailable(why)),
     };
