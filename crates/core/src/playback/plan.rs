@@ -11,6 +11,9 @@
 //!   within [`DELIVERY_DELAY_US`], it is sent first, at that event's time.
 //!   A position later than that belongs to motion after the event and stays
 //!   where it is; the move before the event is then sent as it is.
+//! - A move at the same microsecond as a position before it is covered by
+//!   that position too: at one time the order of a move and its report
+//!   says nothing, since they come by different paths.
 //!
 //! The plan holds only event indices: a recording's events are not copied.
 
@@ -43,7 +46,8 @@ impl Plan {
         let layout = recording.layout()?;
         let events = recording.events();
         let count = u32::try_from(events.len()).ok()?;
-        let (covered, hoists) = cover(events, count);
+        let (mut covered, hoists) = cover(events, count);
+        cover_same_time(events, &mut covered);
         let mut hoisted: Vec<u32> = hoists.iter().map(|&(_, position)| position).collect();
         hoisted.sort_unstable();
         let mut hoists = hoists.into_iter().peekable();
@@ -156,6 +160,18 @@ fn cover(events: &[Event], count: u32) -> (Vec<bool>, Vec<(u32, u32)>) {
     }
     hoists.reverse();
     (covered, hoists)
+}
+
+/// Covers each move at the time of a position before it.
+fn cover_same_time(events: &[Event], covered: &mut [bool]) {
+    let mut position_at = None;
+    for (event, skip) in events.iter().zip(covered) {
+        match event.change {
+            Change::Position(_) => position_at = Some(event.at),
+            Change::Move { .. } if position_at == Some(event.at) => *skip = true,
+            _ => {}
+        }
+    }
 }
 
 /// The outputs of `layout` the positions in `events` lie on.

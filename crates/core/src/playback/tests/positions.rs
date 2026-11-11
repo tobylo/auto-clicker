@@ -194,6 +194,24 @@ fn a_position_before_a_press_stays_before_it() {
 }
 
 #[test]
+fn a_move_at_the_time_of_a_position_before_it_is_covered() {
+    // Read in this order at one microsecond: the report, then its move,
+    // with or without a press between them.
+    let events = [(0, MOVE), (2_000, at(10, 10)), (2_000, MOVE), (9_000, MOVE)];
+    assert_eq!(planned(&events), [(2_000, at(10, 10)), (9_000, MOVE)]);
+    let events = [
+        (0, MOVE),
+        (2_000, at(10, 10)),
+        (2_000, Change::Press(LEFT)),
+        (2_000, MOVE),
+    ];
+    assert_eq!(
+        planned(&events),
+        [(2_000, at(10, 10)), (2_000, Change::Press(LEFT))]
+    );
+}
+
+#[test]
 fn relative_motion_sends_every_move_and_no_position() {
     let playback = once(positioned(
         100_000,
