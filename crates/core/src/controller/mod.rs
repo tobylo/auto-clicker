@@ -22,6 +22,7 @@ mod desktop;
 mod hotkeys;
 mod playback;
 mod recording;
+mod screen;
 mod session;
 mod settings;
 mod view;
@@ -38,6 +39,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Instant, sleep_until};
 
 pub use hotkeys::{HotkeyReader, HotkeySender};
+pub use screen::{LayoutSignal, LayoutWatch};
 pub use session::{Blocked, SessionFacts};
 pub use settings::{WindowLink, WindowOpener};
 pub use view::{Activity, Hotkey, Listed, NoRecording, Route, Routes, View, describe};
@@ -50,6 +52,7 @@ use crate::recording::{FileName, Layout, LocalTime, RecordingFeed, RecordingSlot
 use crate::run::{Ended, RunEnd, Signals};
 use hotkeys::HotkeySource;
 use playback::Playing;
+use screen::LayoutSource;
 
 /// How long a start from the hotkey waits for the hotkey's modifiers to come
 /// up before it is cancelled.
@@ -209,10 +212,22 @@ pub trait Platform {
     fn recordings_dir(&self) -> Option<PathBuf>;
 
     /// The screen layout now, without waiting; `None` while it is not known,
-    /// which is always unless the platform reports one.
-    /// [`Message::LayoutChanged`] says when it changes.
+    /// which is always unless the platform reports one. The layout watcher's
+    /// signal ([`Platform::watch_layout`]) or [`Message::LayoutChanged`] says
+    /// when it changes.
     fn layout(&self) -> Option<Layout> {
         None
+    }
+
+    /// Starts watching the screen layout; called once, when the controller
+    /// starts. The watcher fires `changed` whenever [`Platform::layout`]
+    /// changes or becomes unknown, and while a recording runs in `feed`'s
+    /// slot it hands the recorder where the pointer is. It starts and stops
+    /// nothing. The controller polls it beside everything else and drops it
+    /// when it ends. The default watches nothing.
+    fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
+        let _ = (feed, changed);
+        Box::pin(pending())
     }
 }
 
@@ -341,6 +356,7 @@ enum Wake<B: InputBackend> {
     Window(settings::WindowEvent),
     Deadline,
     RecordingFull,
+    LayoutChanged,
 }
 
 /// The daemon's controller. Build it with [`Controller::new`] and drive it
@@ -365,6 +381,8 @@ pub struct Controller<P: Platform> {
     input_error: Option<String>,
     hotkeys: HotkeySource,
     hotkey_status: Option<HotkeyStatus>,
+    /// The screen layout's watcher.
+    screen: LayoutSource,
     /// The desktop's hotkeys, when it delivers them.
     desktop: Option<desktop::DesktopHotkeys>,
     /// Starts out unknown: a state not yet read is not "unlocked".
@@ -435,6 +453,7 @@ impl<P: Platform> Controller<P> {
             input_error: None,
             hotkeys: HotkeySource::none(),
             hotkey_status: None,
+            screen: LayoutSource::default(),
             desktop,
             blocked: Some(Blocked::Unknown("not read yet".to_owned())),
             notice: None,
@@ -467,6 +486,7 @@ impl<P: Platform> Controller<P> {
     /// saved.
     pub async fn run(mut self) {
         self.list_recordings();
+        self.start_layout_watch();
         self.start_reader();
         loop {
             self.publish();
@@ -486,15 +506,19 @@ impl<P: Platform> Controller<P> {
     /// The next thing to handle. Branches are tried in order, so what was
     /// asked for comes before what it would prevent: a queued Stop or lock
     /// before the hotkey events, the run's next action and the deadlines;
-    /// hotkey events (a stop) before the run. The reader goes last: kept busy
-    /// by a flood of key events, it spends tokio's budget, and anything
-    /// polled after it would wait. Everything else is cheap to poll. A
-    /// settings window cannot flood: its requests come through a bounded
-    /// queue that a task on this thread fills only while the controller
-    /// waits, after it polled every branch. (A due
-    /// timer and a queued message cannot be made ready in one poll on the
-    /// paused clock, so the tests pin the reader's place and the outcomes,
-    /// not every tie.)
+    /// hotkey events (a stop) and the screen layout before the run. The
+    /// layout watcher reads what KWin reported and fires its signal in the
+    /// same poll, so a change already received stops a playback using
+    /// positions before its next event. The watcher is busy only while a
+    /// recording moves the pointer, when nothing plays, and drains far
+    /// faster than reports come. The reader goes last: kept busy by a flood
+    /// of key events, it spends tokio's budget, and anything polled after it
+    /// would wait. Everything else is cheap to poll. A settings window cannot
+    /// flood: its requests come through a bounded queue that a task on this
+    /// thread fills only while the controller waits, after it polled every
+    /// branch. (A due timer and a queued message cannot be made ready in one
+    /// poll on the paused clock, so the tests pin the reader's place and the
+    /// outcomes, not every tie.)
     async fn next_wake(&mut self) -> Wake<P::Backend> {
         let deadline = self.next_deadline();
         let Controller {
@@ -503,6 +527,7 @@ impl<P: Platform> Controller<P> {
             hotkeys,
             opening,
             recording,
+            screen,
             settings,
             ..
         } = self;
@@ -511,6 +536,8 @@ impl<P: Platform> Controller<P> {
             message = inbox.recv() => Wake::Message(message.unwrap_or(Message::Quit)),
             event = hotkeys::received(&mut hotkeys.events) => Wake::Hotkey(event),
             event = settings::next_event(settings) => Wake::Window(event),
+            never = hotkeys::drive(&mut screen.watch) => match never {},
+            () = screen.signal.fired() => Wake::LayoutChanged,
             wake = run_wake(state) => wake,
             opened = open_end(opening) => Wake::Opened(opened),
             () = sleep_until_some(deadline) => Wake::Deadline,
@@ -551,6 +578,7 @@ impl<P: Platform> Controller<P> {
             Wake::Window(event) => self.window_event(event),
             Wake::Deadline => self.deadline(),
             Wake::RecordingFull => self.recording_full(),
+            Wake::LayoutChanged => self.layout_changed(),
         }
         true
     }
@@ -955,6 +983,18 @@ impl<P: Platform> Controller<P> {
                 }
             }
         }
+    }
+
+    /// Starts the platform's layout watcher, with a feed of its own.
+    fn start_layout_watch(&mut self) {
+        let Controller {
+            platform,
+            recording,
+            screen,
+            ..
+        } = self;
+        let feed = recording.feed();
+        screen.start(|changed| platform.watch_layout(feed, changed));
     }
 
     fn start_reader(&mut self) {
