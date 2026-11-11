@@ -96,12 +96,12 @@ impl<P: Platform> Controller<P> {
     /// Makes `file` the current recording, and keeps it for the next start
     /// unless the state file holds it already.
     pub(super) fn make_current(&mut self, file: &FileName) {
+        // It is listed, played or just saved.
+        self.shelf.current_gone = false;
         if self.shelf.current.as_ref() == Some(file) && self.shelf.kept {
             return;
         }
         self.shelf.current = Some(file.clone());
-        // It is listed, played or just saved.
-        self.shelf.current_gone = false;
         let written = self.shelf.file.write(file);
         self.shelf.kept = written.is_ok();
         self.shelf.current_error = written.err().map(|err| {

@@ -317,9 +317,22 @@ async fn a_current_recording_that_is_gone_marks_the_newest_and_one_older_than_th
 
         // Gone, with older ones still left out of the list: the newest is
         // marked, and plays.
-        fs::remove_file(recordings.path().join(files[0].as_str())).unwrap();
+        let oldest = recordings.path().join(files[0].as_str());
+        let bytes = fs::read(&oldest).unwrap();
+        fs::remove_file(&oldest).unwrap();
         let s = setup(shared_over(&recordings), config(0), &state, false).await;
         assert_eq!(s.d.view().current.as_ref(), Some(&files[11]));
+
+        // Back before the hotkey: it plays, and the newest is no longer
+        // marked.
+        fs::write(&oldest, &bytes).unwrap();
+        assert_eq!(s.hotkey_plays().await, Some(label("17:00:00")));
+        assert_eq!(s.d.view().current, None);
+        drop(s);
+
+        // Gone again: the newest plays.
+        fs::remove_file(&oldest).unwrap();
+        let s = setup(shared_over(&recordings), config(0), &state, false).await;
         assert_eq!(s.hotkey_plays().await, Some(label("17:11:00")));
     })
     .await;
