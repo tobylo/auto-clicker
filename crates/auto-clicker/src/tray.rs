@@ -7,7 +7,7 @@ use ksni::menu::{StandardItem, SubMenu};
 use ksni::{MenuItem, ToolTip, TrayMethods};
 use tokio::sync::{mpsc, watch};
 
-use crate::tray_text;
+use crate::{tray_icon, tray_text};
 
 /// The tray's state: the latest view, and where menu choices go.
 pub struct Tray {
@@ -213,7 +213,8 @@ fn recordings(view: &View, relisted: bool) -> Vec<Entry> {
     listed.chain([none]).chain(marker).collect()
 }
 
-/// The icon for `activity`, by name from the icon theme.
+/// The themed icon for `activity`, by name. A countdown shows the idle
+/// picture here; the tray draws its seconds instead (see [`tray_icon`]).
 fn icon_name(activity: Activity) -> &'static str {
     match activity {
         Activity::Clicking => "auto-clicker-clicking",
@@ -293,8 +294,18 @@ impl ksni::Tray for Tray {
         ksni::Status::Active
     }
 
+    /// No name during a countdown, so Plasma shows the pixmaps instead.
     fn icon_name(&self) -> String {
-        icon_name(self.view.activity).to_owned()
+        if tray_icon::counts_down(self.view.activity) {
+            String::new()
+        } else {
+            icon_name(self.view.activity).to_owned()
+        }
+    }
+
+    /// The seconds left during a countdown; nothing otherwise.
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        tray_icon::pixmaps(self.view.activity)
     }
 
     /// Built for development, the icons come from the source tree; an
@@ -309,7 +320,9 @@ impl ksni::Tray for Tray {
 
     fn tool_tip(&self) -> ToolTip {
         ToolTip {
-            icon_name: self.icon_name(),
+            // The themed picture, even during a countdown, which the
+            // title already spells out.
+            icon_name: icon_name(self.view.activity).to_owned(),
             icon_pixmap: Vec::new(),
             title: escape(&tray_text::title(&self.view, self.language)),
             description: tooltip_body(&self.view),
@@ -573,6 +586,76 @@ mod tests {
         ] {
             assert_eq!(icon_name(waiting), "auto-clicker-idle", "{waiting:?}");
         }
+    }
+
+    /// What the tray shows as its icon: the name, the pixmaps' sizes, and
+    /// the tooltip's icon name.
+    fn shown_icon(tray: &Tray) -> (String, Vec<i32>, String) {
+        use ksni::Tray as _;
+        let sizes = tray.icon_pixmap().iter().map(|icon| icon.width).collect();
+        (tray.icon_name(), sizes, tray.tool_tip().icon_name)
+    }
+
+    #[test]
+    fn a_countdown_shows_on_the_icon_and_the_themed_icon_comes_back() {
+        use Activity::*;
+        let (send, _received) = mpsc::unbounded_channel();
+        let (settings, _opened) = mpsc::unbounded_channel();
+        let mut tray = Tray::new(view(Idle), send, settings, Language::English);
+        let themed = |name: &str| (name.to_owned(), Vec::new(), name.to_owned());
+        let counting = (
+            String::new(),
+            vec![22, 32, 48],
+            "auto-clicker-idle".to_owned(),
+        );
+        // Each countdown, then what ends it: cancelled, or the run starting.
+        for (countdown, then) in [
+            (StartingIn(5), Idle),
+            (StartingIn(5), Clicking),
+            (RecordingIn(5), Idle),
+            (RecordingIn(5), Recording),
+            (PlayingIn(5), Idle),
+            (PlayingIn(5), Playing),
+        ] {
+            tray.show(view(countdown));
+            assert_eq!(shown_icon(&tray), counting, "{countdown:?}");
+            tray.show(view(then));
+            assert_eq!(
+                shown_icon(&tray),
+                themed(icon_name(then)),
+                "{countdown:?} then {then:?}"
+            );
+        }
+        for other in [
+            Idle,
+            WaitingForRelease,
+            Opening,
+            Clicking,
+            Recording,
+            PlayWaitingForRelease,
+            PlayOpening,
+            Playing,
+        ] {
+            tray.show(view(other));
+            assert_eq!(shown_icon(&tray), themed(icon_name(other)), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn each_second_of_a_countdown_draws_a_new_pixmap() {
+        use ksni::Tray as _;
+        let (send, _received) = mpsc::unbounded_channel();
+        let (settings, _opened) = mpsc::unbounded_channel();
+        let mut tray = Tray::new(
+            view(Activity::StartingIn(3)),
+            send,
+            settings,
+            Language::English,
+        );
+        let three = tray.icon_pixmap();
+        tray.show(view(Activity::StartingIn(2)));
+        let two = tray.icon_pixmap();
+        assert!(three.iter().zip(&two).all(|(a, b)| a.data != b.data));
     }
 
     /// A menu item's label, whether it is enabled and shows, and its

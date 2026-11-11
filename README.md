@@ -80,7 +80,7 @@ The build refuses to run if the downloaded copy has been changed by hand (`git s
 
 Once installed and enabled, it starts at login and stays in the system tray (run `auto-clicker` to start it by hand). A left or right click on its icon opens the menu:
 
-- **Start clicking** counts down `tray_start_delay` seconds (5 by default), so you can switch to the game, then clicks. The icon's tooltip shows the seconds left. **Stop clicking** stops it, or cancels the countdown.
+- **Start clicking** counts down `tray_start_delay` seconds (5 by default), so you can switch to the game, then clicks. The icon itself shows the seconds left, so you can see them with the game in front; a countdown over 99 seconds shows whole minutes, such as `5m`. **Stop clicking** stops it, or cancels the countdown.
 - **Record** counts down the same way, then records what the mouse and keyboard do until **Stop recording**, and saves it. The icon turns red while recording. Where recording cannot start (with the hotkeys from Plasma's shortcuts, without the `input` group, or after watching for keyboards failed), Record is greyed out and its label says what it needs, such as `Record (needs the input group)`; the tooltip says how to fix it.
 - **Play** lists the ten newest recordings, newest first. Choosing one counts down the same way, then plays it; **Stop playing** stops it, or cancels the countdown (see [Playing a recording](#playing-a-recording)).
 - **Settings** opens the settings window (see [Settings window](#settings-window)).
