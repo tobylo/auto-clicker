@@ -7,9 +7,10 @@
 //! controller that ignored a stop would still be waiting for its deadline.
 
 use std::fmt;
-use std::future::{Future, pending};
+use std::future::{Future, pending, poll_fn};
 use std::io;
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
@@ -86,6 +87,13 @@ struct Record {
     open_gate: Option<tokio::sync::oneshot::Sender<()>>,
     /// The screen layout the platform reports; unknown when `None`.
     layout: Option<Layout>,
+    /// What each layout watcher was given: its feed and its signal.
+    watches: Vec<(RecordingFeed, LayoutSignal)>,
+    /// How often the layout watchers were polled.
+    watch_polls: usize,
+    /// A layout the watcher has received and takes when it is next polled,
+    /// as a report waiting in its queue.
+    queued_layout: Option<Layout>,
     /// Devices closed (dropped): their id, and how many device calls had
     /// been made by then.
     closed: Vec<(usize, usize)>,
@@ -315,6 +323,26 @@ impl Platform for FakePlatform {
 
     fn layout(&self) -> Option<Layout> {
         self.0.with(|r| r.layout.clone())
+    }
+
+    fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
+        self.0.with(|r| r.watches.push((feed, changed.clone())));
+        let shared = self.0.clone();
+        Box::pin(poll_fn(move |_| {
+            let taken = shared.with(|r| {
+                r.watch_polls += 1;
+                let queued = r.queued_layout.take();
+                let taken = queued.is_some();
+                if taken {
+                    r.layout = queued;
+                }
+                taken
+            });
+            if taken {
+                changed.changed();
+            }
+            Poll::Pending
+        }))
     }
 
     fn input_reader(&self) -> InputReader {

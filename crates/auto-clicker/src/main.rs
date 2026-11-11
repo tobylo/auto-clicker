@@ -10,6 +10,8 @@ mod tray;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use auto_clicker_backend_kernel::monotonic_now;
+use auto_clicker_backend_kwin::Kwin;
 use auto_clicker_backend_portal::{PortalOutput, token_path};
 use auto_clicker_core::config::{Config, ConfigFile, config_path};
 use auto_clicker_core::controller::{Controller, Links, Message, Platform};
@@ -47,6 +49,17 @@ async fn daemon() -> ExitCode {
         Ok(name) => name,
         Err(status) => return status,
     };
+    // Only now, with the name claimed, may anything clean up after an
+    // earlier daemon: a second one never touches its scripts. However this
+    // one ends from here on, it unloads them.
+    let kwin = serve_kwin(&name).await;
+    let status = run(name, &kwin).await;
+    kwin.exit().await;
+    status
+}
+
+/// Picks the routes and runs the controller on them until it ends.
+async fn run(name: instance::Claim, kwin: &Kwin) -> ExitCode {
     let (config, config_error, file) = load_config();
     let portal = PortalOutput::new(token_path());
     // Whatever detection finds, the daemon runs: a job without a route says
@@ -68,6 +81,7 @@ async fn daemon() -> ExitCode {
                 Portal {
                     output: portal,
                     hotkeys,
+                    kwin: kwin.clone(),
                 },
                 start,
                 name,
@@ -82,7 +96,11 @@ async fn daemon() -> ExitCode {
         config_error,
         file,
     };
-    serve(Kernel { hotkeys }, start, name).await
+    let kernel = Kernel {
+        hotkeys,
+        kwin: kwin.clone(),
+    };
+    serve(kernel, start, name).await
 }
 
 /// `problem`, written to the journal too.
@@ -113,6 +131,18 @@ async fn serve<P: Platform>(platform: P, start: Start<P>, name: instance::Claim)
             ExitCode::SUCCESS
         }
         Err(status) => status,
+    }
+}
+
+/// Receives from KWin on the claimed name; without it, recordings get no
+/// positions. Nothing is loaded until the controller runs.
+async fn serve_kwin(name: &instance::Claim) -> Kwin {
+    match timeout(BUS_TIMEOUT, Kwin::serve(name.connection(), monotonic_now)).await {
+        Ok(kwin) => kwin,
+        Err(_) => {
+            eprintln!("auto-clicker: the session bus did not answer; recordings get no positions");
+            Kwin::none()
+        }
     }
 }
 
