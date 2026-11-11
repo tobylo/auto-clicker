@@ -146,6 +146,16 @@ pub enum InputReader {
     Desktop,
 }
 
+impl From<InputReader> for Route {
+    /// The route a reader's hotkeys take.
+    fn from(reader: InputReader) -> Route {
+        match reader {
+            InputReader::Devices => Route::Kernel,
+            InputReader::Desktop => Route::Portal,
+        }
+    }
+}
+
 /// What the controller needs from the platform: its input devices, an input
 /// reader that ignores them, and the clocks and directory recordings need.
 pub trait Platform {
@@ -1061,18 +1071,15 @@ fn run_wake<B: InputBackend>(state: &mut State<B>) -> impl Future<Output = Wake<
     })
 }
 
-/// The end of the open in flight; never resolves while none is.
 /// The routes `platform` takes.
 fn routes<P: Platform>(platform: &P) -> Routes {
     Routes {
         output: P::OUTPUT,
-        hotkeys: match platform.input_reader() {
-            InputReader::Devices => Route::Kernel,
-            InputReader::Desktop => Route::Portal,
-        },
+        hotkeys: platform.input_reader().into(),
     }
 }
 
+/// The end of the open in flight; never resolves while none is.
 fn open_end<B: InputBackend>(
     opening: &mut Option<OpenInput<B>>,
 ) -> impl Future<Output = Result<Input<B>, InputError>> + '_ {

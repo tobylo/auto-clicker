@@ -120,8 +120,9 @@ impl Hotkey {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NoRecording {
-    /// The desktop delivers the hotkeys (`hotkeys = "portal"`): nothing
-    /// reads the keyboards and mice a recording is made of.
+    /// The desktop delivers the hotkeys (`hotkeys = "portal"`, or `"auto"`
+    /// without readable keyboards): nothing reads the keyboards and mice a
+    /// recording is made of.
     DesktopHotkeys,
     /// The user may not read the keyboards, or watching for them failed. The
     /// tooltip lists this as a problem already, with what to do.
