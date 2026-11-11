@@ -28,6 +28,10 @@ jobs:
       # Installs the toolchain and components rust-toolchain.toml pins.
       - name: Install toolchain
         run: rustup toolchain install
+      # The settings window's font lookup links fontconfig at build time;
+      # its Wayland libraries are loaded at run time and need nothing here.
+      - name: Install fontconfig's headers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libfontconfig-dev
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # The version scripts/gates.sh requires. rust-cache keeps the binary, so
       # this builds it only when the cache is cold.
