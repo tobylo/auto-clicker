@@ -16,7 +16,7 @@ use evdev::uinput::VirtualDevice;
 use evdev::{AbsoluteAxisCode, EventType, InputEvent, RelativeAxisCode};
 
 pub use clock::{local_time, monotonic_now};
-pub use hotkeys::{InputSources, read_input};
+pub use hotkeys::{InputSources, keyboard_access, read_input};
 
 pub use devices::{
     ABSOLUTE_MAX, DeviceIdentity, DeviceRole, KEYBOARD_NAME, MOUSE_NAME, PRODUCT_KEYBOARD,

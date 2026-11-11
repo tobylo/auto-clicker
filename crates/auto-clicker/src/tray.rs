@@ -113,7 +113,7 @@ fn entries(view: &View, relisted: bool) -> [Entry; 8] {
             true,
             activity.clicking(),
         ),
-        Entry::item("Record", Some(Message::Record), idle, !activity.recording()),
+        record(view),
         Entry::item(
             "Stop recording",
             Some(Message::StopRecording),
@@ -134,6 +134,21 @@ fn entries(view: &View, relisted: bool) -> [Entry; 8] {
         Entry::item("Settings", None, false, true),
         Entry::item("Quit", Some(Message::Quit), true, true),
     ]
+}
+
+/// The Record item: off, saying why, where no recording can start.
+fn record(view: &View) -> Entry {
+    let (label, possible) = match &view.no_recording {
+        Some(no_recording) => (no_recording.label(), false),
+        None => ("Record", true),
+    };
+    let idle = view.activity == Activity::Idle;
+    Entry::item(
+        label,
+        Some(Message::Record),
+        idle && possible,
+        !view.activity.recording(),
+    )
 }
 
 /// The Play submenu: one place for each recording the controller may list,
@@ -279,8 +294,8 @@ mod tests {
     use std::sync::Arc;
 
     use auto_clicker_core::config::Config;
-    use auto_clicker_core::controller::Hotkey;
-    use auto_clicker_core::controller::Listed;
+    use auto_clicker_core::controller::{Hotkey, Listed, NoRecording, Route, Routes};
+    use auto_clicker_core::hotkeys::Unavailable;
     use auto_clicker_core::recording::FileName;
 
     use super::*;
@@ -300,9 +315,11 @@ mod tests {
             .collect();
         View {
             activity,
+            routes: Routes::default(),
             settings: config.clicker,
             hotkey: Hotkey::Bound(config.hotkeys.toggle_clicking),
             record_hotkey: Hotkey::Bound(config.hotkeys.toggle_recording),
+            no_recording: None,
             play_hotkey: Hotkey::Bound(config.hotkeys.toggle_playback),
             playback: config.playback,
             recordings: Arc::from(recordings),
@@ -582,6 +599,108 @@ mod tests {
                 Message::MenuOpened
             ]
         );
+    }
+
+    #[test]
+    fn record_is_off_and_says_why_where_no_recording_can_start() {
+        use Activity::*;
+        let reasons = [
+            NoRecording::DesktopHotkeys,
+            NoRecording::Keyboards(Unavailable::NoPermission),
+            NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned())),
+        ];
+        for no_recording in reasons {
+            let label = no_recording.label();
+            for activity in [Idle, Clicking, Playing] {
+                let shown = View {
+                    no_recording: Some(no_recording.clone()),
+                    ..view(activity)
+                };
+                let [_, _, record, stop, ..] = entries(&shown, false);
+                assert_eq!(
+                    (record.label.as_str(), record.enabled, record.visible),
+                    (label, false, true),
+                    "{activity:?}"
+                );
+                assert!(!stop.visible, "{activity:?}");
+            }
+            // A recording the keyboards went away under still stops.
+            let recording = View {
+                no_recording: Some(no_recording),
+                ..view(Recording)
+            };
+            let [_, _, record, stop, ..] = entries(&recording, false);
+            assert!(!record.visible);
+            assert_eq!(
+                (stop.label.as_str(), stop.enabled, stop.visible),
+                ("Stop recording", true, true)
+            );
+        }
+    }
+
+    #[test]
+    fn the_tooltip_gives_the_reason_and_the_fix_escaped_like_every_line() {
+        let shown = View {
+            no_recording: Some(NoRecording::DesktopHotkeys),
+            notice: Some("Not recording: <why>".to_owned()),
+            ..view(Activity::Idle)
+        };
+        let lines: Vec<String> = tooltip_body(&shown)
+            .split("<br/>")
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(
+            lines[2],
+            "Recording is unavailable with the desktop's shortcuts: nothing reads the \
+             keyboards and mice. It needs the input group, and hotkeys = \"auto\" or \
+             \"kernel\" under [input] in the config."
+        );
+        assert!(
+            !lines.iter().any(|line| line.contains("starts recording")),
+            "{lines:?}"
+        );
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some("Not recording: &lt;why&gt;")
+        );
+    }
+
+    #[test]
+    fn the_tooltip_names_the_route_of_each_job() {
+        let cases = [
+            (
+                Route::Kernel,
+                Route::Kernel,
+                "Clicks through /dev/uinput, hotkeys from the keyboards",
+            ),
+            (
+                Route::Kernel,
+                Route::Portal,
+                "Clicks through /dev/uinput, hotkeys from the desktop's shortcuts",
+            ),
+            (
+                Route::Portal,
+                Route::Kernel,
+                "Clicks through the desktop's remote input, hotkeys from the keyboards",
+            ),
+            (
+                Route::Portal,
+                Route::Portal,
+                "Clicks through the desktop's remote input, hotkeys from the desktop's \
+                 shortcuts",
+            ),
+        ];
+        for (output, hotkeys, line) in cases {
+            let shown = View {
+                routes: Routes { output, hotkeys },
+                ..view(Activity::Idle)
+            };
+            let body = tooltip_body(&shown);
+            let lines: Vec<&str> = body.split("<br/>").collect();
+            // After the hotkeys, before the notice, which stays escaped.
+            assert_eq!(lines[4], line, "{body}");
+            assert_eq!(lines[5], "a &lt;b&gt; &amp; c", "{body}");
+        }
     }
 
     #[test]

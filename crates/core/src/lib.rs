@@ -10,6 +10,7 @@ pub mod input;
 pub mod playback;
 pub mod recording;
 pub mod run;
+pub mod window;
 
 #[cfg(test)]
 mod test_support;

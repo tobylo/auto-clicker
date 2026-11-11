@@ -3,17 +3,21 @@
 //! The controller publishes a [`View`] after every change; the tray only
 //! reads it. The text is plain: a tray that renders markup escapes it.
 
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::clicker::{ClickerSettings, Mode, Position, Repeat};
-use crate::hotkeys::{Binding, DESKTOP_RELEASE_PAUSE};
+use crate::hotkeys::{Binding, DESKTOP_RELEASE_PAUSE, Unavailable};
 use crate::input::{Button, Key};
 use crate::playback::{PlaybackSettings, Speed};
 use crate::recording::{FileName, MAX_DURATION};
 
 /// What the controller is doing, as the tray shows it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Activity {
     Idle,
     /// A start from the tray counts down; whole seconds left, rounded up.
@@ -76,7 +80,8 @@ pub struct Listed {
 }
 
 /// A hotkey as the tray names it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Hotkey {
     /// The config's binding, matched by the program itself.
     Bound(Binding),
@@ -111,15 +116,113 @@ impl Hotkey {
     }
 }
 
+/// Why no recording can start here, whatever state the controller is in.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoRecording {
+    /// The desktop delivers the hotkeys (`hotkeys = "portal"`, or `"auto"`
+    /// without readable keyboards): nothing reads the keyboards and mice a
+    /// recording is made of.
+    DesktopHotkeys,
+    /// The user may not read the keyboards, or watching for them failed. The
+    /// tooltip lists this as a problem already, with what to do.
+    Keyboards(Unavailable),
+}
+
+/// The refusal on the desktop's hotkeys, after "Recording is".
+const WITH_DESKTOP_HOTKEYS: &str = "unavailable with the desktop's shortcuts";
+
+impl NoRecording {
+    /// What the tray's Record item reads: the item and why it is off. The
+    /// desktop's shortcuts are in use either because the config asks for
+    /// them or because the keyboards could not be read at start; the input
+    /// group is what recording needs in both cases.
+    pub fn label(&self) -> &'static str {
+        match self {
+            NoRecording::DesktopHotkeys | NoRecording::Keyboards(Unavailable::NoPermission) => {
+                "Record (needs the input group)"
+            }
+            NoRecording::Keyboards(_) => "Record (needs a restart)",
+        }
+    }
+
+    /// The tooltip's line on it, in place of the recording hotkey's: none
+    /// where a problem line says why already.
+    fn line(&self) -> Option<String> {
+        match self {
+            NoRecording::DesktopHotkeys => Some(format!(
+                "Recording is {WITH_DESKTOP_HOTKEYS}: nothing reads the keyboards and mice. It \
+                 needs the input group, and hotkeys = \"auto\" or \"kernel\" under [input] in the \
+                 config."
+            )),
+            NoRecording::Keyboards(_) => None,
+        }
+    }
+}
+
+/// Why a recording did not start, after "Not recording: ". The tooltip's
+/// own line or problem says what to do.
+impl fmt::Display for NoRecording {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NoRecording::DesktopHotkeys => write!(f, "recording is {WITH_DESKTOP_HOTKEYS}"),
+            NoRecording::Keyboards(why) => why.fmt(f),
+        }
+    }
+}
+
+/// A route a job takes, as the daemon picked it at start.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Route {
+    /// The kernel: `/dev/uinput` for clicks, `/dev/input` for hotkeys.
+    #[default]
+    Kernel,
+    /// The desktop's portals: remote input for clicks, its shortcuts for
+    /// hotkeys.
+    Portal,
+}
+
+/// The routes the daemon runs on. They are picked once at start, so they
+/// change only with a restart.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Routes {
+    /// Where clicks and keys go.
+    pub output: Route,
+    /// Where hotkeys come from.
+    pub hotkeys: Route,
+}
+
+impl Routes {
+    /// The tooltip's line naming both.
+    pub fn line(self) -> String {
+        let output = match self.output {
+            Route::Kernel => "Clicks through /dev/uinput",
+            Route::Portal => "Clicks through the desktop's remote input",
+        };
+        let hotkeys = match self.hotkeys {
+            Route::Kernel => "hotkeys from the keyboards",
+            Route::Portal => "hotkeys from the desktop's shortcuts",
+        };
+        format!("{output}, {hotkeys}")
+    }
+}
+
 /// Everything the tray shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
     pub activity: Activity,
+    /// The routes in use.
+    pub routes: Routes,
     pub settings: ClickerSettings,
     /// The hotkey that starts and stops clicking.
     pub hotkey: Hotkey,
     /// The hotkey that starts and stops recording.
     pub record_hotkey: Hotkey,
+    /// Why no recording can start, if none can: the tray's Record item is
+    /// off then.
+    pub no_recording: Option<NoRecording>,
     /// The hotkey that starts and stops playback.
     pub play_hotkey: Hotkey,
     pub playback: PlaybackSettings,
@@ -162,19 +265,22 @@ impl View {
     }
 
     /// The tooltip's lines: what a run does, the hotkeys, how a recording
-    /// plays, the recording's time limit while one runs, what plays, the
-    /// last notice and every problem.
+    /// plays, the routes in use, the recording's time limit while one runs,
+    /// what plays, the last notice and every problem.
     pub fn details(&self) -> Vec<String> {
         let mut lines = vec![describe(&self.settings)];
         lines.extend(self.hotkey.line("starts and stops clicking"));
-        lines.extend(
-            self.record_hotkey
+        lines.extend(match &self.no_recording {
+            Some(no_recording) => no_recording.line(),
+            None => self
+                .record_hotkey
                 .line("starts recording, and stops and saves it"),
-        );
+        });
         lines.extend(self.play_hotkey.line(&format!(
             "plays the last recording {}, and stops it",
             describe_playback(&self.playback)
         )));
+        lines.push(self.routes.line());
         if self.activity.recording() {
             let minutes = MAX_DURATION.as_secs() / 60;
             lines.push(format!(
@@ -338,9 +444,11 @@ mod tests {
     fn view(activity: Activity, hotkey: &str) -> View {
         View {
             activity,
+            routes: Routes::default(),
             settings: ClickerSettings::default(),
             hotkey: Hotkey::Bound(Binding::parse(hotkey).unwrap()),
             record_hotkey: Hotkey::Bound(Binding::parse("Ctrl+F7").unwrap()),
+            no_recording: None,
             play_hotkey: Hotkey::Bound(Binding::parse("Ctrl+Alt+F8").unwrap()),
             playback: PlaybackSettings::default(),
             recordings: Arc::from([]),
@@ -416,11 +524,85 @@ mod tests {
                 "Ctrl+F6 starts and stops clicking",
                 "Ctrl+F7 starts recording, and stops and saves it",
                 "Ctrl+Alt+F8 plays the last recording once, and stops it",
+                "Clicks through /dev/uinput, hotkeys from the keyboards",
                 "notice",
                 "one",
                 "two",
             ]
         );
+    }
+
+    #[test]
+    fn a_recording_that_cannot_start_replaces_the_recording_hotkeys_line() {
+        let portal = "Recording is unavailable with the desktop's shortcuts: nothing reads the \
+                      keyboards and mice. It needs the input group, and hotkeys = \"auto\" or \
+                      \"kernel\" under [input] in the config.";
+        let keyboards = NoRecording::Keyboards(Unavailable::NoPermission);
+        let watch = NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned()));
+        // Every state of the hotkey, as the program or the desktop names it:
+        // none of them is offered for recording.
+        let hotkeys = [
+            Hotkey::Bound(Binding::parse("Ctrl+F7").unwrap()),
+            Hotkey::Desktop(None),
+            Hotkey::Desktop(Some(String::new())),
+            Hotkey::Desktop(Some("Ctrl+Shift+F7".to_owned())),
+        ];
+        for record_hotkey in hotkeys {
+            for (no_recording, line) in [
+                (NoRecording::DesktopHotkeys, Some(portal)),
+                // The problem line says why already.
+                (keyboards.clone(), None),
+                (watch.clone(), None),
+            ] {
+                let shown = View {
+                    record_hotkey: record_hotkey.clone(),
+                    no_recording: Some(no_recording.clone()),
+                    ..view(Activity::Idle, "Ctrl+F6")
+                };
+                let expected: Vec<&str> = [
+                    Some("Clicks the left button every 100 ms"),
+                    Some("Ctrl+F6 starts and stops clicking"),
+                    line,
+                    Some("Ctrl+Alt+F8 plays the last recording once, and stops it"),
+                    Some("Clicks through /dev/uinput, hotkeys from the keyboards"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                assert_eq!(
+                    shown.details(),
+                    expected,
+                    "{record_hotkey:?} {no_recording:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn each_reason_has_its_label_and_refusal() {
+        let cases = [
+            (
+                NoRecording::DesktopHotkeys,
+                "Record (needs the input group)",
+                "recording is unavailable with the desktop's shortcuts",
+            ),
+            (
+                NoRecording::Keyboards(Unavailable::NoPermission),
+                "Record (needs the input group)",
+                "hotkeys are unavailable: keyboards cannot be read; add your user to the input \
+                 group and log in again, or set hotkeys = \"portal\" under [input] for the \
+                 desktop's shortcuts",
+            ),
+            (
+                NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned())),
+                "Record (needs a restart)",
+                "hotkeys stopped: watching for keyboards failed: gone; restart the program",
+            ),
+        ];
+        for (no_recording, label, refusal) in cases {
+            assert_eq!(no_recording.label(), label);
+            assert_eq!(no_recording.to_string(), refusal);
+        }
     }
 
     #[test]
