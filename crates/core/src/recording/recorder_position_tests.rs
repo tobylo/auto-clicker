@@ -627,3 +627,23 @@ fn a_chord_modifier_with_only_positions_since_is_still_left_out() {
         .any(|(_, change)| matches!(change, Change::Press(_)));
     assert!(!pressed, "{:?}", changes(&recording));
 }
+
+#[test]
+fn reports_delivered_after_two_wheel_turns_keep_both_turns_apart() {
+    let mut recorder = positioned();
+    recorder.motion(t(0), 1, 0);
+    recorder.wheel(t(1_000), 1);
+    recorder.wheel(t(2_000), 1);
+    // Stamped when they came, delivered after both turns were read.
+    report(&mut recorder, 2_000, 1, 0);
+    report(&mut recorder, 2_100, 2, 0);
+    report(&mut recorder, 2_200, 3, 0);
+    let positions: Vec<_> = events_at(recorder, t(9_000))
+        .into_iter()
+        .filter(|(_, change)| matches!(change, Change::Position(_)))
+        .collect();
+    assert_eq!(
+        positions,
+        [(2_000, at(1, 0)), (2_100, at(2, 0)), (2_200, at(3, 0))]
+    );
+}
