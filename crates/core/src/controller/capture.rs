@@ -136,15 +136,10 @@ impl<P: Platform> Controller<P> {
     }
 
     /// The reader captured something. A result that comes at or after the
-    /// deadline (the controller was late to look) is not taken.
+    /// deadline (the controller was late to look) finds the capture over.
     pub(super) fn captured(&mut self, captured: Captured) {
-        let late = self
-            .settings
-            .pending
-            .as_ref()
-            .is_some_and(|pending| Instant::now() >= pending.deadline);
+        self.pending_expired();
         let outcome = match captured {
-            _ if late => Outcome::CaptureEnded(CaptureEnd::TimedOut),
             Captured::Hotkey(binding) => Outcome::CapturedHotkey(binding),
             Captured::Key(key) => Outcome::CapturedKey(key.code()),
             Captured::Cancelled => Outcome::CaptureEnded(CaptureEnd::Cancelled),
@@ -154,8 +149,16 @@ impl<P: Platform> Controller<P> {
     }
 
     /// The reader answered `operation`, a request to open the desktop's
-    /// settings; an answer to any other than the one pending is dropped.
+    /// settings; an answer to any other than the one pending, or after its
+    /// deadline, is dropped.
     pub(super) fn configured(&mut self, operation: u64, result: Result<(), String>) {
+        self.pending_expired();
+        self.answer_configure(operation, result);
+    }
+
+    /// Answers the request to open the desktop's settings that `operation`
+    /// is, if it is the one pending.
+    fn answer_configure(&mut self, operation: u64, result: Result<(), String>) {
         let ours = |p: &mut Pending| matches!(p.kind, Kind::Configure(asked) if asked == operation);
         let Some(pending) = self.settings.pending.take_if(ours) else {
             return;
@@ -167,11 +170,17 @@ impl<P: Platform> Controller<P> {
         self.answer(pending.id, outcome);
     }
 
-    /// Hotkeys stopped working during a capture: it can get nothing.
-    pub(super) fn capture_status(&mut self, status: &HotkeyStatus) {
-        if let HotkeyStatus::Unavailable(why) = status {
-            self.end_capture(Outcome::Unavailable(why.to_string()));
-        }
+    /// Hotkeys stopped working: a capture can get nothing, and the
+    /// desktop's settings, asked of a session now gone, will not open.
+    pub(super) fn pending_status(&mut self, status: &HotkeyStatus) {
+        let HotkeyStatus::Unavailable(why) = status else {
+            return;
+        };
+        let operation = match self.settings.pending.as_ref().map(|p| p.kind) {
+            Some(Kind::Configure(operation)) => operation,
+            _ => return self.end_capture(Outcome::Unavailable(why.to_string())),
+        };
+        self.answer_configure(operation, Err(why.to_string()));
     }
 
     /// The pending request's deadline passed: it ends unanswered. Other
@@ -187,7 +196,7 @@ impl<P: Platform> Controller<P> {
             Kind::Capture(_) => self.end_capture(Outcome::CaptureEnded(CaptureEnd::TimedOut)),
             Kind::Configure(operation) => {
                 let why = "the desktop did not open its settings".to_owned();
-                self.configured(operation, Err(why));
+                self.answer_configure(operation, Err(why));
             }
         }
     }

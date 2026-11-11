@@ -137,17 +137,30 @@ struct Waiting<'a, O> {
 }
 
 impl<O: Stream<Item = bool> + Unpin> Waiting<'_, O> {
-    /// The next change of a portal service's owner. A command meanwhile is
-    /// answered at once: no session is bound to open settings for.
+    /// The next change of a portal service's owner, with no session bound.
     async fn owner_change(&mut self, send: &mut impl FnMut(HotkeyEvent)) -> Option<bool> {
-        loop {
-            tokio::select! {
-                change = self.owners.next() => return change,
-                command = self.commands.next() => {
-                    let ReaderCommand::ConfigureShortcuts { operation, .. } = command;
-                    let result = Err(NOT_BOUND.to_owned());
-                    send(HotkeyEvent::Configured { operation, result });
-                }
+        unbound(self.owners.next(), self.commands, send).await
+    }
+}
+
+/// Runs `work` while no session is bound (between sessions, or while one
+/// binds, which can wait minutes on the desktop's dialog), answering every
+/// command meanwhile at once: there are no settings to open yet, and a
+/// command kept for later would open them long after it was answered.
+pub(crate) async fn unbound<T>(
+    work: impl Future<Output = T>,
+    commands: &mut ReaderCommands,
+    send: &mut dyn FnMut(HotkeyEvent),
+) -> T {
+    let mut work = pin!(work);
+    loop {
+        tokio::select! {
+            biased;
+            done = &mut work => return done,
+            command = commands.next() => {
+                let ReaderCommand::ConfigureShortcuts { operation, .. } = command;
+                let result = Err(NOT_BOUND.to_owned());
+                send(HotkeyEvent::Configured { operation, result });
             }
         }
     }

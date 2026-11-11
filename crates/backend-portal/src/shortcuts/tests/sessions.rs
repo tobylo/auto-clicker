@@ -301,3 +301,37 @@ async fn between_sessions_a_request_for_the_settings_is_answered_at_once() {
     })
     .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn while_a_session_binds_a_request_for_the_settings_is_answered_at_once() {
+    local(async {
+        let (commands, mut received) = ReaderCommands::channel();
+        let (bound, binding) = tokio::sync::oneshot::channel::<&str>();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        let task = tokio::task::spawn_local(async move {
+            let mut send = |event| sink.borrow_mut().push(event);
+            unbound(binding, &mut received, &mut send).await
+        });
+        settle().await;
+        commands
+            .send(ReaderCommand::ConfigureShortcuts {
+                operation: 3,
+                activation_token: None,
+            })
+            .unwrap();
+        settle().await;
+        let not_bound = HotkeyEvent::Configured {
+            operation: 3,
+            result: Err(NOT_BOUND.to_owned()),
+        };
+        assert_eq!(
+            events.borrow_mut().drain(..).collect::<Vec<_>>(),
+            [not_bound]
+        );
+        bound.send("bound").unwrap();
+        settle().await;
+        assert_eq!(task.await.unwrap(), Ok("bound"));
+    })
+    .await;
+}
