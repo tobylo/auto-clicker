@@ -44,7 +44,7 @@ use crate::clicker::run;
 use crate::config::Config;
 use crate::hotkeys::{Action, Binding, HotkeyEvent, HotkeyStatus, Unavailable};
 use crate::input::{Input, InputBackend, InputError};
-use crate::recording::{FileName, LocalTime, RecordingFeed, RecordingSlot};
+use crate::recording::{FileName, Layout, LocalTime, RecordingFeed, RecordingSlot};
 use crate::run::{Ended, RunEnd, Signals};
 use hotkeys::HotkeySource;
 use playback::Playing;
@@ -93,6 +93,9 @@ pub enum Message {
     /// the controller reports `n` on [`Links::released_for_sleep`], so the
     /// sender can let the machine sleep.
     Sleep(u64),
+    /// [`Platform::layout`] changed, or became unknown. A playback that
+    /// moves to positions on the old layout stops.
+    LayoutChanged,
 }
 
 /// Where to reach a controller, and what it reports.
@@ -191,6 +194,13 @@ pub trait Platform {
 
     /// Where recordings are saved; `None` when there is no data directory.
     fn recordings_dir(&self) -> Option<PathBuf>;
+
+    /// The screen layout now, without waiting; `None` while it is not known,
+    /// which is always unless the platform reports one.
+    /// [`Message::LayoutChanged`] says when it changes.
+    fn layout(&self) -> Option<Layout> {
+        None
+    }
 }
 
 /// What a start will run once it begins.
@@ -253,6 +263,9 @@ struct Running<B: InputBackend> {
     playing: Option<String>,
     /// The keys it presses by itself.
     keys: desktop::OwnKeys,
+    /// The layout a playback moves to positions on; `None` when it moves
+    /// by relative motion only, or clicks.
+    positions: Option<Layout>,
     run: RunFuture<B>,
     stop: Option<oneshot::Sender<()>>,
     shutdown: Option<oneshot::Sender<()>>,
@@ -302,6 +315,7 @@ enum Wake<B: InputBackend> {
     Opened(Result<Input<B>, InputError>),
     Hotkey(HotkeyEvent),
     Deadline,
+    RecordingFull,
 }
 
 /// The daemon's controller. Build it with [`Controller::new`] and drive it
@@ -453,6 +467,7 @@ impl<P: Platform> Controller<P> {
             state,
             hotkeys,
             opening,
+            recording,
             ..
         } = self;
         tokio::select! {
@@ -462,6 +477,7 @@ impl<P: Platform> Controller<P> {
             wake = run_wake(state) => wake,
             opened = open_end(opening) => Wake::Opened(opened),
             () = sleep_until_some(deadline) => Wake::Deadline,
+            () = recording.filled() => Wake::RecordingFull,
             never = hotkeys::drive(&mut hotkeys.reader) => match never {},
         }
     }
@@ -496,6 +512,7 @@ impl<P: Platform> Controller<P> {
             Wake::Opened(opened) => self.opened(opened),
             Wake::Hotkey(event) => self.hotkey(event),
             Wake::Deadline => self.deadline(),
+            Wake::RecordingFull => self.recording_full(),
         }
         true
     }
@@ -518,6 +535,7 @@ impl<P: Platform> Controller<P> {
                 self.session(Some(Blocked::Sleeping));
                 self.sleep_notice = Some(notice);
             }
+            Message::LayoutChanged => self.layout_changed(),
             Message::Quit => return false,
         }
         true
@@ -778,23 +796,26 @@ impl<P: Platform> Controller<P> {
             stop: signal(stop_signal),
             shutdown: signal(shutdown_signal),
         };
+        let layout = self.platform.layout();
         self.notice = match &job {
             Job::Click => None,
-            Job::Play(playing) => playing.start_notice(),
+            Job::Play(playing) => playing.start_notice(layout.as_ref()),
         };
         let playing = job.playing().map(str::to_owned);
         let keys = job.own_keys(&self.config);
-        let run: RunFuture<P::Backend> = match job {
+        let (run, positions): (RunFuture<P::Backend>, _) = match job {
             Job::Click => {
                 let settings = self.config.clicker;
                 let rng = self.rng.fork();
-                Box::pin(async move { run(input, &settings, rng, signals).await })
+                let run = Box::pin(async move { run(input, &settings, rng, signals).await });
+                (run, None)
             }
-            Job::Play(playing) => playing.run(input, signals),
+            Job::Play(playing) => playing.run(input, layout.as_ref(), signals),
         };
         self.state = State::Running(Running {
             playing,
             keys,
+            positions,
             run,
             stop: Some(stop),
             shutdown: Some(shutdown),

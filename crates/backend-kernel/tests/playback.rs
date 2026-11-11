@@ -33,7 +33,7 @@ use auto_clicker_backend_kernel::{
 use auto_clicker_core::clicker::Repeat;
 use auto_clicker_core::hotkeys::{Binding, Bindings, HotkeyEvent, HotkeyStatus};
 use auto_clicker_core::input::{AbsolutePosition, Input, Key};
-use auto_clicker_core::playback::{Playback, PlaybackSettings, Speed, play};
+use auto_clicker_core::playback::{Motion, Playback, PlaybackSettings, Speed, play};
 use auto_clicker_core::recording::{
     Change, Created, Ending, Event, Recorder, Recording, RecordingSlot, recordable,
 };
@@ -155,7 +155,7 @@ async fn play_through(input: Input<KernelBackend>, playback: &Playback) -> Input
         stop: pending(),
         shutdown: pending(),
     };
-    let end = play(input, playback, signals).await;
+    let end = play(input, playback, &Motion::Relative, signals).await;
     assert!(
         matches!(end.result, Ok(Ended::Finished)),
         "{:?}",

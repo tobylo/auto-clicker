@@ -107,12 +107,14 @@ fn with_events(events: &str) -> String {
 #[test]
 fn unknown_versions_are_refused_whatever_else_the_file_holds() {
     for (text, version) in [
-        (r#"{"version":2,"anything":[1,2]}"#, 2),
+        (r#"{"version":3,"anything":[1,2]}"#, 3),
         (&sample_text().replace("\"version\":1", "\"version\":0"), 0),
     ] {
         assert_eq!(
             refused(text),
-            format!("the file is a version {version} recording; this program reads version 1")
+            format!(
+                "the file is a version {version} recording; this program reads versions 1 and 2"
+            )
         );
     }
 }
@@ -247,3 +249,5 @@ fn debug_output_leaves_the_events_out() {
     assert!(shown.contains("events: 6"), "{shown}");
     assert!(!shown.contains("Key") && !shown.contains("17"), "{shown}");
 }
+
+pub(crate) mod positions;

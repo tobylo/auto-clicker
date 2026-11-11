@@ -15,7 +15,9 @@ use super::store::{held_path, open_folder};
 use super::{InvalidRecording, Recording};
 
 /// The largest recording file that is read. An hour of fast mouse movement
-/// is under 100 MiB; anything larger is not a recording this program made.
+/// is under 110 MB, and about 245 MB with a position each millisecond; the
+/// recorder stops a recording before its file would grow past this, so
+/// anything larger is not a recording this program made.
 pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The name of a recording's file, in the one form this program writes:
