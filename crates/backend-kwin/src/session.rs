@@ -3,8 +3,9 @@
 //!
 //! Loading a script is: unload its plugin name, remove that script's files,
 //! write a new file, load it and start it. An unload that fails ends the load
-//! there (KWin refuses a name that is still loaded) and is tried again
-//! before the next load and at exit, so a failure is never forgotten. A
+//! there (KWin refuses a name that is still loaded). The watcher tries a
+//! failed layout load or position unload again after a back-off, and every
+//! load and the exit unload first, so a failure is never forgotten. A
 //! script's files stay until it is unloaded, and the start sweeps any a
 //! crash left.
 
