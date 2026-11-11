@@ -647,3 +647,23 @@ fn reports_delivered_after_two_wheel_turns_keep_both_turns_apart() {
         [(2_000, at(1, 0)), (2_100, at(2, 0)), (2_200, at(3, 0))]
     );
 }
+
+#[test]
+fn a_report_delivered_after_a_click_it_came_before_keeps_the_first_after_the_click() {
+    let mut recorder = positioned();
+    recorder.motion(t(0), 1, 0);
+    recorder.key(MOUSE, KeyInput::press(button_code(LEFT)), t(2_000));
+    // Stamped before the press, fed after it.
+    report(&mut recorder, 1_900, 1, 0);
+    report(&mut recorder, 2_100, 2, 0);
+    report(&mut recorder, 2_200, 3, 0);
+    recorder.key(MOUSE, KeyInput::release(button_code(LEFT)), t(9_000));
+    let positions: Vec<_> = events_at(recorder, t(10_000))
+        .into_iter()
+        .filter(|(_, change)| matches!(change, Change::Position(_)))
+        .collect();
+    assert_eq!(
+        positions,
+        [(1_900, at(1, 0)), (2_100, at(2, 0)), (2_200, at(3, 0))]
+    );
+}
