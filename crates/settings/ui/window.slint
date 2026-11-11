@@ -116,6 +116,7 @@ export component SettingsWindow inherits Window {
                         Row {
                             label: @tr("Action");
                             ComboBox {
+                                enabled: !root.waiting;
                                 model: [@tr("Click"), @tr("Double click"), @tr("Hold the button"), @tr("Repeat a key"), @tr("Hold a key")];
                                 current-index <=> root.mode;
                             }
@@ -123,10 +124,12 @@ export component SettingsWindow inherits Window {
                         Row {
                             label: @tr("Interval");
                             LineEdit {
+                                enabled: !root.waiting;
                                 text <=> root.interval-text;
                                 input-type: decimal;
                             }
                             ComboBox {
+                                enabled: !root.waiting;
                                 model: [@tr("ms between actions"), @tr("actions a second")];
                                 current-index <=> root.interval-unit;
                             }
@@ -134,6 +137,7 @@ export component SettingsWindow inherits Window {
                         Row {
                             label: @tr("Jitter, percent");
                             SpinBox {
+                                enabled: !root.waiting;
                                 minimum: 0;
                                 maximum: 50;
                                 value <=> root.jitter;
@@ -142,6 +146,7 @@ export component SettingsWindow inherits Window {
                         Row {
                             label: @tr("Button");
                             ComboBox {
+                                enabled: !root.waiting;
                                 model: [@tr("Left"), @tr("Right"), @tr("Middle"), @tr("Back"), @tr("Forward")];
                                 current-index <=> root.button;
                             }
@@ -149,6 +154,7 @@ export component SettingsWindow inherits Window {
                         Row {
                             label: @tr("Key: a name such as space, or a code such as #113");
                             LineEdit {
+                                enabled: !root.waiting;
                                 text <=> root.key-text;
                             }
                             if !root.desktop-hotkeys: Button {
@@ -160,6 +166,7 @@ export component SettingsWindow inherits Window {
                         Row {
                             label: @tr("Where");
                             ComboBox {
+                                enabled: !root.waiting;
                                 model: [@tr("At the pointer"), @tr("At a fixed point")];
                                 current-index: root.position-fixed ? 1 : 0;
                                 selected => { root.position-fixed = self.current-index == 1; }
@@ -168,11 +175,13 @@ export component SettingsWindow inherits Window {
                         if root.position-fixed: Row {
                             label: @tr("Point, 0 to 65535 across all screens");
                             SpinBox {
+                                enabled: !root.waiting;
                                 minimum: 0;
                                 maximum: 65535;
                                 value <=> root.position-x;
                             }
                             SpinBox {
+                                enabled: !root.waiting;
                                 minimum: 0;
                                 maximum: 65535;
                                 value <=> root.position-y;
@@ -181,11 +190,12 @@ export component SettingsWindow inherits Window {
                         Row {
                             label: @tr("Repeat");
                             CheckBox {
+                                enabled: !root.waiting;
                                 text: @tr("Until stopped");
                                 checked <=> root.repeat-forever;
                             }
                             LineEdit {
-                                enabled: !root.repeat-forever;
+                                enabled: !root.repeat-forever && !root.waiting;
                                 input-type: number;
                                 text <=> root.repeat-text;
                             }
@@ -193,6 +203,7 @@ export component SettingsWindow inherits Window {
                         Row {
                             label: @tr("Delay before a start from the tray, seconds");
                             SpinBox {
+                                enabled: !root.waiting;
                                 minimum: 0;
                                 maximum: 3600;
                                 value <=> root.tray-delay;
@@ -236,6 +247,7 @@ export component SettingsWindow inherits Window {
                     Row {
                         label: @tr("Hotkeys come from");
                         ComboBox {
+                            enabled: !root.waiting;
                             model: [@tr("The keyboards (needs the input group)"), @tr("Plasma's shortcuts")];
                             current-index <=> root.hotkeys-route;
                         }
@@ -243,6 +255,7 @@ export component SettingsWindow inherits Window {
                     Row {
                         label: @tr("Clicks and keys go through");
                         ComboBox {
+                            enabled: !root.waiting;
                             model: [@tr("/dev/uinput"), @tr("Plasma's remote input")];
                             current-index <=> root.output-route;
                         }
@@ -262,6 +275,7 @@ export component SettingsWindow inherits Window {
                     Row {
                         label: @tr("Speed, 0.25 to 4 times as recorded");
                         LineEdit {
+                            enabled: !root.waiting;
                             text <=> root.speed-text;
                             input-type: decimal;
                         }
@@ -269,11 +283,12 @@ export component SettingsWindow inherits Window {
                     Row {
                         label: @tr("Plays");
                         CheckBox {
+                            enabled: !root.waiting;
                             text: @tr("Until stopped");
                             checked <=> root.plays-forever;
                         }
                         LineEdit {
-                            enabled: !root.plays-forever;
+                            enabled: !root.plays-forever && !root.waiting;
                             input-type: number;
                             text <=> root.plays-text;
                         }

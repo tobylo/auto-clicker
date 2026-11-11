@@ -87,22 +87,18 @@ pub struct State {
     next_id: u64,
     asked: Option<(u64, Asked)>,
     question: Option<(Question, Agreed)>,
-    /// The settings the window last sent in a save: when the daemon sends
-    /// them back as saved, the fields already show them, and any edit made
-    /// since stays.
-    submitted: Option<Draft>,
 }
 
 impl State {
     /// Takes a view from the daemon.
     pub fn view(&mut self, view: &WindowView) -> Shown {
         let mut shown = Shown::default();
+        // The fields are not edited while a request waits on its answer,
+        // so settings saved by it can fill them, as the daemon has them.
         if self.saved.as_ref() != Some(&view.settings) {
             self.saved = Some(view.settings.clone());
-            if self.submitted.as_ref() != Some(&view.settings) {
-                self.hotkeys = Some(view.settings.hotkeys.clone());
-                shown.fields = Some(view.settings.clone());
-            }
+            self.hotkeys = Some(view.settings.hotkeys.clone());
+            shown.fields = Some(view.settings.clone());
         }
         let answered = view.answer.as_ref().and_then(|answer| {
             let (id, _) = self.asked.as_ref()?;
@@ -161,11 +157,6 @@ impl State {
     /// Whether the window waits on an answer.
     pub fn waiting(&self) -> bool {
         self.asked.is_some()
-    }
-
-    /// Whether the window waits on the answer to a save.
-    pub fn saving(&self) -> bool {
-        matches!(self.asked, Some((_, Asked::Save(_))))
     }
 
     /// The hotkeys to show: as captured, before a save.
@@ -246,7 +237,6 @@ impl State {
     ) -> Option<Result<Request, Unreadable>> {
         let draft = fields.to_draft(self.hotkeys.as_ref()?);
         Some(draft.map(|settings| {
-            self.submitted = Some(settings.clone());
             let ask = Ask::Save {
                 settings,
                 replace: agreed.replace,
