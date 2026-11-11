@@ -9,6 +9,9 @@
 [graph]
 # Optional dependencies are checked too, whether or not a feature enables them.
 all-features = true
+# The program runs on Linux only; crates that other systems alone pull in
+# (Windows clipboard and window crates, say) never reach a build.
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 
 [advisories]
 # Vulnerabilities always fail, whichever crate in the graph they are in;
@@ -39,6 +42,19 @@ exceptions = [
     # The tray's StatusNotifierItem client. The Unlicense dedicates the code to
     # the public domain, with no conditions at all.
     { crate = "ksni", allow = ["Unlicense"] },
+    # The settings window's toolkit, used under the Slint Royalty-free
+    # License 2.0 (a desktop application, which shows AboutSlint), never
+    # the GPL that is the other choice it offers.
+    { crate = "slint", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "slint-build", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "slint-macros", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-backend-selector", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-backend-winit", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-common", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-compiler", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-core", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-core-macros", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-renderer-femtovg", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
 ]
 # Crates used only by tests are built on the machine too.
 include-dev = true

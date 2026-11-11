@@ -7,6 +7,7 @@ pub mod controller;
 pub mod fs;
 pub mod hotkeys;
 pub mod input;
+pub mod locale;
 pub mod playback;
 pub mod recording;
 pub mod run;

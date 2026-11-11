@@ -2,8 +2,8 @@
 //! socket the daemon gives the window: one JSON object per line, each at
 //! most [`MAX_LINE`] bytes.
 //!
-//! The window sends [`Request`]s. The daemon sends a [`WindowView`] at the
-//! start and after every change: everything the window shows, including the
+//! The window sends [`Request`]s. The daemon sends [`Update`]s: a
+//! [`WindowView`] at the start and after every change, everything the window shows, including the
 //! answer to its last request. Answers are part of the view rather than
 //! messages of their own, so a newer view never hides one, and the daemon
 //! only ever has the latest view to send.
@@ -32,6 +32,17 @@ pub const MAX_TEXT: usize = 500;
 
 /// The most problems a view lists.
 pub const MAX_PROBLEMS: usize = 8;
+
+/// What the daemon sends the window.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Update {
+    /// Everything the window shows now.
+    View(Box<WindowView>),
+    /// Settings was chosen in the tray again: come to the front, if the
+    /// desktop lets you.
+    Raise,
+}
 
 /// What the window asks, with a number the answer carries. The window asks
 /// one thing at a time: it sends the next request once the view answers
