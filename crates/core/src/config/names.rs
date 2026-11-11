@@ -12,6 +12,7 @@ use crate::input::Button;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteName {
+    Auto,
     Kernel,
     Portal,
 }
@@ -19,6 +20,7 @@ pub enum RouteName {
 impl RouteName {
     pub fn word(self) -> &'static str {
         match self {
+            RouteName::Auto => "auto",
             RouteName::Kernel => "kernel",
             RouteName::Portal => "portal",
         }
@@ -28,6 +30,7 @@ impl RouteName {
 impl From<RouteName> for OutputRoute {
     fn from(name: RouteName) -> OutputRoute {
         match name {
+            RouteName::Auto => OutputRoute::Auto,
             RouteName::Kernel => OutputRoute::Kernel,
             RouteName::Portal => OutputRoute::Portal,
         }
@@ -37,6 +40,7 @@ impl From<RouteName> for OutputRoute {
 impl From<RouteName> for HotkeyRoute {
     fn from(name: RouteName) -> HotkeyRoute {
         match name {
+            RouteName::Auto => HotkeyRoute::Auto,
             RouteName::Kernel => HotkeyRoute::Kernel,
             RouteName::Portal => HotkeyRoute::Portal,
         }
@@ -46,6 +50,7 @@ impl From<RouteName> for HotkeyRoute {
 impl From<OutputRoute> for RouteName {
     fn from(route: OutputRoute) -> RouteName {
         match route {
+            OutputRoute::Auto => RouteName::Auto,
             OutputRoute::Kernel => RouteName::Kernel,
             OutputRoute::Portal => RouteName::Portal,
         }
@@ -55,6 +60,7 @@ impl From<OutputRoute> for RouteName {
 impl From<HotkeyRoute> for RouteName {
     fn from(route: HotkeyRoute) -> RouteName {
         match route {
+            HotkeyRoute::Auto => RouteName::Auto,
             HotkeyRoute::Kernel => RouteName::Kernel,
             HotkeyRoute::Portal => RouteName::Portal,
         }

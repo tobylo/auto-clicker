@@ -17,7 +17,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Draft, InputDraft, Refusal, Stale};
-use crate::controller::{Activity, Hotkey, NoRecording};
+use crate::controller::{Activity, Hotkey, NoRecording, Routes};
 use crate::hotkeys::Action;
 
 /// The longest line either side sends or reads, newline included.
@@ -63,9 +63,11 @@ pub enum Ask {
 pub struct WindowView {
     /// The settings in the config file: what the daemon last read or saved.
     pub settings: Draft,
-    /// The routes the daemon runs on; a change to `[input]` applies from its
-    /// next start.
+    /// The routes the config gave the daemon at its start, `auto` included;
+    /// a change to `[input]` applies from its next start.
     pub running: InputDraft,
+    /// The routes the daemon picked from those at its start.
+    pub routes: Routes,
     pub activity: Activity,
     /// What each hotkey is now, as the tray names it.
     pub hotkeys: ShownHotkeys,
