@@ -115,6 +115,16 @@ fn version_1_refuses_a_layout_and_positions() {
         1,
     );
     assert_eq!(refused(&with_layout), "a version 1 recording has no layout");
+    let null = sample_text().replacen(
+        r#""duration_us":3000000"#,
+        r#""duration_us":3000000,"layout":null"#,
+        1,
+    );
+    assert!(
+        refused(&null).starts_with("the file does not have a recording's layout"),
+        "{}",
+        refused(&null)
+    );
     assert_eq!(
         refused(&with_events(r#"[0,"move",1,0],[10,"at",1,1]"#)),
         "events[1] is a position, which a version 1 recording cannot hold"

@@ -270,6 +270,11 @@ impl Recorder {
 
     /// Wheel notches at `time`; positive scrolls up.
     pub fn wheel(&mut self, time: Duration, notches: i32) {
+        if let Some(at) = self.offset(time)
+            && notches != 0
+        {
+            self.timeline.event_read(at);
+        }
         self.add(
             time,
             Bucket {

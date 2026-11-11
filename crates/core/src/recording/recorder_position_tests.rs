@@ -436,3 +436,26 @@ fn random_input_and_positions_always_make_a_valid_recording() {
         );
     }
 }
+
+#[test]
+fn a_wheel_turn_ends_the_millisecond_when_it_is_read() {
+    let mut recorder = positioned();
+    recorder.motion(t(0), 1, 0);
+    report(&mut recorder, 2_000, 1, 0);
+    // The turn waits in the motion bucket; the report after it must not
+    // replace the position before it.
+    recorder.wheel(t(2_100), 1);
+    report(&mut recorder, 2_300, 2, 0);
+    report(&mut recorder, 2_400, 3, 0);
+    report(&mut recorder, 2_500, 4, 0);
+    assert_eq!(
+        events_at(recorder, t(9_000)),
+        [
+            (0, moved(1, 0)),
+            (2_000, at(1, 0)),
+            (2_100, wheel(1)),
+            (2_300, at(2, 0)),
+            (2_500, at(4, 0)),
+        ]
+    );
+}

@@ -108,16 +108,21 @@ impl Timeline {
         }
         self.insert(Event { at, change });
         self.last_input_at = at;
-        if matches!(
-            change,
-            Change::Press(_) | Change::Release(_) | Change::Wheel(_)
-        ) {
-            self.window = match self.window {
-                // The open position is later: it is the first after this.
-                Window::Open { at: open, .. } if open > at => Window::Closed,
-                _ => Window::AfterEvent,
-            };
+        if matches!(change, Change::Press(_) | Change::Release(_)) {
+            self.event_read(at);
         }
+    }
+
+    /// A press, release or wheel turn at `at` was read: it ends the
+    /// position millisecond. A wheel turn says so when it is read, since it
+    /// is written only once its motion bucket ends.
+    pub(super) fn event_read(&mut self, at: u64) {
+        let at = at.max(self.last_input_at);
+        self.window = match self.window {
+            // The open position is later: it is the first after this.
+            Window::Open { at: open, .. } if open > at => Window::Closed,
+            _ => Window::AfterEvent,
+        };
     }
 
     /// Writes a position stamped `at`.
