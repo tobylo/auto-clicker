@@ -17,20 +17,29 @@ const DESKTOP: &str = "org.freedesktop.portal.Desktop";
 const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
 
 /// Whether `err` is an answer that the call cannot succeed, rather than no
-/// answer: the bus or the service replied with an error of its own.
+/// answer: the bus or the service replied with an error of its own. An
+/// error reply zbus has no name for comes wrapped, as a method error.
+/// Starting the service can fail for want of resources, or because it
+/// crashed while starting: those may pass, as no answer does.
 pub(crate) fn refused(err: &Fdo) -> bool {
-    !matches!(
-        err,
+    match err {
+        Fdo::ZBus(err) => matches!(err, zbus::Error::MethodError(..)),
         Fdo::NoReply(_)
-            | Fdo::Timeout(_)
-            | Fdo::TimedOut(_)
-            | Fdo::Disconnected(_)
-            | Fdo::NoServer(_)
-            | Fdo::IOError(_)
-            | Fdo::NoMemory(_)
-            | Fdo::LimitsExceeded(_)
-            | Fdo::ZBus(_)
-    )
+        | Fdo::Timeout(_)
+        | Fdo::TimedOut(_)
+        | Fdo::Disconnected(_)
+        | Fdo::NoServer(_)
+        | Fdo::IOError(_)
+        | Fdo::NoMemory(_)
+        | Fdo::LimitsExceeded(_)
+        | Fdo::SpawnForkFailed(_)
+        | Fdo::SpawnChildExited(_)
+        | Fdo::SpawnChildSignaled(_)
+        | Fdo::SpawnFailed(_)
+        | Fdo::SpawnFailedToSetup(_)
+        | Fdo::SpawnNoMemory(_) => false,
+        _ => true,
+    }
 }
 
 /// `err` from a call named `what`, as the user sees it: unavailable when
@@ -73,6 +82,19 @@ pub(crate) async fn version(
 mod tests {
     use super::*;
 
+    /// An error reply named `name`, which zbus has no variant for.
+    fn error_reply(name: &str) -> zbus::Error {
+        let call = zbus::Message::method_call("/org/freedesktop/portal/desktop", "Register")
+            .unwrap()
+            .build(&())
+            .unwrap();
+        let reply = zbus::Message::error(&call.header(), name)
+            .unwrap()
+            .build(&("no",))
+            .unwrap();
+        zbus::Error::from(reply)
+    }
+
     #[test]
     fn a_reply_with_an_error_is_a_refusal_and_no_reply_is_not() {
         let said_no = [
@@ -81,6 +103,8 @@ mod tests {
             Fdo::UnknownMethod("Register".to_owned()),
             Fdo::Failed("App info not found".to_owned()),
             Fdo::AccessDenied("no".to_owned()),
+            Fdo::SpawnServiceNotFound("no portal".to_owned()),
+            Fdo::ZBus(error_reply("org.freedesktop.portal.Error.NotAllowed")),
         ];
         for err in said_no {
             assert!(refused(&err), "{err}");
@@ -99,6 +123,12 @@ mod tests {
             Fdo::NoMemory("bus".to_owned()),
             Fdo::LimitsExceeded("bus".to_owned()),
             Fdo::ZBus(zbus::Error::InterfaceNotFound),
+            Fdo::SpawnForkFailed("busy".to_owned()),
+            Fdo::SpawnChildExited("crashed".to_owned()),
+            Fdo::SpawnChildSignaled("crashed".to_owned()),
+            Fdo::SpawnFailed("busy".to_owned()),
+            Fdo::SpawnFailedToSetup("busy".to_owned()),
+            Fdo::SpawnNoMemory("busy".to_owned()),
         ];
         for err in no_answer {
             assert!(!refused(&err), "{err}");

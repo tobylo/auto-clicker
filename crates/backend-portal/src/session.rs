@@ -124,7 +124,8 @@ impl Portal {
         .await?
         .map_err(|err| portal_error("RemoteDesktop", err))?;
         // Read again without ashpd, which takes a failed read for version 1.
-        check_version(version(&self.connection, REMOTE_DESKTOP).await?)?;
+        let found = version(&self.connection, REMOTE_DESKTOP).await?;
+        usable(found, proxy.version())?;
         Ok(proxy)
     }
 
@@ -271,6 +272,21 @@ fn check_version(version: u32) -> Result<(), InputError> {
     }
 }
 
+/// Whether a proxy that read the version as `cached` serves a portal whose
+/// version is `found`. ashpd checks its own reading before each versioned
+/// call, so a proxy that failed to read it would refuse `ConnectToEIS`
+/// after the session had started: such a proxy is a failed call, and the
+/// next start makes a new one.
+fn usable(found: u32, cached: u32) -> Result<(), InputError> {
+    check_version(found)?;
+    if cached < MIN_VERSION {
+        return Err(InputError::Portal(
+            "RemoteDesktop: its version could not be read; try again".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Why `Registry.Register` failed: the portal's answer that it cannot
 /// register the program, most often for want of the desktop file, or a
 /// call that got no answer and may work later.
@@ -397,6 +413,20 @@ mod tests {
     fn a_cancelled_dialog_is_not_allowed() {
         let err = portal_error("Start", ashpd::Error::Response(ResponseError::Cancelled));
         assert!(matches!(err, InputError::NotAllowed), "{err:?}");
+    }
+
+    #[test]
+    fn a_proxy_that_misread_the_version_is_a_failed_call() {
+        assert!(usable(2, 2).is_ok());
+        assert!(matches!(
+            usable(1, 1),
+            Err(InputError::PortalUnavailable(_))
+        ));
+        assert!(matches!(
+            usable(1, 2),
+            Err(InputError::PortalUnavailable(_))
+        ));
+        assert!(matches!(usable(2, 1), Err(InputError::Portal(_))));
     }
 
     #[test]
