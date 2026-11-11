@@ -215,9 +215,17 @@ async fn a_session_ends_when_closed_unreadable_or_cut_off_and_says_which() {
     .await;
 }
 
-fn configure(token: Option<&str>) -> ReaderCommand {
+fn configure(operation: u64, token: Option<&str>) -> ReaderCommand {
     ReaderCommand::ConfigureShortcuts {
+        operation,
         activation_token: token.map(str::to_owned),
+    }
+}
+
+fn configured(operation: u64, result: Result<(), &str>) -> HotkeyEvent {
+    HotkeyEvent::Configured {
+        operation,
+        result: result.map_err(str::to_owned),
     }
 }
 
@@ -225,21 +233,42 @@ fn configure(token: Option<&str>) -> ReaderCommand {
 async fn a_bound_session_opens_the_desktops_settings_and_says_how_it_went() {
     local(async {
         let s = Served::start().await;
-        s.commands.send(configure(Some("token-1"))).unwrap();
+        s.commands.send(configure(1, Some("token-1"))).unwrap();
         settle().await;
-        assert_eq!(s.take(), [HotkeyEvent::Configured(Ok(()))]);
+        assert_eq!(s.take(), [configured(1, Ok(()))]);
         *s.configured.borrow_mut() = Err("refused".to_owned());
-        s.commands.send(configure(None)).unwrap();
+        s.commands.send(configure(2, None)).unwrap();
         settle().await;
-        assert_eq!(
-            s.take(),
-            [HotkeyEvent::Configured(Err("refused".to_owned()))]
-        );
+        assert_eq!(s.take(), [configured(2, Err("refused"))]);
         let tokens = s.tokens.borrow().clone();
         assert_eq!(tokens, [Some("token-1".to_owned()), None]);
         // Hotkeys go on as before.
         s.press(CLICKING).await;
         assert_eq!(s.take(), [fired(Action::ToggleClicking)]);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn hotkeys_go_on_while_the_desktops_settings_are_being_opened() {
+    local(async {
+        let s = Served::start().await;
+        s.stalls.set(true);
+        s.commands.send(configure(1, None)).unwrap();
+        settle().await;
+        s.press(CLICKING).await;
+        assert_eq!(s.take(), [fired(Action::ToggleClicking)]);
+        // One at a time: a second request is answered at once.
+        s.commands.send(configure(2, None)).unwrap();
+        settle().await;
+        assert_eq!(s.take(), [configured(2, Err(STILL_OPENING))]);
+        // The call ends with the session.
+        s.hear(Signal::Closed).await;
+        let said = tokio::time::timeout(Duration::from_millis(1), s.end)
+            .await
+            .expect("the session did not end at once")
+            .unwrap();
+        assert!(said.contains("closed"), "{said}");
     })
     .await;
 }

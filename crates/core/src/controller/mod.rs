@@ -594,7 +594,7 @@ impl<P: Platform> Controller<P> {
             HotkeyEvent::Status(status) => self.hotkey_status_changed(status),
             HotkeyEvent::Triggers(triggers) => self.triggers_changed(triggers),
             HotkeyEvent::Captured(captured) => self.captured(captured),
-            HotkeyEvent::Configured(result) => self.configured(result),
+            HotkeyEvent::Configured { operation, result } => self.configured(operation, result),
         }
     }
 
@@ -796,8 +796,8 @@ impl<P: Platform> Controller<P> {
                     self.begin_run(job);
                 }
             }
-            // Its deadline is the only time a release wait wakes by itself.
-            State::Release(..) => self.release_expired(),
+            // The settings window's deadlines wake the controller too.
+            State::Release(deadline, _) if now >= deadline => self.release_expired(),
             State::RecordCountdown(deadline) if now >= deadline => self.begin_recording(None),
             State::Recording(limit) if now >= limit => self.recording_limit_reached(),
             // A second of a countdown passed; the view shows it.
