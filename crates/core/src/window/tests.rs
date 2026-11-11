@@ -144,13 +144,28 @@ fn a_line_of_exactly_the_limit_is_sent_and_read_and_one_more_byte_is_not() {
 fn long_messages_are_cut_so_every_view_fits_a_line() {
     // Control characters are the longest to escape: six bytes each.
     let worst = "\u{1}".repeat(MAX_LINE);
+    let desktop = || Hotkey::Desktop(Some(worst.clone()));
     let mut widest = view();
-    widest.problems = vec![bounded(&worst); MAX_PROBLEMS];
+    widest.hotkeys = ShownHotkeys {
+        toggle_clicking: desktop(),
+        toggle_recording: desktop(),
+        toggle_playback: desktop(),
+    };
+    widest.problems = vec![worst.clone(); MAX_PROBLEMS + 1];
     widest.answer = Some(Answer {
         id: u64::MAX,
-        outcome: Outcome::Refused(Refusal::new(Field::Key, worst.clone())).bounded(),
+        outcome: Outcome::Refused(Refusal::new(Field::Key, worst.clone())),
     });
-    assert!(line(&widest).is_ok());
+    for why in [
+        Unavailable::ReadFailed(worst.clone()),
+        Unavailable::WatchFailed(worst.clone()),
+        Unavailable::Desktop(worst.clone()),
+    ] {
+        widest.no_recording = Some(NoRecording::Keyboards(why));
+        let shown = widest.clone().bounded();
+        assert_eq!(shown.problems.len(), MAX_PROBLEMS);
+        assert!(line(&shown).is_ok());
+    }
     assert_eq!(bounded(&worst).chars().count(), MAX_TEXT + 1);
     assert_eq!(bounded("short"), "short");
     for outcome in [

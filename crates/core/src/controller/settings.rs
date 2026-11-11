@@ -22,9 +22,7 @@ use super::capture::Pending;
 use super::{Controller, InputReader, Platform, State};
 use crate::config::{Config, ConfigFile, Draft, Field, Refusal, SaveError, Saved, check};
 use crate::hotkeys::{Action, Bindings, Capture, Modifiers};
-use crate::window::{
-    Answer, Ask, Confirm, MAX_PROBLEMS, Outcome, Request, ShownHotkeys, WindowView, bounded,
-};
+use crate::window::{Answer, Ask, Confirm, Outcome, Request, ShownHotkeys, WindowView};
 
 /// A settings window's link to the controller. The controller drops it to
 /// end the window's session; the window's side ends it by closing
@@ -277,14 +275,10 @@ impl<P: Platform> Controller<P> {
                 toggle_playback: self.shown_hotkey(Action::TogglePlayback),
             },
             no_recording: self.no_recording(),
-            problems: self
-                .problems()
-                .iter()
-                .take(MAX_PROBLEMS)
-                .map(|problem| bounded(problem))
-                .collect(),
+            problems: self.problems(),
             answer: self.settings.answer.clone(),
-        };
+        }
+        .bounded();
         window.view.send_if_modified(|shown| {
             let changed = shown.as_ref() != Some(&view);
             if changed {
