@@ -144,3 +144,14 @@ fn a_file_in_place_but_not_flushed_counts_as_saved_and_says_so() {
         Ok(Saved::Synced)
     ));
 }
+
+#[test]
+fn the_directorys_entry_is_flushed_on_every_save_not_only_the_first() {
+    let (dir, path, mut file) = loaded_with(Some("version = 1\n"));
+    // The config directory exists already; its parent cannot be opened to
+    // flush the directory's entry, as after a first save that failed to.
+    let result = with_mode(dir.path(), 0o300, || file.save(&changed(), false));
+    let Some(result) = result else { return };
+    assert!(matches!(result, Ok(Saved::Unsynced(_))), "{result:?}");
+    assert_eq!(Config::parse(&read(&path)).ok(), Some(changed()));
+}

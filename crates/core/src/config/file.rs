@@ -92,7 +92,7 @@ impl ConfigFile {
         self.seen = Seen::Text(text.into_bytes());
         Ok(match written {
             Ok(()) => Saved::Synced,
-            Err(unsynced) => Saved::Unsynced(unsynced.into_error()),
+            Err(unflushed) => Saved::Unsynced(unflushed),
         })
     }
 
@@ -130,26 +130,38 @@ fn write_error(err: io::Error, place: Place) -> SaveError {
     }
 }
 
-/// Writes the file, creating its directory first if it is missing.
-fn write(path: &Path, contents: &[u8], place: Place) -> io::Result<Result<(), Unsynced>> {
-    if let Some(dir) = path.parent() {
-        create_dir_durably(dir)?;
-    }
-    atomic_save(path, contents, place)
+/// Writes the file, creating its directory first if it is missing. The
+/// outer error: nothing was written. The inner one: the file is in place,
+/// but flushing it or a directory entry on its way failed.
+fn write(path: &Path, contents: &[u8], place: Place) -> io::Result<Result<(), io::Error>> {
+    let dir = directory_of(path);
+    let created: Vec<PathBuf> = dir
+        .ancestors()
+        .take_while(|dir| !dir.as_os_str().is_empty() && !dir.exists())
+        .map(Path::to_path_buf)
+        .collect();
+    std::fs::create_dir_all(dir)?;
+    let placed = atomic_save(path, contents, place)?.map_err(Unsynced::into_error);
+    Ok(placed.and_then(|()| flush_entries(dir, &created)))
 }
 
-/// Creates `dir` and any missing parents, and flushes each new directory's
-/// entry in its parent, so a power loss cannot take the directory and the
-/// file in it after a save said it was on disk.
-fn create_dir_durably(dir: &Path) -> io::Result<()> {
-    let missing: Vec<&Path> = dir.ancestors().take_while(|dir| !dir.exists()).collect();
-    std::fs::create_dir_all(dir)?;
-    for created in missing.iter().rev() {
-        if let Some(parent) = created.parent() {
-            std::fs::File::open(parent)?.sync_all()?;
-        }
+/// Flushes the entry of `dir`, and of each directory this save created, in
+/// its parent: every save, since an earlier save may have created `dir` and
+/// failed to flush it. A power loss then cannot take the file's directory.
+fn flush_entries(dir: &Path, created: &[PathBuf]) -> io::Result<()> {
+    let entries = std::iter::once(dir).chain(created.iter().map(PathBuf::as_path));
+    for entry in entries {
+        std::fs::File::open(directory_of(entry))?.sync_all()?;
     }
     Ok(())
+}
+
+/// The directory `path` is in: "." for a bare name.
+fn directory_of(path: &Path) -> &Path {
+    match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    }
 }
 
 #[cfg(test)]
@@ -167,6 +179,16 @@ mod tests {
         for (seen, replace, place) in cases {
             assert_eq!(placement(&seen, replace), place, "{seen:?} {replace}");
         }
+    }
+
+    #[test]
+    fn a_bare_directory_name_is_in_the_current_directory() {
+        assert_eq!(directory_of(Path::new("settings")), Path::new("."));
+        assert_eq!(
+            directory_of(Path::new("settings/config.toml")),
+            Path::new("settings")
+        );
+        assert_eq!(directory_of(Path::new("/config")), Path::new("/"));
     }
 
     #[test]
