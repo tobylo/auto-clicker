@@ -161,8 +161,11 @@ impl Timeline {
             self.window = Window::AfterEvent;
             return;
         }
-        let index = self.boundaries.partition_point(|&other| other <= at);
-        self.boundaries.insert(index, at);
+        // Turns at one time do what one would, so at most one waits per
+        // microsecond.
+        if let Err(index) = self.boundaries.binary_search(&at) {
+            self.boundaries.insert(index, at);
+        }
         self.settle(at.saturating_sub(SETTLE_US));
     }
 
@@ -273,10 +276,19 @@ impl Timeline {
         true
     }
 
-    /// Inserts a position after every event before its time, and before
-    /// the input events at its time, as [`Timeline::settle`] orders them.
+    /// Inserts a position among the events at its time: after the moves
+    /// it may cover and the positions placed before it, and before the
+    /// first press, release or wheel turn, as [`Timeline::settle`] orders
+    /// them.
     fn insert(&mut self, event: Event) {
-        let index = self.events.partition_point(|other| other.at < event.at);
+        let start = self.events.partition_point(|other| other.at < event.at);
+        let end = self.events.partition_point(|other| other.at <= event.at);
+        let boundary = self.events.get(start..end).and_then(|same| {
+            same.iter().position(|other| {
+                !matches!(other.change, Change::Move { .. } | Change::Position(_))
+            })
+        });
+        let index = boundary.map_or(end, |offset| start.saturating_add(offset));
         self.events.insert(index, event);
         self.positioned = true;
     }
@@ -297,6 +309,15 @@ mod tests {
         // Those at most 20 ms before the last one still wait.
         assert_eq!(timeline.boundaries.len(), 200);
         assert_eq!(timeline.boundaries.front(), Some(&(1_000_000 - SETTLE_US)));
+    }
+
+    #[test]
+    fn wheel_turns_at_one_time_wait_as_one() {
+        let mut timeline = Timeline::new(u64::MAX);
+        for _ in 0..1_000 {
+            timeline.event_read(1_000);
+        }
+        assert_eq!(timeline.boundaries, [1_000]);
     }
 
     #[test]
