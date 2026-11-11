@@ -81,7 +81,7 @@ The build refuses to run if the downloaded copy has been changed by hand (`git s
 Once installed and enabled, it starts at login and stays in the system tray (run `auto-clicker` to start it by hand). A left or right click on its icon opens the menu:
 
 - **Start clicking** counts down `tray_start_delay` seconds (5 by default), so you can switch to the game, then clicks. The icon's tooltip shows the seconds left. **Stop clicking** stops it, or cancels the countdown.
-- **Record** counts down the same way, then records what the mouse and keyboard do until **Stop recording**, and saves it. The icon turns red while recording.
+- **Record** counts down the same way, then records what the mouse and keyboard do until **Stop recording**, and saves it. The icon turns red while recording. Where recording cannot start (with `hotkeys = "portal"`, or when the keyboards cannot be read), Record is greyed out and its label says what it needs, such as `Record (needs the input group)`; the tooltip says how to fix it.
 - **Play** lists the ten newest recordings, newest first. Choosing one counts down the same way, then plays it; **Stop playing** stops it, or cancels the countdown (see [Playing a recording](#playing-a-recording)).
 - **Settings** comes in a later version.
 - **Quit** stops clicking and playback, lets go of everything it pressed, saves a recording in progress and exits.
@@ -164,7 +164,15 @@ repeat = 1                    # how many times it plays, or "until_stopped"
 - On a Swedish or Finnish keyboard, the letters, the digits, "comma" and "dot" match their labels. The other keys: "grave" is §, "minus" is +, "equal" is ´, "leftbrace" is Å, "rightbrace" is ¨, "semicolon" is Ö, "apostrophe" is Ä, "backslash" is ', "102nd" is < and "slash" is -.
 - A fixed point runs from 0 to 65535 across all screens together, left to right and top to bottom. Games that lock the pointer (Minecraft while playing) ignore it; use the cursor position there.
 - `output = "portal"` clicks and types without `/dev/uinput`, through the desktop's remote input portal (see [Clicking through the portal](#clicking-through-the-portal)). `kernel`, the default, uses `/dev/uinput`.
-- `hotkeys = "portal"` gets the hotkeys from Plasma's own shortcuts instead of reading the keyboards, so it works without the `input` group (see [Hotkeys through the portal](#hotkeys-through-the-portal)). `kernel`, the default, reads the keyboards. The two settings are independent: `output = "kernel"` with `hotkeys = "portal"` suits a user who may write to `/dev/uinput` but is not in the `input` group. Recording reads the keyboards and mice, so it needs `hotkeys = "kernel"`.
+- `hotkeys = "portal"` gets the hotkeys from Plasma's own shortcuts instead of reading the keyboards, so it works without the `input` group (see [Hotkeys through the portal](#hotkeys-through-the-portal)). `kernel`, the default, reads the keyboards. The two settings are independent: `output = "kernel"` with `hotkeys = "portal"` suits a user who may write to `/dev/uinput` but is not in the `input` group.
+- What each route supports:
+
+  | Feature | Set by | `kernel` (the default) | `portal` |
+  | --- | --- | --- | --- |
+  | Clicking and playback | `output` | Through `/dev/uinput`, with no prompt | Through Plasma's remote input; Plasma asks once |
+  | Hotkeys | `hotkeys` | Read from the keyboards, in every window; needs the `input` group; set in `[hotkeys]` | Plasma's own shortcuts, in every window; no `input` group; set in System Settings |
+  | Recording | `hotkeys` | Yes; needs the `input` group | No: nothing reads the keyboards and mice, so Record is greyed out and the tooltip says to switch to `kernel` |
+
 - A hotkey is any of Ctrl, Shift, Alt and Meta, then a key name from the list above, joined by `+`, in any letter case: "Ctrl+F6", "ctrl+shift+f9", "F13". It fires when the key is pressed while exactly those modifiers are held, left or right alike, on any keyboard. Two actions cannot share a hotkey, and with `hotkeys = "kernel"` no hotkey can use the key the clicker presses (with `hotkeys = "portal"`, Plasma's own hotkeys decide that).
 
 ## Clicking through the portal
@@ -177,7 +185,7 @@ The portal needs the package's `io.github.tobylo.AutoClicker.desktop`: Plasma ke
 
 ## Hotkeys
 
-With `hotkeys = "kernel"`, the default, hotkeys work in every window, fullscreen games included, because the program reads the keyboards directly. Mice are read only while recording, so the program sleeps while you play. That needs read access to `/dev/input`: the user must be in the `input` group (see [Install](#install)). When no keyboard can be read, the program keeps running and the tray says why.
+With `hotkeys = "kernel"`, the default, hotkeys work in every window, fullscreen games included, because the program reads the keyboards directly. Mice are read only while recording, so the program sleeps while you play. That needs read access to `/dev/input`: the user must be in the `input` group (see [Install](#install)). When no keyboard can be read, the program keeps running and the tray says why; without the `input` group, Record is greyed out too.
 
 The keyboards are only read, never taken over, so the game also gets the hotkey. The defaults are free in stock Plasma, and Minecraft does nothing on F6, F7 or F8; a hotkey Plasma also uses (Ctrl+F7 is its "Toggle Present Windows (Window class)") would do both things at once. In Minecraft, Ctrl is sprint and Shift is sneak: pressing Ctrl+Shift+F6 also does both for a moment. Pick a hotkey the game ignores if that gets in the way.
 
@@ -203,7 +211,7 @@ From then on Plasma owns the hotkeys, and `[hotkeys]` in the config has no furth
 - **A start from the hotkey begins 1 second after you let go.** Plasma reports the release when the first key comes up, usually the function key while Ctrl and Shift are still down, and never says when those follow. The pause keeps the first clicks from being Ctrl+Shift+clicks. Playback still starts 2 seconds after the press at the latest, as on the other route, so let go of its hotkey within a second.
 - **The clicker's key cannot be a hotkey's key.** Plasma cannot tell the program's key presses from yours, so `key_repeat` and `hold_key` do not start when their key is the key of any hotkey, whatever its modifiers, and the tooltip says so. They do not start either when the key is Ctrl, Shift, Alt or Meta (held by the program, it would turn your Ctrl+Shift+F6 into something else), or when a hotkey is not on a function key (F1 to F24): Plasma names other keys by the keyboard layout's labels, which the program cannot match against its own. Click modes always start.
 - **A recording that presses a hotkey's key is not played,** for the same reason: played back, it would set the hotkey off, and any hotkey stops playback. Nor is a recording with keys played while a hotkey is not on a function key. Recordings that hold Ctrl, Shift, Alt or Meta play; while one of those is held by the playback, your hotkey may not match, so stop from the tray then.
-- **Recording is not available.** Nothing reads the keyboards and mice on this route; the tray says so when you try. Use `hotkeys = "kernel"` to record.
+- **Recording is not available.** Nothing reads the keyboards and mice on this route, so the tray's Record item is greyed out and reads `Record (needs hotkeys = "kernel")`, and the tooltip says `Recording is unavailable with hotkeys = "portal": nothing reads the keyboards and mice. Set hotkeys = "kernel" under [input] in the config; that needs the input group.` The record shortcut stays in System Settings; pressing it records nothing, and the tooltip says why.
 - **If one of Plasma's portal services stops or restarts,** the program registers its shortcuts again at once, without a dialog. For one second after that, hotkeys do nothing: a key the program itself pressed meanwhile may have set one off. The same second follows when you move a hotkey onto a key a run is pressing, which stops the run. If that fails, the tooltip says hotkeys are unavailable, clicking goes on working from the tray, and the program tries again when a portal service next starts or stops. After five tries in a row that fail, it stops trying and the tooltip says to restart it. While hotkeys are unavailable, nothing can set one off, so the key modes start whatever their key is.
 - **If you decline the dialog,** hotkeys stay unavailable. Plasma does not ask a second time: restart the program and set the hotkeys in System Settings.
 
