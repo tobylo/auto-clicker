@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::read::read_config;
 use super::{Config, render};
-use crate::fs::atomic_write;
+use crate::fs::{Place, Unsynced, atomic_save};
 
 /// The config file and what the daemon last saw in it.
 #[derive(Debug)]
@@ -37,6 +37,16 @@ pub enum Stale {
     /// The file could not be used at start (the settings shown are the
     /// defaults), or cannot be read now.
     Unusable,
+}
+
+/// A save that wrote the file.
+#[derive(Debug)]
+pub enum Saved {
+    /// Written and flushed to disk.
+    Synced,
+    /// Written, but flushing its directory failed: the file holds the new
+    /// settings, which may not survive a power loss.
+    Unsynced(io::Error),
 }
 
 /// Why a save did not write.
@@ -68,16 +78,25 @@ impl ConfigFile {
 
     /// Writes `config` to the file, atomically. Unless `replace` is set, a
     /// file that changed since it was last read or written, or that could
-    /// not be used, is left as it is, and the error says which.
-    pub fn save(&mut self, config: &Config, replace: bool) -> Result<(), SaveError> {
+    /// not be used, is left as it is, and the error says which. A file
+    /// that was missing is created only where none appeared since.
+    pub fn save(&mut self, config: &Config, replace: bool) -> Result<Saved, SaveError> {
         let path = self.path.as_deref().ok_or(SaveError::NoPath)?;
         if !replace && let Some(stale) = self.stale(path) {
             return Err(SaveError::Stale(stale));
         }
+        let place = match self.seen {
+            Seen::Missing if !replace => Place::New,
+            _ => Place::Replace,
+        };
         let text = render(config);
-        write(path, text.as_bytes()).map_err(SaveError::Write)?;
+        let written = write(path, text.as_bytes(), place).map_err(|err| write_error(err, place))?;
+        // In place, flushed or not: the file holds this now.
         self.seen = Seen::Text(text.into_bytes());
-        Ok(())
+        Ok(match written {
+            Ok(()) => Saved::Synced,
+            Err(unsynced) => Saved::Unsynced(unsynced.into_error()),
+        })
     }
 
     /// Why the file is not as the daemon last saw it, if it is not.
@@ -95,10 +114,20 @@ impl ConfigFile {
     }
 }
 
+/// Why a write did not happen: a file appeared where none was may not be
+/// replaced without the user's word.
+fn write_error(err: io::Error, place: Place) -> SaveError {
+    if place == Place::New && err.kind() == io::ErrorKind::AlreadyExists {
+        SaveError::Stale(Stale::Changed)
+    } else {
+        SaveError::Write(err)
+    }
+}
+
 /// Writes the file, creating its directory first if it is missing.
-fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
+fn write(path: &Path, contents: &[u8], place: Place) -> io::Result<Result<(), Unsynced>> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    atomic_write(path, contents)
+    atomic_save(path, contents, place)
 }

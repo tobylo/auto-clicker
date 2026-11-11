@@ -88,3 +88,51 @@ fn lines_longer_than_the_limit_are_neither_read_nor_sent() {
     let err = parse::<Request>(padded.as_bytes()).unwrap_err();
     assert!(err.to_string().contains("longer than"), "{err}");
 }
+
+/// A view whose line, newline included, is `size` bytes long.
+fn view_of_size(size: usize) -> WindowView {
+    let mut sized = view();
+    sized.problems = vec![String::new()];
+    let bare = line(&sized).unwrap().len();
+    sized.problems = vec!["x".repeat(size - bare)];
+    sized
+}
+
+#[test]
+fn a_line_of_exactly_the_limit_is_sent_and_read_and_one_more_byte_is_not() {
+    let largest = view_of_size(MAX_LINE);
+    let sent = line(&largest).unwrap();
+    assert_eq!(sent.len(), MAX_LINE);
+    assert_eq!(parse::<WindowView>(&sent[..MAX_LINE - 1]).unwrap(), largest);
+    let over = view_of_size(MAX_LINE + 1);
+    assert!(line(&over).is_err());
+    // Valid JSON, refused for its length alone.
+    let body = serde_json::to_vec(&over).unwrap();
+    assert_eq!(body.len(), MAX_LINE);
+    assert!(parse::<WindowView>(&body).is_err());
+}
+
+#[test]
+fn long_messages_are_cut_so_every_view_fits_a_line() {
+    // Control characters are the longest to escape: six bytes each.
+    let worst = "\u{1}".repeat(MAX_LINE);
+    let mut widest = view();
+    widest.problems = vec![bounded(&worst); MAX_PROBLEMS];
+    widest.answer = Some(Answer {
+        id: u64::MAX,
+        outcome: Outcome::Refused(Refusal::new(Field::Key, worst.clone())).bounded(),
+    });
+    assert!(line(&widest).is_ok());
+    assert_eq!(bounded(&worst).chars().count(), MAX_TEXT + 1);
+    assert_eq!(bounded("short"), "short");
+    for outcome in [
+        Outcome::Failed(worst.clone()),
+        Outcome::SavedUnsynced(worst.clone()),
+    ] {
+        let answer = Answer {
+            id: 1,
+            outcome: outcome.bounded(),
+        };
+        assert!(line(&answer).unwrap().len() < MAX_TEXT * 7);
+    }
+}

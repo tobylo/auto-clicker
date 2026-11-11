@@ -2,11 +2,12 @@
 //! user's word.
 
 use std::fs;
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::*;
-use crate::test_support::TempDir;
+use crate::test_support::{TempDir, permissions_apply};
 
 fn changed() -> Config {
     Config {
@@ -31,7 +32,7 @@ fn read(path: &PathBuf) -> String {
     fs::read_to_string(path).unwrap()
 }
 
-fn stale(result: Result<(), SaveError>) -> Option<Stale> {
+fn stale(result: Result<Saved, SaveError>) -> Option<Stale> {
     match result {
         Err(SaveError::Stale(stale)) => Some(stale),
         _ => None,
@@ -104,22 +105,42 @@ fn without_a_config_directory_nothing_is_saved() {
     assert!(matches!(result, Err(SaveError::NoPath)));
 }
 
+/// Runs `body` with `dir`'s mode set to `mode`, and restores it; `None`
+/// when the mode does not apply (root ignores it).
+fn with_mode<T>(dir: &Path, mode: u32, body: impl FnOnce() -> T) -> Option<T> {
+    let set = |mode| fs::set_permissions(dir, fs::Permissions::from_mode(mode)).unwrap();
+    set(mode);
+    let result = body();
+    set(0o700);
+    permissions_apply().then_some(result)
+}
+
 #[test]
 fn a_failed_write_leaves_the_file_and_what_was_seen() {
     let (_dir, path, mut file) = loaded_with(Some("version = 1\n"));
     // No temporary file can be made in a read-only directory.
-    let blocker = path.parent().unwrap().to_path_buf();
-    let before = read(&path);
-    let mut perms = fs::metadata(&blocker).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o500);
-    fs::set_permissions(&blocker, perms.clone()).unwrap();
-    let result = file.save(&changed(), false);
-    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o700);
-    fs::set_permissions(&blocker, perms).unwrap();
-    if !matches!(result, Err(SaveError::Write(_))) {
-        // Root ignores the permission; nothing to check then.
-        return;
-    }
-    assert_eq!(read(&path), before);
+    let result = with_mode(path.parent().unwrap(), 0o500, || {
+        file.save(&changed(), false)
+    });
+    let Some(result) = result else { return };
+    assert!(matches!(result, Err(SaveError::Write(_))), "{result:?}");
+    assert_eq!(read(&path), "version = 1\n");
     file.save(&changed(), false).unwrap();
+}
+
+#[test]
+fn a_file_in_place_but_not_flushed_counts_as_saved_and_says_so() {
+    let (_dir, path, mut file) = loaded_with(Some("version = 1\n"));
+    // The directory cannot be opened to flush it, but can be written.
+    let result = with_mode(path.parent().unwrap(), 0o300, || {
+        file.save(&changed(), false)
+    });
+    let Some(result) = result else { return };
+    assert!(matches!(result, Ok(Saved::Unsynced(_))), "{result:?}");
+    assert_eq!(Config::parse(&read(&path)).ok(), Some(changed()));
+    // What was written is what the next save compares with.
+    assert!(matches!(
+        file.save(&Config::default(), false),
+        Ok(Saved::Synced)
+    ));
 }

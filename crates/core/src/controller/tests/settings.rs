@@ -228,7 +228,7 @@ async fn a_save_is_written_shown_and_used_from_the_next_start() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_save_during_a_run_leaves_the_run_as_it_is() {
+async fn a_save_waits_until_nothing_goes_on() {
     local(async {
         let shared = Shared::default();
         let mut s = setup_with(
@@ -237,12 +237,22 @@ async fn a_save_during_a_run_leaves_the_run_as_it_is() {
         )
         .await;
         s.d.start_by_hotkey().await;
-        assert_eq!(s.window.save(&s.d, draft(hold_right)).await, Outcome::Saved);
+        assert_eq!(s.window.save(&s.d, draft(hold_right)).await, Outcome::Busy);
         s.d.send(Message::Stop).await;
+        s.d.send(Message::Start).await;
+        assert!(matches!(s.d.activity(), Activity::StartingIn(_)));
+        assert_eq!(s.window.save(&s.d, draft(hold_right)).await, Outcome::Busy);
+        s.d.send(Message::Stop).await;
+        s.d.send(Message::Record).await;
+        assert!(s.d.activity().recording());
+        assert_eq!(s.window.save(&s.d, draft(hold_right)).await, Outcome::Busy);
+        s.d.send(Message::StopRecording).await;
+        assert_eq!(
+            fs::read_to_string(&s.path).unwrap(),
+            "version = 1\n[clicker]\nmode = \"hold_button\"\n"
+        );
         assert_eq!(s.d.shared.calls(), [LEFT_DOWN, LEFT_UP]);
-        s.d.start_by_hotkey().await;
-        let right_down = Call::Button(Button::Right, PressState::Down);
-        assert_eq!(s.d.shared.calls(), [LEFT_DOWN, LEFT_UP, right_down]);
+        assert_eq!(s.window.save(&s.d, draft(hold_right)).await, Outcome::Saved);
     })
     .await;
 }
@@ -268,6 +278,22 @@ async fn an_invalid_value_is_refused_and_nothing_is_written() {
         );
         assert!(!s.path.exists());
         assert_eq!(s.window.view().settings, Draft::from(&Config::default()));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refusal_quoting_a_long_value_still_reaches_the_window() {
+    local(async {
+        let mut s = setup().await;
+        let long = draft(|d| d.hotkeys.toggle_clicking = "x".repeat(40_000));
+        let refusal = match s.window.save(&s.d, long).await {
+            Outcome::Refused(refusal) => refusal,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(refusal.field, Field::Hotkey(Action::ToggleClicking));
+        assert_eq!(refusal.reason.chars().count(), crate::window::MAX_TEXT + 1);
+        assert!(crate::window::line(&s.window.view()).is_ok());
     })
     .await;
 }
@@ -388,7 +414,7 @@ async fn saved_hotkeys_reach_the_reader_at_once_while_idle() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn saved_hotkeys_reach_the_reader_once_a_run_ends() {
+async fn a_save_while_devices_open_again_is_refused() {
     local(async {
         let shared = Shared::default();
         let mut s = setup_with(
@@ -397,54 +423,15 @@ async fn saved_hotkeys_reach_the_reader_once_a_run_ends() {
         )
         .await;
         s.d.start_by_hotkey().await;
-        assert_eq!(
-            s.window
-                .save(
-                    &s.d,
-                    draft(|d| {
-                        d.clicker.mode = ModeName::HoldButton;
-                        moved(d);
-                    })
-                )
-                .await,
-            Outcome::Saved
-        );
-        assert_eq!(s.d.shared.with(|r| r.bindings.len()), 1);
-        // The hotkey in use until then stops the run.
-        s.d.press_hotkey().await;
-        assert_eq!(s.d.activity(), Activity::Idle);
-        let started = s.d.shared.with(|r| r.bindings.clone());
-        assert_eq!(started, [Bindings::default(), moved_bindings()]);
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn saved_hotkeys_wait_for_devices_being_opened_again() {
-    local(async {
-        let shared = Shared::default();
-        let mut s = setup_with(
-            Some("version = 1\n[clicker]\nmode = \"hold_button\"\n"),
-            shared,
-        )
-        .await;
-        s.d.start_by_hotkey().await;
-        assert_eq!(
-            s.window
-                .save(
-                    &s.d,
-                    draft(|d| {
-                        d.clicker.mode = ModeName::HoldButton;
-                        moved(d);
-                    })
-                )
-                .await,
-            Outcome::Saved
-        );
-        // A failed write loses the devices: they open again, and no reader
-        // runs that does not know the new ones.
+        // A failed write loses the devices, which open again. The save is
+        // handled before the open ends: no reader may start meanwhile.
         s.d.shared.log(0).fail_once(LEFT_UP);
-        s.d.send(Message::Stop).await;
+        s.d.inbox.send(Message::Stop).unwrap();
+        let held = draft(|d| {
+            d.clicker.mode = ModeName::HoldButton;
+            moved(d);
+        });
+        assert_eq!(s.window.save(&s.d, held.clone()).await, Outcome::Busy);
         assert_eq!(
             s.d.shared.steps(),
             [
@@ -452,10 +439,9 @@ async fn saved_hotkeys_wait_for_devices_being_opened_again() {
                 Step::ReaderDropped(0),
                 Step::Opened(Some(1)),
                 Step::ReaderStarted(Some(1)),
-                Step::ReaderDropped(1),
-                Step::ReaderStarted(Some(1)),
             ]
         );
+        assert_eq!(s.window.save(&s.d, held).await, Outcome::Saved);
         let started = s.d.shared.with(|r| r.bindings.clone());
         assert_eq!(started.last(), Some(&moved_bindings()));
     })
@@ -463,26 +449,17 @@ async fn saved_hotkeys_wait_for_devices_being_opened_again() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_clicker_key_may_not_be_a_hotkey_in_use_until_the_reader_takes_new_ones() {
+async fn a_save_may_move_the_hotkeys_off_the_key_the_clicker_now_presses() {
     local(async {
-        let shared = Shared::default();
-        let mut s = setup_with(
-            Some("version = 1\n[clicker]\nmode = \"hold_button\"\n"),
-            shared,
-        )
-        .await;
+        let mut s = setup().await;
         let on_f6 = draft(|d| {
             moved(d);
             d.clicker.mode = ModeName::KeyRepeat;
             d.clicker.key = 64;
         });
-        s.d.start_by_hotkey().await;
-        assert_eq!(
-            refused_at(s.window.save(&s.d, on_f6.clone()).await),
-            Field::Hotkey(Action::ToggleClicking)
-        );
-        s.d.send(Message::Stop).await;
         assert_eq!(s.window.save(&s.d, on_f6).await, Outcome::Saved);
+        let started = s.d.shared.with(|r| r.bindings.clone());
+        assert_eq!(started.last(), Some(&moved_bindings()));
     })
     .await;
 }

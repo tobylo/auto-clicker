@@ -2,11 +2,15 @@
 //! window's requests and takes the view it shows, and the config file the
 //! window's saves go to.
 //!
-//! The controller checks and writes a save, and takes what it can into use
-//! at once: the clicker, playback and tray settings from the next start
-//! (never during a run), the hotkeys as soon as it is idle, when it starts
-//! the reader again with them. `[input]` picks the platform, so it applies
-//! from the daemon's next start.
+//! The controller checks and writes a save, and takes it into use at once:
+//! the clicker, playback and tray settings for the next start, the hotkeys
+//! by starting the reader again with them. `[input]` picks the platform, so
+//! it applies from the daemon's next start.
+//!
+//! It saves only while idle, with no start pending and no devices opening:
+//! a save writes and flushes a file on the controller's thread, which must
+//! never keep it from stopping a run, and nothing that is about to start
+//! sees its settings change under it.
 
 use std::future::{Future, poll_fn};
 use std::task::Poll;
@@ -15,9 +19,11 @@ use tokio::sync::{mpsc, watch};
 
 use super::hotkeys::HotkeySource;
 use super::{Controller, InputReader, Platform, State};
-use crate::config::{Config, ConfigFile, Draft, Field, Refusal, SaveError, check};
+use crate::config::{Config, ConfigFile, Draft, Field, Refusal, SaveError, Saved, check};
 use crate::hotkeys::{Action, Bindings, Modifiers};
-use crate::window::{Answer, Ask, Confirm, Outcome, Request, ShownHotkeys, WindowView};
+use crate::window::{
+    Answer, Ask, Confirm, MAX_PROBLEMS, Outcome, Request, ShownHotkeys, WindowView, bounded,
+};
 
 /// A settings window's link to the controller. The controller drops it to
 /// end the window's session; the window's side ends it by closing
@@ -112,12 +118,16 @@ impl<P: Platform> Controller<P> {
                         without_modifier,
                     } => self.save_settings(&settings, replace, without_modifier),
                 };
+                let outcome = outcome.bounded();
                 self.settings.answer = Some(Answer { id, outcome });
             }
         }
     }
 
     fn save_settings(&mut self, draft: &Draft, replace: bool, without_modifier: bool) -> Outcome {
+        if !self.settled() {
+            return Outcome::Busy;
+        }
         let config = match draft.to_config().and_then(|config| self.allowed(config)) {
             Ok(config) => config,
             Err(refusal) => return Outcome::Refused(refusal),
@@ -125,29 +135,35 @@ impl<P: Platform> Controller<P> {
         if !without_modifier && let Some(action) = self.new_without_modifier(&config.hotkeys) {
             return Outcome::Confirm(Confirm::WithoutModifier(action));
         }
-        match self.settings.file.save(&config, replace) {
-            Ok(()) => {
-                self.use_saved(config);
-                Outcome::Saved
+        let outcome = match self.settings.file.save(&config, replace) {
+            Ok(Saved::Synced) => Outcome::Saved,
+            Ok(Saved::Unsynced(err)) => Outcome::SavedUnsynced(err.to_string()),
+            Err(SaveError::Stale(stale)) => return Outcome::Confirm(Confirm::Replace(stale)),
+            Err(SaveError::NoPath) => {
+                return Outcome::Failed(
+                    "there is no config directory: neither XDG_CONFIG_HOME nor HOME is set"
+                        .to_owned(),
+                );
             }
-            Err(SaveError::Stale(stale)) => Outcome::Confirm(Confirm::Replace(stale)),
-            Err(SaveError::NoPath) => Outcome::Failed(
-                "there is no config directory: neither XDG_CONFIG_HOME nor HOME is set".to_owned(),
-            ),
             Err(SaveError::Write(err)) => {
-                Outcome::Failed(format!("the config file could not be written: {err}"))
+                return Outcome::Failed(format!("the config file could not be written: {err}"));
             }
-        }
+        };
+        self.use_saved(config);
+        outcome
+    }
+
+    /// Whether nothing goes on: no run, start or recording, and no open.
+    fn settled(&self) -> bool {
+        matches!(self.state, State::Idle) && self.opening.is_none()
     }
 
     /// `config` when the daemon as it runs now may take it; else why not.
     /// Where the desktop delivers the hotkeys, its settings choose the keys,
     /// so `[hotkeys]` stays as it is. Where the program reads the
-    /// keyboards, the clicker's key may be no hotkey: neither of the new
-    /// bindings, even when the save moves the hotkeys to the desktop (that
-    /// applies from the next start), nor of the bindings in use while the
-    /// reader cannot take the new ones yet, since the clicker settings apply
-    /// from the next start.
+    /// keyboards, no hotkey may be on the clicker's key, even when the save
+    /// moves the hotkeys to the desktop: that applies from the next start,
+    /// and the reader matches the new bindings until then.
     fn allowed(&self, config: Config) -> Result<Config, Refusal> {
         if self.platform.input_reader() == InputReader::Desktop {
             return match changed_action(&self.settings.saved.hotkeys, &config.hotkeys) {
@@ -160,28 +176,10 @@ impl<P: Platform> Controller<P> {
                 None => Ok(config),
             };
         }
-        // Checked here whatever route the save names: the reader of the
-        // keyboards matches the new bindings until the daemon restarts.
-        if let Some((action, reason)) = check::on_the_clicker_key(&config.hotkeys, &config.clicker)
-        {
-            return Err(Refusal::new(Field::Hotkey(action), reason));
+        match check::on_the_clicker_key(&config.hotkeys, &config.clicker) {
+            Some((action, reason)) => Err(Refusal::new(Field::Hotkey(action), reason)),
+            None => Ok(config),
         }
-        if !self.rebinds_at_once()
-            && let Some((action, reason)) =
-                check::on_the_clicker_key(&self.config.hotkeys, &config.clicker)
-        {
-            return Err(Refusal::new(
-                Field::Hotkey(action),
-                format!("{reason}, or save once the program is idle"),
-            ));
-        }
-        Ok(config)
-    }
-
-    /// Whether the reader would take new bindings right after a save: the
-    /// controller is idle and opens nothing.
-    fn rebinds_at_once(&self) -> bool {
-        matches!(self.state, State::Idle) && self.opening.is_none()
     }
 
     /// The first action whose binding has no modifier and is not saved
@@ -198,28 +196,21 @@ impl<P: Platform> Controller<P> {
     }
 
     /// Takes a saved config into use: the clicker, playback and tray
-    /// settings at once (a run that goes on keeps its own), the hotkeys
-    /// once the controller is idle. The file is valid now.
+    /// settings for the next start, the hotkeys at once. The controller is
+    /// settled, so the reader can start again: it knows every device. The
+    /// file is valid now.
     fn use_saved(&mut self, saved: Config) {
         self.config.tray_start_delay = saved.tray_start_delay;
         self.config.clicker = saved.clicker;
         self.config.playback = saved.playback;
         self.config_error = None;
-        self.settings.saved = saved;
-    }
-
-    /// Starts the reader again with the saved hotkeys, once nothing is
-    /// going on: no run, start or recording, and no open, after which the
-    /// reader starts again anyway (and which it must know the devices of).
-    pub(super) fn rebind_when_idle(&mut self) {
-        let saved = self.settings.saved.hotkeys;
-        if saved == self.config.hotkeys || !self.rebinds_at_once() {
-            return;
+        if saved.hotkeys != self.config.hotkeys {
+            self.config.hotkeys = saved.hotkeys;
+            // The reader in use goes first: two never read at once.
+            self.hotkeys = HotkeySource::none();
+            self.start_reader();
         }
-        self.config.hotkeys = saved;
-        // The reader in use goes first: two never read at once.
-        self.hotkeys = HotkeySource::none();
-        self.start_reader();
+        self.settings.saved = saved;
     }
 
     /// Shows the window what it shows, when one is open.
@@ -237,7 +228,12 @@ impl<P: Platform> Controller<P> {
                 toggle_playback: self.shown_hotkey(Action::TogglePlayback),
             },
             no_recording: self.no_recording(),
-            problems: self.problems(),
+            problems: self
+                .problems()
+                .iter()
+                .take(MAX_PROBLEMS)
+                .map(|problem| bounded(problem))
+                .collect(),
             answer: self.settings.answer.clone(),
         };
         window.view.send_if_modified(|shown| {
