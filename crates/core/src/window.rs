@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{Draft, InputDraft, Refusal, Stale};
 use crate::controller::{Activity, Hotkey, NoRecording, Routes};
-use crate::hotkeys::{Action, Binding, Capture};
+use crate::hotkeys::{Action, Binding, Capture, Unavailable};
 
 /// The longest line either side sends or reads, newline included.
 pub const MAX_LINE: usize = 64 * 1024;
@@ -196,6 +196,55 @@ impl Outcome {
             Outcome::SavedUnsynced(why) => Outcome::SavedUnsynced(bounded(&why)),
             other => other,
         }
+    }
+}
+
+impl WindowView {
+    /// The view with every text from outside the program cut to
+    /// [`MAX_TEXT`] (a reader's error, a trigger the desktop reports, a
+    /// problem, an answer's message) and at most [`MAX_PROBLEMS`]
+    /// problems, so it always fits a line.
+    pub fn bounded(self) -> WindowView {
+        let shown = |hotkey: Hotkey| match hotkey {
+            Hotkey::Desktop(Some(trigger)) => Hotkey::Desktop(Some(bounded(&trigger))),
+            other => other,
+        };
+        let ShownHotkeys {
+            toggle_clicking,
+            toggle_recording,
+            toggle_playback,
+        } = self.hotkeys;
+        WindowView {
+            hotkeys: ShownHotkeys {
+                toggle_clicking: shown(toggle_clicking),
+                toggle_recording: shown(toggle_recording),
+                toggle_playback: shown(toggle_playback),
+            },
+            no_recording: self.no_recording.map(bounded_no_recording),
+            problems: self
+                .problems
+                .iter()
+                .take(MAX_PROBLEMS)
+                .map(|problem| bounded(problem))
+                .collect(),
+            answer: self.answer.map(|answer| Answer {
+                id: answer.id,
+                outcome: answer.outcome.bounded(),
+            }),
+            ..self
+        }
+    }
+}
+
+fn bounded_no_recording(why: NoRecording) -> NoRecording {
+    match why {
+        NoRecording::Keyboards(unavailable) => NoRecording::Keyboards(match unavailable {
+            Unavailable::ReadFailed(why) => Unavailable::ReadFailed(bounded(&why)),
+            Unavailable::WatchFailed(why) => Unavailable::WatchFailed(bounded(&why)),
+            Unavailable::Desktop(why) => Unavailable::Desktop(bounded(&why)),
+            other => other,
+        }),
+        other => other,
     }
 }
 

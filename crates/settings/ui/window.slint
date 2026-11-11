@@ -126,7 +126,6 @@ export component SettingsWindow inherits Window {
                             LineEdit {
                                 enabled: !root.waiting;
                                 text <=> root.interval-text;
-                                input-type: decimal;
                             }
                             ComboBox {
                                 enabled: !root.waiting;
@@ -277,7 +276,6 @@ export component SettingsWindow inherits Window {
                         LineEdit {
                             enabled: !root.waiting;
                             text <=> root.speed-text;
-                            input-type: decimal;
                         }
                     }
                     Row {
