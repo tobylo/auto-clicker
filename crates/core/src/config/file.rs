@@ -85,10 +85,7 @@ impl ConfigFile {
         if !replace && let Some(stale) = self.stale(path) {
             return Err(SaveError::Stale(stale));
         }
-        let place = match self.seen {
-            Seen::Missing if !replace => Place::New,
-            _ => Place::Replace,
-        };
+        let place = placement(&self.seen, replace);
         let text = render(config);
         let written = write(path, text.as_bytes(), place).map_err(|err| write_error(err, place))?;
         // In place, flushed or not: the file holds this now.
@@ -114,6 +111,15 @@ impl ConfigFile {
     }
 }
 
+/// How a save puts the file in place: where the file was missing and the
+/// user did not agree to replace one, only where none appeared since.
+fn placement(seen: &Seen, replace: bool) -> Place {
+    match seen {
+        Seen::Missing if !replace => Place::New,
+        _ => Place::Replace,
+    }
+}
+
 /// Why a write did not happen: a file appeared where none was may not be
 /// replaced without the user's word.
 fn write_error(err: io::Error, place: Place) -> SaveError {
@@ -130,4 +136,40 @@ fn write(path: &Path, contents: &[u8], place: Place) -> io::Result<Result<(), Un
         std::fs::create_dir_all(dir)?;
     }
     atomic_save(path, contents, place)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_missing_file_not_agreed_to_replace_is_placed_as_new() {
+        let cases = [
+            (Seen::Missing, false, Place::New),
+            (Seen::Missing, true, Place::Replace),
+            (Seen::Text(Vec::new()), false, Place::Replace),
+            (Seen::Unusable, true, Place::Replace),
+        ];
+        for (seen, replace, place) in cases {
+            assert_eq!(placement(&seen, replace), place, "{seen:?} {replace}");
+        }
+    }
+
+    #[test]
+    fn a_file_that_appeared_is_stale_and_any_other_failure_a_write_error() {
+        let exists = || io::Error::from(io::ErrorKind::AlreadyExists);
+        let denied = || io::Error::from(io::ErrorKind::PermissionDenied);
+        assert!(matches!(
+            write_error(exists(), Place::New),
+            SaveError::Stale(Stale::Changed)
+        ));
+        assert!(matches!(
+            write_error(exists(), Place::Replace),
+            SaveError::Write(_)
+        ));
+        assert!(matches!(
+            write_error(denied(), Place::New),
+            SaveError::Write(_)
+        ));
+    }
 }
