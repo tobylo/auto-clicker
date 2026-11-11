@@ -298,6 +298,34 @@ async fn the_current_recording_survives_a_restart_and_a_bad_state_file_means_the
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_current_recording_that_is_gone_marks_the_newest_and_one_older_than_the_list_marks_none()
+{
+    local(async {
+        let times: Vec<String> = (0..12).map(|minute| format!("17:{minute:02}:00")).collect();
+        let times: Vec<&str> = times.iter().map(String::as_str).collect();
+        let (shared, files) = shared_with(&times);
+        let recordings = shared.with(|r| r.recordings.clone()).unwrap();
+        let state = TempDir::new();
+        fs::create_dir_all(state_file(&state).parent().unwrap()).unwrap();
+
+        // The oldest, left out of the tray's ten: it plays, none is marked.
+        fs::write(state_file(&state), format!("{}\n", files[0])).unwrap();
+        let s = setup(shared, config(0), &state, false).await;
+        assert_eq!(s.d.view().current, None);
+        assert_eq!(s.hotkey_plays().await, Some(label("17:00:00")));
+        drop(s);
+
+        // Gone, with every recording listed: the newest is marked, and plays.
+        fs::remove_file(recordings.path().join(files[0].as_str())).unwrap();
+        fs::remove_file(recordings.path().join(files[1].as_str())).unwrap();
+        let s = setup(shared_over(&recordings), config(0), &state, false).await;
+        assert_eq!(s.d.view().current.as_ref(), Some(&files[11]));
+        assert_eq!(s.hotkey_plays().await, Some(label("17:11:00")));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_new_recording_a_play_from_the_tray_and_a_choice_in_the_window_make_it_current() {
     local(async {
         let (shared, files) = shared_with(&["18:00:00", "18:01:00"]);

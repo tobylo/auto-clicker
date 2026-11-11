@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use super::library::FileName;
 use crate::fs::atomic_write;
 
-/// The longest file a valid one can be: a recording's file name and a
-/// newline.
+/// How much of the file is read: more than a recording's file name and a
+/// newline, so a longer file reads as no file name.
 const MAX_BYTES: u64 = 64;
 
 /// Where the current recording is kept; nowhere when there is no state
@@ -90,17 +90,13 @@ impl CurrentFile {
     }
 }
 
-/// What a regular file holds, up to [`MAX_BYTES`]; more is an error.
+/// The first [`MAX_BYTES`] of a regular file.
 fn read_small(file: File) -> io::Result<Vec<u8>> {
     if !file.metadata()?.is_file() {
         return Err(invalid("it is not a regular file"));
     }
     let mut bytes = Vec::new();
-    file.take(MAX_BYTES.saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    if u64::try_from(bytes.len()).map_or(true, |len| len > MAX_BYTES) {
-        return Err(invalid("it is too large"));
-    }
+    file.take(MAX_BYTES).read_to_end(&mut bytes)?;
     Ok(bytes)
 }
 
