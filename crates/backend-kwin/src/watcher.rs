@@ -65,7 +65,6 @@ type Job = Pin<Box<dyn Future<Output = Done>>>;
 
 /// How a call to KWin ended.
 enum Done {
-    Swept,
     Loaded(Script, Result<(), CallError>),
     Unloaded(Result<(), CallError>),
 }
@@ -236,6 +235,9 @@ impl<S: Scripting + 'static> Watcher<S> {
             self.job = None;
         }
         self.position_token = None;
+        if self.feed.recording() && self.layout_given_up() {
+            self.layout_due = Due::Now;
+        }
         self.position = if self.feed.recording() {
             Next::Load
         } else if self.position_loaded {
@@ -263,7 +265,6 @@ impl<S: Scripting + 'static> Watcher<S> {
         self.sweep_due = false;
         self.layout_due = if running { Due::Now } else { Due::No };
         self.failures = 0;
-        self.retry_at = None;
         self.position = if running && self.feed.recording() {
             Next::Load
         } else {
@@ -303,7 +304,6 @@ impl<S: Scripting + 'static> Watcher<S> {
 
     fn done(&mut self, done: Done) {
         match done {
-            Done::Swept => {}
             Done::Loaded(_, Ok(())) => self.failures = 0,
             Done::Loaded(script, Err(err)) => {
                 log_failure("load", script, &err);
@@ -350,8 +350,23 @@ impl<S: Scripting + 'static> Watcher<S> {
             }
             return false;
         };
-        self.retry_at = Instant::now().checked_add(*wait);
-        self.retry_at.is_some()
+        // The earlier deadline wins: a call waiting already is never put
+        // off by another's failure, only tried sooner.
+        let Some(at) = Instant::now().checked_add(*wait) else {
+            return false;
+        };
+        self.retry_at = Some(self.retry_at.map_or(at, |old| old.min(at)));
+        true
+    }
+
+    /// The layout load failed after its last back-off: KWin runs, no layout
+    /// script is loaded or being loaded, and none is due. The script
+    /// directory is fine, or no load could succeed.
+    fn layout_given_up(&self) -> bool {
+        self.owner.is_some()
+            && self.layout_token.is_none()
+            && self.layout_due == Due::No
+            && self.session.dir.is_ok()
     }
 
     /// The back-off ended: what waited for it is due now.
@@ -389,9 +404,14 @@ impl<S: Scripting + 'static> Watcher<S> {
         let session = Rc::clone(&self.session);
         let mut loads_position = false;
         let job: Job = if mem::take(&mut self.sweep_due) {
+            // The position unload counts as any other: a crashed daemon's
+            // script that stays loaded is tried again after the back-off.
             Box::pin(async move {
-                session.unload_all(&owner).await;
-                Done::Swept
+                let (_, position) = tokio::join!(
+                    session.unload_logged(&owner, Script::Layout),
+                    session.unload(&owner, Script::Position)
+                );
+                Done::Unloaded(position)
             })
         } else if self.layout_due == Due::Now {
             self.layout_due = Due::No;
@@ -424,7 +444,9 @@ impl<S: Scripting + 'static> Watcher<S> {
             Script::Position => {
                 self.position_token = Some(token.clone());
                 self.position_loaded = true;
-                self.layout_from_position = true;
+                // A layout script that was loaded: one only being loaded
+                // after a back-off may never run to see a change.
+                self.layout_from_position = self.layout_token.is_some();
             }
         }
         self.publish_trust();

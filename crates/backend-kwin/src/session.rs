@@ -70,7 +70,7 @@ impl<S: Scripting> Session<S> {
         );
     }
 
-    async fn unload_logged(&self, owner: &str, script: Script) {
+    pub(crate) async fn unload_logged(&self, owner: &str, script: Script) {
         if let Err(err) = self.unload(owner, script).await {
             log_failure("unload", script, &err);
         }

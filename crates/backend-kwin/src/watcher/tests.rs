@@ -60,6 +60,8 @@ struct State {
     owners: Option<mpsc::UnboundedSender<Option<String>>>,
     /// Unloads that fail before the next one succeeds.
     failing_unloads: usize,
+    /// Only this plugin's unloads fail, when set.
+    failing_plugin: Option<&'static str>,
     /// Every call from now on never answers.
     hanging: bool,
     /// `start` never answers, once the script has run and reported.
@@ -144,6 +146,12 @@ impl Scripting for FakeKwin {
         self.call(Unload(script.plugin())).await?;
         self.with(|s| match s.failing_unloads {
             0 => Ok(()),
+            _ if s
+                .failing_plugin
+                .is_some_and(|plugin| plugin != script.plugin()) =>
+            {
+                Ok(())
+            }
             _ => {
                 s.failing_unloads -= 1;
                 Err(CallError("unload failed".to_owned()))
@@ -979,6 +987,29 @@ async fn with_nothing_failed_the_watcher_sets_no_timer() {
         );
         assert_eq!(watcher.retry_at, None);
 
+        // A recording replaces an unload waiting for its back-off, and a
+        // new owner a layout load: nothing is left to wait for.
+        h.record().await;
+        drive(&mut watcher, &mut owners, &mut inbox).await;
+        h.kwin.with(|s| s.failing_unloads = 1);
+        h.stop().await;
+        drive(&mut watcher, &mut owners, &mut inbox).await;
+        assert!(watcher.retry_at.is_some());
+        h.record().await;
+        drive(&mut watcher, &mut owners, &mut inbox).await;
+        assert_eq!(watcher.retry_at, None);
+        h.stop().await;
+        drive(&mut watcher, &mut owners, &mut inbox).await;
+        h.kwin.with(|s| s.refused = Some(LAYOUT));
+        h.receiver.layout_dropped.notify_one();
+        drive(&mut watcher, &mut owners, &mut inbox).await;
+        assert!(watcher.retry_at.is_some());
+        h.kwin.with(|s| s.refused = None);
+        h.new_owner(Some(":1.9")).await;
+        drive(&mut watcher, &mut owners, &mut inbox).await;
+        assert_eq!(watcher.retry_at, None);
+        h.calls();
+
         // Nor once the tries are spent.
         h.kwin.with(|s| s.refused = Some(LAYOUT));
         h.receiver.layout_dropped.notify_one();
@@ -1010,6 +1041,117 @@ async fn a_script_directory_that_failed_its_check_is_not_tried_again() {
         drive(&mut watcher, &mut owners, &mut inbox).await;
         assert_eq!(h.calls().last(), Some(&Unload(LAYOUT)));
         assert_eq!(watcher.retry_at, None);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unload_that_fails_after_the_next_recording_started_leaves_its_load_due() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        h.record().await;
+        // The unload hangs, and the next recording starts while it does.
+        h.kwin.with(|s| s.hanging = true);
+        h.stop().await;
+        h.kwin.with(|s| s.hanging = false);
+        h.record().await;
+        h.calls();
+        after(crate::scripting::CALL_TIMEOUT).await;
+        assert_eq!(h.calls(), LOAD_POSITION);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_layout_load_given_up_is_tried_again_at_the_next_recording() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.kwin.with(|s| s.refused = Some(LAYOUT));
+        h.start(inbox).await;
+        for wait in BACK_OFF {
+            after(wait).await;
+        }
+        after(HOUR).await;
+        h.calls();
+        h.kwin.with(|s| s.refused = None);
+        h.record().await;
+        assert_eq!(h.calls(), [LOAD_LAYOUT, LOAD_POSITION].concat());
+        assert_eq!(h.layout(), two_screens());
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_crashed_daemons_position_script_that_fails_to_unload_at_start_is_tried_again() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.kwin.with(|s| {
+            s.failing_unloads = 1;
+            s.failing_plugin = Some(POSITION);
+        });
+        h.start(inbox).await;
+        let swept = [Unload(LAYOUT), Unload(POSITION)];
+        assert_eq!(h.calls(), [swept.as_slice(), &LOAD_LAYOUT].concat());
+        after(BACK_OFF[0]).await;
+        assert_eq!(h.calls(), [Unload(POSITION)]);
+        after(HOUR).await;
+        assert_eq!(h.calls(), []);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_second_failure_does_not_put_off_a_call_already_waiting() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        h.record().await;
+        h.kwin.with(|s| {
+            s.failing_unloads = 1;
+            s.failing_plugin = Some(POSITION);
+        });
+        h.stop().await;
+        h.calls();
+        // A second later a layout load fails, with a longer back-off.
+        after(Duration::from_secs(1)).await;
+        h.kwin.with(|s| s.refused = Some(LAYOUT));
+        h.receiver.layout_dropped.notify_one();
+        settle().await;
+        assert_eq!(h.calls(), REFUSED_LAYOUT);
+        h.kwin.with(|s| s.refused = None);
+        after(BACK_OFF[0] - Duration::from_secs(1)).await;
+        assert_eq!(
+            h.calls(),
+            [LOAD_LAYOUT.as_slice(), &[Unload(POSITION)]].concat()
+        );
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_position_script_loaded_during_a_layout_back_off_reports_no_layout() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.kwin.with(|s| s.refused = Some(LAYOUT));
+        h.start(inbox).await;
+        h.record().await;
+        let token = h.newest_token(POSITION);
+        // The layout load tried after the back-off never answers, so its
+        // new token is current while no layout script runs.
+        h.kwin.with(|s| {
+            s.refused = None;
+            s.hanging = true;
+        });
+        after(BACK_OFF[0]).await;
+        assert_eq!(h.calls().last(), Some(&Unload(LAYOUT)));
+        h.receiver.layout_from(Incoming {
+            sender: Some(KWIN),
+            token: token.as_str(),
+            text: SCREENS,
+        });
+        settle().await;
+        assert_eq!(h.layout(), None);
     })
     .await;
 }
