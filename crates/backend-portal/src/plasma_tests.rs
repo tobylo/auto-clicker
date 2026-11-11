@@ -328,6 +328,39 @@ async fn plasma_offers_its_shortcuts_without_a_dialog() {
 }
 
 #[tokio::test]
+#[ignore = "needs Plasma 6.8, the installed desktop file and shortcuts already accepted; opens System Settings; run by hand"]
+async fn the_desktops_shortcut_settings_open_for_a_bound_session() {
+    use auto_clicker_core::controller::{ReaderCommand, ReaderCommands};
+    use auto_clicker_core::hotkeys::{Bindings, HotkeyEvent, HotkeyStatus};
+
+    let (events, mut received) = mpsc::unbounded_channel();
+    let (commands, asked) = ReaderCommands::channel();
+    let reader = crate::read_shortcuts(Bindings::default(), asked, move |event| {
+        let _ = events.send(event);
+    });
+    let check = async {
+        let wait = Duration::from_secs(30);
+        let mut next = async || timeout(wait, received.recv()).await.unwrap().unwrap();
+        while next().await != HotkeyEvent::Status(HotkeyStatus::Available) {}
+        let configure = ReaderCommand::ConfigureShortcuts {
+            operation: 1,
+            activation_token: None,
+        };
+        commands.send(configure).unwrap();
+        loop {
+            if let HotkeyEvent::Configured { result, .. } = next().await {
+                assert_eq!(result, Ok(()));
+                break;
+            }
+        }
+    };
+    tokio::select! {
+        () = reader => panic!("the reader ended"),
+        () = check => {}
+    }
+}
+
+#[tokio::test]
 #[ignore = "needs Plasma 6.8, the installed desktop file and a person to click Deny; run by hand"]
 async fn deny_in_the_dialog_is_not_allowed() {
     let opened = PortalOutput::new(None).open().await;
@@ -346,7 +379,8 @@ async fn a_hotkey_pressed_by_a_person_arrives_through_the_portal() {
     use tokio::time::timeout;
 
     let (events, mut received) = mpsc::unbounded_channel();
-    let reader = crate::read_shortcuts(Bindings::default(), move |event| {
+    let (_commands, asked) = auto_clicker_core::controller::ReaderCommands::channel();
+    let reader = crate::read_shortcuts(Bindings::default(), asked, move |event| {
         let _ = events.send(event);
     });
     let person = async {
@@ -395,7 +429,8 @@ async fn hotkey_events_as_they_arrive() {
         .and_then(|secs| secs.parse().ok())
         .unwrap_or(60);
     let start = Instant::now();
-    let reader = crate::read_shortcuts(Bindings::default(), move |event| {
+    let (_commands, asked) = auto_clicker_core::controller::ReaderCommands::channel();
+    let reader = crate::read_shortcuts(Bindings::default(), asked, move |event| {
         eprintln!("{:>8.3} s  {event:?}", start.elapsed().as_secs_f64());
     });
     tokio::select! {

@@ -16,7 +16,7 @@
 use std::time::Duration;
 
 use auto_clicker_backend_kernel::{InputSources, KernelBackend, read_input};
-use auto_clicker_core::hotkeys::{Action, Binding, Bindings, HotkeyEvent};
+use auto_clicker_core::hotkeys::{Action, Binding, Bindings, Capture, Captured, HotkeyEvent};
 use auto_clicker_core::input::Key;
 use auto_clicker_core::recording::RecordingSlot;
 use evdev::uinput::VirtualDevice;
@@ -93,6 +93,14 @@ impl Reader {
         }
     }
 
+    /// Waits for the reader's first status, which it sends once it has
+    /// looked at every device there was at its start.
+    async fn scanned(&mut self) {
+        let first = timeout(DEVICE_TIMEOUT, self.received.recv()).await;
+        let first = first.expect("no status came").expect("the reader ended");
+        assert!(matches!(first, HotkeyEvent::Status(_)), "{first:?}");
+    }
+
     /// Presses Ctrl+F24 on `keyboard` until it fires, which also shows the
     /// reader has opened the keyboard: a new device takes a moment.
     async fn fires_from(&mut self, keyboard: &mut Keyboard) {
@@ -123,6 +131,15 @@ where
     F: FnOnce(Reader, auto_clicker_core::input::Input<KernelBackend>) -> Fut,
     Fut: Future<Output = ()>,
 {
+    with_reader_for(None, test).await;
+}
+
+/// [`with_reader`], with the reader started to capture `capture` if set.
+async fn with_reader_for<F, Fut>(capture: Option<Capture>, test: F)
+where
+    F: FnOnce(Reader, auto_clicker_core::input::Input<KernelBackend>) -> Fut,
+    Fut: Future<Output = ()>,
+{
     let input = KernelBackend::open().unwrap();
     let own = input.backend().devices().to_vec();
     let (events, received) = mpsc::unbounded_channel();
@@ -130,6 +147,7 @@ where
     // No recording runs: the slot goes, and the feed never sees one.
     let reader = read_input(
         InputSources {
+            capture,
             bindings: bindings(),
             own: &own,
             feed: RecordingSlot::new().feed(),
@@ -164,6 +182,40 @@ async fn another_keyboard_fires_and_ours_never_does() {
         input.press_key(f24).unwrap();
         input.release_key(f24).unwrap();
         input.release_key(ctrl).unwrap();
+        reader.stays_quiet().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs /dev/uinput and the input group; run by hand"]
+async fn a_capture_reads_every_keyboard_but_the_programs_own() {
+    const KEY_A: u16 = 30;
+    with_reader_for(Some(Capture::Hotkey), |mut reader, mut input| async move {
+        // A keyboard with no bound key and no modifier, read only to capture.
+        let mut keyboard = Keyboard::new("auto-clicker test letters", &[KEY_A]);
+        let a = Key::from_name("a").unwrap();
+        // The program's own keyboard was there at the start, so the reader
+        // has passed over it once it has looked: A from it is never
+        // captured.
+        reader.scanned().await;
+        input.press_key(a).unwrap();
+        input.release_key(a).unwrap();
+        reader.stays_quiet().await;
+        let deadline = Instant::now() + DEVICE_TIMEOUT;
+        loop {
+            assert!(Instant::now() < deadline, "A was never captured");
+            keyboard.key(KEY_A, 1);
+            keyboard.key(KEY_A, 0);
+            if let Some(event) = reader.next_hotkey(Duration::from_millis(200)).await {
+                let captured = Captured::Hotkey(Binding::parse("A").unwrap());
+                assert_eq!(event, HotkeyEvent::Captured(captured));
+                break;
+            }
+        }
+        // Once: nothing more is reported.
+        keyboard.key(KEY_A, 1);
+        keyboard.key(KEY_A, 0);
         reader.stays_quiet().await;
     })
     .await;
@@ -312,6 +364,7 @@ async fn a_real_keyboard_works_after_a_replug() {
     let (stop, stopped) = oneshot::channel::<()>();
     let reader = read_input(
         InputSources {
+            capture: None,
             bindings: Bindings::default(),
             own: &[],
             feed: RecordingSlot::new().feed(),

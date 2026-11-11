@@ -12,13 +12,14 @@
 //! (an unknown field, a line too long) ends the connection.
 
 use std::fmt;
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Draft, InputDraft, Refusal, Stale};
 use crate::controller::{Activity, Hotkey, NoRecording, Routes};
-use crate::hotkeys::Action;
+use crate::hotkeys::{Action, Binding, Capture};
 
 /// The longest line either side sends or reads, newline included.
 pub const MAX_LINE: usize = 64 * 1024;
@@ -34,7 +35,9 @@ pub const MAX_PROBLEMS: usize = 8;
 
 /// What the window asks, with a number the answer carries. The window asks
 /// one thing at a time: it sends the next request once the view answers
-/// this one, since the view holds only the answer to the last request.
+/// this one, since the view holds only the answer to the last request. A
+/// request while a capture or the desktop's settings are pending is
+/// answered [`Outcome::Busy`].
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
@@ -55,7 +58,22 @@ pub enum Ask {
         /// as a [`Confirm::WithoutModifier`] named them.
         without_modifier: Vec<Action>,
     },
+    /// Read what the user presses next, for a hotkey or the clicker's key.
+    /// Hotkeys do nothing until it ends: with a capture, Esc, after
+    /// [`CAPTURE_TIME`], when the window goes, or when anything else
+    /// happens to the program. The answer comes when it ends.
+    Capture(Capture),
+    /// Open the desktop's settings for the program's shortcuts, where the
+    /// desktop delivers the hotkeys. The token, from the window's
+    /// activation, lets the desktop raise the settings.
+    ConfigureShortcuts { activation_token: Option<String> },
 }
+
+/// How long a capture waits for a key.
+pub const CAPTURE_TIME: Duration = Duration::from_secs(10);
+
+/// The longest activation token taken; the desktop's are far shorter.
+pub const MAX_TOKEN: usize = 256;
 
 /// Everything the window shows.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -115,6 +133,33 @@ pub enum Outcome {
     Confirm(Confirm),
     /// Writing failed, or there is nowhere to write; nothing was written.
     Failed(String),
+    /// What a capture got: a hotkey, which may have no modifier, or the
+    /// clicker's key, as a Linux key code.
+    CapturedHotkey(Binding),
+    CapturedKey(u16),
+    /// A capture ended without a key.
+    CaptureEnded(CaptureEnd),
+    /// The desktop opened its settings for the program's shortcuts.
+    Configured,
+    /// This cannot be done here, and why: capturing where the desktop
+    /// delivers the hotkeys or no keyboard can be read, or opening the
+    /// desktop's settings where the program reads the keyboards.
+    Unavailable(String),
+}
+
+/// Why a capture ended without a key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureEnd {
+    /// Esc was pressed.
+    Cancelled,
+    /// Nothing was pressed within [`CAPTURE_TIME`].
+    TimedOut,
+    /// A key without a name was pressed, which no hotkey can use.
+    Unnamed,
+    /// Something else happened: a start, a stop, the session locked, the
+    /// keyboards could no longer be read, or the program quit.
+    Interrupted,
 }
 
 /// What a save needs the user's word on.
@@ -136,6 +181,7 @@ impl Outcome {
                 Outcome::Refused(Refusal::new(field, bounded(&reason)))
             }
             Outcome::Failed(why) => Outcome::Failed(bounded(&why)),
+            Outcome::Unavailable(why) => Outcome::Unavailable(bounded(&why)),
             Outcome::SavedUnsynced(why) => Outcome::SavedUnsynced(bounded(&why)),
             other => other,
         }

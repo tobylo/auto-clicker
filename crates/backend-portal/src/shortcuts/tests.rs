@@ -7,6 +7,7 @@ use std::future::pending;
 use std::rc::Rc;
 use std::time::Duration;
 
+use auto_clicker_core::controller::{ReaderCommand, ReaderCommands};
 use auto_clicker_core::hotkeys::{
     Action, Binding, DESKTOP_RELEASE_PAUSE, HotkeyEvent, HotkeyStatus, Trigger, Triggers,
     Unavailable,
@@ -22,7 +23,9 @@ use super::portal::{
     MAX_LISTED, closes_a_session, connect_failure, failed, has_owner, parse, preferred_trigger,
     sent_by, session_namespace, within,
 };
-use super::reactor::{Listed, Signal, bound_triggers, id_of, serve};
+use super::reactor::{
+    Listed, STILL_OPENING, Served as Serving, Signal, bound_triggers, id_of, serve,
+};
 use super::*;
 
 const CLICKING: &str = "toggle_clicking";
@@ -60,10 +63,17 @@ async fn settle() {
     }
 }
 
-/// One served session: its signals go in, its events and its end come out.
+/// One served session: its signals and commands go in, its events, the
+/// activation tokens it opened the desktop's settings with, and its end
+/// come out. Opening the settings answers what `configured` holds.
 struct Served {
     signals: mpsc::UnboundedSender<Signal>,
+    commands: mpsc::UnboundedSender<ReaderCommand>,
     events: Rc<RefCell<Vec<HotkeyEvent>>>,
+    tokens: Rc<RefCell<Vec<Option<String>>>>,
+    configured: Rc<RefCell<Result<(), String>>>,
+    /// Opening the settings never ends, as on a portal that stalls.
+    stalls: Rc<std::cell::Cell<bool>>,
     end: tokio::task::JoinHandle<String>,
 }
 
@@ -72,19 +82,39 @@ impl Served {
     /// every session opens with are checked and left out.
     async fn start() -> Served {
         let (signals, received) = mpsc::unbounded_channel();
+        let (commands, mut asked) = ReaderCommands::channel();
         let events = Rc::new(RefCell::new(Vec::new()));
-        let sink = events.clone();
+        let tokens = Rc::new(RefCell::new(Vec::new()));
+        let configured = Rc::new(RefCell::new(Ok(())));
+        let stalls = Rc::new(std::cell::Cell::new(false));
+        let (sink, noted, answer) = (events.clone(), tokens.clone(), configured.clone());
+        let stall = stalls.clone();
         let end = tokio::task::spawn_local(async move {
             let signals = futures_util::stream::unfold(received, |mut received| async {
                 received.recv().await.map(|signal| (signal, received))
             });
             let mut send = |event| sink.borrow_mut().push(event);
-            serve(bound_triggers(&defaults()), signals, &mut send).await
+            let serving = Serving {
+                signals,
+                commands: &mut asked,
+                configure: async |token| {
+                    noted.borrow_mut().push(token);
+                    if stall.get() {
+                        pending::<()>().await;
+                    }
+                    answer.borrow().clone()
+                },
+            };
+            serve(bound_triggers(&defaults()), serving, &mut send).await
         });
         settle().await;
         let served = Served {
             signals,
+            commands,
             events,
+            tokens,
+            configured,
+            stalls,
             end,
         };
         assert_eq!(

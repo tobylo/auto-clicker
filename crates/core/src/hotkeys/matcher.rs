@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use super::{Action, Bindings, HotkeyEvent, Modifier, Modifiers};
+use super::{Action, Bindings, Capture, Captured, HotkeyEvent, Modifier, Modifiers};
 
 /// One device the backend reads, as long as it is open. The backend never
 /// reuses an id.
@@ -47,6 +47,7 @@ pub struct Reaction {
     pub fired: Option<Action>,
     pub released: bool,
     pub release_lost: bool,
+    pub captured: Option<Captured>,
 }
 
 impl Reaction {
@@ -55,7 +56,12 @@ impl Reaction {
         let fired = self.fired.map(HotkeyEvent::Fired);
         let released = self.released.then_some(HotkeyEvent::ModifiersReleased);
         let lost = self.release_lost.then_some(HotkeyEvent::ReleaseLost);
-        fired.into_iter().chain(released).chain(lost)
+        let captured = self.captured.map(HotkeyEvent::Captured);
+        fired
+            .into_iter()
+            .chain(released)
+            .chain(lost)
+            .chain(captured)
     }
 }
 
@@ -82,6 +88,10 @@ pub struct Matcher {
     /// The devices that lost events and were not read again yet: what they
     /// hold is unknown, so nothing fires.
     unread: Vec<DeviceId>,
+    /// What it captures instead of matching, if it does.
+    capture: Option<Capture>,
+    /// The capture got what it was for: it reports nothing more.
+    captured: bool,
 }
 
 /// Every modifier key code, left and right, as [`Modifier::codes`] gives
@@ -103,11 +113,25 @@ impl Matcher {
             awaiting_release: false,
             cutoff: Duration::ZERO,
             unread: Vec::new(),
+            capture: None,
+            captured: false,
+        }
+    }
+
+    /// A matcher that fires no binding and captures what the user presses
+    /// for `capture`, once.
+    pub fn capturing(capture: Capture) -> Matcher {
+        Matcher {
+            capture: Some(capture),
+            ..Matcher::new(Bindings::default())
         }
     }
 
     /// Takes one key event from `device`.
     pub fn key(&mut self, device: DeviceId, event: KeyEvent) -> Reaction {
+        if let Some(capture) = self.capture {
+            return self.capture_key(capture, device, &event);
+        }
         match (modifier_bit(event.code), event.value) {
             (Some(bit), KeyValue::Press) => {
                 self.update(device, |keys| keys | bit);
@@ -119,6 +143,29 @@ impl Matcher {
             }
             (None, KeyValue::Press) => self.press(event.code, event.time),
             (_, KeyValue::Repeat) | (None, KeyValue::Release) => Reaction::default(),
+        }
+    }
+
+    /// A key event while capturing: modifiers are tracked as always, and
+    /// the first press that ends the capture is reported. A press from
+    /// before the last out-of-order change, or while a device's state is
+    /// unknown, is not taken: what was held with it is not known.
+    fn capture_key(&mut self, capture: Capture, device: DeviceId, event: &KeyEvent) -> Reaction {
+        if let Some(bit) = modifier_bit(event.code) {
+            match event.value {
+                KeyValue::Press => self.update(device, |keys| keys | bit),
+                KeyValue::Release => self.update(device, |keys| keys & !bit),
+                KeyValue::Repeat => {}
+            }
+        }
+        let pressed = matches!(event.value, KeyValue::Press);
+        let captured = (pressed && !self.captured && self.may_fire(event.time))
+            .then(|| capture.press(event.code, self.modifiers()))
+            .flatten();
+        self.captured = self.captured || captured.is_some();
+        Reaction {
+            captured,
+            ..Reaction::default()
         }
     }
 

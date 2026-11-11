@@ -121,6 +121,14 @@ impl Binding {
         }
     }
 
+    /// The binding of `key` with `modifiers`, on the same terms as
+    /// [`Binding::parse`]: `None` for a key without a name, or a modifier
+    /// key.
+    pub fn new(modifiers: Modifiers, key: Key) -> Option<Binding> {
+        (key.name().is_some() && Modifier::of_code(key.code()).is_none())
+            .then_some(Binding { modifiers, key })
+    }
+
     /// Parses a binding such as "Ctrl+F6". The error says what is wrong, for
     /// the config error message.
     pub fn parse(text: &str) -> Result<Binding, String> {

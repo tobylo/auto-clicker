@@ -70,6 +70,10 @@ struct Record {
     feeds: Vec<RecordingFeed>,
     /// The bindings each reader was given.
     bindings: Vec<Bindings>,
+    /// What each reader was started to capture, if anything.
+    captures: Vec<Option<Capture>>,
+    /// Each reader's commands from the controller.
+    commands: Vec<ReaderCommands>,
     /// Where event-clock time 0 is.
     epoch: Option<Instant>,
     /// Where recordings are saved; none when `None`.
@@ -354,11 +358,15 @@ impl Platform for FakePlatform {
             bindings,
             send,
             feed,
+            capture,
+            commands,
         } = reading;
         let own = own.map(|input| input.backend().id);
         let (n, ends_with, busy) = self.0.with(|r| {
             r.steps.push(Step::ReaderStarted(own));
             r.bindings.push(bindings);
+            r.captures.push(capture);
+            r.commands.push(commands);
             r.senders.push(send.clone());
             r.feeds.push(feed);
             (
@@ -1237,6 +1245,7 @@ fn the_countdown_wakes_on_each_whole_second_and_then_the_deadline() {
     assert_eq!(whole_seconds(Duration::ZERO), 0);
 }
 
+mod capture;
 mod desktop;
 mod per_run;
 mod playback;

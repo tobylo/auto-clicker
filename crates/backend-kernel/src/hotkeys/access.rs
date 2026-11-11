@@ -35,8 +35,10 @@ pub(super) fn look(paths: Paths, bindings: Bindings, own: Vec<PathBuf>) -> Hotke
         Ok(watch) => watch,
         Err(err) => return HotkeyStatus::Unavailable(Unavailable::WatchFailed(err.to_string())),
     };
+    // The check is for the hotkeys, so it matches them: it captures nothing.
     let setup = Setup {
         bindings,
+        capture: None,
         own,
         feed: RecordingSlot::new().feed(),
     };

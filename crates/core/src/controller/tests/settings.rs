@@ -7,17 +7,17 @@ use std::path::PathBuf;
 use super::*;
 use crate::config::{CountDraft, Draft, Field, IntervalDraft, ModeName, RouteName, Stale};
 use crate::input::Button;
-use crate::window::{Answer, Ask, Confirm, Outcome, Request, WindowView};
+use crate::window::{Ask, Confirm, Outcome, Request, WindowView};
 
 /// A settings window as the controller sees it: the other ends of a link.
-struct Window {
-    requests: mpsc::Sender<Request>,
-    view: watch::Receiver<Option<WindowView>>,
+pub(super) struct Window {
+    pub(super) requests: mpsc::Sender<Request>,
+    pub(super) view: watch::Receiver<Option<WindowView>>,
     next_id: u64,
 }
 
 impl Window {
-    fn open(opener: &WindowOpener) -> Window {
+    pub(super) fn open(opener: &WindowOpener) -> Window {
         let (requests, receiver) = mpsc::channel(4);
         let (sender, view) = watch::channel(None);
         opener
@@ -33,33 +33,39 @@ impl Window {
         }
     }
 
-    fn view(&self) -> WindowView {
+    pub(super) fn view(&self) -> WindowView {
         self.view.borrow().clone().expect("a view")
     }
 
     /// Asks `ask` and returns the answer the view shows for it.
-    async fn ask(&mut self, d: &Daemon, ask: Ask) -> Outcome {
+    pub(super) async fn ask(&mut self, d: &Daemon, ask: Ask) -> Outcome {
+        let id = self.send(d, ask).await;
+        self.answer_to(id).expect("an answer")
+    }
+
+    /// Asks `ask`, lets the controller handle it, and returns its number.
+    pub(super) async fn send(&mut self, d: &Daemon, ask: Ask) -> u64 {
         self.next_id += 1;
         let id = self.next_id;
         self.requests.send(Request { id, ask }).await.unwrap();
         d.settle().await;
-        let Some(Answer {
-            id: answered,
-            outcome,
-        }) = self.view().answer
-        else {
-            panic!("no answer");
-        };
-        assert_eq!(answered, id);
-        outcome
+        id
     }
 
-    async fn save(&mut self, d: &Daemon, settings: Draft) -> Outcome {
+    /// The answer to request `id`, once the view holds it.
+    pub(super) fn answer_to(&self, id: u64) -> Option<Outcome> {
+        self.view()
+            .answer
+            .filter(|answer| answer.id == id)
+            .map(|answer| answer.outcome)
+    }
+
+    pub(super) async fn save(&mut self, d: &Daemon, settings: Draft) -> Outcome {
         self.ask(d, save(settings, Agreed::default())).await
     }
 
     /// Whether the controller ended this window's session.
-    fn ended(&self) -> bool {
+    pub(super) fn ended(&self) -> bool {
         self.view.has_changed().is_err()
     }
 }
@@ -93,17 +99,17 @@ fn plain_keys(actions: &[Action]) -> Agreed {
 }
 
 /// A controller with a config file and a settings window open.
-struct Setup {
-    d: Daemon,
-    window: Window,
-    opener: WindowOpener,
-    path: PathBuf,
+pub(super) struct Setup {
+    pub(super) d: Daemon,
+    pub(super) window: Window,
+    pub(super) opener: WindowOpener,
+    pub(super) path: PathBuf,
     _dir: TempDir,
 }
 
 /// A daemon that read `text` as its config file (none when `None`), with a
 /// window open on it.
-async fn setup_with(text: Option<&str>, shared: Shared) -> Setup {
+pub(super) async fn setup_with(text: Option<&str>, shared: Shared) -> Setup {
     let dir = TempDir::new();
     let path = dir.path().join("config.toml");
     if let Some(text) = text {
@@ -128,11 +134,11 @@ async fn setup_with(text: Option<&str>, shared: Shared) -> Setup {
     }
 }
 
-async fn setup() -> Setup {
+pub(super) async fn setup() -> Setup {
     setup_with(None, Shared::default()).await
 }
 
-fn draft(change: impl FnOnce(&mut Draft)) -> Draft {
+pub(super) fn draft(change: impl FnOnce(&mut Draft)) -> Draft {
     let mut draft = Draft::from(&Config::default());
     change(&mut draft);
     draft

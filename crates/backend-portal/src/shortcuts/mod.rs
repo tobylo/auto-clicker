@@ -26,6 +26,7 @@ use std::cell::Cell;
 use std::future::Future;
 use std::pin::pin;
 
+use auto_clicker_core::controller::{ReaderCommand, ReaderCommands};
 use auto_clicker_core::hotkeys::{Bindings, HotkeyEvent, HotkeyStatus, Unavailable};
 use futures_util::{Stream, StreamExt};
 
@@ -34,23 +35,46 @@ use portal::PortalShortcuts;
 /// Reads hotkeys from the desktop's GlobalShortcuts portal and hands them
 /// to `send`, with the desktop's triggers and whether hotkeys work. The
 /// config's `bindings` are only what the program asks for at the first bind.
+/// `commands` ask it to open the desktop's settings for the shortcuts; it
+/// answers each with [`HotkeyEvent::Configured`].
 ///
 /// Runs until dropped, or until the session bus cannot be watched.
-pub async fn read_shortcuts(bindings: Bindings, mut send: impl FnMut(HotkeyEvent)) {
-    let owners = match portal::watch_owner().await {
+pub async fn read_shortcuts(
+    bindings: Bindings,
+    mut commands: ReaderCommands,
+    mut send: impl FnMut(HotkeyEvent),
+) {
+    // No session is bound while the watch starts: a request for the
+    // desktop's settings is answered at once.
+    let owners = match unbound(portal::watch_owner(), &mut commands, &mut send).await {
         Ok(owners) => owners,
         Err(why) => return send(unavailable(why)),
     };
-    run(&mut PortalShortcuts::new(bindings), owners, send).await;
+    run(
+        &mut PortalShortcuts::new(bindings),
+        owners,
+        &mut commands,
+        send,
+    )
+    .await;
 }
 
 /// Where shortcut sessions come from: the portal, or a test's script.
 pub(crate) trait Desktop {
     /// Opens a session, binds the shortcuts and serves it, sending what it
-    /// hears to `send`. Returns why the session ended; it does not end by
-    /// itself otherwise. Dropping the future closes the session.
-    fn session(&mut self, send: &mut dyn FnMut(HotkeyEvent)) -> impl Future<Output = String>;
+    /// hears to `send` and answering `commands` once bound. Returns why the
+    /// session ended; it does not end by itself otherwise. Dropping the
+    /// future closes the session.
+    fn session(
+        &mut self,
+        send: &mut dyn FnMut(HotkeyEvent),
+        commands: &mut ReaderCommands,
+    ) -> impl Future<Output = String>;
 }
+
+/// The answer to a command while no session is bound.
+pub(crate) const NOT_BOUND: &str =
+    "the desktop's shortcuts are not bound now; see the tray for why";
 
 /// What ended a session.
 enum End {
@@ -81,15 +105,20 @@ pub(crate) const MAX_FAILED_IN_A_ROW: u32 = 5;
 pub(crate) async fn run(
     desktop: &mut impl Desktop,
     owners: impl Stream<Item = bool>,
+    commands: &mut ReaderCommands,
     mut send: impl FnMut(HotkeyEvent),
 ) {
     let mut owners = pin!(owners);
     let mut failed_in_a_row = 0u32;
     loop {
-        let (end, bound) = one_session(desktop, &mut owners, &mut send).await;
+        let (end, bound) = one_session(desktop, &mut owners, commands, &mut send).await;
         failed_in_a_row = failures_after(failed_in_a_row, bound);
         let gave_up = failed_in_a_row >= MAX_FAILED_IN_A_ROW;
-        let why = reason(end, gave_up, &mut owners, &mut send).await;
+        let waiting = Waiting {
+            owners: &mut owners,
+            commands: &mut *commands,
+        };
+        let why = reason(end, gave_up, waiting, &mut send).await;
         let (report, done) = verdict(why, gave_up);
         send(unavailable(report));
         if done {
@@ -103,20 +132,56 @@ fn failures_after(before: u32, bound: bool) -> u32 {
     if bound { 0 } else { before.saturating_add(1) }
 }
 
+/// What a reader between sessions waits on.
+struct Waiting<'a, O> {
+    owners: &'a mut O,
+    commands: &'a mut ReaderCommands,
+}
+
+impl<O: Stream<Item = bool> + Unpin> Waiting<'_, O> {
+    /// The next change of a portal service's owner, with no session bound.
+    async fn owner_change(&mut self, send: &mut impl FnMut(HotkeyEvent)) -> Option<bool> {
+        unbound(self.owners.next(), self.commands, send).await
+    }
+}
+
+/// Runs `work` while no session is bound (between sessions, or while one
+/// binds, which can wait minutes on the desktop's dialog), answering every
+/// command meanwhile at once: there are no settings to open yet, and a
+/// command kept for later would open them long after it was answered.
+pub(crate) async fn unbound<T>(
+    work: impl Future<Output = T>,
+    commands: &mut ReaderCommands,
+    send: &mut dyn FnMut(HotkeyEvent),
+) -> T {
+    let mut work = pin!(work);
+    loop {
+        tokio::select! {
+            biased;
+            done = &mut work => return done,
+            command = commands.next() => {
+                let ReaderCommand::ConfigureShortcuts { operation, .. } = command;
+                let result = Err(NOT_BOUND.to_owned());
+                send(HotkeyEvent::Configured { operation, result });
+            }
+        }
+    }
+}
+
 /// Why the next session is opened, once it may be: a session that ended by
 /// itself waits here for a portal service to change first, unless the
 /// reader has given up. `None` when the bus can no longer be watched.
 async fn reason(
     end: End,
     gave_up: bool,
-    owners: &mut (impl Stream<Item = bool> + Unpin),
+    mut waiting: Waiting<'_, impl Stream<Item = bool> + Unpin>,
     send: &mut impl FnMut(HotkeyEvent),
 ) -> Option<String> {
     match end {
         End::Session(why) if gave_up => Some(why),
         End::Session(why) => {
             send(unavailable(why));
-            owner_change(owners.next().await)
+            owner_change(waiting.owner_change(send).await)
         }
         End::Owner(change) => owner_change(change),
     }
@@ -145,6 +210,7 @@ fn verdict(why: Option<String>, gave_up: bool) -> (String, bool) {
 async fn one_session(
     desktop: &mut impl Desktop,
     owners: &mut (impl Stream<Item = bool> + Unpin),
+    commands: &mut ReaderCommands,
     send: &mut impl FnMut(HotkeyEvent),
 ) -> (End, bool) {
     let bound = Cell::new(false);
@@ -159,7 +225,7 @@ async fn one_session(
     let end = tokio::select! {
         biased;
         change = owners.next() => End::Owner(change),
-        why = desktop.session(&mut pass) => End::Session(why),
+        why = desktop.session(&mut pass, commands) => End::Session(why),
     };
     (end, bound.get())
 }
