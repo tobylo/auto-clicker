@@ -9,6 +9,7 @@
 //! opens mice and the other keyboards, and hands what each recordable device
 //! does to the recorder. Input reaches the game too: nothing is grabbed.
 
+mod access;
 mod events;
 mod node;
 mod recording;
@@ -38,6 +39,8 @@ use node::{Node, Paths, Role, Wanted};
 use registry::{Opened, Registry};
 use watch::{Change, Watch};
 
+pub use access::keyboard_access;
+
 /// Reads every keyboard for hotkeys until `shutdown` resolves, and hands
 /// what happens to `send`: fired bindings, the release after each, and
 /// whether hotkeys are available. While a recording runs in `feed`'s slot,
@@ -62,14 +65,15 @@ pub async fn read_input(
 ) {
     let setup = Setup {
         bindings: sources.bindings,
-        own: sources
-            .own
-            .iter()
-            .map(|device| device.syspath.clone())
-            .collect(),
+        own: own_paths(sources.own),
         feed: sources.feed,
     };
     run(Reader::new(Paths::system(), setup, send), shutdown).await;
+}
+
+/// The sysfs paths of the program's `own` devices.
+fn own_paths(own: &[DeviceIdentity]) -> Vec<PathBuf> {
+    own.iter().map(|device| device.syspath.clone()).collect()
 }
 
 /// What [`read_input`] reads for, and what it leaves alone.

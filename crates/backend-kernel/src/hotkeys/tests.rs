@@ -12,6 +12,7 @@ use auto_clicker_core::recording::RecordingSlot;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
+use super::access::look;
 use super::node::Paths;
 use super::{Reader, Setup, run};
 
@@ -129,6 +130,46 @@ async fn no_keyboard_is_reported_and_shutdown_ends_the_wait() {
         stop.send(()).unwrap();
     })
     .await;
+}
+
+/// What one look at `fixture`'s nodes finds.
+fn looked(fixture: &Fixture) -> HotkeyStatus {
+    look(fixture.paths.clone(), Bindings::default(), Vec::new())
+}
+
+#[tokio::test]
+async fn one_look_finds_no_keyboard_or_no_permission_as_the_reader_would() {
+    let fixture = Fixture::new();
+    let no_keyboard = HotkeyStatus::Unavailable(Unavailable::NoKeyboard);
+    assert_eq!(looked(&fixture), no_keyboard, "no node");
+    // A file that is no device, and a node removed before it is looked at.
+    fs::write(fixture.node("event1"), b"").unwrap();
+    assert_eq!(looked(&fixture), no_keyboard, "no device");
+    if !permissions_apply() {
+        return;
+    }
+    // An unreadable name that is no event node counts for nothing.
+    unreadable(&fixture.node("mice"));
+    assert_eq!(looked(&fixture), no_keyboard, "not an event node");
+    unreadable(&fixture.node("event2"));
+    assert_eq!(
+        looked(&fixture),
+        HotkeyStatus::Unavailable(Unavailable::NoPermission)
+    );
+}
+
+#[tokio::test]
+async fn a_look_where_the_nodes_cannot_be_listed_says_so() {
+    let fixture = Fixture::new();
+    fs::remove_dir(&fixture.paths.dev).unwrap();
+    assert!(
+        matches!(
+            looked(&fixture),
+            HotkeyStatus::Unavailable(Unavailable::WatchFailed(_))
+        ),
+        "{:?}",
+        looked(&fixture)
+    );
 }
 
 #[tokio::test]

@@ -370,7 +370,8 @@ async fn recording_is_refused_when_the_session_devices_or_clock_do_not_allow_it(
         ),
         (
             "Not recording: hotkeys are unavailable: keyboards cannot be read; add your user to \
-             the input group and log in again",
+             the input group and log in again, or set hotkeys = \"portal\" under [input] for the \
+             desktop's shortcuts",
             Box::new(|shared| {
                 shared.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(
                     Unavailable::NoPermission,

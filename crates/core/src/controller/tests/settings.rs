@@ -175,6 +175,7 @@ async fn an_opened_window_is_shown_the_settings_and_what_goes_on() {
         let view = s.window.view();
         assert_eq!(view.settings, Draft::from(&Config::default()));
         assert_eq!(view.running, Draft::from(&Config::default()).input);
+        assert_eq!(view.routes, s.d.view().routes);
         assert_eq!(view.activity, Activity::Idle);
         assert_eq!(view.hotkeys.toggle_clicking, s.d.view().hotkey);
         assert_eq!(view.no_recording, s.d.view().no_recording);
