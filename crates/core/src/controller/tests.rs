@@ -77,6 +77,8 @@ struct Record {
     desktop_reader: bool,
     /// The screen layout the platform reports; unknown when `None`.
     layout: Option<Layout>,
+    /// What each layout watcher was given: its feed and its signal.
+    watches: Vec<(RecordingFeed, LayoutSignal)>,
 }
 
 #[derive(Clone, Default)]
@@ -276,6 +278,11 @@ impl Platform for FakePlatform {
 
     fn layout(&self) -> Option<Layout> {
         self.0.with(|r| r.layout.clone())
+    }
+
+    fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
+        self.0.with(|r| r.watches.push((feed, changed)));
+        Box::pin(pending())
     }
 
     fn input_reader(&self) -> InputReader {

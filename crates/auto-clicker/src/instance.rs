@@ -21,7 +21,7 @@ pub enum ClaimError {
 /// The claimed name: the connection that holds it, and the signal that
 /// says it was lost.
 pub struct Claim {
-    _bus: Connection,
+    bus: Connection,
     lost: NameLostStream,
 }
 
@@ -44,7 +44,7 @@ pub async fn claim() -> Result<Claim, ClaimError> {
         .request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())
         .await;
     owned(reply)?;
-    Ok(Claim { _bus: bus, lost })
+    Ok(Claim { bus, lost })
 }
 
 /// Whether the name request made this daemon the owner. zbus reports a name
@@ -60,6 +60,12 @@ fn owned(reply: zbus::Result<RequestNameReply>) -> Result<(), ClaimError> {
 }
 
 impl Claim {
+    /// The connection that holds the name: what else the daemon serves on
+    /// the bus is served under it.
+    pub fn connection(&self) -> &Connection {
+        &self.bus
+    }
+
     /// Resolves when the name is lost, or the session bus went away with it:
     /// another daemon could then claim it and open devices of its own.
     pub async fn lost(mut self) {
