@@ -182,6 +182,12 @@ msgstr "Plasma levererar snabbtangenterna, så de väljs i Systeminställningar,
 msgid "Change in System Settings"
 msgstr "Ändra i Systeminställningar"
 
+msgid "X"
+msgstr "X"
+
+msgid "Y"
+msgstr "Y"
+
 msgid "Picked at start"
 msgstr "Väljs vid start"
 

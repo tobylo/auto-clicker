@@ -164,7 +164,8 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
         widest.no_recording = Some(NoRecording::Keyboards(why));
         let shown = widest.clone().bounded();
         assert_eq!(shown.problems.len(), MAX_PROBLEMS);
-        assert!(line(&shown).is_ok());
+        // As the daemon sends it: inside an update.
+        assert!(line(&Update::View(Box::new(shown))).is_ok());
     }
     assert_eq!(bounded(&worst).chars().count(), MAX_TEXT + 1);
     assert_eq!(bounded("short"), "short");
