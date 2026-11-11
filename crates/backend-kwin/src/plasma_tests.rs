@@ -60,6 +60,18 @@ async fn loaded(bus: &Connection) -> (bool, bool) {
     (layout, position)
 }
 
+/// Waits, within [`WAIT`], until KWin has loaded what `expected` says.
+async fn until_loaded(bus: &Connection, expected: (bool, bool)) {
+    let reached = async {
+        while loaded(bus).await != expected {
+            sleep(Duration::from_millis(50)).await;
+        }
+    };
+    timeout(WAIT, reached)
+        .await
+        .unwrap_or_else(|_| panic!("KWin's scripts never became {expected:?}"));
+}
+
 /// The script files left in the runtime directory.
 fn files() -> Vec<String> {
     let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap();
@@ -104,11 +116,11 @@ async fn plasma_scripts_load_report_and_unload() {
             assert_eq!(files().len(), 1);
 
             slot.start(recorder(&kwin));
+            until_loaded(&bus, (true, true)).await;
+            // Time to move the mouse while the position script reports.
             sleep(Duration::from_secs(3)).await;
-            assert_eq!(loaded(&bus).await, (true, true));
             let recorder = slot.take().unwrap();
-            sleep(Duration::from_millis(500)).await;
-            assert_eq!(loaded(&bus).await, (true, false));
+            until_loaded(&bus, (true, false)).await;
             drop(recorder);
 
             task.abort();
@@ -129,8 +141,7 @@ async fn plasma_a_crashed_daemons_scripts_are_unloaded_at_the_next_start() {
             let slot = RecordingSlot::new();
             let (kwin, _changed, task) = start(&bus, &slot).await;
             slot.start(recorder(&kwin));
-            sleep(Duration::from_secs(1)).await;
-            assert_eq!(loaded(&bus).await, (true, true));
+            until_loaded(&bus, (true, true)).await;
             task.abort();
             drop((kwin, slot));
             drop(bus);
@@ -149,6 +160,9 @@ async fn plasma_a_crashed_daemons_scripts_are_unloaded_at_the_next_start() {
         })
         .await;
 }
+
+/// The plugin names of the foreign scripts.
+const FOREIGN: [&str; 2] = ["auto-clicker-test-first", "auto-clicker-test-second"];
 
 /// Where a foreign script's file goes: the user's own runtime directory,
 /// which no other user can write to (not the shared temporary directory).
@@ -186,7 +200,8 @@ async fn unload_foreign(bus: &Connection, plugin: &str) {
         .await
         .unwrap();
     let _: bool = scripting.call("unloadScript", &(plugin,)).await.unwrap();
-    std::fs::remove_file(foreign_path(plugin)).unwrap();
+    // Gone already when nothing was left.
+    let _ = std::fs::remove_file(foreign_path(plugin));
 }
 
 #[tokio::test]
@@ -197,22 +212,24 @@ async fn plasma_a_script_given_the_id_of_a_running_one_still_runs() {
             // KWin numbers a script by how many are loaded: with the first
             // of two unloaded, the next one gets the second one's id.
             let bus = claim().await;
-            load_foreign(&bus, "auto-clicker-test-first").await;
-            let second = load_foreign(&bus, "auto-clicker-test-second").await;
-            unload_foreign(&bus, "auto-clicker-test-first").await;
+            // What a failed run of this test left loaded goes first.
+            for plugin in FOREIGN {
+                unload_foreign(&bus, plugin).await;
+            }
+            let [first, second] = FOREIGN;
+            load_foreign(&bus, first).await;
+            let id = load_foreign(&bus, second).await;
+            unload_foreign(&bus, first).await;
 
             // The layout script is loaded under that id, and still reports.
             let slot = RecordingSlot::new();
             let (kwin, _changed, task) = start(&bus, &slot).await;
-            println!(
-                "the second script's id: {second}; layout: {:?}",
-                kwin.layout()
-            );
+            println!("the second script's id: {id}; layout: {:?}", kwin.layout());
             assert!(kwin.layout().is_some());
 
             task.abort();
             kwin.exit().await;
-            unload_foreign(&bus, "auto-clicker-test-second").await;
+            unload_foreign(&bus, second).await;
         })
         .await;
 }
