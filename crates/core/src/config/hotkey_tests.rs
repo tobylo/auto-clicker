@@ -100,12 +100,15 @@ fn a_config_binding_on_the_clicker_key_is_fine_where_the_desktop_owns_the_hotkey
             assert_eq!(config.clicker.key, Key::from_name(key).unwrap());
         }
     }
-    // On the kernel route the same file is rejected: a default binding.
-    let (line, reason) = invalid(
-        "version = 1\n[clicker]\nmode = \"hold_key\"\nkey = \"f6\"\n[input]\nhotkeys = \"kernel\"\n",
-    );
-    assert_eq!(line, None, "{reason}");
-    assert!(reason.contains("the key the clicker presses"), "{reason}");
+    // On the kernel route, and the automatic one that may pick it, the same
+    // file is rejected: a default binding.
+    for route in ["kernel", "auto"] {
+        let (line, reason) = invalid(&format!(
+            "version = 1\n[clicker]\nmode = \"hold_key\"\nkey = \"f6\"\n[input]\nhotkeys = \"{route}\"\n"
+        ));
+        assert_eq!(line, None, "{route}: {reason}");
+        assert!(reason.contains("the key the clicker presses"), "{reason}");
+    }
 }
 
 #[test]

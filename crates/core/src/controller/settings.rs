@@ -264,6 +264,7 @@ impl<P: Platform> Controller<P> {
         let view = WindowView {
             settings: Draft::from(&self.settings.saved),
             running: Draft::from(&self.config).input,
+            routes: super::routes(&self.platform),
             activity: self.activity(),
             hotkeys: ShownHotkeys {
                 toggle_clicking: self.shown_hotkey(Action::ToggleClicking),

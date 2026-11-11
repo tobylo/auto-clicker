@@ -368,12 +368,18 @@ fn two_actions_on_one_hotkey_are_refused_at_the_later() {
 }
 
 #[test]
-fn a_hotkey_on_the_clicker_key_is_refused_only_on_the_kernel_route() {
+fn a_hotkey_on_the_clicker_key_is_refused_except_on_the_portal_route() {
     let on_space = |d: &mut Draft| {
         d.clicker.mode = ModeName::KeyRepeat;
         d.hotkeys.toggle_recording = "Ctrl+Space".to_owned();
     };
-    assert_eq!(refused(on_space), Field::Hotkey(Action::ToggleRecording));
+    for route in [RouteName::Auto, RouteName::Kernel] {
+        let field = refused(|d| {
+            on_space(d);
+            d.input.hotkeys = route;
+        });
+        assert_eq!(field, Field::Hotkey(Action::ToggleRecording), "{route:?}");
+    }
     let mut draft = Draft::from(&Config::default());
     on_space(&mut draft);
     draft.input.hotkeys = RouteName::Portal;

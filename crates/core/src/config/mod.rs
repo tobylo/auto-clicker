@@ -24,10 +24,11 @@
 //! toggle_playback = "Ctrl+Shift+F8"
 //!
 //! [input]
-//! output = "kernel"             # kernel (/dev/uinput) or portal (the desktop's
-//!                               # remote input portal, which asks once)
-//! hotkeys = "kernel"            # kernel (reads the keyboards) or portal (the
-//!                               # desktop's shortcuts, which asks once)
+//! output = "auto"               # auto, kernel (/dev/uinput) or portal (the
+//!                               # desktop's remote input portal, which asks once)
+//! hotkeys = "auto"              # auto, kernel (reads the keyboards) or portal
+//!                               # (the desktop's shortcuts, which asks once)
+//!                               # auto: kernel where the program has access
 //!
 //! [playback]
 //! speed = 1.0                   # 0.25 to 4 times the recorded speed
@@ -90,19 +91,34 @@ pub struct InputSettings {
 /// The route hotkeys take to the program.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HotkeyRoute {
-    /// The keyboards, read from `/dev/input`, which needs the `input` group.
+    /// The keyboards where the program may read one at start, else the
+    /// desktop's shortcuts where the desktop offers them.
     #[default]
+    Auto,
+    /// The keyboards, read from `/dev/input`, which needs the `input` group.
     Kernel,
     /// The desktop's GlobalShortcuts portal. The desktop asks the user once,
     /// and its settings choose the keys from then on.
     Portal,
 }
 
+impl HotkeyRoute {
+    /// Whether the program may end up matching the hotkeys itself, from the
+    /// keyboards: on the kernel route, and on the automatic one, which may
+    /// pick it.
+    pub fn may_read_keyboards(self) -> bool {
+        self != HotkeyRoute::Portal
+    }
+}
+
 /// The route clicks and keys take to the desktop.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OutputRoute {
-    /// Virtual devices through `/dev/uinput`.
+    /// `/dev/uinput` where the program may open it at start, else the
+    /// desktop's remote input portal where the desktop offers it.
     #[default]
+    Auto,
+    /// Virtual devices through `/dev/uinput`.
     Kernel,
     /// The desktop's RemoteDesktop portal and libei. The desktop asks the
     /// user once.
