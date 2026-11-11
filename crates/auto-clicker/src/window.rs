@@ -11,8 +11,8 @@
 //! The window's session ends when the window's end of the socket closes
 //! (it exited, after every request it sent was read), when it sends a line
 //! that does not parse or stops reading for [`WRITE_TIME`], and when the
-//! controller ends it. Each way kills the window if it still runs,
-//! and waits [`REAP_TIME`] at most for it to go.
+//! controller ends it, as it does when the keeper ends. Each way drops the
+//! window's process, which kills it if it still runs; tokio reaps it.
 
 use std::io;
 use std::os::fd::OwnedFd;
@@ -35,7 +35,7 @@ use tokio::time::timeout;
 const PROGRAM: &str = "auto-clicker-settings";
 /// How long a write to the window may take before it counts as stuck.
 const WRITE_TIME: Duration = Duration::from_secs(5);
-/// How long the daemon waits for a window it killed to go.
+/// How long the requests of a window that stopped reading are still read.
 const REAP_TIME: Duration = Duration::from_secs(2);
 /// How many requests may wait for the controller.
 const QUEUED_REQUESTS: usize = 4;
@@ -63,19 +63,11 @@ struct Opening {
 }
 
 /// A window that runs: where to ask it to come to the front, and its
-/// session, which kills it when dropped.
+/// session. Dropping it closes the raise channel, which ends the session,
+/// and with it the window.
 struct Running {
     raise: mpsc::UnboundedSender<()>,
-    session: Aborting,
-}
-
-/// A task aborted when dropped: the session, and with it the window.
-struct Aborting(JoinHandle<()>);
-
-impl Drop for Aborting {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
+    session: JoinHandle<()>,
 }
 
 async fn keeper(opening: Opening, mut asked: mpsc::UnboundedReceiver<()>) {
@@ -95,7 +87,7 @@ async fn keeper(opening: Opening, mut asked: mpsc::UnboundedReceiver<()>) {
 /// one opens.
 fn chosen(running: Option<Running>, opening: &Opening) -> Option<Running> {
     match running {
-        Some(window) if !window.session.0.is_finished() => {
+        Some(window) if !window.session.is_finished() => {
             // The window may already be closing; then nothing comes to the
             // front, and the next choice opens one.
             let _ = window.raise.send(());
@@ -109,8 +101,8 @@ fn chosen(running: Option<Running>, opening: &Opening) -> Option<Running> {
 async fn finished(running: &mut Option<Running>) {
     match running {
         Some(window) => {
-            // An aborted or panicked session ended just the same.
-            let _ = (&mut window.session.0).await;
+            // A panicked session ended just the same.
+            let _ = (&mut window.session).await;
         }
         None => std::future::pending().await,
     }
@@ -127,10 +119,7 @@ fn open(opening: &Opening) -> Option<Running> {
             let (raise, raised) = mpsc::unbounded_channel();
             let opener = opening.opener.clone();
             let session = tokio::spawn(session(opener, child, socket, raised));
-            Some(Running {
-                raise,
-                session: Aborting(session),
-            })
+            Some(Running { raise, session })
         }
         Err(err) => {
             eprintln!("auto-clicker: could not open the settings window: {err}");
@@ -176,7 +165,7 @@ fn spawn(program: &std::path::Path) -> io::Result<(Child, UnixStream)> {
 /// gone.
 async fn session(
     opener: WindowOpener,
-    mut child: Child,
+    child: Child,
     socket: UnixStream,
     mut raised: mpsc::UnboundedReceiver<()>,
 ) {
@@ -203,14 +192,8 @@ async fn session(
             let _ = timeout(REAP_TIME, reading).await;
         }
     }
-    end(&mut child).await;
-}
-
-/// Kills the window if it still runs, and waits a little for it to go.
-async fn end(child: &mut Child) {
-    // It may have exited already; then there is nothing to kill.
-    let _ = child.start_kill();
-    let _ = timeout(REAP_TIME, child.wait()).await;
+    // Spawned to be killed on drop: a window still running goes now.
+    drop(child);
 }
 
 /// Hands each request the window sends to the controller, until the window

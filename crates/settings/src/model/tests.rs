@@ -37,6 +37,10 @@ fn drafts() -> Vec<Draft> {
             d.clicker.button = ButtonName::Back;
             d.clicker.interval = IntervalDraft::Ms(86_400_000);
             d.clicker.key = 42;
+            d.input = InputDraft {
+                output: RouteName::Kernel,
+                hotkeys: RouteName::Kernel,
+            };
             d.playback.speed = 4.0;
             d.playback.repeat = CountDraft::Times(u64::from(u32::MAX));
         }),
