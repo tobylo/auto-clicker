@@ -10,15 +10,30 @@
 //! - At most one position per millisecond is kept, the latest. A press, a
 //!   release or a wheel turn ends that millisecond, and the first position
 //!   after it is kept as it is: it may belong to the move before the event.
-//! - The first position, when no motion came before it, is where the
-//!   pointer was since the start, so it goes first, at time 0.
+//! - The first position, when no motion stamped before it was read, is
+//!   where the pointer was since the start, so it goes first, at time 0.
 //! - Every event counts the bytes it takes in the file at most. Once the next
 //!   one would pass the budget, the timeline is full and takes nothing more.
+//!
+//! The last three rules depend on which input events come before a
+//! position, and an input event can be read after positions stamped later
+//! than it. So a position waits ("pending") until its place among the input
+//! events is final, and the rules are applied in time order. A position's
+//! place is final once an input event at or after its time is written,
+//! since no input event goes before that one; or once a report
+//! [`SETTLE_US`] later arrives, which bounds how many wait. An input event
+//! read later than that still goes in time order, but the positions around
+//! it may already have been merged.
+
+use std::collections::VecDeque;
 
 use super::{Change, Event, Point, event_bytes};
 
 /// A millisecond, in microseconds: the span of one kept position.
 const POSITION_US: u64 = 1_000;
+
+/// How long a position waits for input events read late, at most.
+const SETTLE_US: u64 = 20_000;
 
 /// Which position the next one may replace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,16 +48,31 @@ enum Window {
     Open { at: u64, start: u64 },
 }
 
+/// What [`Timeline::settle`] applies next.
+enum Due {
+    Position(Event),
+    /// A press, release or wheel turn.
+    Boundary,
+}
+
 /// The events so far, in time order.
 pub(super) struct Timeline {
     events: Vec<Event>,
     /// The time of the last input event; no input event goes before it.
     last_input_at: u64,
+    /// Positions whose place among the input events is not final yet, in
+    /// time order.
+    pending: VecDeque<Event>,
+    /// The times of presses, releases and wheel turns read but not yet
+    /// applied to the positions, in order.
+    boundaries: VecDeque<u64>,
+    /// Everything up to this time is applied.
+    settled_to: u64,
     window: Window,
-    /// Motion was seen, so a first position no longer stands for the start.
-    moved: bool,
+    /// The earliest time of motion read, if any.
+    first_motion: Option<u64>,
     positioned: bool,
-    /// Bytes the events take in the file at most.
+    /// Bytes the events take in the file at most, pending ones included.
     bytes: u64,
     budget: u64,
     full: bool,
@@ -54,8 +84,11 @@ impl Timeline {
         Timeline {
             events: Vec::new(),
             last_input_at: 0,
+            pending: VecDeque::new(),
+            boundaries: VecDeque::new(),
+            settled_to: 0,
             window: Window::Closed,
-            moved: false,
+            first_motion: None,
             positioned: false,
             bytes: 0,
             budget,
@@ -63,11 +96,14 @@ impl Timeline {
         }
     }
 
+    /// The events written so far, without the positions still pending.
     pub(super) fn events(&self) -> &[Event] {
         &self.events
     }
 
-    pub(super) fn into_events(self) -> Vec<Event> {
+    /// Every event, pending positions placed.
+    pub(super) fn into_events(mut self) -> Vec<Event> {
+        self.settle(u64::MAX);
         self.events
     }
 
@@ -78,8 +114,9 @@ impl Timeline {
 
     /// The time of the last event of any kind.
     pub(super) fn last_at(&self) -> u64 {
-        let last = self.events.last().map_or(0, |event| event.at);
-        last.max(self.last_input_at)
+        let written = self.events.last().map_or(0, |event| event.at);
+        let pending = self.pending.back().map_or(0, |event| event.at);
+        written.max(pending).max(self.last_input_at)
     }
 
     /// Whether an event did not fit the budget; nothing is taken since.
@@ -87,12 +124,12 @@ impl Timeline {
         self.full
     }
 
-    /// Motion was read, whether or not it is written yet.
-    pub(super) fn motion_seen(&mut self) {
-        self.moved = true;
+    /// Motion stamped `at` was read, whether or not it is written yet.
+    pub(super) fn motion_read(&mut self, at: u64) {
+        self.first_motion = Some(self.first_motion.map_or(at, |first| first.min(at)));
     }
 
-    /// Removes the event at `index` (a hotkey's modifier).
+    /// Removes the written event at `index` (a hotkey's modifier).
     pub(super) fn remove(&mut self, index: usize) {
         if index < self.events.len() {
             self.events.remove(index);
@@ -100,13 +137,15 @@ impl Timeline {
     }
 
     /// Writes an input event at `at`, or at the last input event's time if
-    /// that is later.
+    /// that is later. The positions up to it are placed first.
     pub(super) fn input(&mut self, at: u64, change: Change) {
         let at = at.max(self.last_input_at);
         if !self.reserve(event_bytes(change)) {
             return;
         }
-        self.insert(Event { at, change });
+        self.settle(at);
+        let index = self.events.partition_point(|other| other.at <= at);
+        self.events.insert(index, Event { at, change });
         self.last_input_at = at;
         if matches!(change, Change::Press(_) | Change::Release(_)) {
             self.event_read(at);
@@ -118,66 +157,102 @@ impl Timeline {
     /// is written only once its motion bucket ends.
     pub(super) fn event_read(&mut self, at: u64) {
         let at = at.max(self.last_input_at);
-        self.window = match self.window {
-            // The open position is later: it is the first after this.
-            Window::Open { at: open, .. } if open > at => Window::Closed,
-            _ => Window::AfterEvent,
-        };
-    }
-
-    /// Writes a position stamped `at`.
-    pub(super) fn position(&mut self, at: u64, point: Point) {
-        let change = Change::Position(point);
-        if !self.positioned && !self.moved {
-            return self.first_position(change);
-        }
-        if let Window::Open { at: open, start } = self.window
-            && at < start.saturating_add(POSITION_US)
-        {
-            return self.replace(open, start, Event { at, change });
-        }
-        if !self.reserve(event_bytes(change)) {
+        if at <= self.settled_to {
+            self.window = Window::AfterEvent;
             return;
         }
-        self.insert(Event { at, change });
+        let index = self.boundaries.partition_point(|&other| other <= at);
+        self.boundaries.insert(index, at);
+    }
+
+    /// A position stamped `at`. It waits until its place is final.
+    pub(super) fn position(&mut self, at: u64, point: Point) {
+        let event = Event {
+            at,
+            change: Change::Position(point),
+        };
+        if !self.reserve(event_bytes(event.change)) {
+            return;
+        }
+        if at <= self.settled_to {
+            return self.place(event);
+        }
+        let index = self.pending.partition_point(|other| other.at <= at);
+        self.pending.insert(index, event);
+        self.settle(at.saturating_sub(SETTLE_US));
+    }
+
+    /// Applies the pending positions and boundaries up to `frontier`, in
+    /// time order; a position goes before a boundary at its own time.
+    fn settle(&mut self, frontier: u64) {
+        while let Some(next) = self.next_due(frontier) {
+            match next {
+                Due::Position(event) => self.place(event),
+                Due::Boundary => self.window = Window::AfterEvent,
+            }
+        }
+        self.settled_to = self.settled_to.max(frontier);
+    }
+
+    /// Takes the earliest pending position or boundary at or before
+    /// `frontier`; a position first when both are at one time.
+    fn next_due(&mut self, frontier: u64) -> Option<Due> {
+        let position = self.pending.front().map(|event| event.at);
+        let boundary = self.boundaries.front().copied();
+        let position_first = match (position, boundary) {
+            (Some(p), Some(b)) => p <= b,
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        let due = position_first && position.is_some_and(|p| p <= frontier);
+        if due {
+            return self.pending.pop_front().map(Due::Position);
+        }
+        let due = !position_first && boundary.is_some_and(|b| b <= frontier);
+        due.then(|| self.boundaries.pop_front())
+            .flatten()
+            .map(|_| Due::Boundary)
+    }
+
+    /// Places a position whose place is final, by the rules above.
+    fn place(&mut self, event: Event) {
+        let moved = self.first_motion.is_some_and(|first| first <= event.at);
+        if !self.positioned && !moved {
+            return self.first_position(event.change);
+        }
+        if let Window::Open { at: open, start } = self.window
+            && event.at < start.saturating_add(POSITION_US)
+        {
+            return self.replace(open, start, event);
+        }
+        self.insert(event);
         self.window = match self.window {
             Window::AfterEvent => Window::Closed,
-            _ => Window::Open { at, start: at },
+            _ => Window::Open {
+                at: event.at,
+                start: event.at,
+            },
         };
     }
 
     /// The pointer has not moved since the start: its position goes first.
     fn first_position(&mut self, change: Change) {
-        if !self.reserve(event_bytes(change)) {
-            return;
-        }
         self.events.insert(0, Event { at: 0, change });
         self.positioned = true;
         self.window = Window::Closed;
     }
 
     /// Puts `event` in place of the position at `open`, in the millisecond
-    /// from `start`.
+    /// from `start`; the bytes the old one counted are freed.
     fn replace(&mut self, open: u64, start: u64, event: Event) {
         let old = self
             .events
             .iter()
             .rposition(|old| old.at == open && matches!(old.change, Change::Position(_)));
-        let Some(index) = old else {
-            return;
-        };
-        let freed = self
-            .events
-            .get(index)
-            .map_or(0, |old| event_bytes(old.change));
-        let kept = self.bytes;
-        self.bytes = self.bytes.saturating_sub(freed);
-        if !self.reserve(event_bytes(event.change)) {
-            // The old position stays, counted as before.
-            self.bytes = kept;
-            return;
+        if let Some(index) = old {
+            let removed = self.events.remove(index);
+            self.bytes = self.bytes.saturating_sub(event_bytes(removed.change));
         }
-        self.events.remove(index);
         self.insert(event);
         self.window = Window::Open {
             at: event.at,
@@ -197,12 +272,10 @@ impl Timeline {
         true
     }
 
-    /// Inserts `event` after every event at or before its time.
+    /// Inserts a position after every event at or before its time.
     fn insert(&mut self, event: Event) {
         let index = self.events.partition_point(|other| other.at <= event.at);
         self.events.insert(index, event);
-        if matches!(event.change, Change::Position(_)) {
-            self.positioned = true;
-        }
+        self.positioned = true;
     }
 }

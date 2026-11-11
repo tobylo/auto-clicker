@@ -208,8 +208,9 @@ impl Recorder {
     }
 
     /// The pointer at `point`, reported at `time` while the layout was
-    /// `current` (`None` when unknown). It is kept only when `current` is
-    /// the recording's layout and the point lies on it.
+    /// `current` (`None` when unknown). It is kept only when `current` has
+    /// the recording's screens ([`Layout::same_screens`]) and the point lies
+    /// on it.
     pub fn position(&mut self, time: Duration, point: Point, current: Option<&Layout>) {
         let Some(at) = self.offset(time) else {
             return;
@@ -217,7 +218,7 @@ impl Recorder {
         let Some(layout) = &self.layout else {
             return;
         };
-        if current == Some(layout) && layout.holds(point) {
+        if current.is_some_and(|current| current.same_screens(layout)) && layout.holds(point) {
             self.timeline.position(at, point);
         }
     }
@@ -254,8 +255,8 @@ impl Recorder {
 
     /// Relative pointer motion at `time`.
     pub fn motion(&mut self, time: Duration, dx: i32, dy: i32) {
-        if self.offset(time).is_some() {
-            self.timeline.motion_seen();
+        if let Some(at) = self.offset(time) {
+            self.timeline.motion_read(at);
         }
         self.add(
             time,
