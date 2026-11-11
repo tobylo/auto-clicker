@@ -17,7 +17,7 @@ use std::future::Future;
 use auto_clicker_backend_kernel::{KernelBackend, keyboard_access};
 use auto_clicker_backend_portal::{PortalOutput, shortcuts_offered};
 use auto_clicker_core::config::{HotkeyRoute, InputSettings, OutputRoute};
-use auto_clicker_core::controller::InputReader;
+use auto_clicker_core::controller::{InputReader, Route, Routes};
 use auto_clicker_core::hotkeys::{Bindings, HotkeyStatus, Unavailable};
 use auto_clicker_core::input::{Input, InputError};
 
@@ -52,7 +52,25 @@ pub async fn detect(
     };
     let keyboards = || keyboard_access(bindings, &own);
     let hotkeys = choose_hotkeys(settings.hotkeys, keyboards, shortcuts_offered).await;
-    Detected { output, hotkeys }
+    let detected = Detected { output, hotkeys };
+    eprintln!("auto-clicker: {}", detected.routes().line());
+    detected
+}
+
+impl Detected {
+    /// The routes picked, as the tray names them.
+    pub fn routes(&self) -> Routes {
+        Routes {
+            output: match self.output {
+                Output::Kernel(_) => Route::Kernel,
+                Output::Portal(_) => Route::Portal,
+            },
+            hotkeys: match self.hotkeys {
+                InputReader::Devices => Route::Kernel,
+                InputReader::Desktop => Route::Portal,
+            },
+        }
+    }
 }
 
 /// The route for clicks: `open` makes the kernel's devices, `probe` checks
