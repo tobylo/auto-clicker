@@ -1,0 +1,103 @@
+//! What the watcher and the exit share: KWin, the script directory, whom
+//! calls are trusted from, and the current layout.
+//!
+//! Loading a script is: unload its plugin name, remove that script's files,
+//! write a new file, load it and run it. An unload that fails ends the load
+//! there (KWin refuses a name that is still loaded) and is tried again
+//! before the next load and at exit, so a failure is never forgotten. A
+//! script's files stay until it is unloaded, and the start sweeps any a
+//! crash left.
+
+use std::cell::RefCell;
+
+use auto_clicker_core::recording::Layout;
+
+use crate::dir::ScriptDir;
+use crate::receiver::SharedTrust;
+use crate::script::Script;
+use crate::scripting::{CallError, Scripting, bounded};
+use crate::token::Token;
+
+pub(crate) struct Session<S> {
+    pub(crate) scripting: S,
+    /// The checked directory, or why there is none: then nothing loads.
+    pub(crate) dir: Result<ScriptDir, String>,
+    pub(crate) trust: SharedTrust,
+    /// The current layout (brief I4), which `Platform::layout` gives.
+    pub(crate) layout: RefCell<Option<Layout>>,
+    /// `org.kde.KWin`'s owner as the watcher last saw it.
+    pub(crate) owner: RefCell<Option<String>>,
+}
+
+impl<S: Scripting> Session<S> {
+    /// Loads and runs `script` with `token` on `owner`'s KWin.
+    pub(crate) async fn load(
+        &self,
+        owner: &str,
+        script: Script,
+        token: &Token,
+    ) -> Result<(), CallError> {
+        self.unload(owner, script).await?;
+        let dir = self.dir.as_ref().map_err(|why| CallError(why.clone()))?;
+        let path = dir
+            .write(&script.file_name(token), &script.source(token))
+            .map_err(CallError)?;
+        let id = bounded(self.scripting.load(owner, &path, script)).await?;
+        if id < 0 {
+            return Err(CallError(format!(
+                "KWin refused to load {}",
+                script.plugin()
+            )));
+        }
+        bounded(self.scripting.run(owner, id)).await
+    }
+
+    /// Unloads `script` and removes its files.
+    pub(crate) async fn unload(&self, owner: &str, script: Script) -> Result<(), CallError> {
+        bounded(self.scripting.unload(owner, script)).await?;
+        self.sweep(Some(script));
+        Ok(())
+    }
+
+    /// Unloads both scripts at once, whatever was thought loaded, and
+    /// removes the files of each one unloaded; each failure is logged.
+    pub(crate) async fn unload_all(&self, owner: &str) {
+        let [first, second] = Script::ALL;
+        tokio::join!(
+            self.unload_logged(owner, first),
+            self.unload_logged(owner, second)
+        );
+    }
+
+    async fn unload_logged(&self, owner: &str, script: Script) {
+        if let Err(err) = self.unload(owner, script).await {
+            log_failure("unload", script, &err);
+        }
+    }
+
+    /// At exit: unloads both scripts from the KWin last seen, if any, within
+    /// one call's deadline. Without KWin nothing is loaded, and only files
+    /// are left to remove.
+    pub(crate) async fn exit(&self) {
+        let owner = self.owner.borrow().clone();
+        match owner {
+            Some(owner) => self.unload_all(&owner).await,
+            None => self.sweep(None),
+        }
+    }
+
+    /// Removes `script`'s files; every script's when `None`.
+    pub(crate) fn sweep(&self, script: Option<Script>) {
+        if let Ok(dir) = &self.dir {
+            dir.sweep(script);
+        }
+    }
+}
+
+pub(crate) fn log_failure(what: &str, script: Script, err: &CallError) {
+    eprintln!(
+        "auto-clicker: could not {what} the KWin script {}: {}",
+        script.plugin(),
+        err.0
+    );
+}

@@ -103,6 +103,7 @@ A recording keeps the clicks, keys, wheel and mouse movement, with their timing,
 - **Limits.** A recording stops and saves by itself after 60 minutes; the tooltip says so. A recording with nothing in it is not saved. Recording cannot start while clicking runs, and clicking cannot start while recording.
 - **Where.** Each recording is a file in `~/.local/share/auto-clicker/recordings/` (or under `$XDG_DATA_HOME`), named after the time it was made, such as `2026-11-09_18-04-05.123.json`; it shows as "Recording 2026-11-09 18:04". The folder and files are readable by you only. A recording is written once, whole, when it stops: if the computer crashes while recording, that recording is lost, but no half file is left, and saving never replaces an older recording.
 - **Privacy.** Keys are read for recording only while you record, and are written only to the recording. Nothing about them goes to the log or the tooltip.
+- **Where the pointer was.** On Plasma, a recording also keeps where the pointer was on the screens, in whole pixels, and the screens it was made on, so playback can put a click on the same pixel. The program asks KWin for both through two small KWin scripts: one that reports the screens, loaded while the program runs, and one that reports the pointer, loaded only while you record. They need no permission and cost nothing while the pointer is still. They are written to a private folder (`$XDG_RUNTIME_DIR/auto-clicker/`) and unloaded when the program quits; after a crash, the next start unloads them. While a game locks the pointer there is no position to keep, and the movement is recorded as before. Without KWin (another desktop), recordings keep movement only.
 
 The files are JSON, one event per line: microseconds since the start, what happened, and the key, button or amount. Keys and buttons use the kernel's names (`KEY_W`, `BTN_LEFT`):
 
@@ -112,6 +113,18 @@ The files are JSON, one event per line: microseconds since the start, what happe
 [1200,"move",3,-2],
 [480000,"wheel",-1],
 [2500000,"release","KEY_W"]
+]}
+```
+
+A recording with positions is version 2: it adds the screens it was made on (each one's place and size in logical pixels, and its scale in thousandths) and `"at"` events with the pointer's position. Version 2 is written only when there are positions, so a recording without them stays version 1:
+
+```json
+{"version":2,"name":"Recording 2026-11-09 18:04","created":"2026-11-09T18:04:05.123+01:00","duration_us":52000,"layout":[{"x":0,"y":0,"width":2048,"height":1280,"scale_milli":1250}],"events":[
+[0,"at",640,400],
+[1200,"move",3,-2],
+[1900,"at",643,398],
+[52000,"press","BTN_LEFT"],
+[52000,"release","BTN_LEFT"]
 ]}
 ```
 
@@ -125,7 +138,8 @@ Playback repeats what a recording holds, with its timing: each key, click, wheel
 - **Your own input.** The mouse and keyboard keep working while a recording plays and do not stop it: what you do mixes with what plays. A key you hold while the recording presses the same key stays down on Plasma until both have let go of it: the game sees one press and one release (measured on Plasma 6.8.2).
 - **Speed and repeats.** `[playback]` in the [configuration](#configuration) sets the speed, from a quarter to four times the recorded one, and how many times the recording plays: a number, or until stopped. Each repeat starts a whole recording after the one before, the idle time at the recording's end included, so rounds do not run together; the last round is over with its last event. A recording shorter than a tenth of a second plays once only: repeated, it would spin faster than you could stop it.
 - **Timing.** Every event is scheduled from the moment playback started, so small delays never add up, however long the recording or however many rounds. An event lands within a millisecond or two of its time (measured: 1.3 ms off at worst, recording the replay of a 20-event routine on the kernel's own clock). If the computer stalls, the events that became due play in order as soon as it can, and the ones after them keep their own times.
-- **Mouse movement.** Movement plays back as the same mouse movement, not as positions on the screen. In a game that locks the pointer (Minecraft while playing) that turns the view exactly as recorded. On the desktop, the pointer can end somewhere else than it did: the desktop applies its pointer acceleration to the program's virtual mouse, with that mouse's own settings, and acceleration depends on how fast the movement is, so it also changes with the playback speed. Measured on Plasma 6.8.2 with its default acceleration, 400 units of movement moved the pointer 397 to 795 pixels, depending on how fast it was recorded and played (niri gave the same figures). Recordings that click on desktop targets will be exact once positions are recorded as well (a later version).
+- **Mouse movement.** A recording with positions moves the pointer to each recorded position, so a click lands on the pixel it was made on (within a pixel at scales up to about 1.8). Movement made while a game locked the pointer has no positions and plays back as the same mouse movement, which turns the view exactly as recorded. Positions are used when every screen they lie on is still where it was, with the same size; a screen added beside them changes nothing. Otherwise, or while the screens are not known (another desktop, or KWin restarting), the whole playback uses mouse movement and the tooltip says why. If the screens change while positions play, playback stops and says so.
+- **Movement without positions.** Recordings without positions (made before positions existed, or away from Plasma) play back as mouse movement. On the desktop the pointer can then end somewhere else than it did: the desktop applies its pointer acceleration to the program's virtual mouse, and acceleration depends on how fast the movement is, so it also changes with the playback speed. Measured on Plasma 6.8.2 with its default acceleration, 400 units of movement moved the pointer 397 to 795 pixels, depending on how fast it was recorded and played (niri gave the same figures).
 - **Refusals.** Playback does not start while clicking or recording, and those do not start while a recording plays. A file that is missing, damaged or not a recording is not played: the tooltip says what is wrong with it, and nothing is pressed.
 - **Files.** Only files named the way the program names them appear in the Play menu. Recordings are never deleted by the program; a long one with much mouse movement can take tens of megabytes, so clear out the folder by hand now and then.
 

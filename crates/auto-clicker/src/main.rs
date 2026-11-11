@@ -9,7 +9,8 @@ mod tray;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use auto_clicker_backend_kernel::KernelBackend;
+use auto_clicker_backend_kernel::{KernelBackend, monotonic_now};
+use auto_clicker_backend_kwin::Kwin;
 use auto_clicker_backend_portal::{PortalOutput, token_path};
 use auto_clicker_core::config::{Config, OutputRoute, config_path};
 use auto_clicker_core::controller::{Controller, Links, Message, Platform};
@@ -50,6 +51,9 @@ async fn daemon() -> ExitCode {
         Ok(name) => name,
         Err(status) => return status,
     };
+    // Only now, with the name claimed, may anything clean up after an
+    // earlier daemon: a second one never touches its scripts.
+    let kwin = serve_kwin(&name).await;
     let (config, config_error) = load_config();
     let hotkeys = Hotkeys {
         route: config.input.hotkeys,
@@ -70,7 +74,11 @@ async fn daemon() -> ExitCode {
                 config,
                 config_error,
             };
-            serve(Kernel { hotkeys }, start, name).await
+            let platform = Kernel {
+                hotkeys,
+                kwin: kwin.clone(),
+            };
+            serve(platform, start, name, &kwin).await
         }
         OutputRoute::Portal => {
             let output = PortalOutput::new(token_path());
@@ -86,7 +94,12 @@ async fn daemon() -> ExitCode {
                 config,
                 config_error,
             };
-            serve(Portal { output, hotkeys }, start, name).await
+            let platform = Portal {
+                output,
+                hotkeys,
+                kwin: kwin.clone(),
+            };
+            serve(platform, start, name, &kwin).await
         }
     }
 }
@@ -101,14 +114,34 @@ struct Start<P: Platform> {
     config_error: Option<String>,
 }
 
-/// Runs a controller on `platform` until it ends.
-async fn serve<P: Platform>(platform: P, start: Start<P>, name: instance::Claim) -> ExitCode {
-    match connect(platform, start, name).await {
+/// Runs a controller on `platform` until it ends, then unloads what it
+/// loaded into `kwin`.
+async fn serve<P: Platform>(
+    platform: P,
+    start: Start<P>,
+    name: instance::Claim,
+    kwin: &Kwin,
+) -> ExitCode {
+    let status = match connect(platform, start, name).await {
         Ok(controller) => {
             controller.run().await;
             ExitCode::SUCCESS
         }
         Err(status) => status,
+    };
+    kwin.exit().await;
+    status
+}
+
+/// Receives from KWin on the claimed name; without it, recordings get no
+/// positions. Nothing is loaded until the controller runs.
+async fn serve_kwin(name: &instance::Claim) -> Kwin {
+    match timeout(BUS_TIMEOUT, Kwin::serve(name.connection(), monotonic_now)).await {
+        Ok(kwin) => kwin,
+        Err(_) => {
+            eprintln!("auto-clicker: the session bus did not answer; recordings get no positions");
+            Kwin::none()
+        }
     }
 }
 

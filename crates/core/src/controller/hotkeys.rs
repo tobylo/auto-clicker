@@ -68,7 +68,8 @@ pub(super) async fn received(events: &mut mpsc::UnboundedReceiver<HotkeyEvent>) 
 /// Drives the reader, which reads keyboards and sends what it finds; never
 /// resolves. A reader that returned is dropped: a finished future must not
 /// be polled again, and dropping it drops its sender, so its channel ends
-/// after its last events.
+/// after its last events. The layout watcher is the same kind of future and
+/// is driven the same way.
 pub(super) fn drive(reader: &mut Option<HotkeyReader>) -> impl Future<Output = Infallible> + '_ {
     poll_fn(move |cx| {
         if let Some(running) = reader

@@ -1,6 +1,7 @@
 //! The controller's platforms: uinput devices or the desktop's portal for
 //! output, and on either the hotkeys from the keyboards or from the
-//! desktop's shortcuts, with the clocks and directory recordings need.
+//! desktop's shortcuts, the screen layout and the pointer from KWin, and the
+//! clocks and directory recordings need.
 
 use std::future::pending;
 use std::path::PathBuf;
@@ -9,14 +10,16 @@ use std::time::Duration;
 use auto_clicker_backend_kernel::{
     DeviceIdentity, InputSources, KernelBackend, local_time, monotonic_now, read_input,
 };
+use auto_clicker_backend_kwin::Kwin;
 use auto_clicker_backend_portal::{PortalBackend, PortalOutput, read_shortcuts};
 use auto_clicker_core::config::HotkeyRoute;
 use auto_clicker_core::controller::{
-    HotkeyReader, HotkeySender, InputLifetime, InputLoss, InputReader, OpenInput, Platform,
+    HotkeyReader, HotkeySender, InputLifetime, InputLoss, InputReader, LayoutSignal, LayoutWatch,
+    OpenInput, Platform,
 };
 use auto_clicker_core::hotkeys::Bindings;
 use auto_clicker_core::input::Input;
-use auto_clicker_core::recording::{LocalTime, RecordingFeed, recordings_dir};
+use auto_clicker_core::recording::{Layout, LocalTime, RecordingFeed, recordings_dir};
 
 /// Where hotkeys come from, on either output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +59,7 @@ impl Hotkeys {
 
 pub struct Kernel {
     pub hotkeys: Hotkeys,
+    pub kwin: Kwin,
 }
 
 impl Platform for Kernel {
@@ -96,12 +100,21 @@ impl Platform for Kernel {
     fn input_reader(&self) -> InputReader {
         self.hotkeys.reader()
     }
+
+    fn layout(&self) -> Option<Layout> {
+        self.kwin.layout()
+    }
+
+    fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
+        self.kwin.watch(feed, changed)
+    }
 }
 
 /// Output through the desktop's RemoteDesktop portal, one session per run.
 pub struct Portal {
     pub output: PortalOutput,
     pub hotkeys: Hotkeys,
+    pub kwin: Kwin,
 }
 
 impl Platform for Portal {
@@ -142,6 +155,14 @@ impl Platform for Portal {
         feed: RecordingFeed,
     ) -> HotkeyReader {
         self.hotkeys.read(Vec::new(), send, feed)
+    }
+
+    fn layout(&self) -> Option<Layout> {
+        self.kwin.layout()
+    }
+
+    fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
+        self.kwin.watch(feed, changed)
     }
 }
 
@@ -185,10 +206,12 @@ mod tests {
         ] {
             let kernel = Kernel {
                 hotkeys: hotkeys(route),
+                kwin: Kwin::none(),
             };
             let portal = Portal {
                 output: PortalOutput::new(None),
                 hotkeys: hotkeys(route),
+                kwin: Kwin::none(),
             };
             assert_eq!(kernel.input_reader(), reader);
             assert_eq!(portal.input_reader(), reader);
@@ -199,10 +222,12 @@ mod tests {
     fn the_clocks_and_directory_are_the_backends_and_cores() {
         let kernel = Kernel {
             hotkeys: hotkeys(HotkeyRoute::Kernel),
+            kwin: Kwin::none(),
         };
         let portal = Portal {
             output: PortalOutput::new(None),
             hotkeys: hotkeys(HotkeyRoute::Portal),
+            kwin: Kwin::none(),
         };
         for (clock, local, dir) in [
             (
