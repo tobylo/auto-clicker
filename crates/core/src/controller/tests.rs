@@ -77,6 +77,9 @@ struct Record {
     no_local_time: bool,
     /// The reader gets its hotkeys from the desktop.
     desktop_reader: bool,
+    /// Opens wait until the test releases them through `open_gate`.
+    hold_opens: bool,
+    open_gate: Option<tokio::sync::oneshot::Sender<()>>,
     /// The screen layout the platform reports; unknown when `None`.
     layout: Option<Layout>,
 }
@@ -247,10 +250,23 @@ impl Platform for FakePlatform {
 
     const LIFETIME: InputLifetime = InputLifetime::Kept;
 
-    /// Opens at once, as the kernel backend does.
+    /// Opens at once, as the kernel backend does, unless the test holds
+    /// opens.
     fn open_input(&mut self) -> OpenInput<Devices> {
+        let gate = self.0.with(|r| {
+            r.hold_opens.then(|| {
+                let (release, released) = tokio::sync::oneshot::channel();
+                r.open_gate = Some(release);
+                released
+            })
+        });
         let opened = self.open_now();
-        Box::pin(async move { opened })
+        Box::pin(async move {
+            if let Some(released) = gate {
+                let _ = released.await;
+            }
+            opened
+        })
     }
 
     fn event_clock(&self) -> Duration {

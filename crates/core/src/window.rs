@@ -32,7 +32,9 @@ pub const MAX_TEXT: usize = 500;
 /// The most problems a view lists.
 pub const MAX_PROBLEMS: usize = 8;
 
-/// What the window asks, with a number the answer carries.
+/// What the window asks, with a number the answer carries. The window asks
+/// one thing at a time: it sends the next request once the view answers
+/// this one, since the view holds only the answer to the last request.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {

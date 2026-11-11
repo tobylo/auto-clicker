@@ -171,6 +171,32 @@ async fn another_keyboard_fires_and_ours_never_does() {
 
 #[tokio::test]
 #[ignore = "needs /dev/uinput and the input group; run by hand"]
+async fn ctrl_held_before_the_reader_opens_a_keyboard_counts() {
+    // Ctrl goes down before the reader exists, as when the user holds it
+    // while a save starts the reader again: the reader never sees the press.
+    let mut keyboard = Keyboard::full("auto-clicker test held keyboard");
+    keyboard.key(LEFTCTRL, 1);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    with_reader(|mut reader, _input| async move {
+        let deadline = Instant::now() + DEVICE_TIMEOUT;
+        loop {
+            assert!(Instant::now() < deadline, "F24 with Ctrl held never fired");
+            keyboard.key(F24, 1);
+            keyboard.key(F24, 0);
+            if let Some(event) = reader.next_hotkey(Duration::from_millis(200)).await {
+                assert_eq!(event, HotkeyEvent::Fired(Action::ToggleClicking));
+                break;
+            }
+        }
+        keyboard.key(LEFTCTRL, 0);
+        let released = reader.next_hotkey(QUIET).await;
+        assert_eq!(released, Some(HotkeyEvent::ModifiersReleased));
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs /dev/uinput and the input group; run by hand"]
 async fn ctrl_on_one_keyboard_and_f24_on_another_fires() {
     with_reader(|mut reader, _input| async move {
         // The keys first: the reader then polls them before the modifiers,

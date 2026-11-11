@@ -191,6 +191,38 @@ async fn a_new_window_ends_the_session_of_the_one_before() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_window_that_keeps_asking_holds_up_neither_a_run_nor_a_stop() {
+    local(async {
+        let s = setup().await;
+        s.d.start_by_hotkey().await;
+        let requests = s.window.requests.clone();
+        let flood = tokio::task::spawn_local(async move {
+            for id in 0.. {
+                let ask = save(draft(hold_right), Agreed::default());
+                if requests.send(Request { id, ask }).await.is_err() {
+                    return;
+                }
+            }
+        });
+        for _ in 0..10 {
+            tokio::time::advance(Duration::from_millis(100)).await;
+            s.d.settle().await;
+        }
+        let clicks =
+            s.d.shared
+                .calls()
+                .iter()
+                .filter(|call| **call == LEFT_DOWN)
+                .count();
+        assert!(clicks >= 5, "{clicks} clicks in a second");
+        s.d.press_hotkey().await;
+        assert_eq!(s.d.activity(), Activity::Idle);
+        flood.abort();
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_window_that_closes_its_side_is_let_go_and_quit_lets_go_of_any() {
     local(async {
         let s = setup().await;
@@ -423,15 +455,22 @@ async fn a_save_while_devices_open_again_is_refused() {
         )
         .await;
         s.d.start_by_hotkey().await;
-        // A failed write loses the devices, which open again. The save is
-        // handled before the open ends: no reader may start meanwhile.
+        // A failed write loses the devices, which open again, slowly: no
+        // reader may start while they do, since it would not know them.
+        s.d.shared.with(|r| r.hold_opens = true);
         s.d.shared.log(0).fail_once(LEFT_UP);
-        s.d.inbox.send(Message::Stop).unwrap();
+        s.d.send(Message::Stop).await;
+        assert_eq!(s.d.activity(), Activity::Idle);
         let held = draft(|d| {
             d.clicker.mode = ModeName::HoldButton;
             moved(d);
         });
         assert_eq!(s.window.save(&s.d, held.clone()).await, Outcome::Busy);
+        assert_eq!(s.d.shared.with(|r| r.bindings.len()), 1);
+        let release = s.d.shared.with(|r| r.open_gate.take()).unwrap();
+        release.send(()).unwrap();
+        s.d.settle().await;
+        assert_eq!(s.window.save(&s.d, held).await, Outcome::Saved);
         assert_eq!(
             s.d.shared.steps(),
             [
@@ -439,9 +478,10 @@ async fn a_save_while_devices_open_again_is_refused() {
                 Step::ReaderDropped(0),
                 Step::Opened(Some(1)),
                 Step::ReaderStarted(Some(1)),
+                Step::ReaderDropped(1),
+                Step::ReaderStarted(Some(1)),
             ]
         );
-        assert_eq!(s.window.save(&s.d, held).await, Outcome::Saved);
         let started = s.d.shared.with(|r| r.bindings.clone());
         assert_eq!(started.last(), Some(&moved_bindings()));
     })
