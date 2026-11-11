@@ -462,7 +462,6 @@ impl<P: Platform> Controller<P> {
             }
             self.finish_stopped_run().await;
             self.report_sleep();
-            self.rebind_when_idle();
         }
         self.stop_recording(None);
         if let State::Running(running) = mem::replace(&mut self.state, State::Idle) {

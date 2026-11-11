@@ -55,7 +55,7 @@ pub use draft::{
 };
 pub use error::{ConfigError, Problem};
 use file::Seen;
-pub use file::{ConfigFile, SaveError, Stale};
+pub use file::{ConfigFile, SaveError, Saved, Stale};
 pub use names::{ButtonName, ModeName, RouteName};
 pub use write::render;
 

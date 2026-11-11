@@ -23,6 +23,15 @@ use crate::hotkeys::Action;
 /// The longest line either side sends or reads, newline included.
 pub const MAX_LINE: usize = 64 * 1024;
 
+/// The most characters of one message (a problem, a refusal, a failure) a
+/// view carries; a longer one is cut, so it can quote what it is about
+/// (a hotkey the window sent, a line of the config file) and the view still
+/// fits in [`MAX_LINE`], escaped as JSON escapes it.
+pub const MAX_TEXT: usize = 500;
+
+/// The most problems a view lists.
+pub const MAX_PROBLEMS: usize = 8;
+
 /// What the window asks, with a number the answer carries.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -89,6 +98,11 @@ pub struct Answer {
 pub enum Outcome {
     /// Written and in use.
     Saved,
+    /// Written and in use, but not flushed to disk: why.
+    SavedUnsynced(String),
+    /// Nothing was written: the program is clicking, recording or playing,
+    /// or about to. Save once it is idle.
+    Busy,
     /// A value is not valid; nothing was written.
     Refused(Refusal),
     /// Nothing was written: the save needs the user's word first. Ask
@@ -107,6 +121,28 @@ pub enum Confirm {
     /// This action's hotkey has no modifier, so it fires on a plain key
     /// press, in a game too.
     WithoutModifier(Action),
+}
+
+impl Outcome {
+    /// The outcome with its message cut to [`MAX_TEXT`].
+    pub fn bounded(self) -> Outcome {
+        match self {
+            Outcome::Refused(Refusal { field, reason }) => {
+                Outcome::Refused(Refusal::new(field, bounded(&reason)))
+            }
+            Outcome::Failed(why) => Outcome::Failed(bounded(&why)),
+            Outcome::SavedUnsynced(why) => Outcome::SavedUnsynced(bounded(&why)),
+            other => other,
+        }
+    }
+}
+
+/// `text` cut to [`MAX_TEXT`] characters, with "…" where it was cut.
+pub fn bounded(text: &str) -> String {
+    match text.char_indices().nth(MAX_TEXT) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_owned(),
+    }
 }
 
 /// A line that is not a message of the protocol.

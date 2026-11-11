@@ -19,14 +19,55 @@ use nix::fcntl::{RenameFlags, renameat2};
 /// The new file is readable and writable by its owner only (mode 0600):
 /// recordings hold keystrokes.
 pub fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    atomic_save(path, contents, Place::Replace)?.map_err(Unsynced::into_error)
+}
+
+/// How [`atomic_save`] puts the new file in place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    /// Over whatever is at the path.
+    Replace,
+    /// Only where nothing is: `AlreadyExists` if a file appeared.
+    New,
+}
+
+/// The new contents are in place, but flushing their directory failed, so
+/// the change may not survive a power loss.
+#[derive(Debug)]
+pub struct Unsynced {
+    placed: PathBuf,
+    error: io::Error,
+}
+
+impl Unsynced {
+    pub fn into_error(self) -> io::Error {
+        io::Error::new(
+            self.error.kind(),
+            format!(
+                "{} was written, but syncing its directory failed, so the change may not \
+                 survive a power loss: {}",
+                self.placed.display(),
+                self.error
+            ),
+        )
+    }
+}
+
+/// [`atomic_write`], placing the file as `place` says, and telling a write
+/// that failed (the outer error: `path` is untouched) from one that is in
+/// place but not flushed to disk (the inner one).
+pub fn atomic_save(path: &Path, contents: &[u8], place: Place) -> io::Result<Result<(), Unsynced>> {
     let dir = parent_dir(path)?;
-    write_then_place(
+    let placed = write_then_place(
         dir,
         path,
         |out| out.write_all(contents),
-        |temp| fs::rename(temp, path).map(|()| path.to_path_buf()),
-    )
-    .map(drop)
+        |temp| match place {
+            Place::Replace => fs::rename(temp, path).map(|()| path.to_path_buf()),
+            Place::New => place_new(temp, std::slice::from_ref(&path.to_path_buf())),
+        },
+    )?;
+    Ok(placed.map(drop))
 }
 
 /// Writes a new file, atomically, never replacing one: at the first of
@@ -57,7 +98,8 @@ pub fn atomic_create(
             "the paths are not in one directory",
         ));
     }
-    write_then_place(dir, first, write, |temp| place_new(temp, paths))
+    write_then_place(dir, first, write, |temp| place_new(temp, paths))?
+        .map_err(Unsynced::into_error)
 }
 
 /// Renames `temp` to the first of `paths` that is free.
@@ -93,32 +135,24 @@ fn display_first(paths: &[PathBuf]) -> String {
 
 /// The steps both writers share: write a temporary file beside `path` with
 /// `write`, flush it to disk, `place` it, and flush `dir`. A failure before
-/// the file is placed removes the temporary file.
+/// the file is placed removes the temporary file and is the outer error;
+/// a failure to flush `dir` after is the inner one.
 fn write_then_place(
     dir: &Path,
     path: &Path,
     write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
     place: impl FnOnce(&Path) -> io::Result<PathBuf>,
-) -> io::Result<PathBuf> {
+) -> io::Result<Result<PathBuf, Unsynced>> {
     let (temp, file) = create_temp(dir, path)?;
     let placed = fill(file, write).and_then(|()| place(&temp));
     let placed = match placed {
         Ok(placed) => placed,
         Err(err) => return Err(remove_temp(&temp, err)),
     };
-    File::open(dir)
-        .and_then(|dir| dir.sync_all())
-        .map_err(|err| {
-            io::Error::new(
-                err.kind(),
-                format!(
-                    "{} was written, but syncing its directory failed, so the change may not \
-                 survive a power loss: {err}",
-                    placed.display()
-                ),
-            )
-        })?;
-    Ok(placed)
+    Ok(match File::open(dir).and_then(|dir| dir.sync_all()) {
+        Ok(()) => Ok(placed),
+        Err(error) => Err(Unsynced { placed, error }),
+    })
 }
 
 /// Writes through a buffer and flushes the file to disk; the file is closed
@@ -185,6 +219,32 @@ mod tests {
 
     use super::*;
     use crate::test_support::{TempDir, permissions_apply};
+
+    #[test]
+    fn a_new_file_is_placed_only_where_none_is() {
+        let dir = TempDir::new();
+        let path = dir.path().join("config.toml");
+        atomic_save(&path, b"first", Place::New).unwrap().unwrap();
+        let err = atomic_save(&path, b"second", Place::New).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&path).unwrap(), b"first");
+        assert_eq!(dir.entries(), ["config.toml"]);
+    }
+
+    #[test]
+    fn a_file_placed_in_a_directory_that_cannot_be_flushed_is_in_place() {
+        let dir = TempDir::new();
+        let path = dir.path().join("config.toml");
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o300)).unwrap();
+        let saved = atomic_save(&path, b"new", Place::Replace);
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        if !permissions_apply() {
+            return;
+        }
+        let unsynced = saved.unwrap().unwrap_err().into_error();
+        assert!(unsynced.to_string().contains("was written"), "{unsynced}");
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+    }
 
     #[test]
     fn writes_a_new_file_and_leaves_nothing_else() {

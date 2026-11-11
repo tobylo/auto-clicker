@@ -255,10 +255,6 @@ impl From<&Config> for Draft {
     }
 }
 
-/// How far from the nearest guess [`rate_for`] looks for a rate that reads
-/// back exactly, in steps of one representable number.
-const RATE_SEARCH: usize = 64;
-
 /// The interval in whole milliseconds when it is one, else as the clicks
 /// per second that read back to exactly this interval.
 pub fn spell_interval(interval: Interval) -> IntervalDraft {
@@ -269,25 +265,13 @@ pub fn spell_interval(interval: Interval) -> IntervalDraft {
     }
 }
 
-/// A rate whose interval, computed as the file's `clicks_per_second` is, is
-/// exactly `interval`. Every interval that is not whole milliseconds came
-/// from such a rate, so one is near the plain quotient; of those found, the
-/// nearest to it, which prints shortest.
+/// The rate whose interval, computed as the file's `clicks_per_second` is,
+/// is exactly `interval`: its reciprocal. Reading it back rounds to the
+/// nearest nanosecond, and over every interval allowed (10 ms to a day)
+/// the two divisions are off by less than 0.05 ns, so it reads back to
+/// `interval` itself.
 fn rate_for(interval: Duration) -> f64 {
-    let guess = 1.0 / interval.as_secs_f64();
-    let reads_back = |rate: f64| Duration::try_from_secs_f64(1.0 / rate).ok() == Some(interval);
-    let (mut up, mut down) = (guess, guess);
-    for _ in 0..=RATE_SEARCH {
-        if reads_back(up) {
-            return up;
-        }
-        if reads_back(down) {
-            return down;
-        }
-        up = up.next_up();
-        down = down.next_down();
-    }
-    guess
+    1.0 / interval.as_secs_f64()
 }
 
 #[cfg(test)]
