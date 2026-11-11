@@ -13,6 +13,7 @@ use auto_clicker_backend_portal::{PortalBackend, PortalOutput, read_shortcuts};
 use auto_clicker_core::config::HotkeyRoute;
 use auto_clicker_core::controller::{
     HotkeyReader, HotkeySender, InputLifetime, InputLoss, InputReader, OpenInput, Platform,
+    ReadInput,
 };
 use auto_clicker_core::hotkeys::Bindings;
 use auto_clicker_core::input::Input;
@@ -22,9 +23,6 @@ use auto_clicker_core::recording::{LocalTime, RecordingFeed, recordings_dir};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Hotkeys {
     pub route: HotkeyRoute,
-    /// The config's bindings: matched against the keyboards, or asked of
-    /// the desktop at its first bind.
-    pub bindings: Bindings,
 }
 
 impl Hotkeys {
@@ -36,18 +34,19 @@ impl Hotkeys {
     }
 
     /// Starts the reader of this route. Only the keyboard reader has
-    /// devices of the program's `own` to leave out and a recording to feed.
-    fn read(
-        self,
-        own: Vec<DeviceIdentity>,
-        send: HotkeySender,
-        feed: RecordingFeed,
-    ) -> HotkeyReader {
+    /// devices of the program's `own` to leave out and a recording to feed;
+    /// the desktop's is asked for the bindings at its first bind.
+    fn read(self, own: Vec<DeviceIdentity>, reading: ReadInput) -> HotkeyReader {
+        let ReadInput {
+            bindings,
+            send,
+            feed,
+        } = reading;
         match self.route {
-            HotkeyRoute::Kernel => evdev_reader(self.bindings, own, send, feed),
+            HotkeyRoute::Kernel => evdev_reader(bindings, own, send, feed),
             // The controller stops the reader by dropping it, which closes
             // the desktop's session.
-            HotkeyRoute::Portal => Box::pin(read_shortcuts(self.bindings, move |event| {
+            HotkeyRoute::Portal => Box::pin(read_shortcuts(bindings, move |event| {
                 send.send(event);
             })),
         }
@@ -83,14 +82,13 @@ impl Platform for Kernel {
     fn read_input(
         &mut self,
         own: Option<&Input<KernelBackend>>,
-        send: HotkeySender,
-        feed: RecordingFeed,
+        reading: ReadInput,
     ) -> HotkeyReader {
         // The reader keeps its own copy: the devices move into each run.
         let own: Vec<DeviceIdentity> = own
             .map(|input| input.backend().devices().to_vec())
             .unwrap_or_default();
-        self.hotkeys.read(own, send, feed)
+        self.hotkeys.read(own, reading)
     }
 
     fn input_reader(&self) -> InputReader {
@@ -138,10 +136,9 @@ impl Platform for Portal {
     fn read_input(
         &mut self,
         _own: Option<&Input<PortalBackend>>,
-        send: HotkeySender,
-        feed: RecordingFeed,
+        reading: ReadInput,
     ) -> HotkeyReader {
-        self.hotkeys.read(Vec::new(), send, feed)
+        self.hotkeys.read(Vec::new(), reading)
     }
 }
 
@@ -171,10 +168,7 @@ mod tests {
     use super::*;
 
     fn hotkeys(route: HotkeyRoute) -> Hotkeys {
-        Hotkeys {
-            route,
-            bindings: Bindings::default(),
-        }
+        Hotkeys { route }
     }
 
     #[test]
