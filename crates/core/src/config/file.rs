@@ -132,25 +132,23 @@ fn write_error(err: io::Error, place: Place) -> SaveError {
 
 /// Writes the file, creating its directory first if it is missing. The
 /// outer error: nothing was written. The inner one: the file is in place,
-/// but flushing it or a directory entry on its way failed.
+/// but flushing it or a directory on its path failed.
 fn write(path: &Path, contents: &[u8], place: Place) -> io::Result<Result<(), io::Error>> {
     let dir = directory_of(path);
-    let created: Vec<PathBuf> = dir
-        .ancestors()
-        .take_while(|dir| !dir.as_os_str().is_empty() && !dir.exists())
-        .map(Path::to_path_buf)
-        .collect();
     std::fs::create_dir_all(dir)?;
     let placed = atomic_save(path, contents, place)?.map_err(Unsynced::into_error);
-    Ok(placed.and_then(|()| flush_entries(dir, &created)))
+    Ok(placed.and_then(|()| flush_path(dir)))
 }
 
-/// Flushes the entry of `dir`, and of each directory this save created, in
-/// its parent: every save, since an earlier save may have created `dir` and
-/// failed to flush it. A power loss then cannot take the file's directory.
-fn flush_entries(dir: &Path, created: &[PathBuf]) -> io::Result<()> {
-    let entries = std::iter::once(dir).chain(created.iter().map(PathBuf::as_path));
-    for entry in entries {
+/// Flushes every directory on the way to `dir`, so each one's entry in its
+/// parent is on disk: on every save, since an earlier save may have created
+/// some of them and failed to flush them.
+fn flush_path(dir: &Path) -> io::Result<()> {
+    let named = dir
+        .ancestors()
+        .take_while(|dir| !dir.as_os_str().is_empty());
+    // The root is in no directory.
+    for entry in named.filter(|dir| dir.parent().is_some()) {
         std::fs::File::open(directory_of(entry))?.sync_all()?;
     }
     Ok(())
