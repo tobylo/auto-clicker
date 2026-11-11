@@ -141,17 +141,12 @@ impl Platform for PerRunPlatform {
         })
     }
 
-    fn read_input(
-        &mut self,
-        own: Option<&Input<Closing>>,
-        send: HotkeySender,
-        feed: RecordingFeed,
-    ) -> HotkeyReader {
+    fn read_input(&mut self, own: Option<&Input<Closing>>, reading: ReadInput) -> HotkeyReader {
         assert!(
             own.is_none(),
             "per-run devices are never shown to the reader"
         );
-        self.fake().read_input(None, send, feed)
+        self.fake().read_input(None, reading)
     }
 
     fn event_clock(&self) -> Duration {

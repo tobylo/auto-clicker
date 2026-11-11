@@ -67,6 +67,8 @@ struct Record {
     pressed_during_a_run: Option<HotkeyEvent>,
     /// The feed each reader was given.
     feeds: Vec<RecordingFeed>,
+    /// The bindings each reader was given.
+    bindings: Vec<Bindings>,
     /// Where event-clock time 0 is.
     epoch: Option<Instant>,
     /// Where recordings are saved; none when `None`.
@@ -75,6 +77,9 @@ struct Record {
     no_local_time: bool,
     /// The reader gets its hotkeys from the desktop.
     desktop_reader: bool,
+    /// Opens wait until the test releases them through `open_gate`.
+    hold_opens: bool,
+    open_gate: Option<tokio::sync::oneshot::Sender<()>>,
     /// The screen layout the platform reports; unknown when `None`.
     layout: Option<Layout>,
 }
@@ -245,10 +250,23 @@ impl Platform for FakePlatform {
 
     const LIFETIME: InputLifetime = InputLifetime::Kept;
 
-    /// Opens at once, as the kernel backend does.
+    /// Opens at once, as the kernel backend does, unless the test holds
+    /// opens.
     fn open_input(&mut self) -> OpenInput<Devices> {
+        let gate = self.0.with(|r| {
+            r.hold_opens.then(|| {
+                let (release, released) = tokio::sync::oneshot::channel();
+                r.open_gate = Some(release);
+                released
+            })
+        });
         let opened = self.open_now();
-        Box::pin(async move { opened })
+        Box::pin(async move {
+            if let Some(released) = gate {
+                let _ = released.await;
+            }
+            opened
+        })
     }
 
     fn event_clock(&self) -> Duration {
@@ -286,15 +304,16 @@ impl Platform for FakePlatform {
         }
     }
 
-    fn read_input(
-        &mut self,
-        own: Option<&Input<Devices>>,
-        send: HotkeySender,
-        feed: RecordingFeed,
-    ) -> HotkeyReader {
+    fn read_input(&mut self, own: Option<&Input<Devices>>, reading: ReadInput) -> HotkeyReader {
+        let ReadInput {
+            bindings,
+            send,
+            feed,
+        } = reading;
         let own = own.map(|input| input.backend().id);
         let (n, ends_with, busy) = self.0.with(|r| {
             r.steps.push(Step::ReaderStarted(own));
+            r.bindings.push(bindings);
             r.senders.push(send.clone());
             r.feeds.push(feed);
             (
@@ -348,13 +367,24 @@ fn config(mode: Mode) -> Config {
 /// Starts a controller on a local task, with an open session unless
 /// `session_open` is false.
 async fn daemon_with(config: Config, shared: Shared, session_open: bool) -> Daemon {
+    daemon_prepared(config, shared, session_open, |_| {}).await
+}
+
+/// [`daemon_with`], with `prepare` given the controller before it runs.
+async fn daemon_prepared(
+    config: Config,
+    shared: Shared,
+    session_open: bool,
+    prepare: impl FnOnce(&mut Controller<FakePlatform>),
+) -> Daemon {
     shared.with(|r| {
         r.epoch = Some(Instant::now());
         r.recordings.get_or_insert_with(|| Arc::new(TempDir::new()));
     });
     let input = shared.devices();
     let platform = FakePlatform(shared.clone());
-    let (controller, links) = Controller::new(platform, Some(input), config, None);
+    let (mut controller, links) = Controller::new(platform, Some(input), config, None);
+    prepare(&mut controller);
     let Links {
         send: inbox,
         view,
@@ -1143,3 +1173,4 @@ mod per_run;
 mod playback;
 mod positions;
 mod recording;
+mod settings;

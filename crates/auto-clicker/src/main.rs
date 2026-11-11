@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use auto_clicker_backend_kernel::KernelBackend;
 use auto_clicker_backend_portal::{PortalOutput, token_path};
-use auto_clicker_core::config::{Config, OutputRoute, config_path};
+use auto_clicker_core::config::{Config, ConfigFile, OutputRoute, config_path};
 use auto_clicker_core::controller::{Controller, Links, Message, Platform};
 use auto_clicker_core::input::{Input, InputError};
 use tokio::signal::unix::{SignalKind, signal};
@@ -50,10 +50,9 @@ async fn daemon() -> ExitCode {
         Ok(name) => name,
         Err(status) => return status,
     };
-    let (config, config_error) = load_config();
+    let (config, config_error, file) = load_config();
     let hotkeys = Hotkeys {
         route: config.input.hotkeys,
-        bindings: config.hotkeys,
     };
     match config.input.output {
         OutputRoute::Kernel => {
@@ -69,6 +68,7 @@ async fn daemon() -> ExitCode {
                 problem: None,
                 config,
                 config_error,
+                file,
             };
             serve(Kernel { hotkeys }, start, name).await
         }
@@ -85,6 +85,7 @@ async fn daemon() -> ExitCode {
                 problem,
                 config,
                 config_error,
+                file,
             };
             serve(Portal { output, hotkeys }, start, name).await
         }
@@ -99,6 +100,8 @@ struct Start<P: Platform> {
     problem: Option<InputError>,
     config: Config,
     config_error: Option<String>,
+    /// The config file as read, where the settings window saves.
+    file: ConfigFile,
 }
 
 /// Runs a controller on `platform` until it ends.
@@ -123,6 +126,7 @@ async fn connect<P: Platform>(
     if let Some(problem) = &start.problem {
         controller.report_input_problem(problem);
     }
+    controller.keep_config_file(start.file);
     let Links {
         send,
         view: views,
@@ -158,19 +162,23 @@ async fn claim_name() -> Result<instance::Claim, ExitCode> {
     }
 }
 
-/// The config, and its error as the tray shows it.
-fn load_config() -> (Config, Option<String>) {
+/// The config, its error as the tray shows it, and the file as read.
+fn load_config() -> (Config, Option<String>, ConfigFile) {
     let Some(path) = config_path() else {
         let error = "no config directory: neither XDG_CONFIG_HOME nor HOME is set";
         eprintln!("auto-clicker: {error}; using the defaults");
-        return (Config::default(), Some(error.to_owned()));
+        return (
+            Config::default(),
+            Some(error.to_owned()),
+            ConfigFile::none(),
+        );
     };
     let loaded = Config::load(&path);
     let error = loaded.error.map(|err| err.to_string());
     if let Some(error) = &error {
         eprintln!("auto-clicker: {error}; using the defaults");
     }
-    (loaded.config, error)
+    (loaded.config, error, loaded.file)
 }
 
 /// The exit status for kernel devices that could not be opened at start.

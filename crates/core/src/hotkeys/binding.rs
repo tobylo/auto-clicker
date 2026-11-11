@@ -7,6 +7,8 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 use crate::input::Key;
 
 /// A modifier a binding can hold. Left and right keys count as the same
@@ -201,5 +203,20 @@ impl fmt::Display for Binding {
             write!(f, "{}{}", first.to_ascii_uppercase(), chars.as_str())?;
         }
         Ok(())
+    }
+}
+
+/// A binding travels as its text, "Ctrl+Shift+F6", and is read back through
+/// [`Binding::parse`].
+impl Serialize for Binding {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Binding {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Binding::parse(&text).map_err(serde::de::Error::custom)
     }
 }

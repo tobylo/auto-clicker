@@ -7,6 +7,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::clicker::{ClickerSettings, Mode, Position, Repeat};
 use crate::hotkeys::{Binding, DESKTOP_RELEASE_PAUSE, Unavailable};
 use crate::input::{Button, Key};
@@ -14,7 +16,8 @@ use crate::playback::{PlaybackSettings, Speed};
 use crate::recording::{FileName, MAX_DURATION};
 
 /// What the controller is doing, as the tray shows it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Activity {
     Idle,
     /// A start from the tray counts down; whole seconds left, rounded up.
@@ -77,7 +80,8 @@ pub struct Listed {
 }
 
 /// A hotkey as the tray names it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Hotkey {
     /// The config's binding, matched by the program itself.
     Bound(Binding),
@@ -113,7 +117,8 @@ impl Hotkey {
 }
 
 /// Why no recording can start here, whatever state the controller is in.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum NoRecording {
     /// The desktop delivers the hotkeys (`hotkeys = "portal"`): nothing
     /// reads the keyboards and mice a recording is made of.

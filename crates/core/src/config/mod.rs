@@ -34,17 +34,30 @@
 //! repeat = 1                    # a number of plays, or "until_stopped"
 //! ```
 
+pub(crate) mod check;
+mod draft;
 mod error;
+mod file;
 mod hotkeys;
+mod names;
 mod raw;
 mod read;
 mod validate;
+mod write;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub use draft::{
+    ClickerDraft, CountDraft, Draft, Field, HotkeysDraft, InputDraft, IntervalDraft, PlaybackDraft,
+    PositionDraft, Refusal, spell_interval,
+};
 pub use error::{ConfigError, Problem};
+use file::Seen;
+pub use file::{ConfigFile, SaveError, Saved, Stale};
+pub use names::{ButtonName, ModeName, RouteName};
+pub use write::render;
 
 use crate::clicker::ClickerSettings;
 use crate::hotkeys::Bindings;
@@ -108,12 +121,13 @@ impl Default for Config {
     }
 }
 
-/// The result of loading the config: always a config to run on, and the
-/// error, if the file could not be used.
+/// The result of loading the config: always a config to run on, the error,
+/// if the file could not be used, and the file as it was read, for saving.
 #[derive(Debug)]
 pub struct Loaded {
     pub config: Config,
     pub error: Option<ConfigError>,
+    pub file: ConfigFile,
 }
 
 impl Config {
@@ -128,26 +142,31 @@ impl Config {
 
     /// Loads the file at `path`. Never writes to it.
     pub fn load(path: &Path) -> Loaded {
-        let parsed = read::read_config(path).and_then(|bytes| bytes.map(parse_bytes).transpose());
+        let parsed = read::read_config(path).and_then(|bytes| match bytes {
+            None => Ok((Config::default(), Seen::Missing)),
+            Some(bytes) => parse_bytes(&bytes).map(|config| (config, Seen::Text(bytes))),
+        });
         match parsed {
-            Ok(config) => Loaded {
-                config: config.unwrap_or_default(),
+            Ok((config, seen)) => Loaded {
+                config,
                 error: None,
+                file: ConfigFile::new(path, seen),
             },
             Err(problem) => Loaded {
                 config: Config::default(),
                 error: Some(ConfigError::new(path, problem)),
+                file: ConfigFile::new(path, Seen::Unusable),
             },
         }
     }
 }
 
-fn parse_bytes(bytes: Vec<u8>) -> Result<Config, Problem> {
-    let text = String::from_utf8(bytes).map_err(|_| Problem::Invalid {
+fn parse_bytes(bytes: &[u8]) -> Result<Config, Problem> {
+    let text = std::str::from_utf8(bytes).map_err(|_| Problem::Invalid {
         line: None,
         reason: "the file is not UTF-8 text".to_owned(),
     })?;
-    Config::parse(&text)
+    Config::parse(text)
 }
 
 /// Where the config file is: `$XDG_CONFIG_HOME/auto-clicker/config.toml`, or
@@ -168,6 +187,8 @@ fn config_path_from(xdg_config_home: Option<OsString>, home: Option<OsString>) -
         .map(|dir| dir.join("auto-clicker").join("config.toml"))
 }
 
+#[cfg(test)]
+mod file_tests;
 #[cfg(test)]
 mod hotkey_tests;
 #[cfg(test)]
