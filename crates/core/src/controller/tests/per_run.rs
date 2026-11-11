@@ -209,7 +209,8 @@ async fn the_view_names_the_route_each_platform_takes() {
 }
 
 /// As on the kept devices: quitting releases what the run's devices hold,
-/// then closes them, which on the portal ends the desktop's session.
+/// then closes them, which on the portal ends the desktop's session. The
+/// input guard keeps the order.
 #[tokio::test(start_paused = true)]
 async fn quitting_releases_everything_before_the_runs_devices_close() {
     local(async {

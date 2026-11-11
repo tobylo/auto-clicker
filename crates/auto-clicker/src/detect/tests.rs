@@ -249,3 +249,11 @@ fn the_routes_picked_are_named_as_the_tray_names_them() {
         );
     }
 }
+
+#[test]
+fn only_devices_the_kernel_route_opened_are_left_out_of_the_keyboard_check() {
+    let denied = || Uinput::Denied.open().unwrap_err();
+    assert_eq!(Output::Kernel(Ok(7)).kept(), Some(&7));
+    assert_eq!(Output::<u8>::Kernel(Err(denied())).kept(), None);
+    assert_eq!(Output::<u8>::Portal(None).kept(), None);
+}

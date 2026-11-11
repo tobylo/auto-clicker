@@ -14,7 +14,8 @@ use tokio::time::timeout;
 
 use super::access::look;
 use super::node::Paths;
-use super::{Reader, Setup, run};
+use super::{Reader, Setup, own_paths, run};
+use crate::{DeviceIdentity, DeviceRole};
 
 /// Far beyond what any step here takes, and far below the wait it bounds,
 /// which never ends by itself.
@@ -155,6 +156,25 @@ async fn one_look_finds_no_keyboard_or_no_permission_as_the_reader_would() {
     assert_eq!(
         looked(&fixture),
         HotkeyStatus::Unavailable(Unavailable::NoPermission)
+    );
+}
+
+#[test]
+fn the_programs_own_devices_are_left_out_by_their_sysfs_paths() {
+    let device = |role, path: &str| DeviceIdentity {
+        role,
+        syspath: PathBuf::from(path),
+    };
+    let own = [
+        device(DeviceRole::Mouse, "/sys/devices/virtual/input/input40"),
+        device(DeviceRole::Keyboard, "/sys/devices/virtual/input/input41"),
+    ];
+    assert_eq!(
+        own_paths(&own),
+        [
+            PathBuf::from("/sys/devices/virtual/input/input40"),
+            PathBuf::from("/sys/devices/virtual/input/input41"),
+        ]
     );
 }
 

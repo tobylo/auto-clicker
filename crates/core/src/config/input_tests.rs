@@ -40,9 +40,11 @@ fn hotkeys_default_to_auto_and_read_each_route() {
     use HotkeyRoute::{Auto, Kernel, Portal};
     let hotkeys = routes("hotkeys", |input| input.hotkeys);
     assert_eq!(hotkeys, [Auto, Auto, Auto, Kernel, Portal]);
-    // The routes are chosen separately.
+    // The routes are chosen separately, each way round.
     let mixed = parse("version = 1\n[input]\nhotkeys = \"portal\"\n").input;
     assert_eq!(mixed.output, OutputRoute::Auto);
+    let mixed = parse("version = 1\n[input]\noutput = \"portal\"\n").input;
+    assert_eq!(mixed.hotkeys, HotkeyRoute::Auto);
 }
 
 #[test]

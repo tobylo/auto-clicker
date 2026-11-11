@@ -200,3 +200,18 @@ fn fail(message: &str) -> ExitCode {
     eprintln!("auto-clicker: {message}");
     ExitCode::FAILURE
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_problem_found_at_start_is_kept_for_the_tray() {
+        let problem = InputError::Portal("no answer".to_owned());
+        assert!(matches!(
+            reported(Some(problem)),
+            Some(InputError::Portal(why)) if why == "no answer"
+        ));
+        assert!(reported(None).is_none());
+    }
+}

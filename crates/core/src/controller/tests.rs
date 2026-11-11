@@ -816,6 +816,8 @@ async fn quit_while_a_click_is_down_releases_it() {
 
 /// A route changes with a restart, so leaving the old one is quitting:
 /// everything its devices hold is released first, then they close, at once.
+/// The order is the input guard's: it releases before its backend drops,
+/// whoever released before it.
 #[tokio::test(start_paused = true)]
 async fn quitting_releases_everything_before_the_kept_devices_close() {
     local(async {

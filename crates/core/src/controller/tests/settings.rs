@@ -169,6 +169,21 @@ fn moved_bindings() -> Bindings {
 // The view
 
 #[tokio::test(start_paused = true)]
+async fn the_window_is_shown_the_routes_the_daemon_picked() {
+    local(async {
+        let shared = Shared::default();
+        shared.with(|r| r.desktop_reader = true);
+        let s = setup_with(None, shared).await;
+        let routes = s.window.view().routes;
+        assert_eq!(routes.hotkeys, Route::Portal);
+        assert_eq!(routes, s.d.view().routes);
+        // What the config says stays beside it: auto, not what auto picked.
+        assert_eq!(s.window.view().running.hotkeys, RouteName::Auto);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn an_opened_window_is_shown_the_settings_and_what_goes_on() {
     local(async {
         let s = setup().await;
