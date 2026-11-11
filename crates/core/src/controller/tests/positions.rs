@@ -270,6 +270,41 @@ async fn a_layout_change_is_handled_before_a_playback_event_due_with_it() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_layout_the_watcher_has_queued_is_taken_before_a_playback_event_due_with_it() {
+    local(async {
+        let shared = Shared::default();
+        shared.with(|r| {
+            r.recordings = Some(Arc::new(TempDir::new()));
+            r.layout = Some(two_screens());
+        });
+        let later = Event {
+            at: 300_000,
+            change: at(3_000, 720),
+        };
+        let file = store_with(&shared, true, &[later]);
+        let config = Config {
+            tray_start_delay: Duration::ZERO,
+            ..Config::default()
+        };
+        let d = daemon_with(config, shared, true).await;
+        d.play_file_until_w_is_down(&file).await;
+        // A report of the change waits in the watcher's queue, unread, when
+        // the position at 300 ms falls due: the change wins.
+        d.shared.with(|r| r.queued_layout = Some(panel_only()));
+        tokio::time::advance(ms(400)).await;
+        d.settle().await;
+        let why = "Playback stopped: the screen layout changed";
+        assert_eq!((d.activity(), d.notice()), (Activity::Idle, why.to_owned()));
+        let moves = d.shared.calls();
+        let moves = moves
+            .iter()
+            .filter(|call| matches!(call, Call::MoveAbsolute(_)));
+        assert_eq!(moves.count(), 1, "the later position played");
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_layout_watcher_feeds_the_recording_the_controller_starts() {
     local(async {
         let shared = Shared::default();

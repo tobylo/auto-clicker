@@ -82,6 +82,9 @@ struct Record {
     watches: Vec<(RecordingFeed, LayoutSignal)>,
     /// How often the layout watchers were polled.
     watch_polls: usize,
+    /// A layout the watcher has received and takes when it is next polled,
+    /// as a report waiting in its queue.
+    queued_layout: Option<Layout>,
 }
 
 #[derive(Clone, Default)]
@@ -284,10 +287,21 @@ impl Platform for FakePlatform {
     }
 
     fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
-        self.0.with(|r| r.watches.push((feed, changed)));
+        self.0.with(|r| r.watches.push((feed, changed.clone())));
         let shared = self.0.clone();
         Box::pin(poll_fn(move |_| {
-            shared.with(|r| r.watch_polls += 1);
+            let taken = shared.with(|r| {
+                r.watch_polls += 1;
+                let queued = r.queued_layout.take();
+                let taken = queued.is_some();
+                if taken {
+                    r.layout = queued;
+                }
+                taken
+            });
+            if taken {
+                changed.changed();
+            }
             Poll::Pending
         }))
     }

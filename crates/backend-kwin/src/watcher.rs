@@ -88,6 +88,8 @@ pub(crate) struct Watcher<S> {
     /// was lost since it was loaded, so it is not older than one that was.
     layout_from_position: bool,
     job: Option<Job>,
+    /// The call in flight loads the position script.
+    job_loads_position: bool,
 }
 
 impl<S: Scripting + 'static> Watcher<S> {
@@ -106,6 +108,7 @@ impl<S: Scripting + 'static> Watcher<S> {
             position_loaded: false,
             layout_from_position: false,
             job: None,
+            job_loads_position: false,
         }
     }
 
@@ -180,8 +183,13 @@ impl<S: Scripting + 'static> Watcher<S> {
     }
 
     /// Any change is a new recording or none: the old load's token ends
-    /// either way.
+    /// either way, and a load for it still in flight ends at once. Whatever
+    /// that load got to is taken away by the unload that follows, or by the
+    /// next load, which unloads first.
     fn recording_changed(&mut self) {
+        if mem::take(&mut self.job_loads_position) {
+            self.job = None;
+        }
         self.position_token = None;
         self.position = if self.feed.recording() {
             Next::Load
@@ -274,6 +282,7 @@ impl<S: Scripting + 'static> Watcher<S> {
             return;
         };
         let session = Rc::clone(&self.session);
+        let mut loads_position = false;
         let job: Job = if mem::take(&mut self.sweep_due) {
             Box::pin(async move {
                 session.unload_all(&owner).await;
@@ -283,7 +292,10 @@ impl<S: Scripting + 'static> Watcher<S> {
             self.load(Script::Layout, owner)
         } else {
             match mem::replace(&mut self.position, Next::Nothing) {
-                Next::Load => self.load(Script::Position, owner),
+                Next::Load => {
+                    loads_position = true;
+                    self.load(Script::Position, owner)
+                }
                 Next::Unload => Box::pin(async move {
                     Done::Unloaded(session.unload(&owner, Script::Position).await)
                 }),
@@ -291,6 +303,7 @@ impl<S: Scripting + 'static> Watcher<S> {
             }
         };
         self.job = Some(job);
+        self.job_loads_position = loads_position;
     }
 
     /// A load of `script` with a new token, current from now on.

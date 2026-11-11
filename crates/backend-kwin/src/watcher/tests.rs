@@ -781,3 +781,27 @@ async fn a_new_owner_does_not_wait_for_a_call_to_the_old_one() {
     })
     .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_stop_ends_a_position_load_still_in_flight() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        h.calls();
+        // KWin does not answer the load's first call; it answers what
+        // follows.
+        h.kwin.with(|s| s.hanging = true);
+        h.record().await;
+        h.kwin.with(|s| s.hanging = false);
+        h.stop().await;
+        // The load ends at the stop: its script is never loaded, and the
+        // unload goes out at once.
+        assert_eq!(h.calls(), [Unload(POSITION), Unload(POSITION)]);
+        tokio::time::sleep(crate::scripting::CALL_TIMEOUT * 2).await;
+        settle().await;
+        assert_eq!(h.calls(), []);
+        let layout = h.newest_token(LAYOUT);
+        assert_eq!(h.runtime.files(), [file_of(Script::Layout, &layout)]);
+    })
+    .await;
+}
