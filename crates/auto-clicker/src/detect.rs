@@ -32,6 +32,16 @@ pub enum Output<K> {
     Portal(Option<InputError>),
 }
 
+impl<K> Output<K> {
+    /// The devices the kernel route opened, if it did.
+    fn kept(&self) -> Option<&K> {
+        match self {
+            Output::Kernel(Ok(devices)) => Some(devices),
+            _ => None,
+        }
+    }
+}
+
 /// The routes the daemon runs on.
 pub struct Detected {
     pub output: Output<Input<KernelBackend>>,
@@ -46,10 +56,10 @@ pub async fn detect(
     portal: &PortalOutput,
 ) -> Detected {
     let output = choose_output(settings.output, KernelBackend::open, || portal.probe()).await;
-    let own = match &output {
-        Output::Kernel(Ok(input)) => input.backend().devices().to_vec(),
-        _ => Vec::new(),
-    };
+    let own = output
+        .kept()
+        .map(|input| input.backend().devices().to_vec())
+        .unwrap_or_default();
     let keyboards = || keyboard_access(bindings, &own);
     let hotkeys = choose_hotkeys(settings.hotkeys, keyboards, shortcuts_offered).await;
     let detected = Detected { output, hotkeys };
