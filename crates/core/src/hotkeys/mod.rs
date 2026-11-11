@@ -142,7 +142,7 @@ impl fmt::Display for Unavailable {
         match self {
             Unavailable::NoKeyboard => f.write_str("hotkeys are unavailable: no keyboard found"),
             Unavailable::NoPermission => f.write_str(
-                "hotkeys are unavailable: keyboards cannot be read; add your user to the input group and log in again",
+                "hotkeys are unavailable: keyboards cannot be read; add your user to the input group and log in again, or set hotkeys = \"portal\" under [input] for the desktop's shortcuts",
             ),
             Unavailable::ReadFailed(error) => {
                 write!(f, "hotkeys are unavailable: a keyboard cannot be read: {error}")

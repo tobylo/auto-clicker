@@ -40,7 +40,7 @@ use tokio::time::{Instant, sleep_until};
 pub use hotkeys::{HotkeyReader, HotkeySender};
 pub use session::{Blocked, SessionFacts};
 pub use settings::{WindowLink, WindowOpener};
-pub use view::{Activity, Hotkey, Listed, NoRecording, View, describe};
+pub use view::{Activity, Hotkey, Listed, NoRecording, Route, Routes, View, describe};
 
 use crate::clicker::run;
 use crate::config::Config;
@@ -153,6 +153,9 @@ pub trait Platform {
 
     /// How long the devices live.
     const LIFETIME: InputLifetime;
+
+    /// The route its devices take.
+    const OUTPUT: Route = Route::Kernel;
 
     /// Opens the input devices. The future owns what it opened so far:
     /// dropping it part way closes that again.
@@ -389,6 +392,7 @@ impl<P: Platform> Controller<P> {
         let desktop = Self::first_triggers(&platform);
         let (view, shown) = watch::channel(View {
             activity: Activity::Idle,
+            routes: routes(&platform),
             settings: config.clicker,
             hotkey: desktop::shown_hotkey(config.hotkeys, desktop.as_ref(), Action::ToggleClicking),
             record_hotkey: desktop::shown_hotkey(
@@ -967,6 +971,7 @@ impl<P: Platform> Controller<P> {
     fn publish(&self) {
         let view = View {
             activity: self.activity(),
+            routes: routes(&self.platform),
             settings: self.config.clicker,
             hotkey: self.shown_hotkey(Action::ToggleClicking),
             record_hotkey: self.shown_hotkey(Action::ToggleRecording),
@@ -1057,6 +1062,17 @@ fn run_wake<B: InputBackend>(state: &mut State<B>) -> impl Future<Output = Wake<
 }
 
 /// The end of the open in flight; never resolves while none is.
+/// The routes `platform` takes.
+fn routes<P: Platform>(platform: &P) -> Routes {
+    Routes {
+        output: P::OUTPUT,
+        hotkeys: match platform.input_reader() {
+            InputReader::Devices => Route::Kernel,
+            InputReader::Desktop => Route::Portal,
+        },
+    }
+}
+
 fn open_end<B: InputBackend>(
     opening: &mut Option<OpenInput<B>>,
 ) -> impl Future<Output = Result<Input<B>, InputError>> + '_ {

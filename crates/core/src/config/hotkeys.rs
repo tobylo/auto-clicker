@@ -1,8 +1,8 @@
 //! Checks on `[hotkeys]`: each binding parses, no two actions share one, and
 //! none uses the key the clicker presses (see [`check::on_the_clicker_key`]).
-//! The last holds for bindings the program matches itself; where the desktop
-//! delivers the hotkeys, its own triggers decide, and the controller checks
-//! those.
+//! The last holds for bindings the program may match itself (`kernel`, and
+//! `auto`, which may pick it); where the desktop delivers the hotkeys, its
+//! own triggers decide, and the controller checks those.
 
 use toml::Spanned;
 
@@ -54,7 +54,7 @@ pub(super) fn hotkeys(
             None => placed(earlier).invalid(reason),
         });
     }
-    if route == HotkeyRoute::Kernel
+    if route.may_read_keyboards()
         && let Some((action, reason)) = check::on_the_clicker_key(&bindings, clicker)
     {
         return Err(placed(action).invalid(reason));

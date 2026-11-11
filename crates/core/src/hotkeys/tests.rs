@@ -577,7 +577,7 @@ fn unavailable_hotkeys_say_why() {
         messages,
         [
             "hotkeys are unavailable: no keyboard found",
-            "hotkeys are unavailable: keyboards cannot be read; add your user to the input group and log in again",
+            "hotkeys are unavailable: keyboards cannot be read; add your user to the input group and log in again, or set hotkeys = \"portal\" under [input] for the desktop's shortcuts",
             "hotkeys stopped: watching for keyboards failed: no such directory; restart the program",
         ]
     );
