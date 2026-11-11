@@ -474,11 +474,13 @@ impl<P: Platform> Controller<P> {
     /// The next thing to handle. Branches are tried in order, so what was
     /// asked for comes before what it would prevent: a queued Stop or lock
     /// before the hotkey events, the run's next action and the deadlines;
-    /// hotkey events (a stop) before the run. The reader goes last: kept busy
-    /// by a flood of key events, it spends tokio's budget, and anything
-    /// polled after it would wait. The layout watcher goes just before it,
-    /// for the same reason: it is busy while the pointer moves, and a
-    /// recorder that waits 20 ms for late reports must get them before that. Everything else is cheap to poll. (A due
+    /// hotkey events (a stop) and a changed layout (which stops a playback
+    /// using positions) before the run. The reader goes last: kept busy by a
+    /// flood of key events, it spends tokio's budget, and anything polled
+    /// after it would wait. The layout watcher goes just before it, for the
+    /// same reason: it is busy while the pointer moves, and a recorder that
+    /// waits 20 ms for late reports must get them before that. Everything
+    /// else is cheap to poll. (A due
     /// timer and a queued message cannot be made ready in one poll on the
     /// paused clock, so the tests pin the reader's place and the outcomes,
     /// not every tie.)
@@ -497,11 +499,11 @@ impl<P: Platform> Controller<P> {
             biased;
             message = inbox.recv() => Wake::Message(message.unwrap_or(Message::Quit)),
             event = hotkeys::received(&mut hotkeys.events) => Wake::Hotkey(event),
+            () = screen.signal.fired() => Wake::LayoutChanged,
             wake = run_wake(state) => wake,
             opened = open_end(opening) => Wake::Opened(opened),
             () = sleep_until_some(deadline) => Wake::Deadline,
             () = recording.filled() => Wake::RecordingFull,
-            () = screen.signal.fired() => Wake::LayoutChanged,
             never = hotkeys::drive(&mut screen.watch) => match never {},
             never = hotkeys::drive(&mut hotkeys.reader) => match never {},
         }

@@ -196,7 +196,18 @@ mod tests {
         let err = ScriptDir::open(&runtime.0).unwrap_err();
         assert!(err.contains("open to other users"), "{err}");
 
+        // A private file of this user's in the directory's place.
+        fs::remove_dir(runtime.ours()).unwrap();
+        fs::write(runtime.ours(), "").unwrap();
+        fs::set_permissions(runtime.ours(), fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(ScriptDir::open(&runtime.0).is_err());
+        fs::remove_file(runtime.ours()).unwrap();
+        fs::create_dir(runtime.ours()).unwrap();
+
+        // A private directory of this user's, reached through a symlink:
+        // only the symlink keeps it out.
         let elsewhere = Runtime::new();
+        fs::set_permissions(&elsewhere.0, fs::Permissions::from_mode(0o700)).unwrap();
         fs::remove_dir(runtime.ours()).unwrap();
         symlink(&elsewhere.0, runtime.ours()).unwrap();
         assert!(ScriptDir::open(&runtime.0).is_err());

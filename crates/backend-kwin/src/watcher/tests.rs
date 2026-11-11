@@ -12,7 +12,7 @@ use auto_clicker_core::hotkeys::Bindings;
 use auto_clicker_core::recording::{Change, Created, Ending, Point, Recorder, RecordingSlot};
 use futures_util::stream;
 use tokio::task::{LocalSet, yield_now};
-use tokio::time::{Instant, timeout};
+use tokio::time::timeout;
 
 use super::*;
 use crate::dir::ScriptDir;
@@ -62,6 +62,8 @@ struct State {
     failing_unloads: usize,
     /// Every call from now on never answers.
     hanging: bool,
+    /// `run` never answers, once the script has run and reported.
+    hanging_run: bool,
     /// KWin refuses to load this plugin.
     refused: Option<&'static str>,
     /// What a script reports as it runs; nothing when `None`.
@@ -162,6 +164,9 @@ impl Scripting for FakeKwin {
         let (plugin, path) = self.with(|s| s.loaded[usize::try_from(id).unwrap()].clone());
         self.call(Run(plugin)).await?;
         self.script_runs(plugin, &path);
+        if self.with(|s| s.hanging_run) {
+            pending::<()>().await;
+        }
         Ok(())
     }
 }
@@ -438,33 +443,50 @@ async fn reports_reach_the_recorder_in_order_and_at_once_while_kwin_hangs() {
     local(async {
         let (h, inbox) = Harness::new(true, &[]);
         h.start(inbox).await;
+        h.calls();
+        // The position script runs and reports, but KWin never answers
+        // `run`: the load stays in flight.
+        h.kwin.with(|s| s.hanging_run = true);
         h.record().await;
+        assert_eq!(h.calls(), LOAD_POSITION);
         let token = h.newest_token(POSITION);
-        // A lost layout report has the layout script loaded again, by a
-        // call that never answers; the position script brings the layout
-        // back meanwhile.
-        h.kwin.with(|s| s.hanging = true);
-        h.receiver.layout_dropped.notify_one();
-        settle().await;
-        h.receiver.layout_from(Incoming {
-            sender: Some(KWIN),
-            token: token.as_str(),
-            text: SCREENS,
-        });
-        settle().await;
-        assert_eq!(h.calls().last(), Some(&Unload(LAYOUT)), "no call in flight");
-        let sent = Instant::now();
+        // Drained on the paused clock, while the call still hangs.
         for x in 1..=50 {
             h.moved(&token, x);
         }
         settle().await;
-        assert_eq!(sent.elapsed(), Duration::ZERO);
         let positions = h.stop().await;
         let xs: Vec<u32> = positions.iter().map(|point| point.x).collect();
         assert_eq!(
             xs,
             [[100].as_slice(), &(1..=50).collect::<Vec<_>>()].concat()
         );
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_layout_the_position_script_sent_before_a_lost_one_is_not_taken() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        h.record().await;
+        let token = h.newest_token(POSITION);
+        // A lost layout report has the layout script loaded again, by a
+        // call that never answers, so a new layout token is current.
+        h.kwin.with(|s| s.hanging = true);
+        h.receiver.layout_dropped.notify_one();
+        settle().await;
+        assert_eq!(h.calls().last(), Some(&Unload(LAYOUT)));
+        // What the position script queued before the loss is older than
+        // what was lost.
+        h.receiver.layout_from(Incoming {
+            sender: Some(KWIN),
+            token: token.as_str(),
+            text: SCREENS,
+        });
+        settle().await;
+        assert_eq!(h.layout(), None);
     })
     .await;
 }
@@ -568,7 +590,7 @@ async fn a_layout_that_is_none_or_from_an_old_load_is_not_taken() {
             text: SCREENS,
         });
         settle().await;
-        assert_ne!(h.layout(), two_screens());
+        assert_eq!(h.layout(), crate::report::layout("0 0 2048 1280 1.25"));
     })
     .await;
 }
@@ -693,6 +715,69 @@ async fn without_a_layout_script_a_recordings_layout_is_not_kept() {
         assert_eq!(h.layout(), None);
         assert!(h.stop().await.is_empty());
         assert_eq!(h.layout(), None);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lost_layout_report_ends_the_old_load_while_a_call_is_in_flight() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        let token = h.newest_token(LAYOUT);
+        // A recording's position load hangs, so the layout script cannot be
+        // loaded again yet.
+        h.kwin.with(|s| s.hanging = true);
+        h.record().await;
+        let full = u32::try_from(QUEUE).unwrap();
+        for _ in 0..=full {
+            h.receiver.layout_from(Incoming {
+                sender: Some(KWIN),
+                token: token.as_str(),
+                text: "0 0 2048 1280 1.25",
+            });
+        }
+        settle().await;
+        // What the old load queued before the loss says nothing about now.
+        assert_eq!(h.layout(), None);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_exit_before_the_watcher_ran_unloads_what_a_crash_left() {
+    local(async {
+        // The daemon claimed its name and failed to start: the watcher never
+        // saw KWin, which may still run a crashed daemon's scripts.
+        let stale = ["auto-clicker-position-0123.js"];
+        let (h, _inbox) = Harness::new(true, &stale);
+        h.session.exit().await;
+        let mut exit = h.calls();
+        exit.sort_by_key(|call| format!("{call:?}"));
+        assert_eq!(exit, [Unload(LAYOUT), Unload(POSITION)]);
+        assert!(h.runtime.files().is_empty());
+
+        // Without KWin, only the files go.
+        let (h, _inbox) = Harness::new(false, &stale);
+        h.session.exit().await;
+        assert_eq!(h.calls(), []);
+        assert!(h.runtime.files().is_empty());
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_owner_does_not_wait_for_a_call_to_the_old_one() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.kwin.with(|s| s.hanging = true);
+        h.start(inbox).await;
+        h.calls();
+        // The old KWin never answers the sweep; the new one answers at once.
+        h.kwin.with(|s| s.hanging = false);
+        h.new_owner(Some(":1.9")).await;
+        assert_eq!(h.calls(), LOAD_LAYOUT);
+        assert_eq!(h.layout(), two_screens());
     })
     .await;
 }

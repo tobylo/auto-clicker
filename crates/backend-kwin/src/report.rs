@@ -194,7 +194,9 @@ mod tests {
         ] {
             assert_eq!(layout(refused), None, "{refused:?}");
         }
-        let long = format!("0 0 10 10 1{}", " ".repeat(MAX_REPORT_BYTES));
-        assert_eq!(layout(&long), None);
+        // A long scale is a layout up to the bound, and nothing past it.
+        let scale = |len: usize| format!("0 0 10 10 1.{}", "0".repeat(len - 12));
+        assert!(layout(&scale(MAX_REPORT_BYTES)).is_some());
+        assert_eq!(layout(&scale(MAX_REPORT_BYTES + 1)), None);
     }
 }

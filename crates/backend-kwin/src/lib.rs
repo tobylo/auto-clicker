@@ -121,14 +121,17 @@ impl Kwin {
         }
     }
 
-    /// At exit: unloads both scripts and removes their files, within one
-    /// call's deadline and a little more. What fails is logged; the next
-    /// start cleans it up.
+    /// At exit, however the daemon ends once it holds its name: unloads both
+    /// scripts and removes their files, within two calls' deadlines (asking
+    /// who runs KWin, then unloading) and a little more. What fails is
+    /// logged; the next start cleans it up.
     pub async fn exit(&self) {
         let Some(shared) = &self.0 else {
             return;
         };
-        let deadline = CALL_TIMEOUT.saturating_add(Duration::from_millis(500));
+        let deadline = CALL_TIMEOUT
+            .saturating_mul(2)
+            .saturating_add(Duration::from_millis(500));
         if tokio::time::timeout(deadline, shared.session.exit())
             .await
             .is_err()

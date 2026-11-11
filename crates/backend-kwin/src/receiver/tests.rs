@@ -217,3 +217,26 @@ async fn calls_are_handled_one_at_a_time_in_the_order_sent() {
         .collect();
     assert_eq!(seen, expected);
 }
+
+#[tokio::test]
+async fn a_layout_call_on_the_bus_arrives_as_a_layout() {
+    let current = token(1);
+    let (receiver, mut reports) = receiver(vec![current.clone()], QUEUE);
+    let (_daemon, bus) = served(receiver).await;
+    let call = Message::method_call(PATH, "Layout")
+        .unwrap()
+        .sender(KWIN)
+        .unwrap()
+        .interface("io.github.tobylo.AutoClicker.KWin")
+        .unwrap()
+        .build(&(current.as_str(), "0 0 5 5 1"))
+        .unwrap();
+    bus.send(&call).await.unwrap();
+    let report = timeout(Duration::from_secs(10), reports.recv()).await;
+    let expected = Report {
+        time: at_42ms(),
+        token: current,
+        body: Body::Layout(report::layout("0 0 5 5 1")),
+    };
+    assert_eq!(report.unwrap(), Some(expected));
+}
