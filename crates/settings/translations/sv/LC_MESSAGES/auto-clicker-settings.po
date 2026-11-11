@@ -149,8 +149,8 @@ msgstr "Bakåt"
 msgid "Forward"
 msgstr "Framåt"
 
-msgid "Key, a name or a key code"
-msgstr "Tangent, ett namn eller en tangentkod"
+msgid "Key: a name such as space, or a code such as #113"
+msgstr "Tangent: ett namn som space, eller en kod som #113"
 
 msgid "Change…"
 msgstr "Ändra…"

@@ -152,30 +152,22 @@ fn program() -> io::Result<PathBuf> {
 /// window gets its end as file descriptor 0 alone, and no other program the
 /// daemon might start gets either.
 ///
-/// The window gets `DISPLAY` only when it names a display on this machine:
-/// its toolkit's clipboard speaks X11, and a display on another host would
-/// be a network connection, which the program never opens.
+/// The window gets no `DISPLAY`: it is a Wayland window, its clipboard
+/// speaks Wayland, and with an X display named, its toolkit's X11 code
+/// could connect over TCP, which the program never does.
 fn spawn(program: &std::path::Path) -> io::Result<(Child, UnixStream)> {
     let (ours, theirs) = std::os::unix::net::UnixStream::pair()?;
     let mut command = Command::new(program);
     command
         .stdin(Stdio::from(OwnedFd::from(theirs)))
         .kill_on_drop(true);
-    if !local_display(std::env::var_os("DISPLAY").as_deref()) {
-        command.env_remove("DISPLAY");
-    }
+    command.env_remove("DISPLAY");
     let child = command.spawn()?;
     // The command keeps a copy of the window's end until dropped; with it
     // gone, the window's end closes when the window does.
     drop(command);
     ours.set_nonblocking(true)?;
     Ok((child, UnixStream::from_std(ours)?))
-}
-
-/// Whether `display` names an X display on this machine (":1"), which is
-/// reached through a Unix socket; "host:0" is one over the network.
-fn local_display(display: Option<&std::ffi::OsStr>) -> bool {
-    display.is_some_and(|display| display.as_encoded_bytes().first() == Some(&b':'))
 }
 
 /// One window's session: links it to the controller and carries requests
