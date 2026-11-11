@@ -45,8 +45,8 @@ use crate::token::Token;
 
 /// How long the watcher waits before each try again of a failed layout
 /// load or position unload, counted from the failure before it. A failure
-/// after the last is logged, and the call waits for a new owner of KWin,
-/// the next recording or the exit.
+/// after the last is logged, and the call waits for another call to KWin
+/// to succeed, a new owner of KWin, the next recording or the exit.
 const BACK_OFF: [Duration; 3] = [
     Duration::from_secs(2),
     Duration::from_secs(4),
@@ -358,8 +358,8 @@ impl<S: Scripting + 'static> Watcher<S> {
         let Some(wait) = BACK_OFF.get(failures) else {
             if failures == BACK_OFF.len() {
                 eprintln!(
-                    "auto-clicker: KWin keeps failing; its scripts are tried again when it \
-                     restarts, at the next recording and at exit"
+                    "auto-clicker: KWin keeps failing; its scripts are tried again once it \
+                     answers or restarts, at the next recording and at exit"
                 );
             }
             return false;
