@@ -172,3 +172,40 @@ fn every_directory_on_the_path_is_flushed_on_every_save() {
     assert!(matches!(file.save(&changed(), false), Ok(Saved::Synced)));
     assert_eq!(Config::parse(&read(&path)).ok(), Some(changed()));
 }
+
+#[test]
+fn a_config_that_is_a_link_is_saved_through_it() {
+    let (dir, path, _) = loaded_with(None);
+    let dotfiles = dir.path().join("dotfiles");
+    fs::create_dir(&dotfiles).unwrap();
+    let real = dotfiles.join("config.toml");
+    fs::write(&real, "version = 1\n").unwrap();
+    fs::create_dir(path.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&real, &path).unwrap();
+    let mut file = Config::load(&path).file;
+    file.save(&changed(), false).unwrap();
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(Config::parse(&read(&real)).ok(), Some(changed()));
+    assert_eq!(fs::read_dir(&dotfiles).unwrap().count(), 1);
+}
+
+#[test]
+fn a_link_that_leads_nowhere_is_not_replaced() {
+    let (dir, path, _) = loaded_with(None);
+    fs::create_dir(path.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(dir.path().join("gone.toml"), &path).unwrap();
+    let mut file = Config::load(&path).file;
+    let result = file.save(&changed(), true);
+    assert!(matches!(result, Err(SaveError::Write(_))), "{result:?}");
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}

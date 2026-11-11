@@ -79,7 +79,8 @@ impl ConfigFile {
     /// Writes `config` to the file, atomically. Unless `replace` is set, a
     /// file that changed since it was last read or written, or that could
     /// not be used, is left as it is, and the error says which. A file
-    /// that was missing is created only where none appeared since.
+    /// that was missing is created only where none appeared since. A
+    /// symbolic link is saved through: the file it points to is replaced.
     pub fn save(&mut self, config: &Config, replace: bool) -> Result<Saved, SaveError> {
         let path = self.path.as_deref().ok_or(SaveError::NoPath)?;
         if !replace && let Some(stale) = self.stale(path) {
@@ -87,7 +88,9 @@ impl ConfigFile {
         }
         let place = placement(&self.seen, replace);
         let text = render(config);
-        let written = write(path, text.as_bytes(), place).map_err(|err| write_error(err, place))?;
+        let target = target_of(path).map_err(SaveError::Write)?;
+        let written =
+            write(&target, text.as_bytes(), place).map_err(|err| write_error(err, place))?;
         // In place, flushed or not: the file holds this now.
         self.seen = Seen::Text(text.into_bytes());
         Ok(match written {
@@ -127,6 +130,16 @@ fn write_error(err: io::Error, place: Place) -> SaveError {
         SaveError::Stale(Stale::Changed)
     } else {
         SaveError::Write(err)
+    }
+}
+
+/// Where a save writes: the file a symbolic link at `path` points to, so a
+/// link a dotfile manager made stays a link, or `path` itself. A link
+/// that leads nowhere is an error.
+fn target_of(path: &Path) -> io::Result<PathBuf> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => std::fs::canonicalize(path),
+        _ => Ok(path.to_path_buf()),
     }
 }
 
