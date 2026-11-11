@@ -30,7 +30,7 @@ use ashpd::{AppID, PortalError};
 use auto_clicker_core::input::InputError;
 use tokio::time::timeout;
 
-use crate::answer::{refused, version};
+use crate::answer::version;
 use crate::token::{self, RestoreToken};
 
 /// The interface clicks go through.
@@ -287,24 +287,34 @@ fn usable(found: u32, cached: u32) -> Result<(), InputError> {
     Ok(())
 }
 
-/// Why `Registry.Register` failed: the portal's answer that it cannot
-/// register the program, most often for want of the desktop file, or a
-/// call that got no answer and may work later.
+/// Why `Registry.Register` failed. Only a desktop without the registry is
+/// sure to stay so. The portal answers every other failure with one
+/// generic error, whether the desktop file is missing or a lookup that may
+/// work next time failed, so those count as a failed call: the portal
+/// route keeps trying and says what to check.
 fn registration_failed(err: ashpd::Error) -> InputError {
-    let refusal = |why: &dyn std::fmt::Display| {
-        InputError::PortalUnavailable(format!(
-            "could not register the app id {APP_ID} ({why}); is the package's {APP_ID}.desktop \
-             file installed?"
-        ))
-    };
-    match err {
+    let why = match err {
+        ashpd::Error::PortalNotFound(_) => {
+            return InputError::PortalUnavailable(
+                "the desktop has no portal registry, so the app id cannot be registered".to_owned(),
+            );
+        }
         ashpd::Error::Zbus(err) => match zbus::fdo::Error::from(err) {
-            err if refused(&err) => refusal(&err),
-            err => InputError::Portal(format!("Registry.Register: {err}")),
+            err @ (zbus::fdo::Error::ServiceUnknown(_)
+            | zbus::fdo::Error::UnknownInterface(_)
+            | zbus::fdo::Error::UnknownMethod(_)) => {
+                return InputError::PortalUnavailable(format!(
+                    "the desktop has no portal registry ({err})"
+                ));
+            }
+            err => err.to_string(),
         },
-        ashpd::Error::PortalNotFound(_) => refusal(&"the desktop has no portal registry"),
-        other => InputError::Portal(format!("Registry.Register: {other}")),
-    }
+        other => other.to_string(),
+    };
+    InputError::Portal(format!(
+        "could not register the app id {APP_ID} ({why}); is the package's {APP_ID}.desktop \
+         file installed?"
+    ))
 }
 
 /// Runs a portal call with [`CALL_TIMEOUT`].
@@ -430,26 +440,36 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_registration_is_unavailable_and_a_lost_one_is_not() {
+    fn only_a_missing_registry_makes_registration_unavailable() {
         let fdo = |err| ashpd::Error::Zbus(zbus::Error::FDO(Box::new(err)));
+        // The portal's one answer for a missing desktop file and for a
+        // lookup that may work next time.
         let failed = registration_failed(fdo(zbus::fdo::Error::Failed(
             "App info not found".to_owned(),
         )));
         assert!(
-            matches!(&failed, InputError::PortalUnavailable(why) if why.contains(".desktop")),
+            matches!(&failed, InputError::Portal(why) if why.contains(".desktop")),
             "{failed:?}"
         );
         let lost = registration_failed(fdo(zbus::fdo::Error::NoReply("gone".to_owned())));
         assert!(matches!(lost, InputError::Portal(_)), "{lost:?}");
         let cut = registration_failed(ashpd::Error::Zbus(zbus::Error::InterfaceNotFound));
         assert!(matches!(cut, InputError::Portal(_)), "{cut:?}");
+        let io = registration_failed(ashpd::Error::NoResponse);
+        assert!(matches!(io, InputError::Portal(_)));
         let name =
             zbus::names::OwnedInterfaceName::try_from("org.freedesktop.host.portal.Registry")
                 .unwrap();
-        let absent = registration_failed(ashpd::Error::PortalNotFound(name));
-        assert!(matches!(absent, InputError::PortalUnavailable(_)));
-        let io = registration_failed(ashpd::Error::NoResponse);
-        assert!(matches!(io, InputError::Portal(_)));
+        let absent = [
+            ashpd::Error::PortalNotFound(name),
+            fdo(zbus::fdo::Error::ServiceUnknown("no portal".to_owned())),
+            fdo(zbus::fdo::Error::UnknownInterface("Registry".to_owned())),
+            fdo(zbus::fdo::Error::UnknownMethod("Register".to_owned())),
+        ];
+        for err in absent {
+            let got = registration_failed(err);
+            assert!(matches!(got, InputError::PortalUnavailable(_)), "{got:?}");
+        }
     }
 
     #[test]
