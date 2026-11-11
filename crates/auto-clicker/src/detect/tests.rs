@@ -208,3 +208,44 @@ async fn explicit_hotkeys_are_used_as_written_without_a_check() {
         assert_eq!(desktop, (InputReader::Desktop, false, false), "{nodes:?}");
     }
 }
+
+#[test]
+fn the_routes_picked_are_named_as_the_tray_names_them() {
+    let denied = || Uinput::Denied.open().unwrap_err();
+    let cases = [
+        (
+            Output::Kernel(Err(denied())),
+            InputReader::Devices,
+            Route::Kernel,
+            Route::Kernel,
+        ),
+        (
+            Output::Kernel(Err(denied())),
+            InputReader::Desktop,
+            Route::Kernel,
+            Route::Portal,
+        ),
+        (
+            Output::Portal(None),
+            InputReader::Devices,
+            Route::Portal,
+            Route::Kernel,
+        ),
+        (
+            Output::Portal(Some(denied())),
+            InputReader::Desktop,
+            Route::Portal,
+            Route::Portal,
+        ),
+    ];
+    for (output, hotkeys, clicks, keys) in cases {
+        let routes = Detected { output, hotkeys }.routes();
+        assert_eq!(
+            routes,
+            Routes {
+                output: clicks,
+                hotkeys: keys
+            }
+        );
+    }
+}
