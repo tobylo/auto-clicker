@@ -6,6 +6,8 @@ mod instance;
 mod platform;
 mod session;
 mod tray;
+mod tray_text;
+mod window;
 
 use std::process::ExitCode;
 use std::time::Duration;
@@ -165,7 +167,8 @@ async fn connect<P: Platform>(
     } = links;
     forward_signals(send.clone())
         .map_err(|err| fail(&format!("could not watch for signals: {err}")))?;
-    match timeout(BUS_TIMEOUT, tray::show(views, send.clone())).await {
+    let settings = window::keep(controller.window_opener());
+    match timeout(BUS_TIMEOUT, tray::show(views, send.clone(), settings)).await {
         Ok(Ok(())) => {}
         Ok(Err(err)) => return Err(fail(&format!("tray icon: {err}"))),
         Err(_) => return Err(fail("tray icon: the session bus did not answer")),

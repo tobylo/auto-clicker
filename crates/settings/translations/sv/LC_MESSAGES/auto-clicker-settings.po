@@ -1,0 +1,234 @@
+# Swedish translation of the auto-clicker settings window.
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: sv\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Saved."
+msgstr "Sparat."
+
+msgid "Saved, but it may not survive a power loss: {}"
+msgstr "Sparat, men det kanske inte klarar ett strömavbrott: {}"
+
+msgid "Stop clicking, recording or playback first."
+msgstr "Stoppa klickandet, inspelningen eller uppspelningen först."
+
+msgid "Not saved: {}"
+msgstr "Inte sparat: {}"
+
+msgid "{}: {}"
+msgstr "{}: {}"
+
+msgid "Not available: {}"
+msgstr "Inte tillgängligt: {}"
+
+msgid "config.toml changed since the program read it. Replace it with these settings?"
+msgstr "config.toml har ändrats sedan programmet läste den. Ersätta den med de här inställningarna?"
+
+msgid "config.toml could not be used, so the program runs on the defaults. Replace it with these settings?"
+msgstr "config.toml gick inte att använda, så programmet kör med standardinställningarna. Ersätta den med de här inställningarna?"
+
+msgid "{} has no modifier, so it fires on a plain key press, in games too. Keep it?"
+msgstr "{} har ingen modifierare, så den löser ut på ett vanligt tangenttryck, även i spel. Behålla den?"
+
+msgid "Press the new hotkey, or Esc to cancel."
+msgstr "Tryck på den nya snabbtangenten, eller Esc för att avbryta."
+
+msgid "Press the key the clicker should press, or Esc to cancel."
+msgstr "Tryck på tangenten som klickaren ska trycka, eller Esc för att avbryta."
+
+msgid "Cancelled."
+msgstr "Avbrutet."
+
+msgid "Nothing was pressed in time."
+msgstr "Ingenting trycktes i tid."
+
+msgid "That key has no name a hotkey can use; choose another."
+msgstr "Den tangenten har inget namn som en snabbtangent kan använda; välj en annan."
+
+msgid "Stopped: something else happened."
+msgstr "Avbrutet: något annat hände."
+
+msgid "System Settings opened at the program's shortcuts."
+msgstr "Systeminställningar öppnades vid programmets kortkommandon."
+
+msgid "Delay before a tray start"
+msgstr "Fördröjning före start från fältet"
+
+msgid "Interval"
+msgstr "Intervall"
+
+msgid "Jitter"
+msgstr "Variation"
+
+msgid "Key"
+msgstr "Tangent"
+
+msgid "Repeat"
+msgstr "Upprepning"
+
+msgid "Speed"
+msgstr "Hastighet"
+
+msgid "Plays"
+msgstr "Uppspelningar"
+
+msgid "Start or stop clicking"
+msgstr "Börja eller sluta klicka"
+
+msgid "Start or stop recording"
+msgstr "Börja eller sluta spela in"
+
+msgid "Play or stop the recording"
+msgstr "Spela upp eller stoppa inspelningen"
+
+msgid "not set"
+msgstr "inte vald"
+
+msgid "not reported yet"
+msgstr "inte rapporterad än"
+
+msgid "{}: cannot be read"
+msgstr "{}: går inte att läsa"
+
+msgid "Captured {}; save to keep it."
+msgstr "Fångade {}; spara för att behålla den."
+
+msgid "Key set to {}; save to keep it."
+msgstr "Tangenten blev {}; spara för att behålla den."
+
+msgid "Auto clicker settings"
+msgstr "Inställningar för autoklickaren"
+
+msgid "Clicker"
+msgstr "Klickare"
+
+msgid "Action"
+msgstr "Handling"
+
+msgid "Click"
+msgstr "Klicka"
+
+msgid "Double click"
+msgstr "Dubbelklicka"
+
+msgid "Hold the button"
+msgstr "Håll ned knappen"
+
+msgid "Repeat a key"
+msgstr "Upprepa en tangent"
+
+msgid "Hold a key"
+msgstr "Håll ned en tangent"
+
+msgid "ms between actions"
+msgstr "ms mellan handlingar"
+
+msgid "actions a second"
+msgstr "handlingar per sekund"
+
+msgid "Jitter, percent"
+msgstr "Variation, procent"
+
+msgid "Button"
+msgstr "Knapp"
+
+msgid "Left"
+msgstr "Vänster"
+
+msgid "Right"
+msgstr "Höger"
+
+msgid "Middle"
+msgstr "Mitten"
+
+msgid "Back"
+msgstr "Bakåt"
+
+msgid "Forward"
+msgstr "Framåt"
+
+msgid "Key: a name such as space, or a code such as #113"
+msgstr "Tangent: ett namn som space, eller en kod som #113"
+
+msgid "Change…"
+msgstr "Ändra…"
+
+msgid "Where"
+msgstr "Var"
+
+msgid "At the pointer"
+msgstr "Vid pekaren"
+
+msgid "At a fixed point"
+msgstr "På en fast punkt"
+
+msgid "Point, 0 to 65535 across all screens"
+msgstr "Punkt, 0 till 65535 över alla skärmar"
+
+msgid "Until stopped"
+msgstr "Tills den stoppas"
+
+msgid "Delay before a start from the tray, seconds"
+msgstr "Fördröjning före en start från fältet, sekunder"
+
+msgid "Hotkeys"
+msgstr "Snabbtangenter"
+
+msgid "Plasma delivers the hotkeys, so they are set in System Settings, under Shortcuts."
+msgstr "Plasma levererar snabbtangenterna, så de väljs i Systeminställningar, under Genvägar."
+
+msgid "Change in System Settings"
+msgstr "Ändra i Systeminställningar"
+
+msgid "X"
+msgstr "X"
+
+msgid "Y"
+msgstr "Y"
+
+msgid "Picked at start"
+msgstr "Väljs vid start"
+
+msgid "Hotkeys come from"
+msgstr "Snabbtangenterna kommer från"
+
+msgid "The keyboards (needs the input group)"
+msgstr "Tangentborden (kräver gruppen input)"
+
+msgid "Plasma's shortcuts"
+msgstr "Plasmas genvägar"
+
+msgid "Clicks and keys go through"
+msgstr "Klick och tangenter går genom"
+
+msgid "/dev/uinput"
+msgstr "/dev/uinput"
+
+msgid "Plasma's remote input"
+msgstr "Plasmas fjärrinmatning"
+
+msgid "A change of route applies after the program restarts."
+msgstr "En ändrad väg gäller efter att programmet startats om."
+
+msgid "Playback"
+msgstr "Uppspelning"
+
+msgid "Speed, 0.25 to 4 times as recorded"
+msgstr "Hastighet, 0,25 till 4 gånger den inspelade"
+
+msgid "About"
+msgstr "Om"
+
+msgid "Auto clicker for KDE Plasma on Wayland."
+msgstr "Autoklickare för KDE Plasma på Wayland."
+
+msgid "Yes"
+msgstr "Ja"
+
+msgid "No"
+msgstr "Nej"
+
+msgid "Save"
+msgstr "Spara"

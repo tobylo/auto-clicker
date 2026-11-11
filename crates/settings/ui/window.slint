@@ -1,0 +1,361 @@
+// The settings window. Rust sets the fields from the daemon's view and
+// reads them back for a save; every text the window shows is here, under
+// @tr, so the bundled translations cover it all.
+
+import { AboutSlint, Button, CheckBox, ComboBox, GroupBox, LineEdit, SpinBox, TabWidget, ScrollView, Palette } from "std-widgets.slint";
+
+// Texts Rust builds messages from.
+export global Texts {
+    public pure function saved() -> string { @tr("Saved.") }
+    public pure function saved-unsynced(why: string) -> string { @tr("Saved, but it may not survive a power loss: {}", why) }
+    public pure function busy() -> string { @tr("Stop clicking, recording or playback first.") }
+    public pure function failed(why: string) -> string { @tr("Not saved: {}", why) }
+    public pure function refused(field: string, why: string) -> string { @tr("{}: {}", field, why) }
+    public pure function unavailable(why: string) -> string { @tr("Not available: {}", why) }
+    public pure function replace-changed() -> string { @tr("config.toml changed since the program read it. Replace it with these settings?") }
+    public pure function replace-unusable() -> string { @tr("config.toml could not be used, so the program runs on the defaults. Replace it with these settings?") }
+    public pure function without-modifier(actions: string) -> string { @tr("{} has no modifier, so it fires on a plain key press, in games too. Keep it?", actions) }
+    public pure function capturing-hotkey() -> string { @tr("Press the new hotkey, or Esc to cancel.") }
+    public pure function capturing-key() -> string { @tr("Press the key the clicker should press, or Esc to cancel.") }
+    public pure function capture-cancelled() -> string { @tr("Cancelled.") }
+    public pure function capture-timed-out() -> string { @tr("Nothing was pressed in time.") }
+    public pure function capture-unnamed() -> string { @tr("That key has no name a hotkey can use; choose another.") }
+    public pure function capture-interrupted() -> string { @tr("Stopped: something else happened.") }
+    public pure function configured() -> string { @tr("System Settings opened at the program's shortcuts.") }
+    public pure function field-delay() -> string { @tr("Delay before a tray start") }
+    public pure function field-interval() -> string { @tr("Interval") }
+    public pure function field-jitter() -> string { @tr("Jitter") }
+    public pure function field-key() -> string { @tr("Key") }
+    public pure function field-repeat() -> string { @tr("Repeat") }
+    public pure function field-speed() -> string { @tr("Speed") }
+    public pure function field-plays() -> string { @tr("Plays") }
+    public pure function action-clicking() -> string { @tr("Start or stop clicking") }
+    public pure function action-recording() -> string { @tr("Start or stop recording") }
+    public pure function action-playback() -> string { @tr("Play or stop the recording") }
+    public pure function not-set() -> string { @tr("not set") }
+    public pure function not-reported() -> string { @tr("not reported yet") }
+    public pure function unreadable(field: string) -> string { @tr("{}: cannot be read", field) }
+    public pure function captured-hotkey(keys: string) -> string { @tr("Captured {}; save to keep it.", keys) }
+    public pure function captured-key(key: string) -> string { @tr("Key set to {}; save to keep it.", key) }
+}
+
+component Row inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 8px;
+    Text {
+        text: root.label;
+        min-width: 200px;
+        vertical-alignment: center;
+    }
+    @children
+}
+
+export component SettingsWindow inherits Window {
+    title: @tr("Auto clicker settings");
+    preferred-width: 640px;
+    preferred-height: 560px;
+
+    // General
+    in-out property <int> tray-delay;
+    // Clicker
+    in-out property <int> mode;
+    in-out property <string> interval-text;
+    in-out property <int> interval-unit;
+    in-out property <int> jitter;
+    in-out property <int> button;
+    in-out property <string> key-text;
+    in-out property <bool> position-fixed;
+    in-out property <int> position-x;
+    in-out property <int> position-y;
+    in-out property <bool> repeat-forever;
+    in-out property <string> repeat-text: "1";
+    // Hotkeys
+    in property <string> hotkey-clicking;
+    in property <string> hotkey-recording;
+    in property <string> hotkey-playback;
+    in property <bool> desktop-hotkeys;
+    // Input
+    in-out property <int> output-route;
+    in-out property <int> hotkeys-route;
+    in property <bool> routes-pending;
+    // Playback
+    in-out property <string> speed-text;
+    in-out property <bool> plays-forever;
+    in-out property <string> plays-text: "1";
+    // State
+    in property <bool> idle;
+    // The window may send a request: nothing waits on an answer, and no
+    // question is open.
+    in property <bool> may-ask;
+    in property <bool> waiting;
+    in property <string> message;
+    in property <bool> message-is-error;
+    in property <string> confirm-text;
+    in property <string> no-recording;
+    in property <string> problems;
+
+    callback save();
+    callback capture-hotkey(int);
+    callback capture-key();
+    callback configure-shortcuts();
+    callback confirm();
+    callback dismiss();
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        TabWidget {
+            Tab {
+                title: @tr("Clicker");
+                ScrollView {
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 8px;
+                        alignment: start;
+                        Row {
+                            label: @tr("Action");
+                            ComboBox {
+                                enabled: !root.waiting;
+                                model: [@tr("Click"), @tr("Double click"), @tr("Hold the button"), @tr("Repeat a key"), @tr("Hold a key")];
+                                current-index <=> root.mode;
+                            }
+                        }
+                        Row {
+                            label: @tr("Interval");
+                            LineEdit {
+                                enabled: !root.waiting;
+                                text <=> root.interval-text;
+                            }
+                            ComboBox {
+                                enabled: !root.waiting;
+                                model: [@tr("ms between actions"), @tr("actions a second")];
+                                current-index <=> root.interval-unit;
+                            }
+                        }
+                        Row {
+                            label: @tr("Jitter, percent");
+                            SpinBox {
+                                enabled: !root.waiting;
+                                minimum: 0;
+                                maximum: 50;
+                                value <=> root.jitter;
+                            }
+                        }
+                        Row {
+                            label: @tr("Button");
+                            ComboBox {
+                                enabled: !root.waiting;
+                                model: [@tr("Left"), @tr("Right"), @tr("Middle"), @tr("Back"), @tr("Forward")];
+                                current-index <=> root.button;
+                            }
+                        }
+                        Row {
+                            label: @tr("Key: a name such as space, or a code such as #113");
+                            LineEdit {
+                                enabled: !root.waiting;
+                                text <=> root.key-text;
+                            }
+                            if !root.desktop-hotkeys: Button {
+                                text: @tr("Change…");
+                                enabled: root.idle && root.may-ask;
+                                clicked => { root.capture-key(); }
+                            }
+                        }
+                        Row {
+                            label: @tr("Where");
+                            ComboBox {
+                                enabled: !root.waiting;
+                                model: [@tr("At the pointer"), @tr("At a fixed point")];
+                                current-index: root.position-fixed ? 1 : 0;
+                                selected => { root.position-fixed = self.current-index == 1; }
+                            }
+                        }
+                        if root.position-fixed: Row {
+                            label: @tr("Point, 0 to 65535 across all screens");
+                            Text {
+                                text: @tr("X");
+                                vertical-alignment: center;
+                            }
+                            SpinBox {
+                                enabled: !root.waiting;
+                                minimum: 0;
+                                maximum: 65535;
+                                value <=> root.position-x;
+                            }
+                            Text {
+                                text: @tr("Y");
+                                vertical-alignment: center;
+                            }
+                            SpinBox {
+                                enabled: !root.waiting;
+                                minimum: 0;
+                                maximum: 65535;
+                                value <=> root.position-y;
+                            }
+                        }
+                        Row {
+                            label: @tr("Repeat");
+                            CheckBox {
+                                enabled: !root.waiting;
+                                text: @tr("Until stopped");
+                                checked <=> root.repeat-forever;
+                            }
+                            LineEdit {
+                                enabled: !root.repeat-forever && !root.waiting;
+                                input-type: number;
+                                text <=> root.repeat-text;
+                            }
+                        }
+                        Row {
+                            label: @tr("Delay before a start from the tray, seconds");
+                            SpinBox {
+                                enabled: !root.waiting;
+                                minimum: 0;
+                                maximum: 3600;
+                                value <=> root.tray-delay;
+                            }
+                        }
+                    }
+                }
+            }
+            Tab {
+                title: @tr("Hotkeys");
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 8px;
+                    alignment: start;
+                    for hotkey[index] in [
+                        { label: @tr("Start or stop clicking"), keys: root.hotkey-clicking },
+                        { label: @tr("Start or stop recording"), keys: root.hotkey-recording },
+                        { label: @tr("Play or stop the recording"), keys: root.hotkey-playback },
+                    ]: Row {
+                        label: hotkey.label;
+                        Text {
+                            text: hotkey.keys;
+                            vertical-alignment: center;
+                            min-width: 160px;
+                        }
+                        if !root.desktop-hotkeys: Button {
+                            text: @tr("Change…");
+                            enabled: root.idle && root.may-ask;
+                            clicked => { root.capture-hotkey(index); }
+                        }
+                    }
+                    if root.desktop-hotkeys: Text {
+                        text: @tr("Plasma delivers the hotkeys, so they are set in System Settings, under Shortcuts.");
+                        wrap: word-wrap;
+                    }
+                    if root.desktop-hotkeys: Button {
+                        text: @tr("Change in System Settings");
+                        enabled: root.may-ask;
+                        clicked => { root.configure-shortcuts(); }
+                    }
+                    Row {
+                        label: @tr("Hotkeys come from");
+                        ComboBox {
+                            enabled: !root.waiting;
+                            model: [@tr("Picked at start"), @tr("The keyboards (needs the input group)"), @tr("Plasma's shortcuts")];
+                            current-index <=> root.hotkeys-route;
+                        }
+                    }
+                    Row {
+                        label: @tr("Clicks and keys go through");
+                        ComboBox {
+                            enabled: !root.waiting;
+                            model: [@tr("Picked at start"), @tr("/dev/uinput"), @tr("Plasma's remote input")];
+                            current-index <=> root.output-route;
+                        }
+                    }
+                    if root.routes-pending: Text {
+                        text: @tr("A change of route applies after the program restarts.");
+                        wrap: word-wrap;
+                    }
+                }
+            }
+            Tab {
+                title: @tr("Playback");
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 8px;
+                    alignment: start;
+                    Row {
+                        label: @tr("Speed, 0.25 to 4 times as recorded");
+                        LineEdit {
+                            enabled: !root.waiting;
+                            text <=> root.speed-text;
+                        }
+                    }
+                    Row {
+                        label: @tr("Plays");
+                        CheckBox {
+                            enabled: !root.waiting;
+                            text: @tr("Until stopped");
+                            checked <=> root.plays-forever;
+                        }
+                        LineEdit {
+                            enabled: !root.plays-forever && !root.waiting;
+                            input-type: number;
+                            text <=> root.plays-text;
+                        }
+                    }
+                    if root.no-recording != "": Text {
+                        text: root.no-recording;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+            Tab {
+                title: @tr("About");
+                VerticalLayout {
+                    padding: 8px;
+                    alignment: start;
+                    Text {
+                        text: @tr("Auto clicker for KDE Plasma on Wayland.");
+                    }
+                    AboutSlint { }
+                }
+            }
+        }
+
+        if root.problems != "": Text {
+            text: root.problems;
+            wrap: word-wrap;
+            color: Palette.foreground;
+        }
+        if root.confirm-text != "": HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.confirm-text;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+            }
+            Button {
+                text: @tr("Yes");
+                primary: true;
+                enabled: !root.waiting;
+                clicked => { root.confirm(); }
+            }
+            Button {
+                text: @tr("No");
+                clicked => { root.dismiss(); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.message;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                color: root.message-is-error ? #c42b1c : Palette.foreground;
+            }
+            Button {
+                text: @tr("Save");
+                primary: true;
+                enabled: root.idle && root.may-ask;
+                clicked => { root.save(); }
+            }
+        }
+    }
+}

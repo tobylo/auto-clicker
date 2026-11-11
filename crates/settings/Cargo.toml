@@ -1,0 +1,29 @@
+[package]
+name = "auto-clicker-settings"
+description = "Settings window of auto-clicker, started by the daemon from its tray"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "auto-clicker-settings"
+path = "src/main.rs"
+
+[dependencies]
+auto-clicker-core = { path = "../core" }
+# The window. Wayland through winit, drawn with femtovg on OpenGL; no tray,
+# no software renderer, no X11. Royalty-free licence: the window shows
+# AboutSlint.
+# Puts /dev/null on standard input once the socket is off it, without
+# unsafe code; the portal backend already uses it.
+rustix = { version = "1.0.7", default-features = false, features = ["std", "stdio"] }
+slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-18", "backend-winit-wayland", "renderer-femtovg"] }
+
+[build-dependencies]
+# Compiles the .slint files and bundles the translations into the binary.
+slint-build = "1.18.1"
+
+[lints]
+workspace = true

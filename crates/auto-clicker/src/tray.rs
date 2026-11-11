@@ -2,17 +2,33 @@
 //! asks for. It never changes the mode itself.
 
 use auto_clicker_core::controller::{Activity, LISTED_RECORDINGS, Message, View};
+use auto_clicker_core::locale::Language;
 use ksni::menu::{StandardItem, SubMenu};
 use ksni::{MenuItem, ToolTip, TrayMethods};
 use tokio::sync::{mpsc, watch};
+
+use crate::tray_text;
 
 /// The tray's state: the latest view, and where menu choices go.
 pub struct Tray {
     view: View,
     send: mpsc::UnboundedSender<Message>,
+    /// Where a choice of Settings goes: the settings window's keeper.
+    settings: mpsc::UnboundedSender<()>,
+    /// The language the menu and the title line speak.
+    language: Language,
     /// Flips whenever the list of recordings changes, which changes the
     /// menu's shape (see [`Tray::menu`](ksni::Tray::menu)).
     relisted: bool,
+}
+
+/// What a menu item does when chosen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Choice {
+    /// Sends the controller this message.
+    Send(Message),
+    /// Opens the settings window, or raises the one open.
+    Settings,
 }
 
 /// Shows the tray icon and keeps it in step with the controller's view.
@@ -23,9 +39,10 @@ pub struct Tray {
 pub async fn show(
     mut views: watch::Receiver<View>,
     send: mpsc::UnboundedSender<Message>,
+    settings: mpsc::UnboundedSender<()>,
 ) -> Result<(), ksni::Error> {
     let view = views.borrow_and_update().clone();
-    let handle = Tray::new(view, send)
+    let handle = Tray::new(view, send, settings, Language::of_environment())
         .assume_sni_available(true)
         .spawn()
         .await?;
@@ -42,10 +59,17 @@ pub async fn show(
 }
 
 impl Tray {
-    fn new(view: View, send: mpsc::UnboundedSender<Message>) -> Tray {
+    fn new(
+        view: View,
+        send: mpsc::UnboundedSender<Message>,
+        settings: mpsc::UnboundedSender<()>,
+        language: Language,
+    ) -> Tray {
         Tray {
             view,
             send,
+            settings,
+            language,
             relisted: false,
         }
     }
@@ -60,6 +84,14 @@ impl Tray {
         // The controller is gone only while the daemon exits.
         let _ = self.send.send(message);
     }
+
+    fn choose(&self, choice: Choice) {
+        match choice {
+            Choice::Send(message) => self.send(message),
+            // The keeper is gone only while the daemon exits.
+            Choice::Settings => drop(self.settings.send(())),
+        }
+    }
 }
 
 /// One menu item: its label, the message it sends (`None`: never enabled),
@@ -68,7 +100,7 @@ impl Tray {
 #[derive(Debug, PartialEq, Eq)]
 struct Entry {
     label: String,
-    sends: Option<Message>,
+    sends: Option<Choice>,
     enabled: bool,
     visible: bool,
     children: Vec<Entry>,
@@ -80,8 +112,19 @@ impl Entry {
         Entry {
             label: label.to_owned(),
             enabled: enabled && sends.is_some(),
-            sends,
+            sends: sends.map(Choice::Send),
             visible,
+            children: Vec::new(),
+        }
+    }
+
+    /// The Settings item: always there, and always enabled.
+    fn settings() -> Entry {
+        Entry {
+            label: "Settings".to_owned(),
+            sends: Some(Choice::Settings),
+            enabled: true,
+            visible: true,
             children: Vec::new(),
         }
     }
@@ -130,8 +173,7 @@ fn entries(view: &View, relisted: bool) -> [Entry; 8] {
             true,
             activity.playing(),
         ),
-        // Settings come with M3.
-        Entry::item("Settings", None, false, true),
+        Entry::settings(),
         Entry::item("Quit", Some(Message::Quit), true, true),
     ]
 }
@@ -204,16 +246,18 @@ fn tooltip_body(view: &View) -> String {
         .join("<br/>")
 }
 
-/// The menu item for `entry`: a submenu when it has children.
-fn item(entry: Entry) -> MenuItem<Tray> {
+/// The menu item for `entry`, labelled in `language`: a submenu when it
+/// has children.
+fn item(entry: Entry, language: Language) -> MenuItem<Tray> {
+    let label = tray_text::label(&entry.label, language);
     if entry.children.is_empty() {
         return StandardItem {
-            label: entry.label,
+            label,
             enabled: entry.enabled,
             visible: entry.visible,
             activate: Box::new(move |tray: &mut Tray| {
-                if let Some(message) = entry.sends.clone() {
-                    tray.send(message);
+                if let Some(choice) = entry.sends.clone() {
+                    tray.choose(choice);
                 }
             }),
             ..StandardItem::default()
@@ -221,9 +265,13 @@ fn item(entry: Entry) -> MenuItem<Tray> {
         .into();
     }
     SubMenu {
-        label: entry.label,
+        label,
         visible: entry.visible,
-        submenu: entry.children.into_iter().map(item).collect(),
+        submenu: entry
+            .children
+            .into_iter()
+            .map(|child| item(child, language))
+            .collect(),
         ..SubMenu::default()
     }
     .into()
@@ -238,7 +286,7 @@ impl ksni::Tray for Tray {
     }
 
     fn title(&self) -> String {
-        self.view.title()
+        tray_text::title(&self.view, self.language)
     }
 
     fn status(&self) -> ksni::Status {
@@ -263,14 +311,18 @@ impl ksni::Tray for Tray {
         ToolTip {
             icon_name: self.icon_name(),
             icon_pixmap: Vec::new(),
-            title: escape(&self.view.title()),
+            title: escape(&tray_text::title(&self.view, self.language)),
             description: tooltip_body(&self.view),
         }
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let entries = entries(&self.view, self.relisted);
-        let mut items: Vec<MenuItem<Self>> = entries.into_iter().map(item).collect();
+        let language = self.language;
+        let mut items: Vec<MenuItem<Self>> = entries
+            .into_iter()
+            .map(|entry| item(entry, language))
+            .collect();
         // Quit sits apart from the rest.
         items.insert(items.len().saturating_sub(1), MenuItem::Separator);
         items
@@ -353,7 +405,7 @@ mod tests {
     fn the_menu_offers_what_each_state_allows() {
         use Activity::*;
         // Play is a submenu, enabled through its items.
-        let rest = [("Play", false), ("Settings", false), ("Quit", true)];
+        let rest = [("Play", false), ("Settings", true), ("Quit", true)];
         let idle = [("Start clicking", true), ("Record", true)];
         assert_eq!(
             shown(Idle),
@@ -382,7 +434,7 @@ mod tests {
             ("Start clicking", false),
             ("Record", false),
             ("Stop playing", true),
-            ("Settings", false),
+            ("Settings", true),
             ("Quit", true),
         ];
         for busy in [PlayingIn(2), PlayWaitingForRelease, PlayOpening, Playing] {
@@ -394,15 +446,16 @@ mod tests {
     fn every_item_keeps_its_place_and_message() {
         use Activity::*;
         let messages = |activity| entries(&view(activity), false).map(|entry| entry.sends);
+        let send = |message| Some(Choice::Send(message));
         let expected = [
-            Some(Message::Start),
-            Some(Message::Stop),
-            Some(Message::Record),
-            Some(Message::StopRecording),
+            send(Message::Start),
+            send(Message::Stop),
+            send(Message::Record),
+            send(Message::StopRecording),
             None,
-            Some(Message::Stop),
-            None,
-            Some(Message::Quit),
+            send(Message::Stop),
+            Some(Choice::Settings),
+            send(Message::Quit),
         ];
         for activity in [Idle, Clicking, Recording, RecordingIn(1), Playing] {
             assert_eq!(messages(activity), expected, "{activity:?}");
@@ -413,7 +466,7 @@ mod tests {
 
     /// The Play submenu's visible items: label, whether enabled, and what
     /// each sends.
-    fn play_menu(view: &View) -> Vec<(String, bool, Option<Message>)> {
+    fn play_menu(view: &View) -> Vec<(String, bool, Option<Choice>)> {
         let [_, _, _, _, play, ..] = entries(view, false);
         play.children
             .into_iter()
@@ -428,7 +481,11 @@ mod tests {
             (0..2)
                 .map(|minute| {
                     let label = format!("Recording 2026-11-09 18:{minute:02}:00");
-                    (label, enabled, Some(Message::Play(file(minute))))
+                    (
+                        label,
+                        enabled,
+                        Some(Choice::Send(Message::Play(file(minute)))),
+                    )
                 })
                 .collect::<Vec<_>>()
         };
@@ -452,7 +509,12 @@ mod tests {
     fn the_play_menu_gives_way_to_stop_playing() {
         use ksni::Tray as _;
         let (send, _received) = mpsc::unbounded_channel();
-        let tray = Tray::new(view(Activity::Playing), send);
+        let tray = Tray::new(
+            view(Activity::Playing),
+            send,
+            mpsc::unbounded_channel().0,
+            Language::English,
+        );
         let shown: Vec<(String, bool)> = tray
             .menu()
             .iter()
@@ -467,7 +529,12 @@ mod tests {
     fn a_changed_list_changes_the_shape_of_the_play_menu_and_nothing_else_does() {
         use ksni::Tray as _;
         let (send, _received) = mpsc::unbounded_channel();
-        let mut tray = Tray::new(view_listing(Activity::Idle, 10), send);
+        let mut tray = Tray::new(
+            view_listing(Activity::Idle, 10),
+            send,
+            mpsc::unbounded_channel().0,
+            Language::English,
+        );
         let places = |tray: &Tray| match &tray.menu()[4] {
             MenuItem::SubMenu(play) => play.submenu.len(),
             _ => 0,
@@ -549,7 +616,13 @@ mod tests {
     fn the_tray_shows_the_view_and_its_menu_sends_messages() {
         use ksni::Tray as _;
         let (send, mut received) = mpsc::unbounded_channel();
-        let mut tray = Tray::new(view_listing(Activity::Idle, 1), send);
+        let (settings, mut opened) = mpsc::unbounded_channel();
+        let mut tray = Tray::new(
+            view_listing(Activity::Idle, 1),
+            send,
+            settings,
+            Language::English,
+        );
         assert_eq!(tray.id(), "auto-clicker");
         assert_eq!(tray.title(), "Auto clicker: idle");
         assert_eq!(tray.icon_name(), "auto-clicker-idle");
@@ -576,7 +649,7 @@ mod tests {
             item("Stop recording", true, false),
             ("Play".to_owned(), true, true, play_items),
             item("Stop playing", true, false),
-            item("Settings", false, true),
+            item("Settings", true, true),
             item("-", false, true),
             item("Quit", true, true),
         ];
@@ -592,13 +665,32 @@ mod tests {
                 Message::Record,
                 Message::StopRecording,
                 // The Play menu's unused places and its line for none send
-                // nothing, nor does Settings.
+                // nothing, and Settings goes to the window's keeper.
                 Message::Play(file(0)),
                 Message::Stop,
                 Message::Quit,
                 Message::MenuOpened
             ]
         );
+        assert_eq!(opened.try_recv(), Ok(()));
+        assert!(opened.try_recv().is_err());
+    }
+
+    #[test]
+    fn the_menu_and_title_speak_swedish_in_a_swedish_locale() {
+        use ksni::Tray as _;
+        let (send, _received) = mpsc::unbounded_channel();
+        let tray = Tray::new(
+            view_listing(Activity::Idle, 1),
+            send,
+            mpsc::unbounded_channel().0,
+            Language::Swedish,
+        );
+        assert_eq!(tray.title(), "Autoklickare: vilar");
+        let labels: Vec<String> = tray.menu().iter().map(|item| shown_item(item).0).collect();
+        assert_eq!(labels[0], "Börja klicka");
+        assert_eq!(labels[6], "Inställningar");
+        assert_eq!(labels[8], "Avsluta");
     }
 
     #[test]
