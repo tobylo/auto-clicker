@@ -212,6 +212,30 @@ fn a_move_at_the_time_of_a_position_before_it_is_covered() {
 }
 
 #[test]
+fn a_move_covered_at_its_own_time_moves_no_later_position_before_a_click() {
+    // The pointer rests at A for 3 ms before the press; B belongs to the
+    // move after it. Either order of A and its move gives the same plan.
+    let a = at(10, 10);
+    let b = at(20, 10);
+    let rest = [
+        (5_000, Change::Press(LEFT)),
+        (5_500, MOVE),
+        (6_000, b),
+        (9_000, Change::Release(LEFT)),
+    ];
+    let expected = [
+        (2_000, a),
+        (5_000, Change::Press(LEFT)),
+        (6_000, b),
+        (9_000, Change::Release(LEFT)),
+    ];
+    for first in [[(2_000, a), (2_000, MOVE)], [(2_000, MOVE), (2_000, a)]] {
+        let events: Vec<_> = first.iter().chain(&rest).copied().collect();
+        assert_eq!(planned(&events), expected, "{first:?}");
+    }
+}
+
+#[test]
 fn relative_motion_sends_every_move_and_no_position() {
     let playback = once(positioned(
         100_000,

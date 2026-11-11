@@ -46,8 +46,7 @@ impl Plan {
         let layout = recording.layout()?;
         let events = recording.events();
         let count = u32::try_from(events.len()).ok()?;
-        let (mut covered, hoists) = cover(events, count);
-        cover_same_time(events, &mut covered);
+        let (covered, hoists) = cover(events, count, covered_at_same_time(events));
         let mut hoisted: Vec<u32> = hoists.iter().map(|&(_, position)| position).collect();
         hoisted.sort_unstable();
         let mut hoists = hoists.into_iter().peekable();
@@ -127,8 +126,7 @@ fn cover_move(at: u64, position: Seen, first_event: Seen) -> Cover {
 /// Which moves are covered, and which positions go before which event
 /// (`(event, position)`, ascending by event), found walking back from the
 /// end. `count` is how many events there are.
-fn cover(events: &[Event], count: u32) -> (Vec<bool>, Vec<(u32, u32)>) {
-    let mut covered = vec![false; events.len()];
+fn cover(events: &[Event], count: u32, mut covered: Vec<bool>) -> (Vec<bool>, Vec<(u32, u32)>) {
     let mut hoists: Vec<(u32, u32)> = Vec::new();
     // The next position, and the first press, release or wheel turn before
     // it, after the event being looked at.
@@ -143,6 +141,8 @@ fn cover(events: &[Event], count: u32) -> (Vec<bool>, Vec<(u32, u32)>) {
             Change::Press(_) | Change::Release(_) | Change::Wheel(_) => {
                 first_event = Some((index, event.at));
             }
+            // Covered by a position at its own time: nothing to pair.
+            Change::Move { .. } if *skip => {}
             Change::Move { .. } => match cover_move(event.at, position, first_event) {
                 Cover::Sent => {}
                 Cover::Covered => *skip = true,
@@ -162,16 +162,21 @@ fn cover(events: &[Event], count: u32) -> (Vec<bool>, Vec<(u32, u32)>) {
     (covered, hoists)
 }
 
-/// Covers each move at the time of a position before it.
-fn cover_same_time(events: &[Event], covered: &mut [bool]) {
+/// Which events are moves at the time of a position before them, and so
+/// covered by it.
+fn covered_at_same_time(events: &[Event]) -> Vec<bool> {
     let mut position_at = None;
-    for (event, skip) in events.iter().zip(covered) {
-        match event.change {
-            Change::Position(_) => position_at = Some(event.at),
-            Change::Move { .. } if position_at == Some(event.at) => *skip = true,
-            _ => {}
-        }
-    }
+    events
+        .iter()
+        .map(|event| match event.change {
+            Change::Position(_) => {
+                position_at = Some(event.at);
+                false
+            }
+            Change::Move { .. } => position_at == Some(event.at),
+            _ => false,
+        })
+        .collect()
 }
 
 /// The outputs of `layout` the positions in `events` lie on.
