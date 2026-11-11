@@ -41,7 +41,7 @@ use tokio::time::{Instant, sleep_until};
 pub use hotkeys::{HotkeyReader, HotkeySender, ReaderCommand, ReaderCommands};
 pub use session::{Blocked, SessionFacts};
 pub use settings::{WindowLink, WindowOpener};
-pub use view::{Activity, Hotkey, Listed, NoRecording, View, describe};
+pub use view::{Activity, Hotkey, Listed, NoRecording, Route, Routes, View, describe};
 
 use crate::clicker::run;
 use crate::config::Config;
@@ -148,6 +148,16 @@ pub enum InputReader {
     Desktop,
 }
 
+impl From<InputReader> for Route {
+    /// The route a reader's hotkeys take.
+    fn from(reader: InputReader) -> Route {
+        match reader {
+            InputReader::Devices => Route::Kernel,
+            InputReader::Desktop => Route::Portal,
+        }
+    }
+}
+
 /// What the controller needs from the platform: its input devices, an input
 /// reader that ignores them, and the clocks and directory recordings need.
 pub trait Platform {
@@ -155,6 +165,9 @@ pub trait Platform {
 
     /// How long the devices live.
     const LIFETIME: InputLifetime;
+
+    /// The route its devices take.
+    const OUTPUT: Route = Route::Kernel;
 
     /// Opens the input devices. The future owns what it opened so far:
     /// dropping it part way closes that again.
@@ -397,6 +410,7 @@ impl<P: Platform> Controller<P> {
         let desktop = Self::first_triggers(&platform);
         let (view, shown) = watch::channel(View {
             activity: Activity::Idle,
+            routes: routes(&platform),
             settings: config.clicker,
             hotkey: desktop::shown_hotkey(config.hotkeys, desktop.as_ref(), Action::ToggleClicking),
             record_hotkey: desktop::shown_hotkey(
@@ -993,6 +1007,7 @@ impl<P: Platform> Controller<P> {
     fn publish(&self) {
         let view = View {
             activity: self.activity(),
+            routes: routes(&self.platform),
             settings: self.config.clicker,
             hotkey: self.shown_hotkey(Action::ToggleClicking),
             record_hotkey: self.shown_hotkey(Action::ToggleRecording),
@@ -1080,6 +1095,14 @@ fn run_wake<B: InputBackend>(state: &mut State<B>) -> impl Future<Output = Wake<
         }
         Poll::Pending
     })
+}
+
+/// The routes `platform` takes.
+fn routes<P: Platform>(platform: &P) -> Routes {
+    Routes {
+        output: P::OUTPUT,
+        hotkeys: platform.input_reader().into(),
+    }
 }
 
 /// The end of the open in flight; never resolves while none is.

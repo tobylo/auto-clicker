@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::{Config, Field};
+use crate::controller::{Route, Routes};
 use crate::hotkeys::{Binding, Unavailable};
 
 fn save(id: u64) -> Request {
@@ -18,6 +19,10 @@ fn view() -> WindowView {
     WindowView {
         settings: Draft::from(&config),
         running: Draft::from(&config).input,
+        routes: Routes {
+            output: Route::Kernel,
+            hotkeys: Route::Portal,
+        },
         activity: Activity::Clicking,
         hotkeys: ShownHotkeys {
             toggle_clicking: Hotkey::Bound(Binding::parse("Ctrl+F6").unwrap()),
