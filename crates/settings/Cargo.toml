@@ -16,6 +16,9 @@ auto-clicker-core = { path = "../core" }
 # The window. Wayland through winit, drawn with femtovg on OpenGL; no tray,
 # no software renderer, no X11. Royalty-free licence: the window shows
 # AboutSlint.
+# Puts /dev/null on standard input once the socket is off it, without
+# unsafe code; the portal backend already uses it.
+rustix = { version = "1.0.7", default-features = false, features = ["std", "stdio"] }
 slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-18", "backend-winit-wayland", "renderer-femtovg"] }
 
 [build-dependencies]
