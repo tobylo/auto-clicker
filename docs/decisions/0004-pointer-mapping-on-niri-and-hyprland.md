@@ -2,7 +2,7 @@
 
 - Status: accepted, 2026-11-12. niri and Plasma measured; Hyprland read from source, to be measured by W01c. W01a added niri at a negative position (one output); two outputs wait for a second monitor.
 - Issue: W01 (#75). It shapes the slices in the [W01 brief](../planning/features/w01-other-desktops.md).
-- Measured on: the dev box, niri 26.04 (8ed0da4), Linux 7.3.3-1-cachyos, one output (HDMI-A-1, LG 34GN850, 3440x1440 at 85 Hz); the laptop, KWin 6.8.2, eDP-1 (2560x1600) and DP-1 (3440x1440). Read from source: niri v26.04 (6a0a862) with its pinned smithay (ff5fa7d), Hyprland v0.57.2, KWin v6.8.2.
+- Measured on: the dev box, niri 26.04 (8ed0da4), Linux 7.3.3-1-cachyos, one output (HDMI-A-1, LG 34GN850, 3440x1440 at 85 Hz); the laptop, KWin 6.8.2, eDP-1 (2560x1600) and DP-1 (3440x1440). Read from source: niri v26.04 (commit 8ed0da4; 6a0a862 is its tag object) with its pinned smithay (ff5fa7d), Hyprland v0.57.2, KWin v6.8.2.
 
 ## Decision
 
@@ -73,6 +73,16 @@ From source:
 
 - xdg-output sends round(size) and round(position) of an output's fractional geometry (`src/wayland/xdgoutput_v1.cpp:191,199`). The layout script's `output.geometry` rounds the edges instead (`src/core/rect.h:2439`). The two agree when an output sits at a whole logical position.
 - KWin 6.8.2 has no ext-image-copy-capture.
+
+## One change, every output's events before a sync answer (W01a review, from source)
+
+xdg-output and `wl_output` end an update per output; nothing marks the end of a change across outputs. The client reads the layout when a `wl_display.sync` comes back with nothing new and every output's update ended at its `done` (W3). That is whole only if a compositor queues every affected output's events before it reads the client's next request. Read from source (smithay ff5fa7d as pinned by niri 8ed0da4, KWin v6.8.2 f130ab3, Hyprland v0.57.2 11cbc6c, libwayland f2ecaa6), it does on all three:
+
+- **niri:** `reload_output_config` (`src/niri.rs:1718`) sets each output's scale and transform (`:1749`), resizes (`:1795`), applies modes and enables or disables outputs through the backend (`:1802`; `tty.rs:2495`, `:1545`, `:1601`) and repositions every output (`:1804`, `:2799`) in one call; smithay's `Output::change_current_state` (`src/output.rs:380`) sends the xdg-output and `wl_output` events and `done` at once (`src/wayland/output/xdg.rs:91-147`, `src/wayland/output/mod.rs:218-260`). Client requests are read only in `dispatch_clients` (`src/niri.rs:2465`). An output may get two `done`s in one change; both come before any answer.
+- **KWin:** `Workspace::updateOutputs` (`workspace.cpp:1370`, loop at `:1435`) sets every output's data in one loop, reached synchronously from a configuration change (`:564-568`) and from hotplug (`:1328`); each change sends its `wl_output` and xdg-output events at once (`wayland/output_interface.cpp:209-265`, `xdgoutput_v1.cpp:115-148`) and schedules that output's `done` on a 0 ms timer (`:187-195`, `:322-326`). KWin flushes before it blocks (`display.cpp:128`), so a client can see every output's events before their `done`s, and an answer between them: the client's per-output `done` rule waits for them.
+- **Hyprland:** a rule, configuration or output-management change only marks a reload, and the next render applies every rule and rearranges every output in one call (`MonitorRuleManager.cpp:22-28`, `:133-194`); a connect rearranges at once (`Monitor.cpp:118`, `:341`), a disconnect in an idle callback (`MonitorLayoutController.cpp:27`). Each output's `done` is deferred to an idle callback (`Monitor.cpp:1672`, `EventLoopManager.cpp:215`); libwayland drains every idle callback, new ones included, before the dispatch returns (`event-loop.c:969`, `:1064`), and Hyprland flushes clients only after that (`wayland-server.c:1740`). Two narrow exceptions: libwayland flushes a client whose buffer fills (`connection.c:594`, `:628`), and the retry after a failed mode set (`Monitor.cpp:1056`) applies one output's rule without rearranging the others, a layout the compositor itself holds. W01c measures Hyprland.
+
+A compositor that broke this would show one change as two layouts, each published whole per output and each firing, so a pick begun before either is refused and fixed-point clicking stops on the first; the Wayland source gives no positions, and a recording keeps only the layout it started on.
 
 ## The Wayland client's cost
 
