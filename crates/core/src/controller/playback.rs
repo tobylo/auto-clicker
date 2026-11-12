@@ -30,6 +30,7 @@ use super::{
     Controller, Job, LISTED_RECORDINGS, Listed, PLAY_RELEASE_WAIT, Platform, RunFuture, State,
 };
 use crate::input::{Held, Input, InputBackend, Key};
+use crate::message::{Hindrance, Notice, PlayStart, Quoted, Start, Stop, Unplayable};
 use crate::playback::{MIN_LOOP_LENGTH, Motion, Playback, play};
 use crate::recording::{Change, FileName, Layout, LoadError, Recording, list, load};
 use crate::run::Signals;
@@ -65,19 +66,10 @@ impl Playing {
 
     /// What the tray says when it starts on `layout`, the current one, if
     /// anything.
-    pub(super) fn start_notice(&self, layout: Option<&Layout>) -> Option<String> {
-        let held = self.modifier_held.then(|| {
-            format!(
-                "Playing although the hotkey was still held after {} s; its keys mix into what plays",
-                PLAY_RELEASE_WAIT.as_secs()
-            )
-        });
+    pub(super) fn start_notice(&self, layout: Option<&Layout>) -> Option<Notice> {
+        let held = self.modifier_held.then(|| PLAY_RELEASE_WAIT.as_secs());
         let (_, fallback) = self.playback.motion(layout);
-        let fallback = fallback.map(|why| why.notice().to_owned());
-        match (held, fallback) {
-            (Some(held), Some(fallback)) => Some(format!("{held}. {fallback}")),
-            (held, fallback) => held.or(fallback),
-        }
+        PlayStart::new(held, fallback).map(Notice::Playing)
     }
 
     /// The run that plays it on `input`, on `layout`, the current one; and
@@ -129,10 +121,10 @@ impl<P: Platform> Controller<P> {
         };
         let why = match self.platform.layout() {
             Some(current) if current.same_screens(used) => return,
-            Some(_) => "the screen layout changed",
-            None => "the screen layout is no longer known",
+            Some(_) => Stop::LayoutChanged,
+            None => Stop::LayoutUnknown,
         };
-        self.stop(Some(format!("Playback stopped: {why}")));
+        self.stop(Some(why));
     }
 
     /// The playback hotkey while nothing plays: starts the current
@@ -144,7 +136,10 @@ impl<P: Platform> Controller<P> {
             State::Idle => self.play_from_hotkey(),
             State::RecordCountdown(_) | State::Recording(_) => {}
             State::Countdown(..) | State::Release(..) | State::Opening(_) | State::Running(_) => {
-                self.notice = Some("Not playing: clicking is on; stop it first".to_owned());
+                self.notice = Some(Notice::Refused {
+                    start: Start::Playback,
+                    why: Hindrance::ClickingOn,
+                });
             }
         }
     }
@@ -173,7 +168,7 @@ impl<P: Platform> Controller<P> {
 
     /// Whether playback may start; says why not when it may not.
     fn may_play(&mut self) -> bool {
-        self.session_allows("Not playing")
+        self.session_allows(Start::Playback)
     }
 
     /// Loads the current recording: the last one recorded or played, or the
@@ -187,11 +182,13 @@ impl<P: Platform> Controller<P> {
         }
         self.list_recordings();
         let Some(newest) = self.recordings.first().map(|listed| listed.file.clone()) else {
-            let why = self.recordings_error.as_deref();
-            self.notice = Some(why.map_or_else(
-                || "Nothing to play: no recordings yet".to_owned(),
-                |why| format!("Not playing: the recordings cannot be listed: {why}"),
-            ));
+            self.notice = Some(match &self.recordings_error {
+                None => Notice::NothingToPlay,
+                Some(why) => Notice::Refused {
+                    start: Start::Playback,
+                    why: Hindrance::Unlisted(why.clone()),
+                },
+            });
             return None;
         };
         self.load(&newest)
@@ -214,20 +211,19 @@ impl<P: Platform> Controller<P> {
     /// shown offered a file that cannot be played.
     fn checked(&mut self, file: &FileName, read: Result<Recording, LoadError>) -> Option<Job> {
         let label = file.label();
-        let playback = read.map_err(|err| err.to_string()).and_then(|recording| {
-            Playback::new(recording, self.config.playback).map_err(|_| {
-                format!(
-                    "it is shorter than {} ms, too short to play more than once",
-                    MIN_LOOP_LENGTH.as_millis()
-                )
-            })
-        });
+        let playback = read
+            .map_err(|err| Unplayable::from(&err))
+            .and_then(|recording| {
+                Playback::new(recording, self.config.playback).map_err(|_| Unplayable::TooShort {
+                    ms: MIN_LOOP_LENGTH.as_millis(),
+                })
+            });
         // Where the desktop delivers the hotkeys, a recording that presses
         // one of their keys would set it off by itself.
         let playing = playback.and_then(|playback| {
             let keys = pressed_keys(playback.recording());
             match self.own_key_refusal(&OwnKeys::Recording(Arc::clone(&keys))) {
-                Some(why) => Err(format!("it presses a hotkey's key: {why}")),
+                Some(why) => Err(Unplayable::PressesHotkeyKey(why)),
                 None => Ok(Playing {
                     playback,
                     label: label.clone(),
@@ -242,7 +238,10 @@ impl<P: Platform> Controller<P> {
                 Some(Job::Play(playing))
             }
             Err(why) => {
-                self.notice = Some(format!("Not playing {label}: {why}"));
+                self.notice = Some(Notice::Unplayable {
+                    recording: label,
+                    why,
+                });
                 self.list_recordings();
                 None
             }
@@ -275,7 +274,7 @@ impl<P: Platform> Controller<P> {
             Some(dir) => list(&dir, LISTED_RECORDINGS),
             None => Ok(Vec::new()),
         };
-        self.recordings_error = files.as_ref().err().map(ToString::to_string);
+        self.recordings_error = files.as_ref().err().map(|err| Quoted::new(err.to_string()));
         let listed: Vec<Listed> = files
             .unwrap_or_default()
             .into_iter()

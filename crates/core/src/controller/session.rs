@@ -3,8 +3,11 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// Why clicking may not run now.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Blocked {
     /// The screen is locked.
     Locked,

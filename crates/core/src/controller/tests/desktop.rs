@@ -362,7 +362,7 @@ async fn losing_the_desktops_hotkeys_stops_neither_a_run_nor_the_tray() {
         d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(lost.clone())))
             .await;
         assert_eq!(d.activity(), Activity::Clicking);
-        assert_eq!(d.view().problems, [lost.to_string()]);
+        assert_eq!(d.problems(), [lost.to_string()]);
         assert_eq!(
             lost.to_string(),
             "hotkeys are unavailable: the desktop's shortcuts service stopped"
@@ -374,7 +374,7 @@ async fn losing_the_desktops_hotkeys_stops_neither_a_run_nor_the_tray() {
         assert_eq!(d.activity(), Activity::Clicking);
         // The hotkeys come back: the problem goes.
         d.hotkey(HotkeyEvent::Status(HotkeyStatus::Available)).await;
-        assert_eq!(d.view().problems, [] as [String; 0]);
+        assert_eq!(d.problems(), [] as [String; 0]);
     })
     .await;
 }

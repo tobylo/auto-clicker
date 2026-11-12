@@ -14,6 +14,7 @@ use tokio::time::Instant;
 use super::hotkeys::{HotkeySource, ReaderCommand};
 use super::{Controller, InputReader, Message, Platform};
 use crate::hotkeys::{Capture, Captured, HotkeyStatus};
+use crate::message::{Failure, Quoted, Unavailability};
 use crate::window::{Answer, CAPTURE_TIME, CaptureEnd, MAX_TOKEN, Outcome};
 
 /// How long the desktop may take to open its shortcut settings. The reader
@@ -82,15 +83,11 @@ impl<P: Platform> Controller<P> {
     /// is typed there). Whether a keyboard can be read is the capture
     /// reader's to find out, since it reads more of them: it reports that
     /// at once, which ends the capture.
-    fn capture_refusal(&self) -> Option<String> {
+    fn capture_refusal(&self) -> Option<Unavailability> {
         if self.platform.input_reader() == InputReader::Desktop {
-            return Some(
-                "the desktop delivers the hotkeys: change them in System Settings, under \
-                 Shortcuts"
-                    .to_owned(),
-            );
+            return Some(Unavailability::DesktopDelivers);
         }
-        self.blocked.as_ref().map(ToString::to_string)
+        self.blocked.clone().map(Unavailability::Blocked)
     }
 
     /// Asks the reader to open the desktop's shortcut settings for request
@@ -104,17 +101,13 @@ impl<P: Platform> Controller<P> {
             return Some(Outcome::Busy);
         }
         if self.platform.input_reader() != InputReader::Desktop {
-            return Some(Outcome::Unavailable(
-                "the program reads the keyboards: set the hotkeys in this window".to_owned(),
-            ));
+            return Some(Outcome::Unavailable(Unavailability::ReadsKeyboards));
         }
         if activation_token
             .as_deref()
             .is_some_and(|token| !plain_token(token))
         {
-            return Some(Outcome::Failed(
-                "the activation token is not one".to_owned(),
-            ));
+            return Some(Outcome::Failed(Failure::BadToken));
         }
         let operation = self.settings.next_operation();
         let command = ReaderCommand::ConfigureShortcuts {
@@ -122,9 +115,7 @@ impl<P: Platform> Controller<P> {
             activation_token,
         };
         if !self.hotkeys.command(command) {
-            return Some(Outcome::Unavailable(
-                "the desktop's shortcuts are not available".to_owned(),
-            ));
+            return Some(Outcome::Unavailable(Unavailability::NoShortcuts));
         }
         let deadline = Instant::now().checked_add(CONFIGURE_TIME)?;
         self.settings.pending = Some(Pending {
@@ -153,12 +144,13 @@ impl<P: Platform> Controller<P> {
     /// deadline, is dropped.
     pub(super) fn configured(&mut self, operation: u64, result: Result<(), String>) {
         self.pending_expired();
+        let result = result.map_err(|why| Failure::Desktop(Quoted::new(why)));
         self.answer_configure(operation, result);
     }
 
     /// Answers the request to open the desktop's settings that `operation`
     /// is, if it is the one pending.
-    fn answer_configure(&mut self, operation: u64, result: Result<(), String>) {
+    fn answer_configure(&mut self, operation: u64, result: Result<(), Failure>) {
         let ours = |p: &mut Pending| matches!(p.kind, Kind::Configure(asked) if asked == operation);
         let Some(pending) = self.settings.pending.take_if(ours) else {
             return;
@@ -178,9 +170,12 @@ impl<P: Platform> Controller<P> {
         };
         let operation = match self.settings.pending.as_ref().map(|p| p.kind) {
             Some(Kind::Configure(operation)) => operation,
-            _ => return self.end_capture(Outcome::Unavailable(why.to_string())),
+            _ => {
+                let why = Unavailability::Hotkeys(why.clone());
+                return self.end_capture(Outcome::Unavailable(why));
+            }
         };
-        self.answer_configure(operation, Err(why.to_string()));
+        self.answer_configure(operation, Err(Failure::Hotkeys(why.clone())));
     }
 
     /// The pending request's deadline passed: it ends unanswered. Other
@@ -195,8 +190,7 @@ impl<P: Platform> Controller<P> {
         match pending.kind {
             Kind::Capture(_) => self.end_capture(Outcome::CaptureEnded(CaptureEnd::TimedOut)),
             Kind::Configure(operation) => {
-                let why = "the desktop did not open its settings".to_owned();
-                self.answer_configure(operation, Err(why));
+                self.answer_configure(operation, Err(Failure::NotOpened));
             }
         }
     }

@@ -18,6 +18,7 @@ use auto_clicker_backend_portal::{PortalOutput, token_path};
 use auto_clicker_core::config::{Config, ConfigFile, config_path};
 use auto_clicker_core::controller::{Controller, Links, Message, Platform};
 use auto_clicker_core::input::{Input, InputError};
+use auto_clicker_core::message::ConfigProblem;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -120,7 +121,7 @@ struct Start<P: Platform> {
     /// What a check at start found wrong with the devices.
     problem: Option<InputError>,
     config: Config,
-    config_error: Option<String>,
+    config_error: Option<ConfigProblem>,
     /// The config file as read, where the settings window saves.
     file: ConfigFile,
 }
@@ -197,18 +198,14 @@ async fn claim_name() -> Result<instance::Claim, ExitCode> {
 }
 
 /// The config, its error as the tray shows it, and the file as read.
-fn load_config() -> (Config, Option<String>, ConfigFile) {
+fn load_config() -> (Config, Option<ConfigProblem>, ConfigFile) {
     let Some(path) = config_path() else {
-        let error = "no config directory: neither XDG_CONFIG_HOME nor HOME is set";
+        let error = ConfigProblem::NoDirectory;
         eprintln!("auto-clicker: {error}; using the defaults");
-        return (
-            Config::default(),
-            Some(error.to_owned()),
-            ConfigFile::none(),
-        );
+        return (Config::default(), Some(error), ConfigFile::none());
     };
     let loaded = Config::load(&path);
-    let error = loaded.error.map(|err| err.to_string());
+    let error = loaded.error.as_ref().map(ConfigProblem::from);
     if let Some(error) = &error {
         eprintln!("auto-clicker: {error}; using the defaults");
     }

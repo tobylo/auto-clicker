@@ -57,17 +57,17 @@ pub enum Fallback {
     Changed,
 }
 
-impl Fallback {
-    /// What the tray says while it plays.
-    pub fn notice(self) -> &'static str {
-        match self {
+/// What the tray says while it plays.
+impl std::fmt::Display for Fallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
             Fallback::Unknown => {
                 "Playing with relative motion: the screen layout is not known, so the recorded positions cannot be used"
             }
             Fallback::Changed => {
                 "Playing with relative motion: a screen this recording used has moved, changed size or is gone"
             }
-        }
+        })
     }
 }
 

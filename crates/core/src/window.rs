@@ -19,15 +19,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{Draft, InputDraft, Refusal, Stale};
 use crate::controller::{Activity, Hotkey, NoRecording, Routes};
-use crate::hotkeys::{Action, Binding, Capture, Unavailable};
+use crate::hotkeys::{Action, Binding, Capture};
+use crate::message::{Failure, Problem, Quoted, Unavailability, bounded_unavailable};
 
 /// The longest line either side sends or reads, newline included.
 pub const MAX_LINE: usize = 64 * 1024;
 
-/// The most characters of one message (a problem, a refusal, a failure) a
-/// view carries; a longer one is cut, so it can quote what it is about
-/// (a hotkey the window sent, a line of the config file) and the view still
-/// fits in [`MAX_LINE`], escaped as JSON escapes it.
+/// The most characters of one text from outside the program (a reader's
+/// error, a trigger the desktop reports, a parser's message) a view
+/// carries; a longer one is cut, so the view still fits in [`MAX_LINE`],
+/// escaped as JSON escapes it.
 pub const MAX_TEXT: usize = 500;
 
 /// The most problems a view lists.
@@ -104,7 +105,7 @@ pub struct WindowView {
     /// can.
     pub no_recording: Option<NoRecording>,
     /// What is wrong now, as the tray lists it.
-    pub problems: Vec<String>,
+    pub problems: Vec<Problem>,
     /// The answer to the window's last request, once there is one.
     pub answer: Option<Answer>,
 }
@@ -133,7 +134,7 @@ pub enum Outcome {
     /// Written and in use.
     Saved,
     /// Written and in use, but not flushed to disk: why.
-    SavedUnsynced(String),
+    SavedUnsynced(Quoted),
     /// Nothing was written: the program is clicking, recording or playing,
     /// or about to. Save once it is idle.
     Busy,
@@ -143,7 +144,7 @@ pub enum Outcome {
     /// again with the matching flag set.
     Confirm(Confirm),
     /// Writing failed, or there is nowhere to write; nothing was written.
-    Failed(String),
+    Failed(Failure),
     /// What a capture got: a hotkey, which may have no modifier, or the
     /// clicker's key, as a Linux key code.
     CapturedHotkey(Binding),
@@ -155,7 +156,7 @@ pub enum Outcome {
     /// This cannot be done here, and why: capturing where the desktop
     /// delivers the hotkeys or no keyboard can be read, or opening the
     /// desktop's settings where the program reads the keyboards.
-    Unavailable(String),
+    Unavailable(Unavailability),
 }
 
 /// Why a capture ended without a key.
@@ -185,15 +186,12 @@ pub enum Confirm {
 }
 
 impl Outcome {
-    /// The outcome with its message cut to [`MAX_TEXT`].
+    /// The outcome with the text from outside the program it quotes cut
+    /// to [`MAX_TEXT`]; [`Quoted`] text is cut on its way out.
     pub fn bounded(self) -> Outcome {
         match self {
-            Outcome::Refused(Refusal { field, reason }) => {
-                Outcome::Refused(Refusal::new(field, bounded(&reason)))
-            }
-            Outcome::Failed(why) => Outcome::Failed(bounded(&why)),
-            Outcome::Unavailable(why) => Outcome::Unavailable(bounded(&why)),
-            Outcome::SavedUnsynced(why) => Outcome::SavedUnsynced(bounded(&why)),
+            Outcome::Failed(why) => Outcome::Failed(why.bounded()),
+            Outcome::Unavailable(why) => Outcome::Unavailable(why.bounded()),
             other => other,
         }
     }
@@ -223,9 +221,9 @@ impl WindowView {
             no_recording: self.no_recording.map(bounded_no_recording),
             problems: self
                 .problems
-                .iter()
+                .into_iter()
                 .take(MAX_PROBLEMS)
-                .map(|problem| bounded(problem))
+                .map(Problem::bounded)
                 .collect(),
             answer: self.answer.map(|answer| Answer {
                 id: answer.id,
@@ -238,12 +236,7 @@ impl WindowView {
 
 fn bounded_no_recording(why: NoRecording) -> NoRecording {
     match why {
-        NoRecording::Keyboards(unavailable) => NoRecording::Keyboards(match unavailable {
-            Unavailable::ReadFailed(why) => Unavailable::ReadFailed(bounded(&why)),
-            Unavailable::WatchFailed(why) => Unavailable::WatchFailed(bounded(&why)),
-            Unavailable::Desktop(why) => Unavailable::Desktop(bounded(&why)),
-            other => other,
-        }),
+        NoRecording::Keyboards(why) => NoRecording::Keyboards(bounded_unavailable(why)),
         other => other,
     }
 }

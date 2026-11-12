@@ -2,9 +2,10 @@
 //! the daemon last sent, the hotkeys and key captured since, the request it
 //! waits on, and what each answer means for what it shows.
 
-use auto_clicker_core::config::{Draft, Field, HotkeysDraft, Stale};
+use auto_clicker_core::config::{Draft, Field, HotkeysDraft, Reason, Stale};
 use auto_clicker_core::controller::{Activity, Route};
 use auto_clicker_core::hotkeys::{Action, Capture};
+use auto_clicker_core::message::{Failure, Quoted, Unavailability};
 use auto_clicker_core::window::{Ask, CaptureEnd, Confirm, Outcome, Request, WindowView};
 
 use crate::model::{Fields, Unreadable, with_hotkey};
@@ -21,11 +22,11 @@ pub enum Target {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Note {
     Saved,
-    SavedUnsynced(String),
+    SavedUnsynced(Quoted),
     Busy,
-    Failed(String),
-    Refused(Field, String),
-    Unavailable(String),
+    Failed(Failure),
+    Refused(Field, Reason),
+    Unavailable(Unavailability),
     Capturing(Target),
     /// A hotkey was captured, as it is written; it is kept on a save.
     CapturedHotkey(String),
