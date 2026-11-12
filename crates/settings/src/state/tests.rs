@@ -4,7 +4,7 @@ use auto_clicker_core::config::{Config, Refusal};
 use auto_clicker_core::controller::{Hotkey, Routes};
 use auto_clicker_core::hotkeys::Binding;
 use auto_clicker_core::recording::{Layout, Output};
-use auto_clicker_core::window::{Answer, ShownHotkeys};
+use auto_clicker_core::window::{Answer, ShownHotkeys, Since, Spot};
 
 use super::*;
 
@@ -24,6 +24,7 @@ fn view(settings: Draft, answer: Option<Answer>) -> WindowView {
         problems: Vec::new(),
         recordings: Default::default(),
         screens: None,
+        since: Since::default(),
         answer,
     }
 }
@@ -61,7 +62,7 @@ fn asks_nothing(state: &mut State) {
         state.capture(Target::Hotkey(0)),
         state.configure(),
         state.recording(file(), "label".to_owned(), RecordingAction::Play),
-        state.locate(Point { x: 1, y: 1 }, panel_rect()),
+        state.locate(spot(1.0, 1.0), panel_rect(), Since::default()),
     );
     assert_eq!(asked, (None, None, None, None, None));
 }
@@ -406,6 +407,10 @@ fn a_selected_recording_leaving_the_list_calls_off_its_delete() {
     assert_eq!(state.agree(&fields()), None);
 }
 
+fn spot(x: f64, y: f64) -> Spot {
+    Spot::new(x, y).unwrap()
+}
+
 fn panel_rect() -> Rect {
     Rect {
         x: 0,
@@ -422,14 +427,19 @@ fn panel() -> Layout {
 #[test]
 fn a_located_pick_is_noted_and_kept_for_the_next_save_with_its_screens() {
     let mut state = started();
+    let since = Since {
+        runs: 2,
+        layouts: 5,
+    };
     let request = state
-        .locate(Point { x: 1024, y: 640 }, panel_rect())
+        .locate(spot(1024.5, 640.25), panel_rect(), since)
         .unwrap();
     assert_eq!(
         request.ask,
         Ask::Locate {
-            point: Point { x: 1024, y: 640 },
-            on: panel_rect()
+            at: spot(1024.5, 640.25),
+            on: panel_rect(),
+            since
         }
     );
     asks_nothing(&mut state);
@@ -459,7 +469,9 @@ fn a_located_pick_is_noted_and_kept_for_the_next_save_with_its_screens() {
 #[test]
 fn a_refused_pick_is_noted_and_keeps_nothing() {
     let mut state = started();
-    let request = state.locate(Point { x: 1, y: 1 }, panel_rect()).unwrap();
+    let request = state
+        .locate(spot(1.0, 1.0), panel_rect(), Since::default())
+        .unwrap();
     let refused = Outcome::Unavailable(Unavailability::ScreensChanged);
     let shown = answered(&mut state, request.id, refused);
     assert_eq!(

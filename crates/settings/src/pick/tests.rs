@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use auto_clicker_core::recording::Output;
-use auto_clicker_core::window::PICK_TIME;
+use auto_clicker_core::window::{PICK_TIME, Spot};
 use slint::platform::WindowEvent;
 
 use super::*;
@@ -34,6 +34,34 @@ fn monitor(left: i64, top: i64, name: &'static str) -> Monitor<&'static str> {
         left,
         top,
         monitor: name,
+    }
+}
+
+#[test]
+fn mirrored_screens_on_one_corner_take_the_largest() {
+    let small = Rect {
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+    };
+    let large = Rect {
+        x: 0,
+        y: 0,
+        width: 2560,
+        height: 1440,
+    };
+    for outputs in [[small, large], [large, small]] {
+        let mirrored = Layout::new(
+            outputs
+                .map(|rect| Output::new(rect, 1000).unwrap())
+                .to_vec(),
+        )
+        .unwrap();
+        let monitors = vec![monitor(0, 0, "HDMI-1"), monitor(0, 0, "DP-1")];
+        let targets = targets(monitors, &mirrored).unwrap();
+        let on: Vec<Rect> = targets.iter().map(|t| t.on).collect();
+        assert_eq!(on, [large]);
     }
 }
 
@@ -76,22 +104,33 @@ fn monitors_match_the_screens_by_their_corners() {
     }
 }
 
+fn spot(x: f64, y: f64) -> Spot {
+    Spot::new(x, y).unwrap()
+}
+
 #[test]
-fn a_click_is_its_screens_corner_plus_its_place_rounded_and_kept_on_the_screen() {
+fn a_click_is_its_screens_corner_plus_its_place_kept_on_the_screen() {
     let cases = [
-        ((PANEL, 0.0, 0.0), (0, 0)),
-        ((PANEL, 1000.4, 640.5), (1000, 641)),
-        ((DP1, 0.25, 0.0), (2048, 0)),
-        ((DP1, 952.5, 700.75), (3001, 701)),
-        // The overlay can reach past KWin's whole-pixel size.
-        ((DP1, 2292.75, 959.6), (4340, 959)),
-        ((DP1, 2293.0, 960.0), (4340, 959)),
+        ((PANEL, 0.0, 0.0), spot(0.0, 0.0)),
+        ((PANEL, 1000.25, 640.5), spot(1000.25, 640.5)),
+        ((DP1, 0.25, 0.0), spot(2048.25, 0.0)),
+        ((DP1, 952.5, 700.75), spot(3000.5, 700.75)),
+        // The overlay can reach past KWin's whole-pixel size: kept just
+        // short of the screen's far edge.
+        ((DP1, 2292.75, 959.5), spot(4340.75, 959.5)),
+        (
+            (DP1, 2293.5, 960.0),
+            spot(4340.0 + 1023.0 / 1024.0, 959.0 + 1023.0 / 1024.0),
+        ),
         // What no click gives, kept on the screen anyway.
-        ((DP1, -3.0, f32::NAN), (2048, 0)),
-        ((DP1, f32::INFINITY, f32::NEG_INFINITY), (4340, 0)),
+        ((DP1, -3.0, f64::NAN), spot(2048.0, 0.0)),
+        (
+            (DP1, f64::INFINITY, f64::NEG_INFINITY),
+            spot(4340.0 + 1023.0 / 1024.0, 0.0),
+        ),
     ];
-    for ((on, x, y), (to_x, to_y)) in cases {
-        assert_eq!(point_on(on, x, y), Point { x: to_x, y: to_y }, "{x},{y}");
+    for ((on, x, y), expected) in cases {
+        assert_eq!(spot_on(on, x, y), Some(expected), "{x},{y}");
     }
 }
 
@@ -143,8 +182,8 @@ pub(crate) fn every_end_is_told_once_and_closes_every_overlay() {
     // A second click or an Esc before the app closed it tells nothing more.
     pick.windows[0].invoke_picked(1.0, 1.0);
     pick.windows[0].invoke_cancelled();
-    let point = Point { x: 3001, y: 701 };
-    assert_eq!(*told.borrow(), [PickEnd::At { point, on: DP1 }]);
+    let at = spot(3000.5, 700.75);
+    assert_eq!(*told.borrow(), [PickEnd::At { at, on: DP1 }]);
     closes_every_overlay(pick);
 
     let (pick, told) = open(PICK_TIME);

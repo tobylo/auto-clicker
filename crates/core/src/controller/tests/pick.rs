@@ -10,8 +10,8 @@ use crate::config::{ModeName, PositionDraft};
 use crate::input::AbsolutePosition;
 use crate::message::Unavailability;
 use crate::recording::tests::positions::{screen, two_screens};
-use crate::recording::{Layout, Point, Rect};
-use crate::window::{Ask, Located, Outcome};
+use crate::recording::{Layout, Rect};
+use crate::window::{Ask, Located, Outcome, Since, Spot};
 
 const DP1: Rect = Rect {
     x: 2048,
@@ -21,9 +21,14 @@ const DP1: Rect = Rect {
 };
 
 fn locate(x: u32, y: u32) -> Ask {
+    locate_since(x, y, Since::default())
+}
+
+fn locate_since(x: u32, y: u32, since: Since) -> Ask {
     Ask::Locate {
-        point: Point { x, y },
+        at: Spot::new(f64::from(x), f64::from(y)).unwrap(),
         on: DP1,
+        since,
     }
 }
 
@@ -56,11 +61,16 @@ async fn a_point_on_the_screens_shown_is_located_on_them() {
 async fn the_view_follows_the_screens_and_a_pick_on_old_ones_is_refused() {
     local(async {
         let mut s = setup_with(None, with_layout(Some(two_screens()))).await;
+        let begun = s.window.view().since;
         s.d.shared.with(|r| r.layout = None);
         s.d.send(Message::LayoutChanged).await;
         assert_eq!(s.window.view().screens, None);
         let unknown = Outcome::Unavailable(Unavailability::ScreensUnknown);
-        assert_eq!(s.window.ask(&s.d, locate(3768, 720)).await, unknown);
+        let now = s.window.view().since;
+        assert_eq!(
+            s.window.ask(&s.d, locate_since(3768, 720, now)).await,
+            unknown
+        );
         // DP-1 moved below the panel.
         let moved = Layout::new(vec![
             screen([0, 0, 2048, 1280], 1250),
@@ -71,22 +81,41 @@ async fn the_view_follows_the_screens_and_a_pick_on_old_ones_is_refused() {
         s.d.send(Message::LayoutChanged).await;
         assert_eq!(s.window.view().screens, Some(moved));
         let changed = Outcome::Unavailable(Unavailability::ScreensChanged);
-        assert_eq!(s.window.ask(&s.d, locate(3768, 720)).await, changed);
+        let now = s.window.view().since;
+        assert_eq!(
+            s.window.ask(&s.d, locate_since(3768, 720, now)).await,
+            changed
+        );
+        // Back as they were, as when two equal screens swap places: a pick
+        // begun before the change is refused, one begun now is not.
+        s.d.shared.with(|r| r.layout = Some(two_screens()));
+        s.d.send(Message::LayoutChanged).await;
+        assert_eq!(
+            s.window.ask(&s.d, locate_since(3768, 720, begun)).await,
+            changed
+        );
+        let now = s.window.view().since;
+        let located = s.window.ask(&s.d, locate_since(3768, 720, now)).await;
+        assert!(matches!(located, Outcome::Located(_)), "{located:?}");
     })
     .await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn no_point_is_located_while_the_program_clicks() {
+async fn no_point_is_located_while_the_program_clicks_or_from_a_run_since() {
     local(async {
         let mut s = setup_with(None, with_layout(Some(two_screens()))).await;
+        let begun = s.window.view().since;
         s.d.start_by_hotkey().await;
         assert_eq!(s.window.ask(&s.d, locate(3768, 720)).await, Outcome::Busy);
         s.d.send(Message::Stop).await;
-        assert!(matches!(
-            s.window.ask(&s.d, locate(3768, 720)).await,
-            Outcome::Located(_)
-        ));
+        // Idle again, but a run's click may be the one picked.
+        let stale = s.window.ask(&s.d, locate_since(3768, 720, begun)).await;
+        assert_eq!(stale, Outcome::Busy);
+        let now = s.window.view().since;
+        assert_eq!(now.runs, begun.runs + 1);
+        let located = s.window.ask(&s.d, locate_since(3768, 720, now)).await;
+        assert!(matches!(located, Outcome::Located(_)), "{located:?}");
     })
     .await;
 }

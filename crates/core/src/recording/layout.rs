@@ -97,6 +97,13 @@ impl Rect {
         let bottom = self.y.saturating_add(self.height);
         (self.x..right).contains(&point.x) && (self.y..bottom).contains(&point.y)
     }
+
+    /// Whether the position (`x`, `y`), to a fraction of a pixel, is
+    /// inside, short of the right and bottom edges.
+    pub fn holds(self, x: f64, y: f64) -> bool {
+        let span = |start: u32, size: u32| f64::from(start)..f64::from(start) + f64::from(size);
+        span(self.x, self.width).contains(&x) && span(self.y, self.height).contains(&y)
+    }
 }
 
 /// One output as the config file and the settings window's socket spell
@@ -218,6 +225,16 @@ impl Layout {
             y: normalised(point.y, height),
         }
     }
+
+    /// The same for a position to a fraction of a pixel, such as where the
+    /// user clicked.
+    pub fn absolute_at(&self, x: f64, y: f64) -> AbsolutePosition {
+        let (width, height) = self.size();
+        AbsolutePosition {
+            x: normalised_at(x, width),
+            y: normalised_at(y, height),
+        }
+    }
 }
 
 impl TryFrom<Vec<OutputSpec>> for Layout {
@@ -241,6 +258,13 @@ fn normalised(value: u32, size: u32) -> u16 {
     let size = u64::from(size.max(1));
     let scaled = (u64::from(value) * 65_536 + size / 2) / size;
     u16::try_from(scaled).unwrap_or(u16::MAX)
+}
+
+/// `clamp(round(value * 65536 / size), 0, 65535)`; NaN gives 0.
+fn normalised_at(value: f64, size: u32) -> u16 {
+    let scaled = (value * 65_536.0 / f64::from(size.max(1))).round();
+    // Clamped to the range, or NaN, which the cast takes to 0: exact.
+    scaled.clamp(0.0, 65_535.0) as u16
 }
 
 #[cfg(test)]
@@ -404,6 +428,45 @@ mod tests {
         ];
         for json in invalid {
             assert!(serde_json::from_str::<Layout>(&json).is_err(), "{json}");
+        }
+    }
+
+    #[test]
+    fn a_position_to_a_fraction_maps_by_the_same_formula() {
+        let layout = two_screens(); // 5488 x 1440
+        let cases = [
+            ((0.0, 0.0), (0, 0)),
+            ((2744.0, 720.0), (32768, 32768)),
+            // 5487.9 * 65536 / 5488 = 65534.8; the last fraction stays in range.
+            ((5487.9, 1439.99), (65535, 65535)),
+            ((3600.16, 1425.454), (42992, 64874)),
+            ((-1.0, f64::NAN), (0, 0)),
+            ((1e12, f64::INFINITY), (65535, 65535)),
+        ];
+        for ((x, y), (to_x, to_y)) in cases {
+            let expected = AbsolutePosition { x: to_x, y: to_y };
+            assert_eq!(layout.absolute_at(x, y), expected, "{x},{y}");
+        }
+        // A whole position maps as `absolute` maps it.
+        for (x, y) in [(1, 1), (2047, 1279), (5487, 1439)] {
+            let whole = layout.absolute(Point { x, y });
+            assert_eq!(layout.absolute_at(f64::from(x), f64::from(y)), whole);
+        }
+    }
+
+    #[test]
+    fn a_rectangle_holds_positions_short_of_its_far_edges() {
+        let dp1 = rect(2048, 0, 3440, 1440);
+        let cases = [
+            ((2048.0, 0.0), true),
+            ((5487.99, 1439.99), true),
+            ((5488.0, 0.0), false),
+            ((2047.99, 10.0), false),
+            ((3000.0, 1440.0), false),
+            ((f64::NAN, 10.0), false),
+        ];
+        for ((x, y), inside) in cases {
+            assert_eq!(dp1.holds(x, y), inside, "{x},{y}");
         }
     }
 
