@@ -8,10 +8,11 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::names::{ButtonName, ModeName, RouteName};
-use super::{Config, InputSettings, check};
+use super::{Config, InputSettings, Reason, check};
 use crate::clicker::{ClickerSettings, Interval, Mode, Position, Repeat};
 use crate::hotkeys::{Action, Binding, Bindings};
 use crate::input::AbsolutePosition;
+use crate::message::Quoted;
 use crate::playback::PlaybackSettings;
 
 /// Every setting of the config file.
@@ -109,11 +110,11 @@ pub enum Field {
 #[serde(deny_unknown_fields)]
 pub struct Refusal {
     pub field: Field,
-    pub reason: String,
+    pub reason: Reason,
 }
 
 impl Refusal {
-    pub fn new(field: Field, reason: String) -> Refusal {
+    pub fn new(field: Field, reason: Reason) -> Refusal {
         Refusal { field, reason }
     }
 }
@@ -192,7 +193,9 @@ impl ClickerDraft {
 impl HotkeysDraft {
     fn to_bindings(&self) -> Result<Bindings, Refusal> {
         let parse = |action, text: &str| {
-            Binding::parse(text).map_err(|reason| Refusal::new(Field::Hotkey(action), reason))
+            Binding::parse(text).map_err(|reason| {
+                Refusal::new(Field::Hotkey(action), Reason::Binding(Quoted::new(reason)))
+            })
         };
         Ok(Bindings {
             toggle_clicking: parse(Action::ToggleClicking, &self.toggle_clicking)?,
@@ -203,7 +206,7 @@ impl HotkeysDraft {
 }
 
 impl CountDraft {
-    fn to_repeat(self) -> Result<Repeat, String> {
+    fn to_repeat(self) -> Result<Repeat, Reason> {
         match self {
             CountDraft::UntilStopped => Ok(Repeat::UntilStopped),
             CountDraft::Times(count) => check::count(signed(count)).map(Repeat::Times),

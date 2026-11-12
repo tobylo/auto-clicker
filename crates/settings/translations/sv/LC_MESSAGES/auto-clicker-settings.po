@@ -232,3 +232,133 @@ msgstr "Nej"
 
 msgid "Save"
 msgstr "Spara"
+
+msgid "Clicking cannot start: {}"
+msgstr "Kan inte börja klicka: {}"
+
+msgid "The recordings cannot be listed: {}"
+msgstr "Inspelningarna kan inte listas: {}"
+
+msgid "no config directory: neither XDG_CONFIG_HOME nor HOME is set"
+msgstr "ingen konfigurationsmapp: varken XDG_CONFIG_HOME eller HOME är satt"
+
+msgid "{}: could not read the file: {}"
+msgstr "{}: filen kunde inte läsas: {}"
+
+msgid "{}:{}: {}"
+msgstr "{}, rad {}: {}"
+
+msgctxt "config file"
+msgid "{}: {}"
+msgstr "{} gick inte att använda: {}"
+
+msgid "the screen is locked"
+msgstr "skärmen är låst"
+
+msgid "another session is in front"
+msgstr "en annan session är framme"
+
+msgid "the computer is going to sleep"
+msgstr "datorn ska gå i viloläge"
+
+msgid "the session state is unknown: {}"
+msgstr "sessionens läge är okänt: {}"
+
+msgid "no permission to open /dev/uinput ({}); install the package's udev rule and log in again, or add your user to the `input` group"
+msgstr "ingen behörighet att öppna /dev/uinput ({}); installera paketets udev-regel och logga in igen, eller lägg till din användare i gruppen `input`"
+
+msgid "/dev/uinput is not available ({}); load the kernel module with `sudo modprobe uinput`"
+msgstr "/dev/uinput finns inte ({}); ladda kärnmodulen med `sudo modprobe uinput`"
+
+msgid "could not create a virtual input device: {}"
+msgstr "kunde inte skapa en virtuell inmatningsenhet: {}"
+
+msgid "could not write to a virtual input device: {}"
+msgstr "kunde inte skriva till en virtuell inmatningsenhet: {}"
+
+msgid "the desktop's remote input portal cannot be used: {}"
+msgstr "skrivbordets portal för fjärrinmatning kan inte användas: {}"
+
+msgid "not allowed in the desktop's dialog; Start asks again"
+msgstr "inte tillåtet i skrivbordets dialog; nästa start frågar igen"
+
+msgid "allowed; press Start again"
+msgstr "tillåtet; starta igen"
+
+msgid "the remote input portal failed: {}"
+msgstr "portalen för fjärrinmatning misslyckades: {}"
+
+msgid "the desktop ended remote input: {}"
+msgstr "skrivbordet avslutade fjärrinmatningen: {}"
+
+msgid "hotkeys are unavailable: no keyboard found"
+msgstr "snabbtangenterna är inte tillgängliga: inget tangentbord hittades"
+
+msgid "hotkeys are unavailable: keyboards cannot be read; add your user to the input group and log in again, or set hotkeys = \"portal\" under [input] for the desktop's shortcuts"
+msgstr "snabbtangenterna är inte tillgängliga: tangentborden kan inte läsas; lägg till din användare i gruppen input och logga in igen, eller sätt hotkeys = \"portal\" under [input] för skrivbordets genvägar"
+
+msgid "hotkeys are unavailable: a keyboard cannot be read: {}"
+msgstr "snabbtangenterna är inte tillgängliga: ett tangentbord kan inte läsas: {}"
+
+msgid "hotkeys stopped: watching for keyboards failed: {}; restart the program"
+msgstr "snabbtangenterna stoppade: bevakningen av tangentborden misslyckades: {}; starta om programmet"
+
+msgid "hotkeys are unavailable: {}"
+msgstr "snabbtangenterna är inte tillgängliga: {}"
+
+msgid "recording is unavailable with the desktop's shortcuts"
+msgstr "inspelning går inte med skrivbordets genvägar"
+
+msgid "there is no config directory: neither XDG_CONFIG_HOME nor HOME is set"
+msgstr "det finns ingen konfigurationsmapp: varken XDG_CONFIG_HOME eller HOME är satt"
+
+msgid "the config file could not be written: {}"
+msgstr "konfigurationsfilen kunde inte skrivas: {}"
+
+msgid "the activation token is not one"
+msgstr "aktiveringstoken är ogiltig"
+
+msgid "the desktop did not open its settings"
+msgstr "skrivbordet öppnade inte sina inställningar"
+
+msgid "the desktop delivers the hotkeys: change them in System Settings, under Shortcuts"
+msgstr "skrivbordet levererar snabbtangenterna: ändra dem i Systeminställningar, under Genvägar"
+
+msgid "the program reads the keyboards: set the hotkeys in this window"
+msgstr "programmet läser tangentborden: välj snabbtangenterna i det här fönstret"
+
+msgid "the desktop's shortcuts are not available"
+msgstr "skrivbordets genvägar är inte tillgängliga"
+
+msgid "tray_start_delay must be from 0 to {} seconds"
+msgstr "måste vara från 0 till {} sekunder"
+
+msgid "interval_ms must be from {} to {}"
+msgstr "måste vara från {} till {} ms"
+
+msgid "interval_ms must be from {} to {} for a double click, which fits two clicks in each interval"
+msgstr "måste vara från {} till {} ms för ett dubbelklick, som rymmer två klick i varje intervall"
+
+msgid "clicks_per_second must be from {} to {}"
+msgstr "måste vara från {} till {} åtgärder i sekunden"
+
+msgid "clicks_per_second must be from {} to {} for a double click, which fits two clicks in each interval"
+msgstr "måste vara från {} till {} åtgärder i sekunden för ett dubbelklick, som rymmer två klick i varje intervall"
+
+msgid "jitter_percent must be from 0 to {}"
+msgstr "måste vara från 0 till {} procent"
+
+msgid "speed must be from {} to {}"
+msgstr "måste vara från {} till {}"
+
+msgid "key code {} is not from 1 to 248"
+msgstr "tangentkoden {} är inte från 1 till 248"
+
+msgid "repeat {} is not from 1 to {}; use \"until_stopped\" to repeat until stopped"
+msgstr "antalet {} är inte från 1 till {}; välj att upprepa tills det stoppas"
+
+msgid "hotkey {} is bound to two actions"
+msgstr "snabbtangenten {} används av två åtgärder"
+
+msgid "hotkey {} uses the key the clicker presses; choose another key"
+msgstr "snabbtangenten {} använder tangenten som klickaren trycker; välj en annan tangent"

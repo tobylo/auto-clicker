@@ -4,6 +4,7 @@
 use auto_clicker_core::config::{Config, Draft};
 use auto_clicker_core::controller::Activity;
 use auto_clicker_core::hotkeys::Capture;
+use auto_clicker_core::message::{Failure, Problem, Quoted};
 use auto_clicker_core::window::{Ask, ShownHotkeys, WindowView};
 use tokio::io::{AsyncBufReadExt, duplex};
 
@@ -273,10 +274,10 @@ async fn the_daemon_quitting_ends_a_window_stuck_on_a_write_at_once() {
     let wide = "x".repeat(MAX_TEXT);
     for id in 0..64 {
         let mut shown = view();
-        shown.problems = vec![wide.clone(); MAX_PROBLEMS];
+        shown.problems = vec![Problem::Unlisted(Quoted::new(wide.clone())); MAX_PROBLEMS];
         shown.answer = Some(Answer {
             id,
-            outcome: Outcome::Failed(wide.clone()),
+            outcome: Outcome::Failed(Failure::Write(Quoted::new(wide.clone()))),
         });
         link.view.send_replace(Some(shown));
         tokio::time::sleep(Duration::from_millis(5)).await;

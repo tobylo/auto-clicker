@@ -2,6 +2,8 @@
 
 use std::{fmt, io};
 
+use crate::message::InputFailure;
+
 /// Why synthetic input could not be set up or written.
 ///
 /// The first four come from the kernel backend (`/dev/uinput`), the rest
@@ -51,33 +53,10 @@ impl InputError {
     }
 }
 
+/// The same words the tray shows, in English: see [`InputFailure`].
 impl fmt::Display for InputError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            InputError::NoPermission(e) => write!(
-                f,
-                "no permission to open /dev/uinput ({e}); install the package's udev rule \
-                 and log in again, or add your user to the `input` group"
-            ),
-            InputError::UinputMissing(e) => write!(
-                f,
-                "/dev/uinput is not available ({e}); load the kernel module with \
-                 `sudo modprobe uinput`"
-            ),
-            InputError::CreateDevice(e) => {
-                write!(f, "could not create a virtual input device: {e}")
-            }
-            InputError::Write(e) => write!(f, "could not write to a virtual input device: {e}"),
-            InputError::PortalUnavailable(why) => {
-                write!(f, "the desktop's remote input portal cannot be used: {why}")
-            }
-            InputError::NotAllowed => {
-                f.write_str("not allowed in the desktop's dialog; Start asks again")
-            }
-            InputError::AllowedNow => f.write_str("allowed; press Start again"),
-            InputError::Portal(why) => write!(f, "the remote input portal failed: {why}"),
-            InputError::SessionLost(why) => write!(f, "the desktop ended remote input: {why}"),
-        }
+        InputFailure::from(self).fmt(f)
     }
 }
 

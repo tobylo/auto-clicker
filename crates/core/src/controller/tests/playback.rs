@@ -790,7 +790,7 @@ async fn a_folder_that_cannot_be_listed_is_a_problem_not_an_empty_list() {
         fs::write(&folder, b"").unwrap();
 
         d.send(Message::MenuOpened).await;
-        let problems = d.view().problems;
+        let problems = d.problems();
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(
             problems[0].starts_with("The recordings cannot be listed: "),
@@ -809,7 +809,7 @@ async fn a_folder_that_cannot_be_listed_is_a_problem_not_an_empty_list() {
         fs::remove_file(&folder).unwrap();
         fs::create_dir(&folder).unwrap();
         d.send(Message::MenuOpened).await;
-        assert_eq!(d.view().problems, [""; 0]);
+        assert_eq!(d.problems(), [""; 0]);
     })
     .await;
 }

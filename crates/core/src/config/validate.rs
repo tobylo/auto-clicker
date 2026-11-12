@@ -1,6 +1,7 @@
 //! The checks that span fields or ranges, turning the raw file into a
 //! [`Config`]. Each error points at the value it is about.
 
+use std::fmt;
 use std::ops::Range;
 use std::time::Duration;
 
@@ -22,10 +23,10 @@ pub(super) struct Invalid {
     pub(super) reason: String,
 }
 
-pub(super) fn at<T>(value: &Spanned<T>, reason: String) -> Invalid {
+pub(super) fn at<T>(value: &Spanned<T>, reason: impl fmt::Display) -> Invalid {
     Invalid {
         span: Some(value.span()),
-        reason,
+        reason: reason.to_string(),
     }
 }
 

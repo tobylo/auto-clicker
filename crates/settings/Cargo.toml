@@ -21,6 +21,11 @@ auto-clicker-core = { path = "../core" }
 rustix = { version = "1.0.7", default-features = false, features = ["std", "stdio"] }
 slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-18", "backend-winit-wayland", "renderer-femtovg"] }
 
+[dev-dependencies]
+# Tests show the window on Slint's software renderer, with no display: the
+# same crate, one feature more, and nothing new in Cargo.lock.
+slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-18", "renderer-software"] }
+
 [build-dependencies]
 # Compiles the .slint files and bundles the translations into the binary.
 slint-build = "1.18.1"

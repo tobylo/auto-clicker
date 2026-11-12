@@ -108,21 +108,24 @@ fn a_save_waits_for_its_own_answer_and_nothing_else_is_asked_meanwhile() {
 
 #[test]
 fn answers_become_notes() {
-    let refusal = Refusal::new(Field::Interval, "too fast".to_owned());
+    let refusal = Refusal::new(Field::Interval, Reason::Speed);
     let cases = [
         (
-            Outcome::SavedUnsynced("disk".into()),
-            Note::SavedUnsynced("disk".into()),
+            Outcome::SavedUnsynced(Quoted::new("disk")),
+            Note::SavedUnsynced(Quoted::new("disk")),
         ),
         (Outcome::Busy, Note::Busy),
-        (Outcome::Failed("full".into()), Note::Failed("full".into())),
         (
-            Outcome::Refused(refusal),
-            Note::Refused(Field::Interval, "too fast".into()),
+            Outcome::Failed(Failure::BadToken),
+            Note::Failed(Failure::BadToken),
         ),
         (
-            Outcome::Unavailable("no".into()),
-            Note::Unavailable("no".into()),
+            Outcome::Refused(refusal),
+            Note::Refused(Field::Interval, Reason::Speed),
+        ),
+        (
+            Outcome::Unavailable(Unavailability::NoShortcuts),
+            Note::Unavailable(Unavailability::NoShortcuts),
         ),
         (Outcome::Configured, Note::Configured),
         (

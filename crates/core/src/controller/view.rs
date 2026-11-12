@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::clicker::{ClickerSettings, Mode, Position, Repeat};
 use crate::hotkeys::{Binding, DESKTOP_RELEASE_PAUSE, Unavailable};
 use crate::input::{Button, Key};
+use crate::message::{Notice, Problem};
 use crate::playback::{PlaybackSettings, Speed};
 use crate::recording::{FileName, MAX_DURATION};
 
@@ -232,10 +233,10 @@ pub struct View {
     pub playing: Option<String>,
     /// What last happened that the user should know: why a start was
     /// refused or cancelled, or why a run stopped.
-    pub notice: Option<String>,
+    pub notice: Option<Notice>,
     /// What is wrong now: an invalid config, unreadable keyboards, a locked
     /// session, devices that could not be opened.
-    pub problems: Vec<String>,
+    pub problems: Vec<Problem>,
 }
 
 impl View {
@@ -290,8 +291,8 @@ impl View {
         if let Some(recording) = &self.playing {
             lines.push(format!("Playing {recording}"));
         }
-        lines.extend(self.notice.iter().cloned());
-        lines.extend(self.problems.iter().cloned());
+        lines.extend(self.notice.iter().map(ToString::to_string));
+        lines.extend(self.problems.iter().map(ToString::to_string));
         lines
     }
 }
@@ -364,8 +365,8 @@ fn key_name(key: Key) -> String {
         .map_or_else(|| format!("key {}", key.code()), str::to_owned)
 }
 
-/// "100 ms", or "2 s" for whole seconds.
-fn duration(interval: Duration) -> String {
+/// "100 ms", or "2 s" for whole seconds, in any language.
+pub fn duration(interval: Duration) -> String {
     let millis = interval.as_millis();
     if millis >= 1000 && millis.is_multiple_of(1000) {
         format!("{} s", millis / 1000)
@@ -380,7 +381,9 @@ mod tests {
 
     use super::*;
     use crate::clicker::{Interval, Jitter};
+    use crate::controller::Blocked;
     use crate::input::AbsolutePosition;
+    use crate::message::Quoted;
 
     fn settings(mode: Mode) -> ClickerSettings {
         ClickerSettings {
@@ -515,8 +518,11 @@ mod tests {
     fn details_list_settings_hotkey_notice_and_problems() {
         let mut shown = view(Activity::Idle, "Ctrl+F6");
         shown.hotkey = Hotkey::Bound(Binding::parse("Ctrl+F6").unwrap());
-        shown.notice = Some("notice".to_owned());
-        shown.problems = vec!["one".to_owned(), "two".to_owned()];
+        shown.notice = Some(Notice::NothingToPlay);
+        shown.problems = vec![
+            Problem::Unlisted(Quoted::new("one")),
+            Problem::Blocked(Blocked::Locked),
+        ];
         assert_eq!(
             shown.details(),
             [
@@ -525,9 +531,9 @@ mod tests {
                 "Ctrl+F7 starts recording, and stops and saves it",
                 "Ctrl+Alt+F8 plays the last recording once, and stops it",
                 "Clicks through /dev/uinput, hotkeys from the keyboards",
-                "notice",
-                "one",
-                "two",
+                "Nothing to play: no recordings yet",
+                "The recordings cannot be listed: one",
+                "Clicking cannot start: the screen is locked",
             ]
         );
     }
@@ -623,11 +629,14 @@ mod tests {
     fn what_plays_is_named_before_the_notice() {
         let mut shown = view(Activity::Playing, "Ctrl+F6");
         shown.playing = Some("Recording 2026-11-09 18:04:05".to_owned());
-        shown.notice = Some("notice".to_owned());
+        shown.notice = Some(Notice::NothingToPlay);
         let lines = shown.details();
         assert_eq!(
             lines[lines.len() - 2..],
-            ["Playing Recording 2026-11-09 18:04:05", "notice"]
+            [
+                "Playing Recording 2026-11-09 18:04:05",
+                "Nothing to play: no recordings yet"
+            ]
         );
     }
 

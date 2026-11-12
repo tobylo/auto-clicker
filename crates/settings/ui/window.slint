@@ -37,6 +37,51 @@ export global Texts {
     public pure function unreadable(field: string) -> string { @tr("{}: cannot be read", field) }
     public pure function captured-hotkey(keys: string) -> string { @tr("Captured {}; save to keep it.", keys) }
     public pure function captured-key(key: string) -> string { @tr("Key set to {}; save to keep it.", key) }
+    // What the daemon says, as core's messages give it: each with its own
+    // values, and text from other programs passed through as it is.
+    public pure function problem-clicking(why: string) -> string { @tr("Clicking cannot start: {}", why) }
+    public pure function problem-unlisted(why: string) -> string { @tr("The recordings cannot be listed: {}", why) }
+    public pure function config-no-directory() -> string { @tr("no config directory: neither XDG_CONFIG_HOME nor HOME is set") }
+    public pure function config-unreadable(file: string, why: string) -> string { @tr("{}: could not read the file: {}", file, why) }
+    public pure function config-invalid-at(file: string, line: string, why: string) -> string { @tr("{}:{}: {}", file, line, why) }
+    public pure function config-invalid(file: string, why: string) -> string { @tr("config file" => "{}: {}", file, why) }
+    public pure function blocked-locked() -> string { @tr("the screen is locked") }
+    public pure function blocked-inactive() -> string { @tr("another session is in front") }
+    public pure function blocked-sleeping() -> string { @tr("the computer is going to sleep") }
+    public pure function blocked-unknown(why: string) -> string { @tr("the session state is unknown: {}", why) }
+    public pure function input-no-permission(why: string) -> string { @tr("no permission to open /dev/uinput ({}); install the package's udev rule and log in again, or add your user to the `input` group", why) }
+    public pure function input-uinput-missing(why: string) -> string { @tr("/dev/uinput is not available ({}); load the kernel module with `sudo modprobe uinput`", why) }
+    public pure function input-create-device(why: string) -> string { @tr("could not create a virtual input device: {}", why) }
+    public pure function input-write(why: string) -> string { @tr("could not write to a virtual input device: {}", why) }
+    public pure function input-portal-unavailable(why: string) -> string { @tr("the desktop's remote input portal cannot be used: {}", why) }
+    public pure function input-not-allowed() -> string { @tr("not allowed in the desktop's dialog; Start asks again") }
+    public pure function input-allowed-now() -> string { @tr("allowed; press Start again") }
+    public pure function input-portal(why: string) -> string { @tr("the remote input portal failed: {}", why) }
+    public pure function input-session-lost(why: string) -> string { @tr("the desktop ended remote input: {}", why) }
+    public pure function hotkeys-no-keyboard() -> string { @tr("hotkeys are unavailable: no keyboard found") }
+    public pure function hotkeys-no-permission() -> string { @tr("hotkeys are unavailable: keyboards cannot be read; add your user to the input group and log in again, or set hotkeys = \"portal\" under [input] for the desktop's shortcuts") }
+    public pure function hotkeys-read-failed(why: string) -> string { @tr("hotkeys are unavailable: a keyboard cannot be read: {}", why) }
+    public pure function hotkeys-watch-failed(why: string) -> string { @tr("hotkeys stopped: watching for keyboards failed: {}; restart the program", why) }
+    public pure function hotkeys-desktop(why: string) -> string { @tr("hotkeys are unavailable: {}", why) }
+    public pure function no-recording-desktop() -> string { @tr("recording is unavailable with the desktop's shortcuts") }
+    public pure function failure-no-config-directory() -> string { @tr("there is no config directory: neither XDG_CONFIG_HOME nor HOME is set") }
+    public pure function failure-write(why: string) -> string { @tr("the config file could not be written: {}", why) }
+    public pure function failure-bad-token() -> string { @tr("the activation token is not one") }
+    public pure function failure-not-opened() -> string { @tr("the desktop did not open its settings") }
+    public pure function desktop-delivers() -> string { @tr("the desktop delivers the hotkeys: change them in System Settings, under Shortcuts") }
+    public pure function reads-keyboards() -> string { @tr("the program reads the keyboards: set the hotkeys in this window") }
+    public pure function no-shortcuts() -> string { @tr("the desktop's shortcuts are not available") }
+    public pure function reason-tray-start-delay(max: string) -> string { @tr("tray_start_delay must be from 0 to {} seconds", max) }
+    public pure function reason-interval(floor: string, max: string) -> string { @tr("interval_ms must be from {} to {}", floor, max) }
+    public pure function reason-interval-double(floor: string, max: string) -> string { @tr("interval_ms must be from {} to {} for a double click, which fits two clicks in each interval", floor, max) }
+    public pure function reason-rate(least: string, most: string) -> string { @tr("clicks_per_second must be from {} to {}", least, most) }
+    public pure function reason-rate-double(least: string, most: string) -> string { @tr("clicks_per_second must be from {} to {} for a double click, which fits two clicks in each interval", least, most) }
+    public pure function reason-jitter(max: string) -> string { @tr("jitter_percent must be from 0 to {}", max) }
+    public pure function reason-speed(slowest: string, fastest: string) -> string { @tr("speed must be from {} to {}", slowest, fastest) }
+    public pure function reason-key-code(code: string) -> string { @tr("key code {} is not from 1 to 248", code) }
+    public pure function reason-count(count: string, max: string) -> string { @tr("repeat {} is not from 1 to {}; use \"until_stopped\" to repeat until stopped", count, max) }
+    public pure function reason-bound-twice(hotkey: string) -> string { @tr("hotkey {} is bound to two actions", hotkey) }
+    public pure function reason-on-clicker-key(hotkey: string) -> string { @tr("hotkey {} uses the key the clicker presses; choose another key", hotkey) }
 }
 
 component Row inherits HorizontalLayout {

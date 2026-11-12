@@ -15,8 +15,9 @@ use tokio::time::Instant;
 use super::view::Hotkey;
 use super::{Controller, InputLifetime, InputReader, Job, Platform, State};
 use crate::config::Config;
-use crate::hotkeys::{Action, Bindings, HotkeyStatus, Triggers, Unavailable};
+use crate::hotkeys::{Action, Bindings, HotkeyStatus, Refusal, Triggers, Unavailable};
 use crate::input::Key;
+use crate::message::{Hindrance, Notice, Start, Stop};
 
 /// The keys a run presses by itself, which the desktop would take for the
 /// user's.
@@ -111,7 +112,7 @@ impl<P: Platform> Controller<P> {
             return;
         };
         if let Some(why) = self.own_key_refusal(&keys) {
-            self.stop(Some(format!("Stopped: {why}")));
+            self.stop(Some(Stop::OwnKey(why)));
             // The run pressed a key that is a trigger now: a press it made
             // before this report may be on its way as a hotkey.
             self.open_echo_window();
@@ -152,7 +153,10 @@ impl<P: Platform> Controller<P> {
     pub(super) fn keys_allow(&mut self) -> bool {
         match self.own_key_refusal(&Job::Click.own_keys(&self.config)) {
             Some(why) => {
-                self.notice = Some(format!("Not started: {why}"));
+                self.notice = Some(Notice::Refused {
+                    start: Start::Clicking,
+                    why: Hindrance::OwnKey(why),
+                });
                 false
             }
             None => true,
@@ -171,15 +175,14 @@ impl<P: Platform> Controller<P> {
 
     /// Why a run pressing `keys` would set off a hotkey, if it would. It
     /// can only while the desktop delivers the hotkeys.
-    pub(super) fn own_key_refusal(&self, keys: &OwnKeys) -> Option<String> {
+    pub(super) fn own_key_refusal(&self, keys: &OwnKeys) -> Option<Refusal> {
         let desktop = self.desktop.as_ref().filter(|desktop| desktop.live)?;
-        let refusal = match keys {
+        match keys {
             OwnKeys::Clicker(key) => desktop.triggers.refusal((*key)?),
             OwnKeys::Recording(keys) => keys
                 .iter()
                 .find_map(|key| desktop.triggers.hotkey_refusal(*key)),
-        }?;
-        Some(refusal.to_string())
+        }
     }
 
     pub(super) fn shown_hotkey(&self, action: Action) -> Hotkey {
