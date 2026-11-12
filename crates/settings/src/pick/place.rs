@@ -67,6 +67,16 @@ pub fn monitors(window: &slint::Window) -> Option<Vec<Monitor<MonitorHandle>>> {
     })
 }
 
+/// The logical top-left corner of the monitor `window` is on now; `None`
+/// when that is not known, as before the compositor said, or the window is
+/// not a winit window.
+pub fn corner(window: &slint::Window) -> Option<(i64, i64)> {
+    let monitor = window.with_winit_window(|winit| winit.current_monitor())??;
+    let scale = monitor.scale_factor();
+    let position = monitor.position();
+    Some((logical(position.x, scale)?, logical(position.y, scale)?))
+}
+
 /// How many of the compositor's logical pixels one of Slint's is on
 /// `window`: 1 unless `SLINT_SCALE_FACTOR` overrides the screen's scale,
 /// or the window is not a winit window.
