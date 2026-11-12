@@ -18,6 +18,8 @@ struct FakeState {
     signal: RefCell<Option<LayoutSignal>>,
     /// Its watcher ends at once.
     ends: Cell<bool>,
+    /// The layout its watcher reports on its first poll.
+    at_start: RefCell<Option<Option<Layout>>>,
 }
 
 impl Fake {
@@ -37,11 +39,16 @@ impl Source for Fake {
 
     fn watch(&self, _feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
         self.0.signal.replace(Some(changed));
-        if self.0.ends.get() {
-            Box::pin(async {})
-        } else {
-            Box::pin(pending())
-        }
+        let source = self.clone();
+        Box::pin(async move {
+            let at_start = source.0.at_start.take();
+            if let Some(layout) = at_start {
+                source.set(layout);
+            }
+            if !source.0.ends.get() {
+                pending::<()>().await;
+            }
+        })
     }
 }
 
@@ -134,6 +141,25 @@ async fn a_source_whose_watcher_ends_leaves_the_other_watched() {
             kwin.set(wide(2048));
             settle().await;
             assert!(fired(&changed).await);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_change_a_source_reports_on_its_first_poll_fires() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let (kwin, wayland) = (Fake::default(), Fake::default());
+            wayland.set(wide(1920));
+            let screens = Screens::new(kwin.clone(), wayland.clone());
+            // The controller read the layout before the watcher first ran.
+            assert_eq!(screens.layout(), wide(1920));
+            wayland.0.at_start.replace(Some(wide(2560)));
+            let changed = watched(&local, &screens);
+            settle().await;
+            assert!(fired(&changed).await);
+            assert_eq!(screens.layout(), wide(2560));
         })
         .await;
 }

@@ -70,15 +70,17 @@ impl<K: Source + 'static, W: Source + 'static> Screens<K, W> {
 
     /// Runs both sources' watchers, and fires `changed` each time the
     /// layout [`Screens::layout`] reads changed. A source whose watcher
-    /// ends leaves the other running.
+    /// ends leaves the other running. Changes count from the layout when
+    /// the watcher is made, not when it is first polled: a source may
+    /// report one on its own first poll, before the forwarding begins.
     pub fn watch(&self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
         let heard = LayoutSignal::default();
         let kwin = self.0.kwin.watch(feed.clone(), heard.clone());
         let wayland = self.0.wayland.watch(feed, heard.clone());
         let screens = self.clone();
+        let mut last = self.layout();
         Box::pin(async move {
             let forward = async {
-                let mut last = screens.layout();
                 loop {
                     heard.fired().await;
                     let now = screens.layout();
