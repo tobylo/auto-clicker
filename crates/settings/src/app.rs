@@ -274,7 +274,7 @@ fn note_text(said: &Said<'_>, note: &Note) -> SharedString {
     let texts = said.texts;
     match note {
         Note::Saved => texts.invoke_saved(),
-        Note::SavedUnsynced(why) => texts.invoke_saved_unsynced(why.as_str().into()),
+        Note::SavedUnsynced(why) => texts.invoke_saved_unsynced((&**why).into()),
         Note::Busy => texts.invoke_busy(),
         Note::Failed(why) => texts.invoke_failed(said.failure(why)),
         Note::Refused(field, why) => {

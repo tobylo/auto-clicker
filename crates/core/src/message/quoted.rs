@@ -19,10 +19,6 @@ impl Quoted {
     pub fn new(text: impl Into<String>) -> Quoted {
         Quoted(text.into())
     }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 impl From<String> for Quoted {
@@ -79,8 +75,9 @@ mod tests {
         let long = Quoted::new("é".repeat(MAX_TEXT * 2));
         let line = serde_json::to_string(&long).unwrap();
         let back: Quoted = serde_json::from_str(&line).unwrap();
-        assert_eq!(back.as_str(), bounded(long.as_str()));
+        assert_eq!(&*back, bounded(&long));
         let short = Quoted::new("disk full");
+        assert_eq!(&*short, "disk full");
         let back: Quoted = serde_json::from_str(&serde_json::to_string(&short).unwrap()).unwrap();
         assert_eq!(back, short);
     }
