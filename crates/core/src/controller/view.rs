@@ -544,7 +544,7 @@ mod tests {
                       keyboards and mice. It needs the input group, and hotkeys = \"auto\" or \
                       \"kernel\" under [input] in the config.";
         let keyboards = NoRecording::Keyboards(Unavailable::NoPermission);
-        let watch = NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned()));
+        let watch = NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned().into()));
         // Every state of the hotkey, as the program or the desktop names it:
         // none of them is offered for recording.
         let hotkeys = [
@@ -600,7 +600,7 @@ mod tests {
                  desktop's shortcuts",
             ),
             (
-                NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned())),
+                NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned().into())),
                 "Record (needs a restart)",
                 "hotkeys stopped: watching for keyboards failed: gone; restart the program",
             ),

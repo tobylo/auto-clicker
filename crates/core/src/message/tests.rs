@@ -120,7 +120,7 @@ fn answers_read_as_before() {
         (Failure::Desktop(q()), "why"),
         (Failure::NotOpened, "the desktop did not open its settings"),
         (
-            Failure::Hotkeys(Unavailable::Desktop("gone".to_owned())),
+            Failure::Hotkeys(Unavailable::Desktop("gone".to_owned().into())),
             "hotkeys are unavailable: gone",
         ),
     ]);

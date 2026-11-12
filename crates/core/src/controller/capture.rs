@@ -213,10 +213,7 @@ impl<P: Platform> Controller<P> {
     }
 
     fn answer(&mut self, id: u64, outcome: Outcome) {
-        self.settings.answer = Some(Answer {
-            id,
-            outcome: outcome.bounded(),
-        });
+        self.settings.answer = Some(Answer { id, outcome });
     }
 
     /// Drops the reader in use, then starts one for what the settings ask

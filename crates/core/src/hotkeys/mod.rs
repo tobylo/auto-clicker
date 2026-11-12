@@ -18,6 +18,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::message::Quoted;
+
 pub use binding::{Binding, Modifier, Modifiers};
 pub use capture::{Capture, Captured};
 pub use matcher::{DeviceId, KeyEvent, Matcher, Reaction};
@@ -140,12 +142,12 @@ pub enum Unavailable {
     NoPermission,
     /// Keyboards were found but could not be read; the error of the last
     /// one tried. Retried when a keyboard's node changes.
-    ReadFailed(String),
+    ReadFailed(Quoted),
     /// Watching for devices failed; hotkeys stop until the daemon restarts.
-    WatchFailed(String),
+    WatchFailed(Quoted),
     /// The desktop does not deliver the hotkeys: its shortcuts service is
     /// missing, refused them or went away. Nothing else is affected.
-    Desktop(String),
+    Desktop(Quoted),
 }
 
 impl fmt::Display for Unavailable {

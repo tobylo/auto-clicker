@@ -5,6 +5,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::message::Quoted;
+
 /// Why clicking may not run now.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -17,7 +19,7 @@ pub enum Blocked {
     Sleeping,
     /// The session state could not be read; the reason. A state that cannot
     /// be read is never taken for "unlocked".
-    Unknown(String),
+    Unknown(Quoted),
 }
 
 impl fmt::Display for Blocked {
@@ -94,7 +96,7 @@ mod tests {
 
     #[test]
     fn unknown_names_its_reason() {
-        let unknown = Blocked::Unknown("no graphical session".to_owned());
+        let unknown = Blocked::Unknown("no graphical session".to_owned().into());
         assert_eq!(
             unknown.to_string(),
             "the session state is unknown: no graphical session"

@@ -474,7 +474,7 @@ impl<P: Platform> Controller<P> {
             hotkey_status: None,
             screen: LayoutSource::default(),
             desktop,
-            blocked: Some(Blocked::Unknown("not read yet".to_owned())),
+            blocked: Some(Blocked::Unknown("not read yet".to_owned().into())),
             notice: None,
             sleep_notice: None,
             released_for_sleep,

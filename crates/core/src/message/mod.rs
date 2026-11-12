@@ -29,7 +29,6 @@ pub use quoted::Quoted;
 use crate::config::ConfigError;
 use crate::controller::Blocked;
 use crate::hotkeys::Unavailable;
-use crate::window::bounded;
 
 /// What is wrong now, as the tray and the settings window list it.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -45,37 +44,6 @@ pub enum Problem {
     Input(InputFailure),
     /// The recordings could not be listed.
     Unlisted(Quoted),
-}
-
-impl Problem {
-    /// The problem with the text from outside the program that it does not
-    /// quote as [`Quoted`] cut, as [`Quoted`] is cut on its way to the
-    /// window.
-    pub fn bounded(self) -> Problem {
-        match self {
-            Problem::Hotkeys(why) => Problem::Hotkeys(bounded_unavailable(why)),
-            Problem::Blocked(why) => Problem::Blocked(bounded_blocked(why)),
-            other => other,
-        }
-    }
-}
-
-/// `why` with its quoted text cut, for the window.
-fn bounded_blocked(why: Blocked) -> Blocked {
-    match why {
-        Blocked::Unknown(why) => Blocked::Unknown(bounded(&why)),
-        other => other,
-    }
-}
-
-/// `why` with its quoted text cut, for the window.
-pub fn bounded_unavailable(why: Unavailable) -> Unavailable {
-    match why {
-        Unavailable::ReadFailed(why) => Unavailable::ReadFailed(bounded(&why)),
-        Unavailable::WatchFailed(why) => Unavailable::WatchFailed(bounded(&why)),
-        Unavailable::Desktop(why) => Unavailable::Desktop(bounded(&why)),
-        other => other,
-    }
 }
 
 impl fmt::Display for Problem {
