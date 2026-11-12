@@ -173,12 +173,28 @@ impl Drop for Scratch {
 /// A stand-in for the window: notes its pid and whether it got `DISPLAY`
 /// beside itself (in `window.pids`, so no path is written into the
 /// script), and reads its standard input until the daemon closes it.
+/// Writes `script` to `path` as a program, from a child shell: a file this
+/// process held open for writing could be inherited by a child another test
+/// forks at that moment, and running it would then fail with "Text file
+/// busy" (ETXTBSY).
+fn write_program(path: &std::path::Path, script: &str) {
+    use std::io::Write;
+    let mut shell = std::process::Command::new("sh")
+        .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = shell.stdin.take().unwrap();
+    input.write_all(script.as_bytes()).unwrap();
+    drop(input);
+    assert!(shell.wait().unwrap().success());
+}
+
 fn stand_in(dir: &std::path::Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let program = dir.join("window");
     let script = "#!/bin/sh\necho \"$$ ${DISPLAY-none}\" >> \"$0.pids\"\nexec cat > /dev/null\n";
-    std::fs::write(&program, script).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_program(&program, script);
     program
 }
 
@@ -251,11 +267,9 @@ async fn one_window_runs_at_a_time_and_none_outlives_its_session() {
 
 /// A stand-in that never reads: writes to it block once the socket fills.
 fn deaf_stand_in(dir: &std::path::Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let program = dir.join("window");
     let script = "#!/bin/sh\necho \"$$ ${DISPLAY-none}\" >> \"$0.pids\"\nexec sleep 600\n";
-    std::fs::write(&program, script).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_program(&program, script);
     program
 }
 
@@ -306,14 +320,12 @@ async fn a_window_that_cannot_start_is_reported_and_tried_again() {
 
 #[tokio::test]
 async fn a_request_sent_just_before_the_window_exits_still_reaches_the_controller() {
-    use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new();
     let program = scratch.0.join("window");
     let request = String::from_utf8(capture(7)).unwrap();
     // JSON has no single quote, so it sits in one safely.
     let script = format!("#!/bin/sh\nprintf '%s' '{request}' >&0\nexit 0\n");
-    std::fs::write(&program, script).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_program(&program, &script);
     let (opener, mut links) = mpsc::unbounded_channel();
     let open = keep_with(Opening {
         opener,
