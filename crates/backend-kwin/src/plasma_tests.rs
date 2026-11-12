@@ -247,6 +247,8 @@ async fn plasma_kwins_owner_is_kwin_wayland_under_its_wrapper() {
     assert_eq!(name(process.pid).trim(), "kwin_wayland");
     // The wrapper listens on the display's socket (decision 0004); `comm`
     // holds 15 bytes of its name.
-    let parent = process.parent.expect("KWin's parent");
+    let crate::display::Parent::Of(parent) = process.parent else {
+        panic!("KWin's parent: {:?}", process.parent);
+    };
     assert_eq!(name(parent).trim(), "kwin_wayland_wr");
 }

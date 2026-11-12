@@ -9,15 +9,18 @@
 //! 0004). Each new owner is checked before anything is loaded into it.
 //!
 //! With nothing to check against (no display, or its listener unknown) KWin
-//! counts, as before W01. A lookup that fails is tried again after the
-//! watcher's back-off, and a KWin that still cannot be told then counts
-//! too: a failed lookup never takes the layout away for KWin's life.
+//! counts, as before W01. A lookup that fails, or a parent that cannot be
+//! read, is tried again after the watcher's back-off, and a KWin that still
+//! cannot be told then counts too: a failed lookup never takes the layout
+//! away for KWin's life. A newer owner drops the check of the one before.
 
-use std::future::ready;
+use std::future::Future;
 use std::num::NonZeroU32;
+use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Context, Poll};
 
-use futures_util::{StreamExt, stream};
+use futures_util::Stream;
 
 use crate::scripting::{Owners, Scripting, bounded};
 use crate::session::Session;
@@ -27,8 +30,17 @@ use crate::watcher::BACK_OFF;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Process {
     pub(crate) pid: u32,
-    /// `None` when it is gone or cannot be read.
-    pub(crate) parent: Option<u32>,
+    pub(crate) parent: Parent,
+}
+
+/// A process's parent, as `/proc` tells it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Parent {
+    Of(u32),
+    /// The process is gone: it runs no display.
+    Gone,
+    /// Its status could not be read or parsed: not told.
+    Unknown,
 }
 
 /// `owner` when its KWin counts, else `None`.
@@ -53,13 +65,18 @@ pub(crate) async fn checked_once<S: Scripting>(
     let (Some(owner), Some(compositor)) = (owner.clone(), session.compositor) else {
         return owner;
     };
-    match bounded(session.scripting.owner_process(&owner)).await {
-        Ok(process) => counts(process, compositor).then_some(owner),
-        Err(err) => {
+    let told = match bounded(session.scripting.owner_process(&owner)).await {
+        Ok(process) => {
+            counts(process, compositor).ok_or_else(|| "its parent is unknown".to_owned())
+        }
+        Err(err) => Err(err.0),
+    };
+    match told {
+        Ok(ours) => ours.then_some(owner),
+        Err(why) => {
             eprintln!(
                 "auto-clicker: cannot tell whether KWin runs this display, so its scripts are \
-                 left to the next start: {}",
-                err.0
+                 left to the next start: {why}"
             );
             None
         }
@@ -67,7 +84,8 @@ pub(crate) async fn checked_once<S: Scripting>(
 }
 
 /// `owners` with each checked: a new owner reads as none until it counts,
-/// so nothing is loaded into a KWin before it is checked.
+/// so nothing is loaded into a KWin before it is checked, and a newer owner
+/// drops the check of the one before.
 pub(crate) fn each_checked<S: Scripting + 'static>(
     session: Rc<Session<S>>,
     owners: Owners,
@@ -75,11 +93,60 @@ pub(crate) fn each_checked<S: Scripting + 'static>(
     if session.compositor.is_none() {
         return owners;
     }
-    Box::pin(owners.flat_map(move |owner| {
-        let session = Rc::clone(&session);
-        let checked = async move { checked(&session, owner).await };
-        stream::once(ready(None)).chain(stream::once(checked))
-    }))
+    Box::pin(Latest {
+        session,
+        owners: Some(owners),
+        check: None,
+    })
+}
+
+/// The owners, each checked, the newest only.
+struct Latest<S> {
+    session: Rc<Session<S>>,
+    /// `None` once the bus ended it.
+    owners: Option<Owners>,
+    /// The newest owner's check, until it ends.
+    check: Option<Pin<Box<dyn Future<Output = Option<String>>>>>,
+}
+
+impl<S: Scripting + 'static> Stream for Latest<S> {
+    type Item = Option<String>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let latest = &mut *self;
+        if let Some(owner) = latest.next_owner(cx) {
+            let session = Rc::clone(&latest.session);
+            latest.check = Some(Box::pin(async move { checked(&session, owner).await }));
+            return Poll::Ready(Some(None));
+        }
+        if let Some(check) = &mut latest.check {
+            let told = check.as_mut().poll(cx);
+            if told.is_ready() {
+                latest.check = None;
+            }
+            return told.map(Some);
+        }
+        if latest.owners.is_none() {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+impl<S> Latest<S> {
+    /// A new owner, if one came; notes the end of the owners.
+    fn next_owner(&mut self, cx: &mut Context<'_>) -> Option<Option<String>> {
+        let owners = self.owners.as_mut()?;
+        match owners.as_mut().poll_next(cx) {
+            Poll::Ready(Some(owner)) => Some(owner),
+            Poll::Ready(None) => {
+                self.owners = None;
+                None
+            }
+            Poll::Pending => None,
+        }
+    }
 }
 
 /// Whether `owner`'s process is `compositor` or its child.
@@ -89,8 +156,12 @@ async fn on_display<S: Scripting>(scripting: &S, owner: &str, compositor: NonZer
         if let Some(wait) = wait {
             tokio::time::sleep(wait).await;
         }
-        match bounded(scripting.owner_process(owner)).await {
-            Ok(process) => return counts(process, compositor),
+        let process = bounded(scripting.owner_process(owner)).await;
+        match process.map(|process| counts(process, compositor)) {
+            Ok(Some(ours)) => return ours,
+            Ok(None) => eprintln!(
+                "auto-clicker: cannot tell whether KWin runs this display: its parent is unknown"
+            ),
             Err(err) => eprintln!(
                 "auto-clicker: cannot tell whether KWin runs this display: {}",
                 err.0
@@ -101,23 +172,32 @@ async fn on_display<S: Scripting>(scripting: &S, owner: &str, compositor: NonZer
     true
 }
 
-fn counts(process: Process, compositor: NonZeroU32) -> bool {
+/// `None` when it cannot be told: the process is not the listener and its
+/// parent is unknown.
+fn counts(process: Process, compositor: NonZeroU32) -> Option<bool> {
     let compositor = compositor.get();
-    let ours = process.pid == compositor || process.parent == Some(compositor);
+    let ours = process.pid == compositor
+        || match process.parent {
+            Parent::Of(parent) => parent == compositor,
+            Parent::Gone => false,
+            Parent::Unknown => return None,
+        };
     if !ours {
         eprintln!(
             "auto-clicker: KWin runs another display than this daemon's, so its layout and \
              positions are not used"
         );
     }
-    ours
+    Some(ours)
 }
 
-/// The parent of process `pid`, from `/proc/<pid>/status`; `None` when it
-/// is gone or the line does not parse.
-pub(crate) fn parent_of(pid: u32) -> Option<u32> {
-    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-    parse_parent(&status)
+/// The parent of process `pid`, from `/proc/<pid>/status`.
+pub(crate) fn parent_of(pid: u32) -> Parent {
+    match std::fs::read_to_string(format!("/proc/{pid}/status")) {
+        Ok(status) => parse_parent(&status).map_or(Parent::Unknown, Parent::Of),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Parent::Gone,
+        Err(_) => Parent::Unknown,
+    }
 }
 
 fn parse_parent(status: &str) -> Option<u32> {
@@ -140,45 +220,63 @@ mod tests {
             (
                 Process {
                     pid: 1491,
-                    parent: Some(1487),
+                    parent: Parent::Of(1487),
                 },
                 1487,
-                true,
+                Some(true),
             ),
             // A KWin that listens on its socket itself.
             (
                 Process {
                     pid: 1487,
-                    parent: Some(1),
+                    parent: Parent::Of(1),
                 },
                 1487,
-                true,
+                Some(true),
             ),
             // Another session's KWin, or one under a nested compositor.
             (
                 Process {
                     pid: 2210,
-                    parent: Some(2201),
+                    parent: Parent::Of(2201),
                 },
                 1487,
-                false,
+                Some(false),
             ),
             (
                 Process {
                     pid: 2210,
-                    parent: None,
+                    parent: Parent::Gone,
                 },
                 1487,
-                false,
+                Some(false),
+            ),
+            // A parent that could not be read: not told, unless it is the
+            // listener itself.
+            (
+                Process {
+                    pid: 2210,
+                    parent: Parent::Unknown,
+                },
+                1487,
+                None,
+            ),
+            (
+                Process {
+                    pid: 1487,
+                    parent: Parent::Unknown,
+                },
+                1487,
+                Some(true),
             ),
             // A grandchild does not count.
             (
                 Process {
                     pid: 1600,
-                    parent: Some(1491),
+                    parent: Parent::Of(1491),
                 },
                 1487,
-                false,
+                Some(false),
             ),
         ];
         for (process, listener, expected) in cases {
@@ -198,7 +296,9 @@ mod tests {
         assert_eq!(parse_parent("Name:\tx\n"), None);
         assert_eq!(
             parent_of(std::process::id()),
-            Some(std::os::unix::process::parent_id())
+            Parent::Of(std::os::unix::process::parent_id())
         );
+        // Past the kernel's largest pid: no such process.
+        assert_eq!(parent_of(u32::MAX), Parent::Gone);
     }
 }

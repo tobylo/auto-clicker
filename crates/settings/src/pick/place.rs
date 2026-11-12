@@ -111,11 +111,19 @@ pub fn left_full_screen(window: &slint::Window) -> bool {
 /// not a winit window.
 pub fn corner(window: &slint::Window) -> Option<(i64, i64)> {
     window.with_winit_window(|winit| {
-        let (x, y) = logical_corner(&winit.current_monitor()?)?;
+        let corner = logical_corner(&winit.current_monitor()?)?;
         let all = logical_corners(winit.available_monitors());
-        let (left, top) = origin(all.iter().map(|monitor| (monitor.left, monitor.top)));
-        Some((x.saturating_sub(left), y.saturating_sub(top)))
+        Some(moved(
+            corner,
+            all.iter().map(|monitor| (monitor.left, monitor.top)),
+        ))
     })?
+}
+
+/// `corner` moved as [`from_origin`] moves the monitors at `corners`.
+fn moved((x, y): (i64, i64), corners: impl Iterator<Item = (i64, i64)>) -> (i64, i64) {
+    let (left, top) = origin(corners);
+    (x.saturating_sub(left), y.saturating_sub(top))
 }
 
 /// How many of the compositor's logical pixels one of Slint's is on
@@ -191,6 +199,27 @@ mod tests {
         );
         assert!(corners(Vec::new()).is_empty());
         assert_eq!(origin(std::iter::empty()), (0, 0));
+    }
+
+    #[test]
+    fn the_overlays_corner_is_moved_as_the_monitors_are() {
+        let corners = [(-500, -300), (1420, 100)];
+        let monitors = corners
+            .iter()
+            .map(|&(left, top)| Monitor {
+                left,
+                top,
+                monitor: (),
+            })
+            .collect();
+        let all: Vec<(i64, i64)> = from_origin(monitors)
+            .iter()
+            .map(|monitor| (monitor.left, monitor.top))
+            .collect();
+        for (corner, expected) in corners.into_iter().zip(all) {
+            assert_eq!(moved(corner, corners.into_iter()), expected, "{corner:?}");
+        }
+        assert_eq!(moved((1420, 100), corners.into_iter()), (1920, 400));
     }
 
     #[test]

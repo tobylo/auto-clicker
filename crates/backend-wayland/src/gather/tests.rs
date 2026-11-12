@@ -96,10 +96,37 @@ fn an_update_to_two_outputs_interleaved_is_never_read_half_done() {
 }
 
 #[test]
+fn a_round_trip_answered_before_an_outputs_done_reads_nothing() {
+    let mut gather = two();
+    settled(&mut gather);
+    // A's new place, right of B, arrives and the round trip is answered
+    // before its size and its done.
+    gather.heard(A, Heard::Position { x: 5488, y: 0 });
+    assert!(gather.wants_sync());
+    assert_eq!(gather.synced(), None, "read A's place with its old size");
+    gather.heard(
+        A,
+        Heard::Size {
+            width: 1707,
+            height: 1067,
+        },
+    );
+    gather.heard(A, Heard::Done);
+    let expected = layout(&[
+        (rect(3440, 0, 1707, 1067), 1200),
+        (rect(0, 0, 3440, 1440), 1000),
+    ]);
+    assert_eq!(settled(&mut gather), Some(expected));
+}
+
+#[test]
 fn an_output_not_heard_in_full_leaves_the_layout_unknown() {
     let mut gather = two();
     gather.added(11);
     gather.heard(11, Heard::Position { x: 0, y: 1440 });
+    assert!(gather.wants_sync());
+    assert_eq!(gather.synced(), None, "read before the output's done");
+    gather.heard(11, Heard::Done);
     assert_eq!(settled(&mut gather), None);
     gather.removed(11);
     assert!(settled(&mut gather).is_some(), "the half-heard output went");
@@ -125,6 +152,7 @@ fn the_widest_spread_of_positions_still_fits_and_one_past_it_does_not() {
     ]);
     assert_eq!(settled(&mut gather), Some(expected));
     gather.heard(B, Heard::Position { x: i32::MAX, y: 0 });
+    gather.heard(B, Heard::Done);
     assert_eq!(settled(&mut gather), None, "reaches past u32::MAX");
 }
 
@@ -198,6 +226,7 @@ fn the_scale_is_the_mode_over_the_logical_size() {
         if let Some(whole) = whole {
             gather.heard(A, Heard::Scale(whole));
         }
+        gather.heard(A, Heard::Done);
         settled(&mut gather).map(|layout| layout.outputs()[0].scale_milli())
     };
     let cases = [

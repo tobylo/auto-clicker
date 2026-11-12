@@ -1,10 +1,11 @@
 //! Gathering the outputs' updates into one whole layout (brief W3).
 //!
-//! The compositor sends each output's update on its own, and one change can
-//! touch several outputs (a scale change moves the output beside it). So
-//! after any update the connection asks for a round trip (`wl_display.sync`)
-//! and the layout is read only once its answer arrives with nothing new
-//! since: by then every update the compositor sent for the change is in.
+//! The compositor sends each output's update on its own, ended by its
+//! `done`, and one change can touch several outputs (a scale change moves
+//! the output beside it). So after any update the connection asks for a
+//! round trip (`wl_display.sync`), and the layout is read only once its
+//! answer arrives with nothing new since and no output's update unfinished:
+//! by then every update the compositor sent for the change is in.
 //! Until then the last whole layout stands, and an update that changes no
 //! place or size publishes nothing.
 //!
@@ -40,6 +41,8 @@ struct Screen {
     mode: Option<(i32, i32)>,
     turned: bool,
     whole_scale: Option<i32>,
+    /// Something was heard since its last `done`.
+    updating: bool,
 }
 
 /// The outputs, and where the round trip after their last update stands.
@@ -80,6 +83,7 @@ impl Gather {
             Heard::Scale(scale) => screen.whole_scale = Some(scale),
             Heard::Done => {}
         }
+        screen.updating = heard != Heard::Done;
         self.changed = true;
     }
 
@@ -100,11 +104,13 @@ impl Gather {
     }
 
     /// The round trip came back: the layout now, or `None` when more was
-    /// heard meanwhile and another round trip is due. A layout that is not
+    /// heard meanwhile and another round trip is due, or an output's update
+    /// has not ended (its `done` asks for the next). A layout that is not
     /// whole or not valid is `Some(None)`: unknown.
     pub(crate) fn synced(&mut self) -> Option<Option<Layout>> {
         self.syncing = false;
-        (!self.changed).then(|| self.layout())
+        let updating = self.screens.values().any(|screen| screen.updating);
+        (!self.changed && !updating).then(|| self.layout())
     }
 
     /// The outputs as one layout, moved so its bounding box starts at

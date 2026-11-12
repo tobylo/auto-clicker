@@ -3,9 +3,10 @@
 //!
 //! Each source writes only its own layout; this reads them and is the one
 //! thing the controller polls. Its watcher runs both sources' watchers and
-//! fires the controller's signal only when the layout read here changed:
-//! on Plasma both sources see one change, and every fire refuses a pick
-//! begun before it.
+//! passes on the fires of the source whose layout is in use: on Plasma
+//! both sources see one change, and every fire refuses a pick begun before
+//! it. Each source fires only when its own layout changed, so every change
+//! it reports reaches the controller, even one undone before it was read.
 
 use std::rc::Rc;
 
@@ -68,29 +69,32 @@ impl<K: Source + 'static, W: Source + 'static> Screens<K, W> {
         self.0.kwin.layout().or_else(|| self.0.wayland.layout())
     }
 
-    /// Runs both sources' watchers, and fires `changed` each time the
-    /// layout [`Screens::layout`] reads changed. A source whose watcher
-    /// ends leaves the other running. Changes count from the layout when
-    /// the watcher is made, not when it is first polled: a source may
-    /// report one on its own first poll, before the forwarding begins.
+    /// Runs both sources' watchers, and fires `changed` for each change of
+    /// the layout [`Screens::layout`] reads: every fire of KWin's, which is
+    /// in use or just stopped being, and the display's while KWin has no
+    /// layout. A source whose watcher ends leaves the other running. The
+    /// sources are polled before the forwarding, every time, so a change a
+    /// source read reaches the controller in the same poll.
     pub fn watch(&self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
-        let heard = LayoutSignal::default();
-        let kwin = self.0.kwin.watch(feed.clone(), heard.clone());
-        let wayland = self.0.wayland.watch(feed, heard.clone());
+        let (kwin_heard, wayland_heard) = (LayoutSignal::default(), LayoutSignal::default());
+        let kwin = self.0.kwin.watch(feed.clone(), kwin_heard.clone());
+        let wayland = self.0.wayland.watch(feed, wayland_heard.clone());
         let screens = self.clone();
-        let mut last = self.layout();
         Box::pin(async move {
             let forward = async {
                 loop {
-                    heard.fired().await;
-                    let now = screens.layout();
-                    if now != last {
-                        last = now;
-                        changed.changed();
+                    tokio::select! {
+                        biased;
+                        () = kwin_heard.fired() => changed.changed(),
+                        () = wayland_heard.fired() => {
+                            if screens.0.kwin.layout().is_none() {
+                                changed.changed();
+                            }
+                        }
                     }
                 }
             };
-            tokio::join!(kwin, wayland, forward);
+            tokio::join!(biased; kwin, wayland, forward);
         })
     }
 }

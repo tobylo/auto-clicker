@@ -6,9 +6,8 @@ use super::*;
 #[tokio::test]
 #[ignore = "needs a running Wayland compositor that offers xdg-output"]
 async fn the_running_compositor_gives_a_layout_and_its_listener() {
-    let wayland = tokio::time::timeout(std::time::Duration::from_secs(2), Wayland::connect())
-        .await
-        .expect("the display did not answer within 2 s");
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let wayland = Wayland::connect(deadline).await;
     assert_eq!(wayland.missing(), None);
     let layout = wayland.layout().expect("no whole layout");
     eprintln!("layout: {layout:?}; listener: {:?}", wayland.compositor());
@@ -23,9 +22,7 @@ async fn the_running_compositor_reports_a_screen_change() {
 
     use tokio::time::timeout;
 
-    let wayland = timeout(Duration::from_secs(2), Wayland::connect())
-        .await
-        .expect("the display did not answer within 2 s");
+    let wayland = Wayland::connect(tokio::time::Instant::now() + Duration::from_secs(2)).await;
     let before = wayland.layout();
     eprintln!("before: {before:?}; change a screen's scale or place now");
     let changed = LayoutSignal::default();

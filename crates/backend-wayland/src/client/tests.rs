@@ -29,6 +29,7 @@ struct Name(u32);
 const MANAGER: Name = Name(1);
 const A: Name = Name(10);
 const B: Name = Name(11);
+const C: Name = Name(12);
 
 /// What the fake offers.
 enum Offer {
@@ -121,6 +122,8 @@ fn string(text: &str) -> Vec<u32> {
 struct Fake {
     stream: tokio::net::UnixStream,
     outputs: Vec<(Name, Ids)>,
+    /// Each request read, as its object and opcode.
+    seen: Vec<(u32, u16)>,
 }
 
 impl Fake {
@@ -131,6 +134,7 @@ impl Fake {
         let fake = Fake {
             stream: tokio::net::UnixStream::from_std(theirs).unwrap(),
             outputs: Vec::new(),
+            seen: Vec::new(),
         };
         (ours, fake)
     }
@@ -165,6 +169,7 @@ impl Fake {
         let mut bound: Vec<(Name, u32)> = Vec::new();
         loop {
             let request = self.request().await;
+            self.seen.push((request.object, request.opcode));
             let words = &request.words;
             match (request.object, request.opcode) {
                 (DISPLAY, 0) => return Callback(words[0]),
@@ -270,6 +275,15 @@ impl Fake {
     }
 }
 
+/// `wl_registry.global_remove` for `name`.
+fn removed(Name(name): Name) -> Message {
+    Message {
+        object: REGISTRY,
+        opcode: 1,
+        words: vec![name],
+    }
+}
+
 fn layout(places: &[Place]) -> Option<Layout> {
     let outputs = places.iter().map(|place| place.output()).collect();
     Some(Layout::new(outputs).unwrap())
@@ -285,7 +299,11 @@ struct Watched {
 
 /// Starts a connection on two outputs and watches it on `local`.
 async fn watched(local: &LocalSet, fake: &mut Fake, link: UnixStream) -> Watched {
-    let (started, ()) = tokio::join!(Link::start(link), fake.start_with_two());
+    let (started, ()) = timeout(BOUND, async {
+        tokio::join!(Link::start(link), fake.start_with_two())
+    })
+    .await
+    .unwrap();
     let (link, first) = started.unwrap();
     let wayland = Wayland::of(NonZeroU32::new(std::process::id()), first, Ok(link));
     let changed = LayoutSignal::default();
@@ -347,6 +365,96 @@ async fn a_display_without_xdg_output_gives_no_layout_and_says_why() {
 }
 
 #[tokio::test]
+async fn globals_withdrawn_before_they_were_bound_are_never_bound() {
+    let (link, mut fake) = Fake::pair();
+    let serve = async {
+        let callback = fake.until_sync().await;
+        fake.offer(Offer::Manager).await;
+        fake.offer(Offer::Output(A)).await;
+        fake.offer(Offer::Output(B)).await;
+        fake.send(vec![removed(B)]).await;
+        fake.answer(callback).await;
+        let callback = fake.until_sync().await;
+        let bound: Vec<Name> = fake.outputs.iter().map(|(name, _)| *name).collect();
+        assert_eq!(bound, [A], "bound a withdrawn output");
+        fake.screen(A, LEFT).await;
+        fake.answer(callback).await;
+        let callback = fake.until_sync().await;
+        fake.answer(callback).await;
+    };
+    let (started, ()) = timeout(BOUND, async { tokio::join!(Link::start(link), serve) })
+        .await
+        .unwrap();
+    assert_eq!(started.unwrap().1, layout(&[LEFT]));
+
+    // The manager withdrawn before it was bound: no xdg-output.
+    let (link, mut fake) = Fake::pair();
+    let serve = async {
+        let callback = fake.until_sync().await;
+        fake.offer(Offer::Manager).await;
+        fake.offer(Offer::Output(A)).await;
+        fake.send(vec![removed(MANAGER)]).await;
+        fake.answer(callback).await;
+    };
+    let (started, ()) = timeout(BOUND, async { tokio::join!(Link::start(link), serve) })
+        .await
+        .unwrap();
+    assert_eq!(started.err(), Some(Missing::NoXdgOutput));
+}
+
+#[tokio::test]
+async fn the_mode_turn_and_scale_reach_the_layout_and_fire_nothing() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let (link, mut fake) = Fake::pair();
+            let watched = watched(&local, &mut fake, link).await;
+            timeout(BOUND, async {
+                let output = fake.ids(A).output;
+                let message = |opcode, words| Message {
+                    object: output,
+                    opcode,
+                    words,
+                };
+                // Turned a quarter (transform 90), its current mode 1600 x
+                // 2560 and another it could take, at whole scale 2: the
+                // same logical 2048 x 1280 at 1.25.
+                let geometry = [0, 0, 300, 200, 0]
+                    .into_iter()
+                    .chain(string("make"))
+                    .chain(string("model"))
+                    .chain([1])
+                    .collect();
+                fake.send(vec![
+                    message(0, geometry),
+                    message(1, vec![1, 1600, 2560, 60_000]),
+                    message(1, vec![0, 3840, 2160, 60_000]),
+                    message(3, vec![2]),
+                    message(2, Vec::new()),
+                ])
+                .await;
+                let callback = fake.until_sync().await;
+                fake.answer(callback).await;
+                // A removal after it shows the client handled the answer.
+                fake.send(vec![removed(B)]).await;
+                let callback = fake.until_sync().await;
+                fake.answer(callback).await;
+                fired(&watched).await;
+            })
+            .await
+            .unwrap();
+            settle().await;
+            assert_eq!(watched.fired.get(), 1, "a new scale alone fired");
+            let turned = Output::new(LEFT.output().rect(), 1250).unwrap();
+            assert_eq!(
+                watched.wayland.layout(),
+                Some(Layout::new(vec![turned]).unwrap())
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn an_update_to_two_outputs_interleaved_publishes_once_whole() {
     let local = LocalSet::new();
     local
@@ -403,20 +511,21 @@ async fn an_update_that_moves_nothing_fires_nothing() {
                 let callback = fake.until_sync().await;
                 fake.answer(callback).await;
                 // A removal after it shows the client handled the answer.
-                let removed = Message {
-                    object: REGISTRY,
-                    opcode: 1,
-                    words: vec![B.0],
-                };
-                fake.send(vec![removed]).await;
+                fake.send(vec![removed(B)]).await;
                 let callback = fake.until_sync().await;
                 fake.answer(callback).await;
                 fired(&watched).await;
             })
             .await
             .unwrap();
+            settle().await;
             assert_eq!(watched.fired.get(), 1, "the refresh rate fired too");
             assert_eq!(watched.wayland.layout(), layout(&[LEFT]));
+            // B's objects were released: its xdg-output destroyed, its
+            // output (version 3 and later) released.
+            let Ids { output, xdg } = fake.ids(B);
+            assert!(fake.seen.contains(&(xdg, 0)), "B's xdg-output kept");
+            assert!(fake.seen.contains(&(output, 0)), "B's output kept");
         })
         .await;
 }
@@ -444,6 +553,54 @@ async fn ended_by(
 async fn a_lost_connection_makes_the_layout_unknown_for_good() {
     let (layout, missing, fired) = ended_by(async |fake| drop(fake)).await;
     assert_eq!((layout, missing, fired), (None, Some(Missing::Lost), 1));
+}
+
+#[tokio::test]
+async fn a_connection_that_refuses_a_request_is_lost() {
+    // The fake stops reading but still sends: an update the client answers
+    // with a round trip, whose request is what finds it gone.
+    let (layout, missing, fired) = ended_by(async |mut fake| {
+        let stream = fake.stream.into_std().unwrap();
+        stream.shutdown(std::net::Shutdown::Read).unwrap();
+        fake.stream = tokio::net::UnixStream::from_std(stream).unwrap();
+        let left = Place {
+            width: 1707,
+            ..LEFT
+        };
+        fake.screen(A, left).await;
+        std::future::pending::<()>().await;
+    })
+    .await;
+    assert_eq!((layout, missing, fired), (None, Some(Missing::Lost), 1));
+}
+
+#[tokio::test]
+async fn an_output_plugged_in_later_joins_the_layout() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let (link, mut fake) = Fake::pair();
+            let watched = watched(&local, &mut fake, link).await;
+            let below = Place {
+                x: 0,
+                y: 1440,
+                width: 1920,
+                height: 1080,
+            };
+            timeout(BOUND, async {
+                fake.offer(Offer::Output(C)).await;
+                let callback = fake.until_sync().await;
+                fake.screen(C, below).await;
+                fake.answer(callback).await;
+                let callback = fake.until_sync().await;
+                fake.answer(callback).await;
+                fired(&watched).await;
+            })
+            .await
+            .unwrap();
+            assert_eq!(watched.wayland.layout(), layout(&[LEFT, RIGHT, below]));
+        })
+        .await;
 }
 
 #[tokio::test]
@@ -503,4 +660,17 @@ fn a_second_watch_and_a_handle_without_a_display_watch_nothing() {
         .await;
         assert!(quiet.is_err(), "a watch without a connection ended");
     });
+}
+
+#[tokio::test]
+async fn a_display_that_does_not_answer_in_time_keeps_its_listener() {
+    let (link, _fake) = Fake::pair();
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(100);
+    let wayland = timeout(BOUND, Wayland::over(link, deadline)).await.unwrap();
+    assert_eq!(wayland.missing(), Some(Missing::CannotConnect));
+    assert_eq!(wayland.layout(), None);
+    assert_eq!(
+        wayland.compositor().map(NonZeroU32::get),
+        Some(std::process::id())
+    );
 }

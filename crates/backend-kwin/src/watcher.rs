@@ -170,14 +170,20 @@ impl<S: Scripting + 'static> Watcher<S> {
 
     /// Starts following KWin's owner, each owner counted only when it runs
     /// the daemon's display; a bus that cannot tell leaves KWin unknown for
-    /// good, so nothing is ever loaded.
+    /// good, so nothing is ever loaded. A new owner during the first
+    /// owner's check ends that check: the new one is checked instead.
     async fn follow_owner(&mut self) -> Owners {
         match bounded(self.session.scripting.follow_owner()).await {
             Ok((owner, owners)) => {
-                let owner = display::checked(&self.session, owner).await;
+                let mut owners = display::each_checked(Rc::clone(&self.session), owners);
+                let owner = tokio::select! {
+                    biased;
+                    Some(newer) = owners.next() => newer,
+                    owner = display::checked(&self.session, owner) => owner,
+                };
                 self.owner_changed(owner);
                 self.sweep_due = self.owner.is_some();
-                display::each_checked(Rc::clone(&self.session), owners)
+                owners
             }
             Err(err) => {
                 eprintln!(

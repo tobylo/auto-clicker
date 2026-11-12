@@ -17,7 +17,7 @@ use std::time::Duration;
 use auto_clicker_backend_kernel::monotonic_now;
 use auto_clicker_backend_kwin::Kwin;
 use auto_clicker_backend_portal::{PortalOutput, token_path};
-use auto_clicker_backend_wayland::{Missing, Wayland};
+use auto_clicker_backend_wayland::Wayland;
 use auto_clicker_core::config::{Config, ConfigFile, config_path};
 use auto_clicker_core::controller::{Controller, Links, Message, Platform};
 use auto_clicker_core::input::{Input, InputError};
@@ -147,15 +147,7 @@ async fn serve<P: Platform>(platform: P, start: Start<P>, name: instance::Claim)
 /// The daemon's Wayland display, and the first layout from it; none when it
 /// offers no xdg-output or does not answer in time.
 async fn connect_wayland() -> Wayland {
-    match timeout(DISPLAY_TIMEOUT, Wayland::connect()).await {
-        Ok(wayland) => wayland,
-        Err(_) => {
-            eprintln!(
-                "auto-clicker: the Wayland display did not answer, so the screens are unknown"
-            );
-            Wayland::none(Missing::CannotConnect)
-        }
-    }
+    Wayland::connect(tokio::time::Instant::now() + DISPLAY_TIMEOUT).await
 }
 
 /// Receives from KWin on the claimed name; without it, recordings get no

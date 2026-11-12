@@ -2,7 +2,7 @@
 //! (W01, decision 0004).
 //!
 //! The daemon connects to its Wayland display once at start
-//! ([`Wayland::connect`]), after it holds its name. The source is picked by
+//! ([`Wayland::connect`]), after it holds its name, within a deadline. The source is picked by
 //! what answers: a display offering `zxdg_output_manager_v1` gives the
 //! layout, any other gives none, with the reason kept ([`Missing`]). Nothing
 //! outside this crate talks to the display. A lost connection or a protocol
@@ -22,10 +22,12 @@ mod socket;
 use std::cell::{Cell, RefCell};
 use std::future::pending;
 use std::num::NonZeroU32;
+use std::os::unix::net::UnixStream;
 use std::rc::Rc;
 
 use auto_clicker_core::controller::{LayoutSignal, LayoutWatch};
 use auto_clicker_core::recording::Layout;
+use tokio::time::{Instant, timeout_at};
 
 use client::Link;
 
@@ -59,18 +61,29 @@ struct Shared {
 
 impl Wayland {
     /// Connects to the display `WAYLAND_DISPLAY` names and reads the first
-    /// layout. The caller bounds the wait.
-    pub async fn connect() -> Wayland {
+    /// layout, giving up at `deadline`. A display that answers too late
+    /// keeps its listener, so KWin is still checked against it.
+    pub async fn connect(deadline: Instant) -> Wayland {
         let Some(path) = socket::environment_path() else {
             eprintln!("auto-clicker: no Wayland display, so the screens are unknown");
             return Wayland::none(Missing::NoDisplay);
         };
-        let stream = match socket::open(&path).await {
-            Ok(stream) => stream,
-            Err(missing) => return Wayland::none(missing),
-        };
+        match timeout_at(deadline, socket::open(&path)).await {
+            Ok(Ok(stream)) => Wayland::over(stream, deadline).await,
+            Ok(Err(missing)) => Wayland::none(missing),
+            Err(_) => Wayland::none(too_late()),
+        }
+    }
+
+    /// The display on the other end of `stream`, its first layout read by
+    /// `deadline`.
+    async fn over(stream: UnixStream, deadline: Instant) -> Wayland {
         let compositor = socket::listener(&stream);
-        match Link::start(stream).await {
+        let started = match timeout_at(deadline, Link::start(stream)).await {
+            Ok(started) => started,
+            Err(_) => Err(too_late()),
+        };
+        match started {
             Ok((link, layout)) => Wayland::of(compositor, layout, Ok(link)),
             Err(missing) => {
                 if missing == Missing::NoXdgOutput {
@@ -136,6 +149,11 @@ impl Wayland {
     }
 }
 
+fn too_late() -> Missing {
+    eprintln!("auto-clicker: the Wayland display did not answer, so the screens are unknown");
+    Missing::CannotConnect
+}
+
 /// Reads the connection until it fails, then drops it: the layout is
 /// unknown from then on.
 async fn watch(shared: Rc<Shared>, mut link: Link, changed: LayoutSignal) {
@@ -157,10 +175,15 @@ async fn watch(shared: Rc<Shared>, mut link: Link, changed: LayoutSignal) {
 
 impl Shared {
     /// Makes `layout` the current one, and tells the controller when that
-    /// changed it.
+    /// moved a screen or made the layout known or unknown. A new scale
+    /// alone is kept, untold: stored, never compared (R03 decision 6).
     fn publish(&self, layout: Option<Layout>, changed: &LayoutSignal) {
         let old = self.layout.replace(layout);
-        if *self.layout.borrow() != old {
+        let same = match (&*self.layout.borrow(), &old) {
+            (Some(new), Some(old)) => new.same_screens(old),
+            (new, old) => new.is_none() && old.is_none(),
+        };
+        if !same {
             changed.changed();
         }
     }

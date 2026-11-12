@@ -139,8 +139,16 @@ impl Client {
         self.gather.added(name);
     }
 
-    /// The output `name` went: its objects are released.
-    fn remove_output(&mut self, name: u32) {
+    /// The global `name` went: an output's objects are released, and an
+    /// output or manager offered but not bound yet is never bound.
+    fn remove_global(&mut self, name: u32) {
+        self.offered.retain(|global| global.name != name);
+        if self
+            .manager_offered
+            .is_some_and(|manager| manager.name == name)
+        {
+            self.manager_offered = None;
+        }
         let Some(Bound { output, xdg }) = self.outputs.remove(&name) else {
             return;
         };
@@ -165,7 +173,7 @@ impl Client {
                     _ => {}
                 }
             }
-            wl_registry::Event::GlobalRemove { name } => self.remove_output(name),
+            wl_registry::Event::GlobalRemove { name } => self.remove_global(name),
             _ => {}
         }
     }
@@ -183,7 +191,12 @@ impl Client {
             wl_output::Event::Done => Heard::Done,
             _ => return,
         };
-        self.gather.heard(*arrived.data, heard);
+        let name = *arrived.data;
+        self.gather.heard(name, heard);
+        // Before version 2 an output sends no `done`: each event is whole.
+        if arrived.proxy.version() < 2 {
+            self.gather.heard(name, Heard::Done);
+        }
     }
 
     fn xdg_output_event(&mut self, arrived: Arrived<'_, ZxdgOutputV1, u32>) {

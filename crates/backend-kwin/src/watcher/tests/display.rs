@@ -1,18 +1,19 @@
 //! KWin counted only when it runs the daemon's Wayland display (brief W1).
 
 use super::*;
+use crate::display::Parent;
 
 /// `kwin_wayland_wrapper`, listening on the daemon's display.
 const WRAPPER: u32 = 1487;
 /// `kwin_wayland` under it, owning `KWIN`.
 const OURS: Process = Process {
     pid: 1491,
-    parent: Some(WRAPPER),
+    parent: Parent::Of(WRAPPER),
 };
 /// A KWin of another session.
 const OTHER: Process = Process {
     pid: 2210,
-    parent: Some(2201),
+    parent: Parent::Of(2201),
 };
 
 fn display() -> Option<NonZeroU32> {
@@ -82,7 +83,7 @@ async fn each_new_owner_is_checked_before_anything_is_loaded() {
                 ":1.30",
                 Process {
                     pid: 1700,
-                    parent: Some(WRAPPER),
+                    parent: Parent::Of(WRAPPER),
                 },
             ));
         });
@@ -133,6 +134,83 @@ async fn without_a_display_to_check_against_kwin_counts_unasked() {
         h.start(inbox).await;
         assert_eq!(h.layout(), two_screens());
         assert_eq!(h.kwin.with(|s| s.lookups), 0);
+    })
+    .await;
+}
+
+/// KWin restarted under the wrapper, as `:1.30`.
+const RESTARTED: Process = Process {
+    pid: 1700,
+    parent: Parent::Of(WRAPPER),
+};
+
+#[tokio::test(start_paused = true)]
+async fn a_new_owner_drops_the_check_of_the_one_before() {
+    local(async {
+        let (h, inbox) = kwin_as(OURS);
+        h.start(inbox).await;
+        h.calls();
+        // An owner whose lookup fails, so its check backs off, then a
+        // newer one: the newer is checked and loaded at once.
+        h.new_owner(Some(":1.20")).await;
+        h.kwin.with(|s| s.processes.push((":1.30", RESTARTED)));
+        h.new_owner(Some(":1.30")).await;
+        assert_eq!(h.calls(), LOAD_LAYOUT);
+        assert_eq!(h.layout(), two_screens());
+        // The dropped check never comes back to count `:1.20`.
+        after(HOUR).await;
+        assert_eq!(h.calls(), []);
+        assert_eq!(h.layout(), two_screens());
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_owner_during_the_first_check_is_checked_at_once() {
+    local(async {
+        // The first owner's lookup fails: its check backs off.
+        let (h, inbox) = Harness::on_display(true, &[], display());
+        h.start(inbox).await;
+        h.kwin.with(|s| s.processes.push((":1.30", RESTARTED)));
+        h.new_owner(Some(":1.30")).await;
+        assert_eq!(h.calls(), LOAD_LAYOUT);
+        assert_eq!(h.layout(), two_screens());
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_kwin_whose_parent_cannot_be_read_is_tried_again() {
+    local(async {
+        let unread = Process {
+            parent: Parent::Unknown,
+            ..OURS
+        };
+        let (h, inbox) = kwin_as(unread);
+        h.start(inbox).await;
+        assert_eq!(h.calls(), [], "loaded before KWin was told");
+        // Read on the next try: it is the display's.
+        h.kwin.with(|s| s.processes = vec![(KWIN, OURS)]);
+        after(BACK_OFF[0]).await;
+        assert_eq!(h.kwin.with(|s| s.lookups), 2);
+        assert_eq!(h.layout(), two_screens());
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_owner_reads_as_none_while_it_is_checked() {
+    local(async {
+        let (h, inbox) = kwin_as(OURS);
+        h.start(inbox).await;
+        h.calls();
+        assert!(h.told().await);
+        // Its lookup fails, so its check backs off: the old KWin's layout
+        // is gone meanwhile.
+        h.new_owner(Some(":1.40")).await;
+        assert_eq!(h.layout(), None);
+        assert!(h.told().await);
+        assert_eq!(h.calls(), []);
     })
     .await;
 }
