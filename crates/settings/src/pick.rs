@@ -53,18 +53,18 @@ pub struct Target<M> {
 
 /// Each monitor with the screen of `screens` it shows, matched by their
 /// top-left corners, one per corner: winit lists a Wayland output more than
-/// once. Screens of different sizes on one corner (mirrored) take the
-/// largest, so a click anywhere on either monitor is on it. `None` when a monitor is on no screen of the layout or a screen
+/// once. Screens of different sizes on one corner (mirrored) take the one
+/// that contains the others, so a click anywhere on any of their monitors
+/// is on it; when none contains the others, picking is refused. `None` when a monitor is on no screen of the layout or a screen
 /// has no monitor: the window and KWin see different screens, as while one
 /// is plugged in.
 pub fn targets<M>(monitors: Vec<Monitor<M>>, screens: &Layout) -> Option<Vec<Target<M>>> {
-    let mut rects: Vec<Rect> = screens
+    let rects: Vec<Rect> = screens
         .outputs()
         .iter()
         .map(|output| output.rect())
         .collect();
-    let area = |rect: &Rect| u64::from(rect.width) * u64::from(rect.height);
-    rects.sort_by_key(|rect| std::cmp::Reverse(area(rect)));
+    let rects = covering(&rects)?;
     let corner =
         |rect: &Rect, left: i64, top: i64| i64::from(rect.x) == left && i64::from(rect.y) == top;
     let mut targets = Vec::new();
@@ -80,6 +80,29 @@ pub fn targets<M>(monitors: Vec<Monitor<M>>, screens: &Layout) -> Option<Vec<Tar
             .any(|target| corner(rect, target.on.x.into(), target.on.y.into()))
     });
     covered.then_some(targets)
+}
+
+/// One rectangle per top-left corner: the one that contains every other
+/// on its corner; `None` when one corner has no such rectangle.
+fn covering(rects: &[Rect]) -> Option<Vec<Rect>> {
+    let same_corner = |a: &Rect, b: &Rect| (a.x, a.y) == (b.x, b.y);
+    let contains =
+        |outer: &Rect, inner: &Rect| outer.width >= inner.width && outer.height >= inner.height;
+    let mut chosen: Vec<Rect> = Vec::new();
+    for rect in rects {
+        if chosen.iter().any(|kept| same_corner(kept, rect)) {
+            continue;
+        }
+        let group: Vec<&Rect> = rects
+            .iter()
+            .filter(|other| same_corner(other, rect))
+            .collect();
+        let outer = group
+            .iter()
+            .find(|outer| group.iter().all(|inner| contains(outer, inner)))?;
+        chosen.push(**outer);
+    }
+    Some(chosen)
 }
 
 /// The position on the layout for a click at (`x`, `y`) on the screen at

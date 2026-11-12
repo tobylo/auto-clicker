@@ -38,7 +38,7 @@ fn monitor(left: i64, top: i64, name: &'static str) -> Monitor<&'static str> {
 }
 
 #[test]
-fn mirrored_screens_on_one_corner_take_the_largest() {
+fn mirrored_screens_on_one_corner_take_the_one_containing_the_others() {
     let small = Rect {
         x: 0,
         y: 0,
@@ -63,6 +63,25 @@ fn mirrored_screens_on_one_corner_take_the_largest() {
         let on: Vec<Rect> = targets.iter().map(|t| t.on).collect();
         assert_eq!(on, [large]);
     }
+    // Neither contains the other: a click on one could be off the other.
+    let wide = Rect {
+        x: 0,
+        y: 0,
+        width: 2560,
+        height: 1080,
+    };
+    let tall = Rect {
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1200,
+    };
+    let crossed = Layout::new(vec![
+        Output::new(wide, 1000).unwrap(),
+        Output::new(tall, 1000).unwrap(),
+    ]);
+    let monitors = vec![monitor(0, 0, "HDMI-1"), monitor(0, 0, "DP-1")];
+    assert!(targets(monitors, &crossed.unwrap()).is_none());
 }
 
 /// The screens each monitor was matched to, by name.

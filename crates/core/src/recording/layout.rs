@@ -227,12 +227,24 @@ impl Layout {
     }
 
     /// The same for a position to a fraction of a pixel, such as where the
-    /// user clicked.
-    pub fn absolute_at(&self, x: f64, y: f64) -> AbsolutePosition {
+    /// user clicked, kept to the values that land inside `on`: rounding can
+    /// otherwise cross onto the next screen by up to half a step of the
+    /// range (`W / 131072` logical pixels).
+    pub fn absolute_at(&self, x: f64, y: f64, on: Rect) -> AbsolutePosition {
         let (width, height) = self.size();
+        let across = Along {
+            start: on.x,
+            span: on.width,
+            size: width,
+        };
+        let down = Along {
+            start: on.y,
+            span: on.height,
+            size: height,
+        };
         AbsolutePosition {
-            x: normalised_at(x, width),
-            y: normalised_at(y, height),
+            x: across.normalised(x),
+            y: down.normalised(y),
         }
     }
 }
@@ -260,11 +272,31 @@ fn normalised(value: u32, size: u32) -> u16 {
     u16::try_from(scaled).unwrap_or(u16::MAX)
 }
 
-/// `clamp(round(value * 65536 / size), 0, 65535)`; NaN gives 0.
-fn normalised_at(value: f64, size: u32) -> u16 {
-    let scaled = (value * 65_536.0 / f64::from(size.max(1))).round();
-    // Clamped to the range, or NaN, which the cast takes to 0: exact.
-    scaled.clamp(0.0, 65_535.0) as u16
+/// One axis of a screen in the layout: where it starts, how far it spans,
+/// and how long the layout is on that axis.
+struct Along {
+    start: u32,
+    span: u32,
+    size: u32,
+}
+
+impl Along {
+    /// `clamp(round(value * 65536 / size), 0, 65535)`, kept to the values
+    /// that land on the screen: a value `v` lands at `v * size / 65536`,
+    /// from `start` to short of `start + span`. NaN gives the screen's
+    /// first value.
+    fn normalised(&self, value: f64) -> u16 {
+        let size = u64::from(self.size.max(1));
+        let scaled = (value * 65_536.0 / f64::from(self.size.max(1))).round();
+        // Clamped to the range, or NaN, which the cast takes to 0: exact.
+        let rounded = u64::from(scaled.clamp(0.0, 65_535.0) as u16);
+        // The first value at or past `start`, and the last short of the end.
+        let first = (u64::from(self.start) * 65_536).div_ceil(size);
+        let end = (u64::from(self.start) + u64::from(self.span)) * 65_536;
+        let last = end.div_ceil(size).saturating_sub(1).min(65_535);
+        let kept = rounded.clamp(first.min(last), last);
+        u16::try_from(kept).unwrap_or(u16::MAX)
+    }
 }
 
 #[cfg(test)]
@@ -434,6 +466,7 @@ mod tests {
     #[test]
     fn a_position_to_a_fraction_maps_by_the_same_formula() {
         let layout = two_screens(); // 5488 x 1440
+        let whole_box = rect(0, 0, 5488, 1440);
         let cases = [
             ((0.0, 0.0), (0, 0)),
             ((2744.0, 720.0), (32768, 32768)),
@@ -445,12 +478,37 @@ mod tests {
         ];
         for ((x, y), (to_x, to_y)) in cases {
             let expected = AbsolutePosition { x: to_x, y: to_y };
-            assert_eq!(layout.absolute_at(x, y), expected, "{x},{y}");
+            assert_eq!(layout.absolute_at(x, y, whole_box), expected, "{x},{y}");
         }
         // A whole position maps as `absolute` maps it.
         for (x, y) in [(1, 1), (2047, 1279), (5487, 1439)] {
             let whole = layout.absolute(Point { x, y });
-            assert_eq!(layout.absolute_at(f64::from(x), f64::from(y)), whole);
+            let at = layout.absolute_at(f64::from(x), f64::from(y), whole_box);
+            assert_eq!(at, whole);
+        }
+    }
+
+    #[test]
+    fn a_position_is_kept_on_its_screen_where_rounding_would_cross() {
+        // Two 1920-wide screens: 1919.99 rounds to 32768, which lands at
+        // 1920, on the right screen.
+        let layout = Layout::new(vec![output(0, 0, 1920, 1080), output(1920, 0, 1920, 1080)]);
+        let layout = layout.unwrap();
+        let left = rect(0, 0, 1920, 1080);
+        let right = rect(1920, 0, 1920, 1080);
+        let lands = |v: u16| f64::from(v) * 3840.0 / 65_536.0;
+        let cases = [
+            (1_919.992_187_5, left),
+            (1919.5, left),
+            (1920.0, right),
+            (1920.001, right),
+            (0.0, left),
+            (3839.999, right),
+        ];
+        for (x, on) in cases {
+            let landed = lands(layout.absolute_at(x, 10.0, on).x);
+            assert!(on.holds(landed, 10.0), "{x} landed at {landed}");
+            assert!((landed - x).abs() < 0.06, "{x} landed at {landed}");
         }
     }
 
