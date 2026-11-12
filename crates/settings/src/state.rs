@@ -224,10 +224,11 @@ impl State {
         self.question = None;
     }
 
-    /// The user selected `file` in the list: a delete asked about another
-    /// recording is called off, so a yes never deletes one not selected.
-    pub fn selected(&mut self, file: &FileName) {
-        if matches!(&self.question, Some((Question::Delete(asked, _), _)) if asked != file) {
+    /// The user selected `file` in the list, or nothing (`None`) when the
+    /// one selected left it: a delete asked about another recording is
+    /// called off, so a yes never deletes one not selected.
+    pub fn selected(&mut self, file: Option<&FileName>) {
+        if matches!(&self.question, Some((Question::Delete(asked, _), _)) if Some(asked) != file) {
             self.question = None;
         }
     }

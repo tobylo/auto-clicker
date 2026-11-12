@@ -367,10 +367,10 @@ fn selecting_another_recording_calls_off_a_delete_asked_about() {
     let other = FileName::parse("2026-11-10_07-00-00.000.json").unwrap();
     state.recording(file(), "label".to_owned(), RecordingAction::Delete);
     // The same one again keeps the question.
-    state.selected(&file());
+    state.selected(Some(&file()));
     assert!(matches!(state.question(), Some(Question::Delete(..))));
 
-    state.selected(&other);
+    state.selected(Some(&other));
 
     assert_eq!(state.question(), None);
     assert_eq!(state.agree(&fields()), None);
@@ -381,6 +381,18 @@ fn selecting_another_recording_calls_off_a_delete_asked_about() {
         save.id,
         Outcome::Confirm(Confirm::Replace(Stale::Changed)),
     );
-    state.selected(&other);
+    state.selected(Some(&other));
+    state.selected(None);
     assert_eq!(state.question(), Some(&Question::Replace(Stale::Changed)));
+}
+
+#[test]
+fn a_selected_recording_leaving_the_list_calls_off_its_delete() {
+    let mut state = started();
+    state.recording(file(), "label".to_owned(), RecordingAction::Delete);
+
+    state.selected(None);
+
+    assert_eq!(state.question(), None);
+    assert_eq!(state.agree(&fields()), None);
 }

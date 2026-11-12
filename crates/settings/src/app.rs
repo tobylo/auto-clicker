@@ -214,9 +214,11 @@ impl App {
         let place = shelf::place(&view.recordings, self.selected.as_ref());
         if place < 0 {
             self.selected = None;
+            self.state.selected(None);
             w.set_recording_name(SharedString::new());
         }
         w.set_selected(place);
+        self.show_question();
     }
 
     /// The user picked the recording at `index` in the list: its name goes
@@ -229,7 +231,7 @@ impl App {
         else {
             return;
         };
-        self.state.selected(&listed.file);
+        self.state.selected(Some(&listed.file));
         self.selected = Some(listed.file.clone());
         let name = listed.name.clone().unwrap_or_default();
         self.window.set_recording_name(name.into());

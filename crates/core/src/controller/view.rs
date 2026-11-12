@@ -295,7 +295,7 @@ impl View {
                 .line("starts recording, and stops and saves it"),
         });
         lines.extend(self.play_hotkey.line(&format!(
-            "plays the last recording {}, and stops it",
+            "plays the current recording {}, and stops it",
             describe_playback(&self.playback)
         )));
         lines.push(self.routes.line());
@@ -542,7 +542,7 @@ mod tests {
                 "Clicks the left button every 100 ms",
                 "Ctrl+F6 starts and stops clicking",
                 "Ctrl+F7 starts recording, and stops and saves it",
-                "Ctrl+Alt+F8 plays the last recording once, and stops it",
+                "Ctrl+Alt+F8 plays the current recording once, and stops it",
                 "Clicks through /dev/uinput, hotkeys from the keyboards",
                 "notice",
                 "one",
@@ -582,7 +582,7 @@ mod tests {
                     Some("Clicks the left button every 100 ms"),
                     Some("Ctrl+F6 starts and stops clicking"),
                     line,
-                    Some("Ctrl+Alt+F8 plays the last recording once, and stops it"),
+                    Some("Ctrl+Alt+F8 plays the current recording once, and stops it"),
                     Some("Clicks through /dev/uinput, hotkeys from the keyboards"),
                 ]
                 .into_iter()
