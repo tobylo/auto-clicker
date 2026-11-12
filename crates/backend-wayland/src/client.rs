@@ -21,12 +21,16 @@ use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_manager_v1::Zxd
 use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_v1::{self, ZxdgOutputV1};
 
 use crate::Missing;
-use crate::gather::{Gather, Heard};
+use crate::gather::{Gather, Heard, Settled};
 use crate::socket::{self, Waiting};
 
 /// The newest versions the client knows: `wl_output` 4 (name and
 /// description, which it ignores), xdg-output 3 (`done` on `wl_output`).
 const OUTPUT_VERSION: u32 = 4;
+/// Before version 2 an output sends no `done`, so nothing says when its
+/// update ends: such an output is not bound, and the layout is unknown
+/// while it is offered.
+const OLDEST_OUTPUT_VERSION: u32 = 2;
 const XDG_OUTPUT_VERSION: u32 = 3;
 const OUTPUT: &str = "wl_output";
 const XDG_OUTPUT_MANAGER: &str = "zxdg_output_manager_v1";
@@ -65,8 +69,10 @@ pub(crate) struct Client {
     outputs: BTreeMap<u32, Bound>,
     /// The first round trip came back.
     globals_known: bool,
-    /// The layout a round trip settled on, until it is taken.
-    pub(crate) settled: Option<Option<Layout>>,
+    /// A layout round trip came back in the events being handled.
+    synced: bool,
+    /// What a round trip settled on, until it is taken.
+    pub(crate) settled: Option<Settled>,
 }
 
 /// An event as it arrived: for which object, with that object's data, and
@@ -133,6 +139,14 @@ impl Client {
             return;
         };
         let Global { name, version } = global;
+        if version < OLDEST_OUTPUT_VERSION {
+            eprintln!(
+                "auto-clicker: a screen too old to say when it changed (wl_output {version}), \
+                 so the screens are unknown while it is there"
+            );
+            self.gather.refused(name);
+            return;
+        }
         let output: WlOutput = registry.bind(name, version.min(OUTPUT_VERSION), queue, name);
         let xdg = manager.get_xdg_output(&output, queue, name);
         self.outputs.insert(name, Bound { output, xdg });
@@ -149,6 +163,7 @@ impl Client {
         {
             self.manager_offered = None;
         }
+        self.gather.removed(name);
         let Some(Bound { output, xdg }) = self.outputs.remove(&name) else {
             return;
         };
@@ -156,7 +171,6 @@ impl Client {
         if output.version() >= 3 {
             output.release();
         }
-        self.gather.removed(name);
     }
 
     fn registry_event(&mut self, arrived: Arrived<'_, WlRegistry, ()>) {
@@ -191,12 +205,7 @@ impl Client {
             wl_output::Event::Done => self.output_done(),
             _ => return,
         };
-        let name = *arrived.data;
-        self.gather.heard(name, heard);
-        // Before version 2 an output sends no `done`: each event is whole.
-        if arrived.proxy.version() < 2 {
-            self.gather.heard(name, self.output_done());
-        }
+        self.gather.heard(*arrived.data, heard);
     }
 
     fn xdg_output_event(&mut self, arrived: Arrived<'_, ZxdgOutputV1, u32>) {
@@ -225,11 +234,19 @@ impl Client {
         };
         match arrived.data {
             Mark::Globals => self.globals_known = true,
-            Mark::Layout => {
-                if let Some(layout) = self.gather.synced() {
-                    self.settled = Some(layout);
-                }
-            }
+            Mark::Layout => self.synced = true,
+        }
+    }
+
+    /// After the events that arrived are handled: the layout a round trip
+    /// that came back among them settled on. Read after them all, so an
+    /// update behind the answer asks for another round trip instead.
+    fn read_layout(&mut self) {
+        if !std::mem::take(&mut self.synced) {
+            return;
+        }
+        if let Some(layout) = self.gather.synced() {
+            self.settled = Some(layout);
         }
     }
 }
@@ -269,7 +286,11 @@ impl Link {
         link.until(|client| client.globals_known).await?;
         link.client.bind_offered(&registry, &queue)?;
         link.until(|client| client.settled.is_some()).await?;
-        let first = link.client.settled.take().flatten();
+        let first = link
+            .client
+            .settled
+            .take()
+            .and_then(|settled| settled.layout);
         Ok((link, first))
     }
 
@@ -312,6 +333,7 @@ impl Link {
         self.queue
             .dispatch_pending(&mut self.client)
             .map_err(dispatch_error)?;
+        self.client.read_layout();
         if self.client.gather.wants_sync() {
             self.connection
                 .display()

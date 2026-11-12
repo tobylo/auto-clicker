@@ -395,35 +395,45 @@ async fn with_xdg_output_2_the_layout_waits_for_the_xdg_outputs_done() {
 }
 
 #[tokio::test]
-async fn an_output_too_old_to_send_done_still_gives_a_layout() {
-    let (link, mut fake) = Fake::pair();
-    let serve = async {
-        let callback = fake.until_sync().await;
-        fake.offer(Offer::Manager).await;
-        fake.offer(Offer::OldOutput(A)).await;
-        fake.answer(callback).await;
-        let callback = fake.until_sync().await;
-        // Its place, size and mode, and no done on either object.
-        let Ids { output, xdg } = fake.ids(A);
-        let message = |object, opcode, words| Message {
-            object,
-            opcode,
-            words,
-        };
-        fake.send(vec![
-            message(xdg, 0, vec![0, 0]),
-            message(xdg, 1, vec![2048, 1280]),
-            message(output, 1, vec![1, 2048, 1280, 60_000]),
-        ])
+async fn an_output_too_old_to_say_when_it_changed_leaves_the_layout_unknown() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let (link, mut fake) = Fake::pair();
+            let serve = async {
+                let callback = fake.until_sync().await;
+                fake.offer(Offer::Manager).await;
+                fake.offer(Offer::Output(A)).await;
+                fake.offer(Offer::OldOutput(B)).await;
+                fake.answer(callback).await;
+                let callback = fake.until_sync().await;
+                let bound: Vec<Name> = fake.outputs.iter().map(|(name, _)| *name).collect();
+                assert_eq!(bound, [A], "bound an output with no done");
+                fake.screen(A, LEFT).await;
+                fake.answer(callback).await;
+                let callback = fake.until_sync().await;
+                fake.answer(callback).await;
+            };
+            let (started, ()) = timeout(BOUND, async { tokio::join!(Link::start(link), serve) })
+                .await
+                .unwrap();
+            let (link, first) = started.unwrap();
+            assert_eq!(first, None, "a layout without the old output");
+            // It goes: the layout is known.
+            let wayland = Wayland::of(None, first, Ok(link));
+            let changed = LayoutSignal::default();
+            local.spawn_local(wayland.watch(changed.clone()));
+            timeout(BOUND, async {
+                fake.send(vec![removed(B)]).await;
+                let callback = fake.until_sync().await;
+                fake.answer(callback).await;
+                changed.fired().await;
+            })
+            .await
+            .unwrap();
+            assert_eq!(wayland.layout(), layout(&[LEFT]));
+        })
         .await;
-        fake.answer(callback).await;
-        let callback = fake.until_sync().await;
-        fake.answer(callback).await;
-    };
-    let (started, ()) = timeout(BOUND, async { tokio::join!(Link::start(link), serve) })
-        .await
-        .unwrap();
-    assert_eq!(started.unwrap().1, layout(&[LEFT]));
 }
 
 #[tokio::test]
@@ -570,6 +580,91 @@ async fn an_update_to_two_outputs_interleaved_publishes_once_whole() {
             settle().await;
             assert_eq!(watched.fired.get(), 1);
             assert_eq!(watched.wayland.missing(), None);
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn an_update_behind_the_answer_is_waited_for() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let (link, mut fake) = Fake::pair();
+            let watched = watched(&local, &mut fake, link).await;
+            let left = Place {
+                width: 1707,
+                height: 1067,
+                ..LEFT
+            };
+            let right = Place { x: 1707, ..RIGHT };
+            timeout(BOUND, async {
+                fake.screen(A, left).await;
+                let Callback(id) = fake.until_sync().await;
+                // The answer and B's update arrive in one read.
+                let mut answer_and_b = vec![
+                    Message {
+                        object: id,
+                        opcode: 0,
+                        words: vec![0],
+                    },
+                    Message {
+                        object: DISPLAY,
+                        opcode: 1,
+                        words: vec![id],
+                    },
+                ];
+                let Ids { output, xdg } = fake.ids(B);
+                let message = |object, opcode, words| Message {
+                    object,
+                    opcode,
+                    words,
+                };
+                answer_and_b.extend([
+                    message(xdg, 0, vec![1707, 0]),
+                    message(xdg, 1, vec![3440, 1440]),
+                    message(output, 2, Vec::new()),
+                ]);
+                fake.send(answer_and_b).await;
+                let again = fake.until_sync().await;
+                settle().await;
+                assert_eq!(
+                    watched.wayland.layout(),
+                    layout(&[LEFT, RIGHT]),
+                    "read A's update without B's behind the answer"
+                );
+                fake.answer(again).await;
+                fired(&watched).await;
+            })
+            .await
+            .unwrap();
+            assert_eq!(watched.wayland.layout(), layout(&[left, right]));
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_move_undone_before_the_answer_still_fires() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let (link, mut fake) = Fake::pair();
+            let watched = watched(&local, &mut fake, link).await;
+            let away = Place { y: 1440, ..LEFT };
+            timeout(BOUND, async {
+                // A moves away; before the answer, it moves back.
+                fake.screen(A, away).await;
+                let callback = fake.until_sync().await;
+                fake.screen(A, LEFT).await;
+                fake.answer(callback).await;
+                let callback = fake.until_sync().await;
+                fake.answer(callback).await;
+                fired(&watched).await;
+            })
+            .await
+            .unwrap();
+            settle().await;
+            assert_eq!(watched.fired.get(), 1);
+            assert_eq!(watched.wayland.layout(), layout(&[LEFT, RIGHT]));
         })
         .await;
 }

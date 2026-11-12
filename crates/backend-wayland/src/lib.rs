@@ -30,6 +30,7 @@ use auto_clicker_core::recording::Layout;
 use tokio::time::{Instant, timeout_at};
 
 use client::Link;
+use gather::Settled;
 
 /// Why the layout does not come from xdg-output, as W01e will word it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,8 +162,8 @@ async fn watch(shared: Rc<Shared>, mut link: Link, changed: LayoutSignal) {
         if let Err(missing) = link.dispatch() {
             break missing;
         }
-        if let Some(layout) = link.client.settled.take() {
-            shared.publish(layout, &changed);
+        if let Some(settled) = link.client.settled.take() {
+            shared.publish(settled, &changed);
         }
         if let Err(missing) = link.wait().await {
             break missing;
@@ -170,20 +171,22 @@ async fn watch(shared: Rc<Shared>, mut link: Link, changed: LayoutSignal) {
     };
     drop(link);
     shared.missing.set(Some(ended));
-    shared.publish(None, &changed);
+    let gone = Settled {
+        layout: None,
+        moved: false,
+    };
+    shared.publish(gone, &changed);
 }
 
 impl Shared {
-    /// Makes `layout` the current one, and tells the controller when that
-    /// moved a screen or made the layout known or unknown. A new scale
-    /// alone is kept, untold: stored, never compared (R03 decision 6).
-    fn publish(&self, layout: Option<Layout>, changed: &LayoutSignal) {
-        let old = self.layout.replace(layout);
-        let same = match (&*self.layout.borrow(), &old) {
-            (Some(new), Some(old)) => new.same_screens(old),
-            (new, old) => new.is_none() && old.is_none(),
-        };
-        if !same {
+    /// Makes `settled`'s layout the current one, and tells the controller
+    /// when a screen came, went, moved or changed size since the last, or
+    /// the layout became known or unknown. A new scale alone is kept,
+    /// untold: stored, never compared (R03 decision 6).
+    fn publish(&self, settled: Settled, changed: &LayoutSignal) {
+        let Settled { layout, moved } = settled;
+        let was_known = self.layout.replace(layout).is_some();
+        if moved || was_known != self.layout.borrow().is_some() {
             changed.changed();
         }
     }

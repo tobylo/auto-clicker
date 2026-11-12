@@ -54,6 +54,7 @@ fn settled(gather: &mut Gather) -> Option<Layout> {
     gather
         .synced()
         .expect("nothing was heard during the round trip")
+        .layout
 }
 
 #[test]
@@ -68,7 +69,11 @@ fn a_layout_is_read_only_after_a_round_trip_with_nothing_new() {
         (rect(0, 0, 2048, 1280), 1000),
         (rect(2048, 0, 3440, 1440), 1000),
     ]);
-    assert_eq!(gather.synced(), Some(Some(expected)));
+    let first = Settled {
+        layout: Some(expected),
+        moved: true,
+    };
+    assert_eq!(gather.synced(), Some(first));
     assert!(!gather.wants_sync(), "nothing heard since");
 }
 
@@ -301,4 +306,50 @@ fn what_is_heard_about_an_output_not_bound_is_ignored() {
     assert!(!gather.wants_sync());
     gather.removed(99);
     assert!(!gather.wants_sync());
+}
+
+#[test]
+fn a_move_counts_even_when_undone_before_the_round_trip_came_back() {
+    let mut gather = two();
+    settled(&mut gather);
+    let moved = |gather: &mut Gather| {
+        assert!(gather.wants_sync());
+        gather.synced().expect("a whole round trip").moved
+    };
+    // A moves away and back, each update whole, before one answer.
+    gather.heard(A, Heard::Position { x: 5488, y: 0 });
+    gather.heard(A, DONE);
+    gather.heard(A, Heard::Position { x: 0, y: 0 });
+    gather.heard(A, DONE);
+    assert!(moved(&mut gather));
+    // Told once: the next round trip has nothing new to tell.
+    gather.heard(A, DONE);
+    assert!(!moved(&mut gather));
+    // A repeated place and size, a new mode or scale: nothing moved.
+    gather.heard(A, Heard::Position { x: 0, y: 0 });
+    gather.heard(
+        A,
+        Heard::Size {
+            width: 2048,
+            height: 1280,
+        },
+    );
+    gather.heard(A, Heard::Scale(2));
+    gather.heard(A, DONE);
+    assert!(!moved(&mut gather));
+}
+
+#[test]
+fn an_output_too_old_to_bind_leaves_the_layout_unknown_while_it_is_there() {
+    let mut gather = two();
+    settled(&mut gather);
+    gather.refused(11);
+    let refused = gather.wants_sync().then(|| gather.synced()).flatten();
+    let unknown = Settled {
+        layout: None,
+        moved: true,
+    };
+    assert_eq!(refused, Some(unknown));
+    gather.removed(11);
+    assert!(settled(&mut gather).is_some(), "the old output went");
 }

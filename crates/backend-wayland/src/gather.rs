@@ -12,7 +12,7 @@
 //! No Wayland type lives here: the connection feeds [`Gather`] what it
 //! heard, so the order of events is tested without a compositor.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use auto_clicker_core::recording::{Layout, Output, Rect};
 
@@ -52,7 +52,9 @@ struct Screen {
 }
 
 impl Screen {
-    fn hear(&mut self, heard: Heard) {
+    /// Notes `heard`; whether it moved the output or changed its size.
+    fn hear(&mut self, heard: Heard) -> bool {
+        let before = (self.position, self.size);
         match heard {
             Heard::Position { x, y } => self.position = Some((x, y)),
             Heard::Size { width, height } => self.size = Some((width, height)),
@@ -62,17 +64,18 @@ impl Screen {
             Heard::OutputDone { with_xdg } => {
                 self.output_updating = false;
                 self.xdg_updating &= !with_xdg;
-                return;
+                return false;
             }
             Heard::XdgDone => {
                 self.xdg_updating = false;
-                return;
+                return false;
             }
         }
         match heard {
             Heard::Position { .. } | Heard::Size { .. } => self.xdg_updating = true,
             _ => self.output_updating = true,
         }
+        (self.position, self.size) != before
     }
 
     /// Whether an update on either object has not ended.
@@ -81,29 +84,57 @@ impl Screen {
     }
 }
 
+/// What a round trip settled on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Settled {
+    /// The layout; `None` when it is not whole or not valid: unknown.
+    pub(crate) layout: Option<Layout>,
+    /// An output came, went, moved or changed size since the last one, even
+    /// if it is back where it was: every such change refuses a pick begun
+    /// before it.
+    pub(crate) moved: bool,
+}
+
 /// The outputs, and where the round trip after their last update stands.
 #[derive(Debug, Default)]
 pub(crate) struct Gather {
     /// By the name of their global.
     screens: BTreeMap<u32, Screen>,
+    /// Outputs too old to say when an update ends (`wl_output` 1): while
+    /// any is offered, the layout is unknown.
+    refused: BTreeSet<u32>,
     /// Something was heard since the last round trip was asked for.
     changed: bool,
     /// A round trip was asked for and has not come back.
     syncing: bool,
+    /// See [`Settled::moved`]; since the last settled round trip.
+    moved: bool,
 }
 
 impl Gather {
     /// The output `name` was bound.
     pub(crate) fn added(&mut self, name: u32) {
         self.screens.insert(name, Screen::default());
-        self.changed = true;
+        self.came_or_went();
+    }
+
+    /// The output `name` is offered but too old to be bound.
+    pub(crate) fn refused(&mut self, name: u32) {
+        self.refused.insert(name);
+        self.came_or_went();
     }
 
     /// The output `name` went.
     pub(crate) fn removed(&mut self, name: u32) {
-        if self.screens.remove(&name).is_some() {
-            self.changed = true;
+        let bound = self.screens.remove(&name).is_some();
+        if self.refused.remove(&name) || bound {
+            self.came_or_went();
         }
+    }
+
+    fn came_or_went(&mut self) {
+        self.changed = true;
+        self.moved = true;
     }
 
     /// The compositor said `heard` about the output `name`.
@@ -111,7 +142,7 @@ impl Gather {
         let Some(screen) = self.screens.get_mut(&name) else {
             return;
         };
-        screen.hear(heard);
+        self.moved |= screen.hear(heard);
         self.changed = true;
     }
 
@@ -134,17 +165,23 @@ impl Gather {
     /// The round trip came back: the layout now, or `None` when more was
     /// heard meanwhile and another round trip is due, or an output's update
     /// has not ended (its `done` asks for the next). A layout that is not
-    /// whole or not valid is `Some(None)`: unknown.
-    pub(crate) fn synced(&mut self) -> Option<Option<Layout>> {
+    /// whole or not valid is unknown.
+    pub(crate) fn synced(&mut self) -> Option<Settled> {
         self.syncing = false;
         let updating = self.screens.values().any(Screen::updating);
-        (!self.changed && !updating).then(|| self.layout())
+        (!self.changed && !updating).then(|| Settled {
+            layout: self.layout(),
+            moved: std::mem::take(&mut self.moved),
+        })
     }
 
     /// The outputs as one layout, moved so its bounding box starts at
     /// (0, 0); `None` when an output's place or size is still missing, or
     /// they make no layout ([`Layout::new`]).
     fn layout(&self) -> Option<Layout> {
+        if !self.refused.is_empty() {
+            return None;
+        }
         let placed: Vec<Placed> = self
             .screens
             .values()
