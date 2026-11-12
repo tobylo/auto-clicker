@@ -9,7 +9,11 @@
 //!
 //! winit reports a Wayland monitor's position as its logical position
 //! times the monitor's whole-number scale (`wl_output.scale`, 2 for a
-//! screen at 1.25); divided back, it is KWin's logical corner.
+//! screen at 1.25); divided back, it is the compositor's logical corner.
+//! The daemon moves the layout so its bounding box starts at (0, 0) (W01
+//! brief, W3: niri and Hyprland allow negative positions), so every corner
+//! here is moved by the same offset: the smallest left and top among the
+//! monitors.
 
 use std::cell::RefCell;
 
@@ -53,18 +57,44 @@ pub fn place(monitor: MonitorHandle) -> Result<PickWindow, slint::PlatformError>
 /// it is not a winit window. A monitor whose corner is not a whole logical
 /// pixel is left out, which leaves its screen unmatched.
 pub fn monitors(window: &slint::Window) -> Option<Vec<Monitor<MonitorHandle>>> {
-    window.with_winit_window(|winit| {
-        winit
-            .available_monitors()
-            .filter_map(|monitor| {
-                let scale = monitor.scale_factor();
-                let position = monitor.position();
-                let left = logical(position.x, scale)?;
-                let top = logical(position.y, scale)?;
-                Some(Monitor { left, top, monitor })
-            })
-            .collect()
-    })
+    window.with_winit_window(|winit| from_origin(logical_corners(winit.available_monitors())))
+}
+
+/// The monitors with their logical corners, the ones not whole left out.
+fn logical_corners(monitors: impl Iterator<Item = MonitorHandle>) -> Vec<Monitor<MonitorHandle>> {
+    monitors
+        .filter_map(|monitor| {
+            let (left, top) = logical_corner(&monitor)?;
+            Some(Monitor { left, top, monitor })
+        })
+        .collect()
+}
+
+fn logical_corner(monitor: &MonitorHandle) -> Option<(i64, i64)> {
+    let scale = monitor.scale_factor();
+    let position = monitor.position();
+    Some((logical(position.x, scale)?, logical(position.y, scale)?))
+}
+
+/// `monitors` moved so the smallest left and top are 0, as the daemon
+/// moves the layout.
+fn from_origin<M>(monitors: Vec<Monitor<M>>) -> Vec<Monitor<M>> {
+    let (left, top) = origin(monitors.iter().map(|monitor| (monitor.left, monitor.top)));
+    monitors
+        .into_iter()
+        .map(|monitor| Monitor {
+            left: monitor.left.saturating_sub(left),
+            top: monitor.top.saturating_sub(top),
+            ..monitor
+        })
+        .collect()
+}
+
+/// The smallest left and top among `corners`; (0, 0) when there are none.
+fn origin(corners: impl Iterator<Item = (i64, i64)>) -> (i64, i64) {
+    corners
+        .reduce(|(left, top), (x, y)| (left.min(x), top.min(y)))
+        .unwrap_or((0, 0))
 }
 
 /// Whether `window` was made full-screen and is not any more: the user
@@ -80,10 +110,12 @@ pub fn left_full_screen(window: &slint::Window) -> bool {
 /// when that is not known, as before the compositor said, or the window is
 /// not a winit window.
 pub fn corner(window: &slint::Window) -> Option<(i64, i64)> {
-    let monitor = window.with_winit_window(|winit| winit.current_monitor())??;
-    let scale = monitor.scale_factor();
-    let position = monitor.position();
-    Some((logical(position.x, scale)?, logical(position.y, scale)?))
+    window.with_winit_window(|winit| {
+        let (x, y) = logical_corner(&winit.current_monitor()?)?;
+        let all = logical_corners(winit.available_monitors());
+        let (left, top) = origin(all.iter().map(|monitor| (monitor.left, monitor.top)));
+        Some((x.saturating_sub(left), y.saturating_sub(top)))
+    })?
 }
 
 /// How many of the compositor's logical pixels one of Slint's is on
@@ -127,6 +159,81 @@ mod tests {
         for ((physical, scale), expected) in cases {
             assert_eq!(logical(physical, scale), expected, "{physical} {scale}");
         }
+    }
+
+    #[test]
+    fn corners_are_moved_by_the_smallest_left_and_top() {
+        let monitor = |left, top| Monitor {
+            left,
+            top,
+            monitor: (),
+        };
+        let corners = |monitors: Vec<Monitor<()>>| -> Vec<(i64, i64)> {
+            from_origin(monitors)
+                .iter()
+                .map(|monitor| (monitor.left, monitor.top))
+                .collect()
+        };
+        // niri with one output at (-500, -300) and one right of it, lower.
+        assert_eq!(
+            corners(vec![monitor(-500, -300), monitor(1420, 100)]),
+            [(0, 0), (1920, 400)]
+        );
+        // Plasma's layouts start at (0, 0) already.
+        assert_eq!(
+            corners(vec![monitor(2048, 0), monitor(0, 0)]),
+            [(2048, 0), (0, 0)]
+        );
+        // The smallest left and top may come from different monitors.
+        assert_eq!(
+            corners(vec![monitor(-1920, 200), monitor(0, -1080)]),
+            [(0, 1280), (1920, 0)]
+        );
+        assert!(corners(Vec::new()).is_empty());
+        assert_eq!(origin(std::iter::empty()), (0, 0));
+    }
+
+    #[test]
+    fn monitors_at_negative_corners_match_the_layout_the_daemon_moved() {
+        use auto_clicker_core::recording::{Layout, Output, Rect};
+
+        let rect = |x, y, width, height| Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        // niri's outputs at (-500, -300) and (1420, 100), moved by the
+        // daemon to start at (0, 0).
+        let screens = Layout::new(vec![
+            Output::new(rect(0, 0, 1920, 1080), 1000).unwrap(),
+            Output::new(rect(1920, 400, 2560, 1440), 1000).unwrap(),
+        ])
+        .unwrap();
+        let monitors = vec![
+            Monitor {
+                left: 1420,
+                top: 100,
+                monitor: "DP-1",
+            },
+            Monitor {
+                left: -500,
+                top: -300,
+                monitor: "HDMI-A-1",
+            },
+        ];
+        let matched: Vec<(&str, Rect)> = crate::pick::targets(from_origin(monitors), &screens)
+            .unwrap()
+            .into_iter()
+            .map(|target| (target.monitor, target.on))
+            .collect();
+        assert_eq!(
+            matched,
+            [
+                ("DP-1", rect(1920, 400, 2560, 1440)),
+                ("HDMI-A-1", rect(0, 0, 1920, 1080))
+            ]
+        );
     }
 
     #[test]

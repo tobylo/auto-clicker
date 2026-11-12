@@ -1,0 +1,27 @@
+[package]
+name = "auto-clicker-backend-wayland"
+description = "Wayland backend of auto-clicker: the screen layout from xdg-output"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+auto-clicker-core = { path = "../core" }
+# The Wayland connection, pure Rust: the daemon is built on its own, so no
+# libwayland (W01 decision 7). Both already in the tree through the settings
+# window's winit.
+wayland-client = "0.31.15"
+# `unstable`: xdg-output.
+wayland-protocols = { version = "0.32.13", features = ["client", "unstable"] }
+# SO_PEERCRED on the display's socket; already a dependency of the daemon.
+libc = "0.2.191"
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+auto-clicker-core = { path = "../core", features = ["fake"] }
+tokio = { version = "1.54.1", features = ["rt", "net", "time", "macros", "io-util"] }

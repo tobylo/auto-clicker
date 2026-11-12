@@ -200,8 +200,8 @@ pub struct WindowView {
     /// What is wrong now, as the tray lists it.
     pub problems: Vec<Problem>,
     pub recordings: RecordingsView,
-    /// The screens as KWin has them now, which a point is picked on; `None`
-    /// when they are not known.
+    /// The screens as the compositor has them now, which a point is picked
+    /// on; `None` when they are not known.
     pub screens: Option<Layout>,
     /// What a pick begun now is checked against.
     pub since: Since,

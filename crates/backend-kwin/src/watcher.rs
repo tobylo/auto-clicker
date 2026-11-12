@@ -36,6 +36,7 @@ use futures_util::stream;
 use tokio::sync::{Notify, mpsc};
 use tokio::time::{Instant, sleep_until};
 
+use crate::display;
 use crate::receiver::with_trust;
 use crate::report::{Body, Report};
 use crate::script::Script;
@@ -47,7 +48,7 @@ use crate::token::Token;
 /// load or position unload, counted from the failure before it. A failure
 /// after the last is logged, and the call waits for another call to KWin
 /// to succeed, a new owner of KWin, the next recording or the exit.
-const BACK_OFF: [Duration; 3] = [
+pub(crate) const BACK_OFF: [Duration; 3] = [
     Duration::from_secs(2),
     Duration::from_secs(4),
     Duration::from_secs(8),
@@ -167,14 +168,16 @@ impl<S: Scripting + 'static> Watcher<S> {
         }
     }
 
-    /// Starts following KWin's owner; a bus that cannot tell leaves KWin
-    /// unknown for good, so nothing is ever loaded.
+    /// Starts following KWin's owner, each owner counted only when it runs
+    /// the daemon's display; a bus that cannot tell leaves KWin unknown for
+    /// good, so nothing is ever loaded.
     async fn follow_owner(&mut self) -> Owners {
         match bounded(self.session.scripting.follow_owner()).await {
             Ok((owner, owners)) => {
+                let owner = display::checked(&self.session, owner).await;
                 self.owner_changed(owner);
                 self.sweep_due = self.owner.is_some();
-                owners
+                display::each_checked(Rc::clone(&self.session), owners)
             }
             Err(err) => {
                 eprintln!(

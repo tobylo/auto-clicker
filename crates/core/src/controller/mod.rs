@@ -529,9 +529,9 @@ impl<P: Platform> Controller<P> {
     /// asked for comes before what it would prevent: a queued Stop or lock
     /// before the hotkey events, the run's next action and the deadlines;
     /// hotkey events (a stop) and the screen layout before the run. The
-    /// layout watcher reads what KWin reported and fires its signal in the
-    /// same poll, so a change already received stops a playback using
-    /// positions before its next event. The watcher is busy only while a
+    /// layout watcher reads what its sources reported and fires its signal
+    /// in the same poll, so a change already received stops a playback
+    /// using positions before its next event. The watcher is busy only while a
     /// recording moves the pointer, when nothing plays, and drains far
     /// faster than reports come. The reader goes last: kept busy by a flood
     /// of key events, it spends tokio's budget, and anything polled after it

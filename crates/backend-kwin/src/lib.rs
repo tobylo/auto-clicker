@@ -15,6 +15,7 @@
 //! which can load KWin scripts of their own.
 
 mod dir;
+mod display;
 #[cfg(test)]
 mod plasma_tests;
 mod receiver;
@@ -27,6 +28,7 @@ mod watcher;
 
 use std::cell::RefCell;
 use std::future::pending;
+use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,8 +59,14 @@ impl Kwin {
     /// Serves the receiver on `bus`, the connection that holds the daemon's
     /// name, stamping each call with `clock`, the event clock. Calls KWin
     /// for nothing yet: the watcher does, once it runs. Without the
-    /// receiver, the daemon runs without positions.
-    pub async fn serve(bus: &Connection, clock: fn() -> Duration) -> Kwin {
+    /// receiver, the daemon runs without positions. KWin counts only when
+    /// it is `compositor`, the process listening on the daemon's Wayland
+    /// display, or its child; always when that is `None`.
+    pub async fn serve(
+        bus: &Connection,
+        clock: fn() -> Duration,
+        compositor: Option<NonZeroU32>,
+    ) -> Kwin {
         let trust = SharedTrust::default();
         let (queue, reports) = mpsc::channel(QUEUE);
         let layout_dropped = Arc::new(Notify::new());
@@ -84,6 +92,7 @@ impl Kwin {
             trust,
             layout: RefCell::default(),
             owner: RefCell::default(),
+            compositor,
         };
         let inbox = Inbox {
             reports,

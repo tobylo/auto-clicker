@@ -310,6 +310,7 @@ dependencies = [
  "auto-clicker-backend-kernel",
  "auto-clicker-backend-kwin",
  "auto-clicker-backend-portal",
+ "auto-clicker-backend-wayland",
  "auto-clicker-core",
  "fastrand",
  "futures-util",
@@ -355,6 +356,17 @@ dependencies = [
  "rustix 1.1.6",
  "tokio",
  "zbus",
+]
+
+[[package]]
+name = "auto-clicker-backend-wayland"
+version = "0.7.0"
+dependencies = [
+ "auto-clicker-core",
+ "libc",
+ "tokio",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]

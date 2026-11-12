@@ -87,7 +87,7 @@ fn files() -> Vec<String> {
 
 /// Serves and starts watching on `bus`; the watcher's task.
 async fn start(bus: &Connection, slot: &RecordingSlot) -> (Kwin, LayoutSignal, JoinHandle<()>) {
-    let kwin = Kwin::serve(bus, clock).await;
+    let kwin = Kwin::serve(bus, clock, None).await;
     let changed = LayoutSignal::default();
     let watcher = kwin.watch(slot.feed(), changed.clone());
     let task = tokio::task::spawn_local(watcher);
@@ -232,4 +232,21 @@ async fn plasma_a_script_given_the_id_of_a_running_one_still_runs() {
             unload_foreign(&bus, second).await;
         })
         .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Plasma on Wayland"]
+async fn plasma_kwins_owner_is_kwin_wayland_under_its_wrapper() {
+    let probe = Bus(Connection::session().await.unwrap());
+    let (owner, _) = probe.follow_owner().await.unwrap();
+    let process = probe
+        .owner_process(&owner.expect("KWin runs"))
+        .await
+        .unwrap();
+    let name = |pid: u32| std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap();
+    assert_eq!(name(process.pid).trim(), "kwin_wayland");
+    // The wrapper listens on the display's socket (decision 0004); `comm`
+    // holds 15 bytes of its name.
+    let parent = process.parent.expect("KWin's parent");
+    assert_eq!(name(parent).trim(), "kwin_wayland_wr");
 }

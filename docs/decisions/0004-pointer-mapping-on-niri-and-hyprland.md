@@ -1,6 +1,6 @@
 # 0004: The screen layout and the pointer on niri and Hyprland
 
-- Status: accepted, 2026-11-12. niri and Plasma measured; Hyprland read from source, to be measured by W01c.
+- Status: accepted, 2026-11-12. niri and Plasma measured; Hyprland read from source, to be measured by W01c. W01a added niri at a negative position (one output); two outputs wait for a second monitor.
 - Issue: W01 (#75). It shapes the slices in the [W01 brief](../planning/features/w01-other-desktops.md).
 - Measured on: the dev box, niri 26.04 (8ed0da4), Linux 7.3.3-1-cachyos, one output (HDMI-A-1, LG 34GN850, 3440x1440 at 85 Hz); the laptop, KWin 6.8.2, eDP-1 (2560x1600) and DP-1 (3440x1440). Read from source: niri v26.04 (6a0a862) with its pinned smithay (ff5fa7d), Hyprland v0.57.2, KWin v6.8.2.
 
@@ -25,7 +25,11 @@ A virtual mouse shaped like C01's (buttons, `REL_X`, `REL_Y`, `REL_WHEEL`, `ABS_
 - At 1.4, `v = 32768` landed at x = 1229.00 and y = 514.50: half of 2458 and of 1029. At 1.5 it landed at 1147.00: half of 2294.
 - `v = 65535` landed past the reported width at 1.4 and 1.5, outside the probe window, so the probe saw nothing there.
 - The three sizes come from three roundings of physical/scale. smithay's `Space::output_geometry` rounds up (`to_i32_ceil`, `src/desktop/space/mod.rs:398`), and niri's pointer box is the union of those (`src/input/mod.rs:274-284`, used at 2646-2649). smithay's xdg-output rounds to nearest (`src/wayland/output/xdg.rs:67-71`). niri's IPC truncates (`src/utils/mod.rs:208-228`, `size.w as u32`).
-- niri maps every libinput pointer over the whole box: `NiriInputDevice::output` returns `None` for a libinput device (`src/input/backend_ext.rs:27`). Two outputs, and an output at a negative position, were not measured: the dev box has one monitor. W01a measures them.
+- niri maps every libinput pointer over the whole box: `NiriInputDevice::output` returns `None` for a libinput device (`src/input/backend_ext.rs:27`). Two outputs were not measured: the dev box has one monitor. An output at a negative position was (below).
+
+### One output at a negative position (W01a, 2026-11-12)
+
+The same device and probe, with `niri msg output HDMI-A-1 position set -- -500 -300` at scale 1 (set back to 0, 0 after), over a 7x7 grid (0, 1, 1000, 16384, 32768, 49152 and 64000 per axis); the script is `.claude/local/w01a/niri_negative.py` in the main checkout. xdg-output reported the output at (-500, -300), 3440x1440; the daemon's layout source published it moved to (0, 0), 3440x1440, scale 1000 (`the_running_compositor_gives_a_layout_and_its_listener`). Every point landed at `v * W / 65536` from the output's own corner, worst error 0.002 logical px: niri maps over the box wherever it lies, so moving the box to (0, 0) keeps decision 0001's formula. Two outputs, one at a negative position, remain to measure.
 - It matters where a scale's logical size is not whole: 3440 px at 1.4 or 1.5, 2560 px at 1.5. Common pairs such as 2560x1600 at 1.25 or 3840x2160 at 1.5 are exact. Today it affects only the picked fixed point, since niri gives no positions.
 
 ### For an upstream report (the owner files it)
