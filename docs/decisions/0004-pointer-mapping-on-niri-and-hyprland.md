@@ -74,6 +74,18 @@ From source:
 - xdg-output sends round(size) and round(position) of an output's fractional geometry (`src/wayland/xdgoutput_v1.cpp:191,199`). The layout script's `output.geometry` rounds the edges instead (`src/core/rect.h:2439`). The two agree when an output sits at a whole logical position.
 - KWin 6.8.2 has no ext-image-copy-capture.
 
+## KWin 6.8.2: positions on D-Bus against xdg-output's notice (W01b, measured)
+
+Positions come from KWin's position script over D-Bus and the layout from xdg-output over Wayland, so W4 needed to know how the two channels line up around a change. On the laptop (eDP-1 alone, 2560x1600), a test daemon built from main at f853cca stamped, on one clock (`CLOCK_MONOTONIC`): each position report, each report of the old layout script, and each layout the Wayland source published after its quiet round trip. A virtual relative mouse jiggled the pointer at the panel's right edge every millisecond, and `kscreen-doctor` switched the panel between scale 1.25 (2048x1280 logical) and 1.5 (1707x1067) four times, 3 s apart. A position on the new screens shows by its x: at 1.5 none reaches 1707.
+
+| Run | New-screen positions ahead of xdg-output's notice | KWin's layout report ahead of xdg-output's |
+| --- | --- | --- |
+| debug build, idle | 33.5, 34.4, 34.4, 34.5 ms | 34.4 to 35.3 ms |
+| release build, idle | 33.5, 34.2, 34.4, 35.0 ms | 33.6 to 35.0 ms |
+| release build, `stress-ng` on every CPU, `--io 2 --vm 2` | 49.2, 50.5, 58.4 ms; once xdg-output came 200 ms first | 49.2 to 58.4 ms; that once, 200 ms after |
+
+In the one loaded change where D-Bus ran 200 ms late, xdg-output's notice came first and positions taken on the old screens kept arriving for 200 ms after it. So no window measured on either side of xdg-output's notice bounds where a position belongs: how late D-Bus runs under load has no fixed limit. In every change, including that one, KWin's own layout report reached the daemon before its first position on the new screens (0.04 to 1.4 ms before), in order on one D-Bus connection. W01b therefore has the position script report the layout on every change of the screens, and judges each position by the last layout the script reported before it (W4's "a source whose positions carry their layout"). No timing constant is kept. Raw logs: the session's scratch directory, not kept.
+
 ## One change, every output's events before a sync answer (W01a review, from source)
 
 xdg-output and `wl_output` end an update per output; nothing marks the end of a change across outputs. The client reads the layout when a `wl_display.sync` comes back with nothing new and every output's update ended at its `done` (W3). That is whole only if a compositor queues every affected output's events before it reads the client's next request. Read from source (smithay ff5fa7d as pinned by niri 8ed0da4, KWin v6.8.2 f130ab3, Hyprland v0.57.2 11cbc6c, libwayland f2ecaa6), it does on all three:
