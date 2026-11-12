@@ -222,20 +222,21 @@ impl App {
     }
 
     /// The user picked the recording at `index` in the list: its name goes
-    /// in the name field.
+    /// in the name field. A place that holds none (-1 when a row is
+    /// deselected) selects nothing.
     fn select(&mut self, index: i32) {
-        let Some(listed) = self
+        let listed = self
             .last
             .as_ref()
             .and_then(|view| shelf::at(&view.recordings, index))
-        else {
-            return;
-        };
-        self.state.selected(Some(&listed.file));
-        self.selected = Some(listed.file.clone());
-        let name = listed.name.clone().unwrap_or_default();
+            .cloned();
+        let file = listed.as_ref().map(|listed| listed.file.clone());
+        self.state.selected(file.as_ref());
+        self.selected = file;
+        let name = listed.and_then(|listed| listed.name).unwrap_or_default();
         self.window.set_recording_name(name.into());
-        self.window.set_selected(index);
+        self.window
+            .set_selected(if self.selected.is_some() { index } else { -1 });
         self.show_question();
     }
 
