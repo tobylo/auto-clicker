@@ -229,10 +229,12 @@ impl App {
         else {
             return;
         };
+        self.state.selected(&listed.file);
         self.selected = Some(listed.file.clone());
         let name = listed.name.clone().unwrap_or_default();
         self.window.set_recording_name(name.into());
         self.window.set_selected(index);
+        self.show_question();
     }
 
     fn rename(&mut self) {

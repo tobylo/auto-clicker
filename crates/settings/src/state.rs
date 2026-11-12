@@ -224,6 +224,14 @@ impl State {
         self.question = None;
     }
 
+    /// The user selected `file` in the list: a delete asked about another
+    /// recording is called off, so a yes never deletes one not selected.
+    pub fn selected(&mut self, file: &FileName) {
+        if matches!(&self.question, Some((Question::Delete(asked, _), _)) if asked != file) {
+            self.question = None;
+        }
+    }
+
     /// A capture for `target`; `None` while the user may not ask anything.
     pub fn capture(&mut self, target: Target) -> Option<Request> {
         if !self.may_ask() {

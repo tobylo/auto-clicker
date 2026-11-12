@@ -360,3 +360,27 @@ fn a_delete_asks_first_and_goes_only_on_a_yes() {
     assert_eq!(state.agree(&fields()), None);
     assert!(state.may_ask());
 }
+
+#[test]
+fn selecting_another_recording_calls_off_a_delete_asked_about() {
+    let mut state = started();
+    let other = FileName::parse("2026-11-10_07-00-00.000.json").unwrap();
+    state.recording(file(), "label".to_owned(), RecordingAction::Delete);
+    // The same one again keeps the question.
+    state.selected(&file());
+    assert!(matches!(state.question(), Some(Question::Delete(..))));
+
+    state.selected(&other);
+
+    assert_eq!(state.question(), None);
+    assert_eq!(state.agree(&fields()), None);
+    // A save's question stays whatever is selected.
+    let save = saved(&mut state);
+    answered(
+        &mut state,
+        save.id,
+        Outcome::Confirm(Confirm::Replace(Stale::Changed)),
+    );
+    state.selected(&other);
+    assert_eq!(state.question(), Some(&Question::Replace(Stale::Changed)));
+}
