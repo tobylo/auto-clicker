@@ -15,6 +15,7 @@ use toml::Spanned;
 use super::names::{ButtonName, ModeName, RouteName};
 use crate::clicker::{Position, Repeat};
 use crate::input::{AbsolutePosition, Key};
+use crate::recording::Layout;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -102,9 +103,11 @@ impl Visitor<'_> for KeyVisitor {
     }
 }
 
-/// `position`: "cursor", or a fixed point `{ x = …, y = … }`.
+/// `position`: "cursor", or a fixed point `{ x = …, y = … }`, with the
+/// screens it was picked on when it was picked
+/// (`screens = [{ x = …, y = …, width = …, height = …, scale_milli = … }]`).
 #[derive(Debug)]
-pub(super) struct PositionSpec(pub(super) Position);
+pub(super) struct PositionSpec(pub(super) Position, pub(super) Option<Layout>);
 
 impl<'de> Deserialize<'de> for PositionSpec {
     fn deserialize<D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -118,22 +121,23 @@ impl<'de> Visitor<'de> for PositionVisitor {
     type Value = PositionSpec;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("\"cursor\" or a point { x = 0..65535, y = 0..65535 }")
+        f.write_str("\"cursor\" or a point { x = 0..65535, y = 0..65535 }, with the screens it was picked on")
     }
 
     fn visit_str<E: de::Error>(self, value: &str) -> Result<PositionSpec, E> {
         match value {
-            "cursor" => Ok(PositionSpec(Position::Cursor)),
+            "cursor" => Ok(PositionSpec(Position::Cursor, None)),
             _ => Err(E::invalid_value(de::Unexpected::Str(value), &self)),
         }
     }
 
     fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<PositionSpec, A::Error> {
         let point = Point::deserialize(de::value::MapAccessDeserializer::new(map))?;
-        Ok(PositionSpec(Position::Fixed(AbsolutePosition {
+        let at = AbsolutePosition {
             x: point.x.0,
             y: point.y.0,
-        })))
+        };
+        Ok(PositionSpec(Position::Fixed(at), point.screens))
     }
 }
 
@@ -142,6 +146,7 @@ impl<'de> Visitor<'de> for PositionVisitor {
 struct Point {
     x: Coordinate,
     y: Coordinate,
+    screens: Option<Layout>,
 }
 
 /// One axis of a fixed point, 0 at the left or top of the output layout and

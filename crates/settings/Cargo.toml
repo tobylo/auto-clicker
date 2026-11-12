@@ -20,6 +20,11 @@ auto-clicker-core = { path = "../core" }
 # unsafe code; the portal backend already uses it.
 rustix = { version = "1.0.7", default-features = false, features = ["std", "stdio"] }
 slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-18", "backend-winit-wayland", "renderer-femtovg"] }
+# The overlay that picks the fixed point is full-screen on a chosen screen,
+# which only winit can do: Slint's winit backend, pinned to Slint's own
+# version, with only Wayland. Slint's `unstable-winit-030` reaches the same
+# crate but builds in its X11 backend too.
+i-slint-backend-winit = { version = "=1.18.1", default-features = false, features = ["wayland", "renderer-femtovg"] }
 
 [dev-dependencies]
 # Tests show the window on Slint's software renderer, with no display: the

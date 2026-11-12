@@ -11,6 +11,7 @@ use super::draft::{CountDraft, Draft, IntervalDraft, PositionDraft};
 use super::validate::VERSION;
 use crate::input::Key;
 use crate::playback::Speed;
+use crate::recording::{Layout, OutputSpec};
 
 const HEADER: &str = "\
 # auto-clicker settings, written by its Settings window.
@@ -37,7 +38,7 @@ pub fn render(config: &Config) -> String {
     lines.value("jitter_percent", clicker.jitter_percent.to_string());
     lines.word("button", clicker.button.word());
     lines.value("key", key(clicker.key));
-    lines.value("position", position(clicker.position));
+    lines.value("position", position(&clicker.position));
     lines.value("repeat", count(clicker.repeat));
     lines.section("hotkeys");
     lines.word("toggle_clicking", &draft.hotkeys.toggle_clicking);
@@ -79,11 +80,35 @@ fn key(code: u16) -> String {
     }
 }
 
-fn position(position: PositionDraft) -> String {
+fn position(position: &PositionDraft) -> String {
     match position {
         PositionDraft::Cursor => "\"cursor\"".to_owned(),
-        PositionDraft::Fixed { x, y } => format!("{{ x = {x}, y = {y} }}"),
+        PositionDraft::Fixed {
+            x,
+            y,
+            screens: None,
+        } => format!("{{ x = {x}, y = {y} }}"),
+        PositionDraft::Fixed {
+            x,
+            y,
+            screens: Some(screens),
+        } => format!("{{ x = {x}, y = {y}, screens = [{}] }}", outputs(screens)),
     }
+}
+
+/// Each output as an inline table, comma-separated.
+fn outputs(layout: &Layout) -> String {
+    let specs: Vec<OutputSpec> = layout.clone().into();
+    let tables: Vec<String> = specs
+        .into_iter()
+        .map(|o| {
+            format!(
+                "{{ x = {}, y = {}, width = {}, height = {}, scale_milli = {} }}",
+                o.x, o.y, o.width, o.height, o.scale_milli
+            )
+        })
+        .collect();
+    tables.join(", ")
 }
 
 fn count(count: CountDraft) -> String {

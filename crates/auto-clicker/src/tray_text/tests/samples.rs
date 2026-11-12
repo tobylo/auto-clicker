@@ -4,8 +4,8 @@ use auto_clicker_core::controller::{Blocked, NoRecording};
 use auto_clicker_core::hotkeys::{Binding, Refusal, Unavailable};
 use auto_clicker_core::input::Key;
 use auto_clicker_core::message::{
-    ConfigProblem, Hindrance, InputFailure, Notice, PlayStart, Problem, Quoted, SaveFailure,
-    Saving, Start, Stop, Titled, Unplayable,
+    ConfigProblem, Hindrance, InputFailure, Notice, PlayStart, PointScreens, Problem, Quoted,
+    SaveFailure, Saving, Start, Stop, Titled, Unplayable,
 };
 use auto_clicker_core::playback::Fallback;
 use auto_clicker_core::recording::FileName;
@@ -108,6 +108,8 @@ pub(super) fn hindrances() -> Vec<Hindrance> {
         Hindrance::Unlisted(quoted()),
         Hindrance::NoRecording(NoRecording::DesktopHotkeys),
         Hindrance::NoClock,
+        Hindrance::Screens(PointScreens::Changed),
+        Hindrance::Screens(PointScreens::Unknown),
     ];
     all.extend(blocked().into_iter().map(Hindrance::Blocked));
     all.extend(refusals().into_iter().map(Hindrance::OwnKey));
@@ -137,6 +139,8 @@ pub(super) fn stops() -> Vec<Stop> {
     let mut all = vec![
         Stop::LayoutChanged,
         Stop::LayoutUnknown,
+        Stop::Screens(PointScreens::Changed),
+        Stop::Screens(PointScreens::Unknown),
         Stop::Full,
         Stop::Limit { minutes: 60 },
     ];

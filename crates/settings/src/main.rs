@@ -6,6 +6,7 @@
 mod app;
 mod link;
 mod model;
+mod pick;
 mod said;
 mod shelf;
 mod state;
@@ -129,9 +130,13 @@ mod tests {
     /// would show English in a Swedish window.
     #[test]
     fn every_text_is_translated_to_swedish() {
-        let ui = include_str!("../ui/window.slint");
+        let ui = [
+            include_str!("../ui/window.slint"),
+            include_str!("../ui/pick.slint"),
+        ]
+        .concat();
         let po = include_str!("../translations/sv/LC_MESSAGES/auto-clicker-settings.po");
-        let texts = texts(ui);
+        let texts = texts(&ui);
         assert!(texts.len() > 100, "{}", texts.len());
         for (context, text) in texts {
             let context = context

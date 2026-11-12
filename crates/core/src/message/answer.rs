@@ -56,6 +56,11 @@ pub enum Unavailability {
     NoShortcuts,
     /// Hotkeys cannot be read.
     Hotkeys(Unavailable),
+    /// The screen layout is not known (another desktop, or KWin starting
+    /// again), so no point can be picked.
+    ScreensUnknown,
+    /// The screens changed since the point was picked: pick it again.
+    ScreensChanged,
 }
 
 impl fmt::Display for Unavailability {
@@ -70,6 +75,10 @@ impl fmt::Display for Unavailability {
             }
             Unavailability::NoShortcuts => f.write_str("the desktop's shortcuts are not available"),
             Unavailability::Hotkeys(why) => why.fmt(f),
+            Unavailability::ScreensUnknown => f.write_str("the screen layout is not known"),
+            Unavailability::ScreensChanged => {
+                f.write_str("the screens changed while the point was picked: pick it again")
+            }
         }
     }
 }

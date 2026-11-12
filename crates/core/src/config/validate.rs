@@ -43,6 +43,11 @@ pub(super) fn validate(raw: RawConfig) -> Result<Config, Invalid> {
         Some(delay) => tray_start_delay(delay)?,
         None => defaults.tray_start_delay,
     };
+    let fixed_screens = raw
+        .clicker
+        .position
+        .as_ref()
+        .and_then(|spec| spec.1.clone());
     let clicker = clicker(raw.clicker, defaults.clicker)?;
     let input = InputSettings {
         output: raw.input.output.map_or(defaults.input.output, Into::into),
@@ -52,6 +57,7 @@ pub(super) fn validate(raw: RawConfig) -> Result<Config, Invalid> {
         tray_start_delay,
         hotkeys: super::hotkeys::hotkeys(&raw.hotkeys, &clicker, input.hotkeys)?,
         clicker,
+        fixed_screens,
         input,
         playback: playback(&raw.playback, defaults.playback)?,
     })

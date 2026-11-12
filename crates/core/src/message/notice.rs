@@ -100,6 +100,30 @@ pub enum Hindrance {
     NoClock,
     /// The keyboards can no longer be read.
     Hotkeys(Unavailable),
+    /// The fixed point was picked on other screens than these.
+    Screens(PointScreens),
+}
+
+/// Why clicking at a picked point cannot go on: the screens it was picked
+/// on are not the screens now, or the screens are not known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PointScreens {
+    Changed,
+    Unknown,
+}
+
+impl fmt::Display for PointScreens {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            PointScreens::Changed => {
+                "the screens changed since the fixed point was picked: pick it again in Settings"
+            }
+            PointScreens::Unknown => {
+                "the screen layout is not known, so the picked point cannot be checked"
+            }
+        })
+    }
 }
 
 impl fmt::Display for Hindrance {
@@ -122,6 +146,7 @@ impl fmt::Display for Hindrance {
             Hindrance::NoRecording(why) => why.fmt(f),
             Hindrance::NoClock => f.write_str("the clock could not be read"),
             Hindrance::Hotkeys(why) => why.fmt(f),
+            Hindrance::Screens(why) => why.fmt(f),
         }
     }
 }
@@ -184,6 +209,8 @@ pub enum Stop {
     OwnKey(Refusal),
     LayoutChanged,
     LayoutUnknown,
+    /// Clicking at a picked point: its screens changed or became unknown.
+    Screens(PointScreens),
     /// The keyboards a recording reads can no longer be read.
     Hotkeys(Unavailable),
     /// The recording reached the largest size a recording may have.
@@ -203,6 +230,7 @@ impl fmt::Display for Stop {
             Stop::LayoutUnknown => {
                 f.write_str("Playback stopped: the screen layout is no longer known")
             }
+            Stop::Screens(why) => write!(f, "Clicking stopped: {why}"),
             Stop::Hotkeys(why) => write!(f, "Recording stopped: {why}"),
             Stop::Full => {
                 f.write_str("Recording stopped: it reached the largest size a recording may have")

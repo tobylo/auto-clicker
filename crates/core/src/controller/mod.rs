@@ -21,6 +21,7 @@
 mod capture;
 mod desktop;
 mod hotkeys;
+mod pick;
 mod playback;
 mod recording;
 mod recordings;
@@ -460,9 +461,9 @@ impl<P: Platform> Controller<P> {
         });
         let controller = Controller {
             platform,
+            settings: settings::Settings::new(config.clone()),
             config,
             config_error,
-            settings: settings::Settings::new(config),
             inbox,
             view,
             state: State::Idle,
@@ -819,7 +820,7 @@ impl<P: Platform> Controller<P> {
 
     /// Whether a start may begin; says why not when it may not.
     fn may_start(&mut self) -> bool {
-        self.session_allows(Start::Clicking) && self.keys_allow()
+        self.session_allows(Start::Clicking) && self.keys_allow() && self.screens_allow()
     }
 
     /// Whether the session lets anything start; when it does not, the
