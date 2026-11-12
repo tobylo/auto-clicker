@@ -138,7 +138,14 @@ fn fallback(why: Fallback) -> &'static str {
 fn saving(saving: &Saving) -> String {
     match saving {
         Saving::Nothing => "Inget spelades in, så inget sparades".to_owned(),
-        Saving::Saved(name) => format!("Sparade \u{201d}{name}\u{201d}"),
+        Saving::Saved { name, .. } => {
+            // A new recording's generated name is said as the menu says it.
+            let shown = match saving.titled() {
+                Some(titled) if titled.generated() => recording_name(&titled),
+                _ => name.to_string(),
+            };
+            format!("Sparade \u{201d}{shown}\u{201d}")
+        }
         Saving::Failed(why) => format!("Inspelningen kunde inte sparas: {}", save_failure(why)),
     }
 }

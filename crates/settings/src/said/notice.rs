@@ -168,7 +168,15 @@ impl Said<'_> {
         let t = self.texts;
         match saving {
             Saving::Nothing => t.invoke_saved_nothing(),
-            Saving::Saved(name) => t.invoke_saved_as(s(name)),
+            Saving::Saved { name, .. } => {
+                // A new recording's generated name is said as the notices
+                // say it.
+                let shown = match saving.titled() {
+                    Some(titled) if titled.generated() => self.titled(&titled),
+                    _ => s(name),
+                };
+                t.invoke_saved_as(shown)
+            }
             Saving::Failed(SaveFailure::NoDataDirectory) => {
                 t.invoke_save_failed(t.invoke_no_data_directory())
             }

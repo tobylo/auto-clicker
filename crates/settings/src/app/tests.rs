@@ -199,6 +199,17 @@ fn recordings(said: &Said<'_>) {
 /// A recording named in a notice: generated names in Swedish, the user's
 /// as they are.
 fn titles(said: &Said<'_>) {
+    let saved = Notice::Recorded {
+        stop: None,
+        saving: Saving::Saved {
+            name: Quoted::new("Recording 2026-11-09 18:04"),
+            file: Some(FileName::parse("2026-11-09_18-04-05.123.json").unwrap()),
+        },
+    };
+    assert_eq!(
+        said.notice(&saved),
+        "Sparade \u{201d}Inspelning 2026-11-09 18:04:05\u{201d}"
+    );
     let made = || FileName::parse("2026-11-09_18-04-05.123.json").unwrap();
     let finished = Notice::Finished(Some(Titled::new(made(), None)));
     assert_eq!(

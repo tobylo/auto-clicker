@@ -363,7 +363,13 @@ fn recordings_ended_read_as_before() {
             "Nothing was recorded, so nothing was saved",
         ),
         (
-            recorded(Some(Stop::Full), Saving::Saved("R".to_owned().into())),
+            recorded(
+                Some(Stop::Full),
+                Saving::Saved {
+                    name: Quoted::new("R"),
+                    file: None,
+                },
+            ),
             "Recording stopped: it reached the largest size a recording may have. Saved \
              \u{201c}R\u{201d}",
         ),
