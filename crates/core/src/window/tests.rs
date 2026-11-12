@@ -404,3 +404,21 @@ fn what_comes_of_a_recording_reads_as_the_window_says_it() {
         assert_eq!(outcome.to_string(), english);
     }
 }
+
+#[test]
+fn a_notice_reads_back_as_sent_with_its_key_and_refuses_a_key_that_is_none() {
+    use crate::hotkeys::Refusal;
+    use crate::input::Key;
+    use crate::message::{Hindrance, Start};
+    let notice = Notice::Refused {
+        start: Start::Clicking,
+        why: Hindrance::OwnKey(Refusal::Modifier(Key::new(42).unwrap())),
+    };
+    let outcome = Outcome::Recording(RecordingOutcome::NotPlaying(Some(notice)));
+    let answer = Answer { id: 2, outcome };
+    let sent = body(&answer);
+    assert!(String::from_utf8_lossy(&sent).contains("\"modifier\":42"));
+    assert_eq!(parse::<Answer>(&sent).unwrap(), answer);
+    let none = String::from_utf8_lossy(&sent).replace("\"modifier\":42", "\"modifier\":0");
+    assert!(parse::<Answer>(none.as_bytes()).is_err());
+}
