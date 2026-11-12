@@ -143,6 +143,41 @@
       "code": "S02",
       "issue_number": 24,
       "url": "https://github.com/tobylo/auto-clicker/issues/24"
+    },
+    {
+      "code": "W01",
+      "issue_number": 75,
+      "url": "https://github.com/tobylo/auto-clicker/issues/75"
+    },
+    {
+      "code": "W01a",
+      "issue_number": 77,
+      "url": "https://github.com/tobylo/auto-clicker/issues/77"
+    },
+    {
+      "code": "W01b",
+      "issue_number": 80,
+      "url": "https://github.com/tobylo/auto-clicker/issues/80"
+    },
+    {
+      "code": "W01c",
+      "issue_number": 78,
+      "url": "https://github.com/tobylo/auto-clicker/issues/78"
+    },
+    {
+      "code": "W01d",
+      "issue_number": 81,
+      "url": "https://github.com/tobylo/auto-clicker/issues/81"
+    },
+    {
+      "code": "W01e",
+      "issue_number": 82,
+      "url": "https://github.com/tobylo/auto-clicker/issues/82"
+    },
+    {
+      "code": "W02",
+      "issue_number": 79,
+      "url": "https://github.com/tobylo/auto-clicker/issues/79"
     }
   ]
 }
