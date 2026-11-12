@@ -17,11 +17,11 @@ use std::time::Duration;
 use auto_clicker_core::recording::{Layout, Point, Rect};
 #[cfg(doc)]
 use auto_clicker_core::window::PICK_TIME;
-use slint::{CloseRequestResponse, ComponentHandle, JoinHandle, Timer, TimerMode};
+use slint::{CloseRequestResponse, ComponentHandle, Timer, TimerMode};
 
 use crate::ui::PickWindow;
 
-pub use place::{monitors, place};
+pub use place::{Screen, hook, monitors, place};
 
 /// How a pick ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,9 +50,10 @@ pub struct Target<M> {
 }
 
 /// Each monitor with the screen of `screens` it shows, matched by their
-/// top-left corners. `None` when a monitor is on no screen of the layout or
-/// a screen has no monitor: the window and KWin see different screens, as
-/// while one is plugged in.
+/// top-left corners, one per corner: winit lists a Wayland output more than
+/// once. `None` when a monitor is on no screen of the layout or a screen
+/// has no monitor: the window and KWin see different screens, as while one
+/// is plugged in.
 pub fn targets<M>(monitors: Vec<Monitor<M>>, screens: &Layout) -> Option<Vec<Target<M>>> {
     let rects: Vec<Rect> = screens
         .outputs()
@@ -64,7 +65,9 @@ pub fn targets<M>(monitors: Vec<Monitor<M>>, screens: &Layout) -> Option<Vec<Tar
     let mut targets = Vec::new();
     for Monitor { left, top, monitor } in monitors {
         let on = *rects.iter().find(|rect| corner(rect, left, top))?;
-        targets.push(Target { on, monitor });
+        if !targets.iter().any(|target: &Target<M>| target.on == on) {
+            targets.push(Target { on, monitor });
+        }
     }
     let covered = rects.iter().all(|rect| {
         targets
@@ -112,22 +115,20 @@ fn end(ending: &Ending, how: PickEnd) {
 /// The overlays of a pick that is up; dropping it closes them all.
 pub struct Pick {
     windows: Vec<PickWindow>,
-    /// The tasks placing each overlay on its screen.
-    placing: Vec<JoinHandle<()>>,
     _timeout: Timer,
 }
 
-/// Puts an overlay on its monitor; the task doing it, if it takes one.
-pub type Placer<M> = fn(&PickWindow, M) -> Result<Option<JoinHandle<()>>, String>;
+/// Makes an overlay on a monitor.
+pub type Placer<M> = fn(M) -> Result<PickWindow, slint::PlatformError>;
 
 impl Pick {
-    /// Opens an overlay on each of `targets`, placed by `place`, for at
+    /// Opens an overlay on each of `targets`, made by `place`, for at
     /// most `time` ([`PICK_TIME`]). `ended` hears how the pick ended, once;
     /// it does not hear a pick dropped before it ended.
     ///
     /// # Errors
-    /// An overlay could not be made, shown or placed; the ones opened so
-    /// far are closed.
+    /// An overlay could not be made or shown; the ones opened so far are
+    /// closed.
     pub fn open<M>(
         targets: Vec<Target<M>>,
         place: Placer<M>,
@@ -142,23 +143,22 @@ impl Pick {
         });
         let mut pick = Pick {
             windows: Vec::new(),
-            placing: Vec::new(),
             _timeout: timeout,
         };
         for Target { on, monitor } in targets {
-            let window = overlay(on, &ending).map_err(|err| err.to_string())?;
+            let window = place(monitor).map_err(|err| err.to_string())?;
+            told_by(&window, on, &ending);
             // Kept before it is shown, so a failure from here on closes it.
             pick.windows.push(window.clone_strong());
             window.show().map_err(|err| err.to_string())?;
-            pick.placing.extend(place(&window, monitor)?);
         }
         Ok(pick)
     }
 }
 
-/// An overlay for the screen at `on`, telling `ending` how it ended.
-fn overlay(on: Rect, ending: &Ending) -> Result<PickWindow, slint::PlatformError> {
-    let window = PickWindow::new()?;
+/// Makes `window`, the overlay for the screen at `on`, tell `ending` how
+/// the pick ended.
+fn told_by(window: &PickWindow, on: Rect, ending: &Ending) {
     let clicked = Rc::clone(ending);
     window.on_picked(move |x, y| {
         let point = point_on(on, x, y);
@@ -171,16 +171,12 @@ fn overlay(on: Rect, ending: &Ending) -> Result<PickWindow, slint::PlatformError
         end(&closed, PickEnd::Cancelled);
         CloseRequestResponse::HideWindow
     });
-    Ok(window)
 }
 
 impl Drop for Pick {
     fn drop(&mut self) {
         for window in &self.windows {
             let _ = window.hide();
-        }
-        for task in self.placing.drain(..) {
-            task.abort();
         }
         // An overlay may be closing from its own callback: its handle goes
         // once that callback has returned.

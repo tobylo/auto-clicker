@@ -243,17 +243,20 @@ impl<P: Platform> Controller<P> {
             .collect()
     }
 
-    /// Takes a saved config into use: the clicker, playback and tray
-    /// settings for the next start, the hotkeys at once. The controller is
+    /// Takes a saved config into use: the clicker (with the screens a
+    /// picked point was picked on), playback and tray settings for the next
+    /// start, the hotkeys at once. The controller is
     /// settled, so the reader can start again: it knows every device. The
     /// file is valid now.
     fn use_saved(&mut self, saved: Config) {
-        self.config.tray_start_delay = saved.tray_start_delay;
-        self.config.clicker = saved.clicker;
-        self.config.playback = saved.playback;
+        let hotkeys_changed = saved.hotkeys != self.config.hotkeys;
+        // Everything but `[input]`, which picked the platform at start.
+        self.config = Config {
+            input: self.config.input,
+            ..saved.clone()
+        };
         self.config_error = None;
-        if saved.hotkeys != self.config.hotkeys {
-            self.config.hotkeys = saved.hotkeys;
+        if hotkeys_changed {
             self.restart_reader();
         }
         self.settings.saved = saved;

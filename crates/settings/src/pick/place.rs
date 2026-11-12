@@ -1,17 +1,53 @@
 //! Where the overlays go, through winit: the one place the window reaches
 //! past Slint, since Slint cannot put a window on a chosen screen.
 //!
+//! An overlay is made full-screen on its monitor as it is created: the
+//! backend's window-attributes hook, which Slint runs inside the overlay's
+//! `new`, takes the monitor set just before. Asked at creation, the window
+//! never shows at its own size first, and nothing has to wait for the
+//! window to exist and then act on an overlay that may have closed since.
+//!
 //! winit reports a Wayland monitor's position as its logical position
 //! times the monitor's whole-number scale (`wl_output.scale`, 2 for a
 //! screen at 1.25); divided back, it is KWin's logical corner.
 
+use std::cell::RefCell;
+
 use i_slint_backend_winit::WinitWindowAccessor;
 use i_slint_backend_winit::winit::monitor::MonitorHandle;
-use i_slint_backend_winit::winit::window::Fullscreen;
-use slint::{ComponentHandle, JoinHandle};
+use i_slint_backend_winit::winit::window::{Fullscreen, WindowAttributes};
 
 use super::Monitor;
 use crate::ui::PickWindow;
+
+/// A monitor an overlay goes on.
+pub type Screen = MonitorHandle;
+
+thread_local! {
+    /// The monitor the window being created goes full-screen on.
+    static CREATING_ON: RefCell<Option<MonitorHandle>> = const { RefCell::new(None) };
+}
+
+/// The backend's window-attributes hook: the window being created goes
+/// full-screen on the monitor [`place`] set; any other window is as it was.
+pub fn hook(attributes: WindowAttributes) -> WindowAttributes {
+    match CREATING_ON.with(|on| on.borrow_mut().take()) {
+        Some(monitor) => attributes.with_fullscreen(Some(Fullscreen::Borderless(Some(monitor)))),
+        None => attributes,
+    }
+}
+
+/// An overlay, full-screen on `monitor`.
+///
+/// # Errors
+/// The overlay could not be made.
+pub fn place(monitor: MonitorHandle) -> Result<PickWindow, slint::PlatformError> {
+    CREATING_ON.with(|on| *on.borrow_mut() = Some(monitor));
+    let window = PickWindow::new();
+    // Not left for a later window, should this one not have been made.
+    CREATING_ON.with(|on| on.borrow_mut().take());
+    window
+}
 
 /// The monitors `window` knows of, with their logical corners; `None` when
 /// it is not a winit window. A monitor whose corner is not a whole logical
@@ -38,26 +74,6 @@ fn logical(physical: i32, scale: f64) -> Option<i64> {
     (scale >= 1.0 && value.fract() == 0.0).then_some(value as i64)
 }
 
-/// Makes `window` full-screen on `monitor` once its winit window exists,
-/// which is after the event loop has run.
-///
-/// # Errors
-/// No task can be started: there is no event loop.
-pub fn place(
-    window: &PickWindow,
-    monitor: MonitorHandle,
-) -> Result<Option<JoinHandle<()>>, String> {
-    let window = window.clone_strong();
-    let task = slint::spawn_local(async move {
-        // Borrowed for this call only: a winit window held on to would
-        // stay on screen after the overlay closes.
-        if let Ok(winit) = window.window().winit_window().await {
-            winit.set_fullscreen(Some(Fullscreen::Borderless(Some(monitor))));
-        }
-    });
-    task.map(Some).map_err(|err| err.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +92,11 @@ mod tests {
         for ((physical, scale), expected) in cases {
             assert_eq!(logical(physical, scale), expected, "{physical} {scale}");
         }
+    }
+
+    #[test]
+    fn only_the_window_made_next_is_placed() {
+        let attributes = WindowAttributes::default();
+        assert!(hook(attributes.clone()).fullscreen.is_none());
     }
 }
