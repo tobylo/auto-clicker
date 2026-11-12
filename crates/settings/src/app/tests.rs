@@ -9,9 +9,10 @@ use auto_clicker_core::hotkeys::Refusal;
 use auto_clicker_core::hotkeys::Unavailable;
 use auto_clicker_core::locale::Language;
 use auto_clicker_core::message::{
-    ChangeFailure, ConfigProblem, Failure, Hindrance, InputFailure, Notice, Problem, Quoted,
-    RecordingChange, SaveFailure, Saving, Start, Step, Stop, Unavailability, Unplayable,
+    ChangeFailure, ConfigProblem, Failure, Hindrance, InputFailure, Notice, PlayStart, Problem,
+    Quoted, RecordingChange, SaveFailure, Saving, Start, Step, Stop, Unavailability, Unplayable,
 };
+use auto_clicker_core::playback::Fallback;
 use auto_clicker_core::window::RecordingOutcome;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
@@ -127,6 +128,21 @@ fn problems(said: &Said<'_>) {
 /// What Play, Rename and Delete answer.
 fn recordings(said: &Said<'_>) {
     let note = |note: Note| note_text(said, &note).to_string();
+    let held = Notice::Playing(PlayStart::HeldAndRelative {
+        seconds: 2,
+        fallback: Fallback::Changed,
+    });
+    assert_eq!(
+        said.notice(&held),
+        "Spelar upp fast snabbtangenten fortfarande hölls nere efter 2 s; dess tangenter \
+         blandas in i det som spelas upp. Spelar upp med relativa rörelser: en skärm som \
+         inspelningen använde har flyttats, bytt storlek eller försvunnit"
+    );
+    assert_eq!(
+        said.notice(&Notice::Playing(PlayStart::Relative(Fallback::Unknown))),
+        "Spelar upp med relativa rörelser: skärmlayouten är inte känd, så de inspelade \
+         positionerna kan inte användas"
+    );
     let not_playing = RecordingOutcome::NotPlaying(Some(Notice::Unplayable {
         recording: "Farm loop".to_owned(),
         why: Unplayable::TooShort { ms: 20 },
