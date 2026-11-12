@@ -10,7 +10,7 @@ Minecraft Java takes the program's clicks and hotkey holds under XWayland as it 
 | --- | --- | --- |
 | 1000 right clicks at the 10 ms floor (C02) | 1000 of 1000 (2026-11-09) | 1000 of 1000 |
 | Ctrl+Shift+F6 hold, fullscreen | mines continuously (#66, 2026-11-12) | mines continuously, 5 of 5 holds |
-| The game still gets the hotkey's keys | yes (#61) | yes |
+| The game still gets the hotkey's keys | yes: sprint and sneak (#61) | Shift seen (crouch); Ctrl and F6 not observable |
 
 ## Setup
 
@@ -48,4 +48,4 @@ The launcher must be started through the package's `minecraft-launcher.sh`, whic
 | 14:51:25.007 | wall, game restarted, Ctrl+Shift held 1.4 s before F6 | 5.10 s | kept mining |
 | 14:51:41.631 | wall, Ctrl+Shift held 5.8 s after F6 | 2.11 s | kept mining |
 
-Each hold was one `BTN_LEFT down` on the virtual mouse 0.5 to 1.8 ms after the last of Ctrl and Shift came up, and one `BTN_LEFT up` at the stopping F6. While Ctrl+Shift were held, the player crouched, so the game got the keys the program reads as a hotkey. After every run, no virtual device was left (`/sys/class/input/*/name`) and no daemon, clicker or logger was running.
+Each hold was one `BTN_LEFT down` on the virtual mouse 0.5 to 1.8 ms after the last of Ctrl and Shift came up, and one `BTN_LEFT up` at the stopping F6. While Ctrl+Shift were held, the player crouched, so the game received Shift while the program read it as part of the hotkey. Ctrl and F6 have no effect the player could see here (Ctrl sprints only while moving, F6 acts only with F3 held), so their delivery to the game was not observed; the hotkey reader opens the keyboards without grabbing them (`crates/backend-kernel/src/hotkeys/mod.rs`), so it takes no key away from the game. After every run, no virtual device was left (`/sys/class/input/*/name`) and no daemon, clicker or logger was running.
