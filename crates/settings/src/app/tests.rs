@@ -5,11 +5,14 @@ use std::rc::Rc;
 
 use auto_clicker_core::config::Reason;
 use auto_clicker_core::controller::{Blocked, NoRecording};
+use auto_clicker_core::hotkeys::Refusal;
 use auto_clicker_core::hotkeys::Unavailable;
 use auto_clicker_core::locale::Language;
 use auto_clicker_core::message::{
-    ConfigProblem, Failure, InputFailure, Problem, Quoted, Unavailability,
+    ChangeFailure, ConfigProblem, Failure, Hindrance, InputFailure, Notice, Problem, Quoted,
+    RecordingChange, SaveFailure, Saving, Start, Step, Stop, Unavailability, Unplayable,
 };
+use auto_clicker_core::window::RecordingOutcome;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
 
@@ -101,6 +104,52 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
     assert_eq!(
         note(Note::SavedUnsynced(Quoted::new("EIO"))),
         "Sparat, men det kanske inte klarar ett strömavbrott: EIO"
+    );
+    // What Play, Rename and Delete answer.
+    let not_playing = RecordingOutcome::NotPlaying(Some(Notice::Unplayable {
+        recording: "Farm loop".to_owned(),
+        why: Unplayable::TooShort { ms: 20 },
+    }));
+    assert_eq!(
+        note(Note::Recording(not_playing)),
+        "Spelar inte upp Farm loop: den är kortare än 20 ms, för kort för att spelas mer än en \
+         gång"
+    );
+    let recorded = RecordingOutcome::NotPlaying(Some(Notice::Recorded {
+        stop: Some(Stop::Blocked(Blocked::Locked)),
+        saving: Saving::Failed(SaveFailure::NoDataDirectory),
+    }));
+    assert_eq!(
+        note(Note::Recording(recorded)),
+        "Stoppat: skärmen är låst. Inspelningen kunde inte sparas: ingen datamapp: varken \
+         XDG_DATA_HOME eller HOME är satt"
+    );
+    let gone = RecordingOutcome::NotChanged(RecordingChange::Delete, ChangeFailure::Missing);
+    assert_eq!(
+        note(Note::Recording(gone)),
+        "Inte borttagen: filen finns inte längre"
+    );
+    let full = RecordingOutcome::NotChanged(
+        RecordingChange::Rename,
+        ChangeFailure::NotDone {
+            step: Step::Written,
+            why: Quoted::new("No space left on device (os error 28)"),
+        },
+    );
+    assert_eq!(
+        note(Note::Recording(full)),
+        "Bytte inte namn: filen kunde inte skrivas: No space left on device (os error 28)"
+    );
+    let own_key = Notice::Refused {
+        start: Start::Playback,
+        why: Hindrance::OwnKey(Refusal::Modifier(
+            auto_clicker_core::input::Key::new(42).unwrap(),
+        )),
+    };
+    assert_eq!(
+        said.notice(&own_key),
+        "Spelar inte upp: leftshift är en modifierare, och om programmet håller den ändras \
+         vilken snabbtangent skrivbordet ser"
     );
     // The window's own "{}: {}" keeps its own form.
     assert_eq!(
