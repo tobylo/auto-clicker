@@ -34,7 +34,11 @@ const C: Name = Name(12);
 /// What the fake offers.
 enum Offer {
     Manager,
+    /// The manager at version 2: each xdg-output sends its own `done`.
+    OldManager,
     Output(Name),
+    /// A `wl_output` at version 1, which sends no `done`.
+    OldOutput(Name),
 }
 
 /// An output's logical place and size, as xdg-output sends it.
@@ -207,7 +211,9 @@ impl Fake {
     async fn offer(&mut self, offer: Offer) {
         let (Name(name), interface, version) = match offer {
             Offer::Manager => (MANAGER, "zxdg_output_manager_v1", 3),
+            Offer::OldManager => (MANAGER, "zxdg_output_manager_v1", 2),
             Offer::Output(name) => (name, "wl_output", 4),
+            Offer::OldOutput(name) => (name, "wl_output", 1),
         };
         let words = std::iter::once(name)
             .chain(string(interface))
@@ -348,6 +354,76 @@ async fn two_outputs_give_one_whole_layout_at_start() {
     .unwrap();
     let (_, first) = started.unwrap();
     assert_eq!(first, layout(&[LEFT, RIGHT]));
+}
+
+#[tokio::test]
+async fn with_xdg_output_2_the_layout_waits_for_the_xdg_outputs_done() {
+    let (link, mut fake) = Fake::pair();
+    let serve = async {
+        let callback = fake.until_sync().await;
+        fake.offer(Offer::OldManager).await;
+        fake.offer(Offer::Output(A)).await;
+        fake.answer(callback).await;
+        let callback = fake.until_sync().await;
+        let Ids { output, xdg } = fake.ids(A);
+        let message = |object, opcode, words| Message {
+            object,
+            opcode,
+            words,
+        };
+        // Its place and size, then wl_output's mode and done: the
+        // xdg-output's update has not ended.
+        fake.send(vec![
+            message(xdg, 0, vec![0, 0]),
+            message(xdg, 1, vec![2048, 1280]),
+            message(output, 1, vec![1, 2048, 1280, 60_000]),
+            message(output, 2, Vec::new()),
+        ])
+        .await;
+        fake.answer(callback).await;
+        let callback = fake.until_sync().await;
+        fake.answer(callback).await;
+        // Its xdg-output's done: now the layout is whole.
+        fake.send(vec![message(xdg, 2, Vec::new())]).await;
+        let callback = fake.until_sync().await;
+        fake.answer(callback).await;
+    };
+    let (started, ()) = timeout(BOUND, async { tokio::join!(Link::start(link), serve) })
+        .await
+        .unwrap();
+    assert_eq!(started.unwrap().1, layout(&[LEFT]));
+}
+
+#[tokio::test]
+async fn an_output_too_old_to_send_done_still_gives_a_layout() {
+    let (link, mut fake) = Fake::pair();
+    let serve = async {
+        let callback = fake.until_sync().await;
+        fake.offer(Offer::Manager).await;
+        fake.offer(Offer::OldOutput(A)).await;
+        fake.answer(callback).await;
+        let callback = fake.until_sync().await;
+        // Its place, size and mode, and no done on either object.
+        let Ids { output, xdg } = fake.ids(A);
+        let message = |object, opcode, words| Message {
+            object,
+            opcode,
+            words,
+        };
+        fake.send(vec![
+            message(xdg, 0, vec![0, 0]),
+            message(xdg, 1, vec![2048, 1280]),
+            message(output, 1, vec![1, 2048, 1280, 60_000]),
+        ])
+        .await;
+        fake.answer(callback).await;
+        let callback = fake.until_sync().await;
+        fake.answer(callback).await;
+    };
+    let (started, ()) = timeout(BOUND, async { tokio::join!(Link::start(link), serve) })
+        .await
+        .unwrap();
+    assert_eq!(started.unwrap().1, layout(&[LEFT]));
 }
 
 #[tokio::test]

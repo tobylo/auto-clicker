@@ -14,6 +14,7 @@ use auto_clicker_backend_kwin::Kwin;
 use auto_clicker_backend_wayland::Wayland;
 use auto_clicker_core::controller::{LayoutSignal, LayoutWatch};
 use auto_clicker_core::recording::{Layout, RecordingFeed};
+use tokio::task::coop::unconstrained;
 
 /// A source of the layout.
 pub trait Source {
@@ -73,15 +74,17 @@ impl<K: Source + 'static, W: Source + 'static> Screens<K, W> {
     /// the layout [`Screens::layout`] reads: every fire of KWin's, which is
     /// in use or just stopped being, and the display's while KWin has no
     /// layout. A source whose watcher ends leaves the other running. The
-    /// sources are polled before the forwarding, every time, so a change a
-    /// source read reaches the controller in the same poll.
+    /// sources are polled before the forwarding, every time, and the
+    /// forwarding runs outside the task's budget, so a change a source read
+    /// reaches the controller in the same poll, however much the source
+    /// spent. The forwarding only waits on its signals: it cannot spin.
     pub fn watch(&self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
         let (kwin_heard, wayland_heard) = (LayoutSignal::default(), LayoutSignal::default());
         let kwin = self.0.kwin.watch(feed.clone(), kwin_heard.clone());
         let wayland = self.0.wayland.watch(feed, wayland_heard.clone());
         let screens = self.clone();
         Box::pin(async move {
-            let forward = async {
+            let forward = unconstrained(async {
                 loop {
                     tokio::select! {
                         biased;
@@ -93,7 +96,7 @@ impl<K: Source + 'static, W: Source + 'static> Screens<K, W> {
                         }
                     }
                 }
-            };
+            });
             tokio::join!(biased; kwin, wayland, forward);
         })
     }

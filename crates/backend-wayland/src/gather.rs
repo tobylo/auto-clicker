@@ -29,8 +29,12 @@ pub(crate) enum Heard {
     Turned(bool),
     /// Its whole-number scale (`wl_output.scale`).
     Scale(i32),
-    /// The end of an update, on `wl_output` or on its xdg-output.
-    Done,
+    /// `wl_output.done`, the end of the output's update; with xdg-output
+    /// 3, which sends no `done` of its own, of its xdg-output's too.
+    OutputDone { with_xdg: bool },
+    /// `zxdg_output_v1.done`, the end of its xdg-output's update (xdg-output
+    /// 1 and 2).
+    XdgDone,
 }
 
 /// One output as heard so far.
@@ -41,8 +45,40 @@ struct Screen {
     mode: Option<(i32, i32)>,
     turned: bool,
     whole_scale: Option<i32>,
-    /// Something was heard since its last `done`.
-    updating: bool,
+    /// Something was heard on `wl_output` since its `done`.
+    output_updating: bool,
+    /// Something was heard on its xdg-output since that update's end.
+    xdg_updating: bool,
+}
+
+impl Screen {
+    fn hear(&mut self, heard: Heard) {
+        match heard {
+            Heard::Position { x, y } => self.position = Some((x, y)),
+            Heard::Size { width, height } => self.size = Some((width, height)),
+            Heard::Mode { width, height } => self.mode = Some((width, height)),
+            Heard::Turned(turned) => self.turned = turned,
+            Heard::Scale(scale) => self.whole_scale = Some(scale),
+            Heard::OutputDone { with_xdg } => {
+                self.output_updating = false;
+                self.xdg_updating &= !with_xdg;
+                return;
+            }
+            Heard::XdgDone => {
+                self.xdg_updating = false;
+                return;
+            }
+        }
+        match heard {
+            Heard::Position { .. } | Heard::Size { .. } => self.xdg_updating = true,
+            _ => self.output_updating = true,
+        }
+    }
+
+    /// Whether an update on either object has not ended.
+    fn updating(&self) -> bool {
+        self.output_updating || self.xdg_updating
+    }
 }
 
 /// The outputs, and where the round trip after their last update stands.
@@ -75,15 +111,7 @@ impl Gather {
         let Some(screen) = self.screens.get_mut(&name) else {
             return;
         };
-        match heard {
-            Heard::Position { x, y } => screen.position = Some((x, y)),
-            Heard::Size { width, height } => screen.size = Some((width, height)),
-            Heard::Mode { width, height } => screen.mode = Some((width, height)),
-            Heard::Turned(turned) => screen.turned = turned,
-            Heard::Scale(scale) => screen.whole_scale = Some(scale),
-            Heard::Done => {}
-        }
-        screen.updating = heard != Heard::Done;
+        screen.hear(heard);
         self.changed = true;
     }
 
@@ -109,7 +137,7 @@ impl Gather {
     /// whole or not valid is `Some(None)`: unknown.
     pub(crate) fn synced(&mut self) -> Option<Option<Layout>> {
         self.syncing = false;
-        let updating = self.screens.values().any(|screen| screen.updating);
+        let updating = self.screens.values().any(Screen::updating);
         (!self.changed && !updating).then(|| self.layout())
     }
 

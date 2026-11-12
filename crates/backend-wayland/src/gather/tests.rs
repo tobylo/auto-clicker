@@ -2,6 +2,8 @@ use super::*;
 
 const A: u32 = 7;
 const B: u32 = 9;
+/// `wl_output.done` with xdg-output 3.
+const DONE: Heard = Heard::OutputDone { with_xdg: true };
 
 fn rect(x: u32, y: u32, width: u32, height: u32) -> Rect {
     Rect {
@@ -27,7 +29,7 @@ fn screen(gather: &mut Gather, name: u32, (x, y): (i32, i32), (width, height): (
     gather.heard(name, Heard::Position { x, y });
     gather.heard(name, Heard::Size { width, height });
     gather.heard(name, Heard::Mode { width, height });
-    gather.heard(name, Heard::Done);
+    gather.heard(name, DONE);
 }
 
 /// Outputs `A` and `B` at `[x, y, width, height]` each, bound and heard
@@ -83,11 +85,11 @@ fn an_update_to_two_outputs_interleaved_is_never_read_half_done() {
             height: 1067,
         },
     );
-    gather.heard(A, Heard::Done);
+    gather.heard(A, DONE);
     assert!(gather.wants_sync());
     gather.heard(B, Heard::Position { x: 1707, y: 0 });
     assert_eq!(gather.synced(), None, "read with B's half missing");
-    gather.heard(B, Heard::Done);
+    gather.heard(B, DONE);
     let expected = layout(&[
         (rect(0, 0, 1707, 1067), 1200),
         (rect(1707, 0, 3440, 1440), 1000),
@@ -111,12 +113,49 @@ fn a_round_trip_answered_before_an_outputs_done_reads_nothing() {
             height: 1067,
         },
     );
-    gather.heard(A, Heard::Done);
+    gather.heard(A, DONE);
     let expected = layout(&[
         (rect(3440, 0, 1707, 1067), 1200),
         (rect(0, 0, 3440, 1440), 1000),
     ]);
     assert_eq!(settled(&mut gather), Some(expected));
+}
+
+#[test]
+fn with_xdg_output_2_each_object_ends_its_own_update() {
+    let mut gather = two();
+    settled(&mut gather);
+    // A's new place on its xdg-output, then a mode and done on wl_output:
+    // the xdg-output's update has not ended.
+    gather.heard(A, Heard::Position { x: 5488, y: 0 });
+    gather.heard(
+        A,
+        Heard::Mode {
+            width: 2048,
+            height: 1280,
+        },
+    );
+    gather.heard(A, Heard::OutputDone { with_xdg: false });
+    assert!(gather.wants_sync());
+    assert_eq!(gather.synced(), None, "read A's place with its old size");
+    gather.heard(
+        A,
+        Heard::Size {
+            width: 1707,
+            height: 1067,
+        },
+    );
+    gather.heard(A, Heard::XdgDone);
+    let expected = layout(&[
+        (rect(3440, 0, 1707, 1067), 1200),
+        (rect(0, 0, 3440, 1440), 1000),
+    ]);
+    assert_eq!(settled(&mut gather), Some(expected));
+    // And an xdg-output's done leaves wl_output's update open.
+    gather.heard(A, Heard::Scale(2));
+    gather.heard(A, Heard::XdgDone);
+    assert!(gather.wants_sync());
+    assert_eq!(gather.synced(), None, "read before wl_output's done");
 }
 
 #[test]
@@ -126,7 +165,7 @@ fn an_output_not_heard_in_full_leaves_the_layout_unknown() {
     gather.heard(11, Heard::Position { x: 0, y: 1440 });
     assert!(gather.wants_sync());
     assert_eq!(gather.synced(), None, "read before the output's done");
-    gather.heard(11, Heard::Done);
+    gather.heard(11, DONE);
     assert_eq!(settled(&mut gather), None);
     gather.removed(11);
     assert!(settled(&mut gather).is_some(), "the half-heard output went");
@@ -152,7 +191,7 @@ fn the_widest_spread_of_positions_still_fits_and_one_past_it_does_not() {
     ]);
     assert_eq!(settled(&mut gather), Some(expected));
     gather.heard(B, Heard::Position { x: i32::MAX, y: 0 });
-    gather.heard(B, Heard::Done);
+    gather.heard(B, DONE);
     assert_eq!(settled(&mut gather), None, "reaches past u32::MAX");
 }
 
@@ -208,7 +247,7 @@ fn an_update_that_moves_nothing_gives_the_same_layout() {
             height: 1280,
         },
     );
-    gather.heard(A, Heard::Done);
+    gather.heard(A, DONE);
     assert_eq!(settled(&mut gather), before);
 }
 
@@ -226,7 +265,7 @@ fn the_scale_is_the_mode_over_the_logical_size() {
         if let Some(whole) = whole {
             gather.heard(A, Heard::Scale(whole));
         }
-        gather.heard(A, Heard::Done);
+        gather.heard(A, DONE);
         settled(&mut gather).map(|layout| layout.outputs()[0].scale_milli())
     };
     let cases = [

@@ -188,14 +188,14 @@ impl Client {
                 ..
             } if current(flags) => Heard::Mode { width, height },
             wl_output::Event::Scale { factor } => Heard::Scale(factor),
-            wl_output::Event::Done => Heard::Done,
+            wl_output::Event::Done => self.output_done(),
             _ => return,
         };
         let name = *arrived.data;
         self.gather.heard(name, heard);
         // Before version 2 an output sends no `done`: each event is whole.
         if arrived.proxy.version() < 2 {
-            self.gather.heard(name, Heard::Done);
+            self.gather.heard(name, self.output_done());
         }
     }
 
@@ -203,10 +203,17 @@ impl Client {
         let heard = match arrived.event {
             zxdg_output_v1::Event::LogicalPosition { x, y } => Heard::Position { x, y },
             zxdg_output_v1::Event::LogicalSize { width, height } => Heard::Size { width, height },
-            zxdg_output_v1::Event::Done => Heard::Done,
+            zxdg_output_v1::Event::Done => Heard::XdgDone,
             _ => return,
         };
         self.gather.heard(*arrived.data, heard);
+    }
+
+    /// The end of an output's update on `wl_output`: with xdg-output 3, of
+    /// its xdg-output's too.
+    fn output_done(&self) -> Heard {
+        let xdg = self.manager.as_ref().map_or(0, Proxy::version);
+        Heard::OutputDone { with_xdg: xdg >= 3 }
     }
 
     /// The manager sends no events.

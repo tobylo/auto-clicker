@@ -5,6 +5,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use auto_clicker_core::recording::{Output, RecordingSlot, Rect};
+use tokio::task::coop::consume_budget;
 use tokio::task::{LocalSet, yield_now};
 use tokio::time::timeout;
 
@@ -22,6 +23,8 @@ struct FakeState {
     ends: Cell<bool>,
     /// The layout its watcher reports when next polled.
     staged: RefCell<Option<Option<Layout>>>,
+    /// Its watcher spends the task's whole budget after it reports.
+    spends: Cell<bool>,
 }
 
 impl Fake {
@@ -42,10 +45,13 @@ impl Source for Fake {
     fn watch(&self, _feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
         self.0.signal.replace(Some(changed));
         let source = self.clone();
-        Box::pin(poll_fn(move |_| {
+        Box::pin(poll_fn(move |cx| {
             let staged = source.0.staged.take();
             if let Some(layout) = staged {
                 source.set(layout);
+                if source.0.spends.get() {
+                    while pin!(consume_budget()).poll(cx).is_ready() {}
+                }
             }
             if source.0.ends.get() {
                 Poll::Ready(())
@@ -217,4 +223,21 @@ fn a_change_a_source_reads_reaches_the_controller_in_the_same_poll() {
             "the display's change to {width} waited a poll"
         );
     }
+}
+
+#[tokio::test]
+async fn a_source_that_spends_the_budget_still_reaches_the_controller_in_its_poll() {
+    let (kwin, wayland) = (Fake::default(), Fake::default());
+    let screens = Screens::new(kwin.clone(), wayland.clone());
+    let changed = LayoutSignal::default();
+    let mut watch = screens.watch(RecordingSlot::new().feed(), changed.clone());
+    kwin.0.spends.set(true);
+    kwin.0.staged.replace(Some(wide(2048)));
+    // One poll, inside the runtime's task, where the budget counts.
+    poll_fn(|cx| {
+        assert!(watch.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    assert!(fired_now(&changed), "the change waited for a budget");
 }
