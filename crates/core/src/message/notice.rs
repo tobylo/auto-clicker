@@ -9,7 +9,7 @@ use super::{InputFailure, Quoted, Titled};
 use crate::controller::{Blocked, NoRecording};
 use crate::hotkeys::{Binding, Refusal, Unavailable};
 use crate::playback::Fallback;
-use crate::recording::{LoadError, MAX_FILE_BYTES};
+use crate::recording::{FileName, LoadError, MAX_FILE_BYTES};
 
 /// The tray's notice.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -266,16 +266,34 @@ impl fmt::Display for PlayStart {
 pub enum Saving {
     /// Nothing was recorded.
     Nothing,
-    /// Saved under this name.
-    Saved(Quoted),
+    /// Saved under the name in its header, in this file when its name is
+    /// one a recording's file has.
+    Saved {
+        name: Quoted,
+        file: Option<FileName>,
+    },
     Failed(SaveFailure),
+}
+
+impl Saving {
+    /// The saved recording as the lists name it, when its file is known:
+    /// by when it was made while it has the name a new recording gets.
+    pub fn titled(&self) -> Option<Titled> {
+        match self {
+            Saving::Saved {
+                name,
+                file: Some(file),
+            } => Some(Titled::new(file.clone(), Some(name))),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Saving {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Saving::Nothing => f.write_str("Nothing was recorded, so nothing was saved"),
-            Saving::Saved(name) => write!(f, "Saved \u{201c}{name}\u{201d}"),
+            Saving::Saved { name, .. } => write!(f, "Saved \u{201c}{name}\u{201d}"),
             Saving::Failed(why) => write!(f, "The recording could not be saved: {why}"),
         }
     }

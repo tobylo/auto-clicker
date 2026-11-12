@@ -320,7 +320,7 @@ fn a_message_is_read_only_as_one_of_its_values_and_no_longer_than_cut() {
         let value = serde_json::json!({ "id": 1, "outcome": outcome });
         parse::<Answer>(&serde_json::to_vec(&value).unwrap())
     };
-    let cut = "a".repeat(MAX_TEXT + 1);
+    let cut = format!("{}…", "a".repeat(MAX_TEXT));
     let over = "a".repeat(MAX_TEXT + 2);
     assert!(answer(serde_json::json!({ "failed": { "write": cut } })).is_ok());
     assert!(answer(serde_json::json!({ "failed": { "write": over } })).is_err());
@@ -355,7 +355,7 @@ fn a_nested_reason_longer_than_cut_is_not_read() {
         value["problems"] = serde_json::json!([problem]);
         parse::<WindowView>(&serde_json::to_vec(&value).unwrap())
     };
-    let cut = "a".repeat(MAX_TEXT + 1);
+    let cut = format!("{}…", "a".repeat(MAX_TEXT));
     let over = "a".repeat(MAX_TEXT + 2);
     for text in [&cut, &over] {
         let fits = text == &cut;

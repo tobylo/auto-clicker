@@ -194,10 +194,10 @@ impl<P: Platform> Controller<P> {
             return failed(SaveFailure::NoDataDirectory);
         };
         match save(&dir, recording) {
-            Ok(path) => {
-                self.saved(&path);
-                Saving::Saved(recording.name().to_owned().into())
-            }
+            Ok(path) => Saving::Saved {
+                name: Quoted::new(recording.name()),
+                file: self.saved(&path),
+            },
             Err(err) => failed(SaveFailure::Write(Quoted::new(err.to_string()))),
         }
     }

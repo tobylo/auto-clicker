@@ -56,8 +56,14 @@ impl Serialize for Quoted {
 impl<'de> Deserialize<'de> for Quoted {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Quoted, D::Error> {
         let text = String::deserialize(deserializer)?;
-        // A cut text ends in the "…" the cut adds.
-        if text.chars().nth(MAX_TEXT.saturating_add(1)).is_some() {
+        // Only a cut text is longer than the limit: by the "…" the cut adds.
+        let mut over = text.chars().skip(MAX_TEXT);
+        let fits = match (over.next(), over.next()) {
+            (None, _) => true,
+            (Some(last), None) => last == '…',
+            (Some(_), Some(_)) => false,
+        };
+        if !fits {
             return Err(serde::de::Error::custom(format!(
                 "a quoted text is longer than {MAX_TEXT} characters"
             )));
@@ -84,8 +90,12 @@ mod tests {
 
     #[test]
     fn a_longer_text_than_a_cut_one_is_refused() {
-        let at_most = format!("\"{}\"", "a".repeat(MAX_TEXT + 1));
+        let at_most = format!("\"{}\"", "a".repeat(MAX_TEXT));
         assert!(serde_json::from_str::<Quoted>(&at_most).is_ok());
+        let cut = format!("\"{}…\"", "a".repeat(MAX_TEXT));
+        assert!(serde_json::from_str::<Quoted>(&cut).is_ok());
+        let uncut = format!("\"{}\"", "a".repeat(MAX_TEXT + 1));
+        assert!(serde_json::from_str::<Quoted>(&uncut).is_err());
         let over = format!("\"{}\"", "a".repeat(MAX_TEXT + 2));
         assert!(serde_json::from_str::<Quoted>(&over).is_err());
     }

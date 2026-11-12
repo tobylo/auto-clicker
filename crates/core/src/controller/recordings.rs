@@ -110,12 +110,15 @@ impl<P: Platform> Controller<P> {
 
     /// A recording was saved at `path`: it is the current one now, and the
     /// list has it.
-    pub(super) fn saved(&mut self, path: &Path) {
+    /// The file, when its name is one a recording's file has.
+    pub(super) fn saved(&mut self, path: &Path) -> Option<FileName> {
         let name = path.file_name().and_then(|name| name.to_str());
-        if let Some(file) = name.and_then(FileName::parse) {
-            self.make_current(&file);
+        let file = name.and_then(FileName::parse);
+        if let Some(file) = &file {
+            self.make_current(file);
         }
         self.list_recordings();
+        file
     }
 
     /// A settings window opened: it gets the longer list once the
