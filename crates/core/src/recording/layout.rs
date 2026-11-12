@@ -224,9 +224,6 @@ impl TryFrom<Vec<OutputSpec>> for Layout {
     type Error = &'static str;
 
     fn try_from(specs: Vec<OutputSpec>) -> Result<Layout, &'static str> {
-        if specs.len() > MAX_OUTPUTS {
-            return Err("the layout has more than 16 screens");
-        }
         let outputs = specs.into_iter().map(Output::try_from);
         Layout::new(outputs.collect::<Result<_, _>>()?)
     }

@@ -92,12 +92,11 @@ pub fn point_on(on: Rect, x: f32, y: f32) -> Point {
 fn axis(value: f32, size: u32) -> u32 {
     let last = size.saturating_sub(1);
     let rounded = f64::from(value).round();
-    if rounded.is_nan() || rounded <= 0.0 {
-        0
-    } else if rounded >= f64::from(last) {
+    if rounded >= f64::from(last) {
         last
     } else {
-        // A whole number from 1 to `last - 1`: the cast is exact.
+        // Below `last`, a whole number casts exactly; the cast takes a
+        // negative number and NaN to 0.
         rounded as u32
     }
 }

@@ -5,7 +5,8 @@ use auto_clicker_core::controller::{Blocked, NoRecording, Routes};
 use auto_clicker_core::hotkeys::{Refusal, Unavailable};
 use auto_clicker_core::input::Key;
 use auto_clicker_core::message::{
-    ConfigProblem, Hindrance, InputFailure, Notice, PlayStart, Problem, Quoted, Saving, Start, Stop,
+    ConfigProblem, Hindrance, InputFailure, Notice, PlayStart, PointScreens, Problem, Quoted,
+    Saving, Start, Stop,
 };
 use auto_clicker_core::playback::Fallback;
 
@@ -126,6 +127,19 @@ fn swedish_reads_as_written() {
                 why: Hindrance::NoRecording(NoRecording::DesktopHotkeys),
             }),
             "Spelar inte in: inspelning går inte med skrivbordets genvägar",
+        ),
+        (
+            notice::swedish(&Notice::Refused {
+                start: Start::Clicking,
+                why: Hindrance::Screens(PointScreens::Changed),
+            }),
+            "Startade inte: skärmarna har ändrats sedan den fasta punkten valdes: välj den \
+             igen i Inställningar",
+        ),
+        (
+            notice::swedish(&Notice::Stopped(Stop::Screens(PointScreens::Unknown))),
+            "Klickandet stoppades: skärmlayouten är inte känd, så den valda punkten kan inte \
+             kontrolleras",
         ),
         (
             notice::swedish(&Notice::Playing(PlayStart::HeldAndRelative {
