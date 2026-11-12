@@ -156,7 +156,7 @@ impl Wayland {
     /// Only the first call gets it; any later one, like one without a
     /// display, watches nothing.
     pub fn watch(&self, changed: LayoutSignal, again: LayoutSignal) -> LayoutWatch {
-        if self.0.watched.replace(true) || self.0.path.is_none() && self.0.link.borrow().is_none() {
+        if self.0.watched.replace(true) || !self.0.has_display() {
             return Box::pin(pending());
         }
         let link = self.0.link.borrow_mut().take();
@@ -219,6 +219,11 @@ async fn read(shared: &Shared, mut link: Link, changed: &LayoutSignal) -> Missin
 }
 
 impl Shared {
+    /// There is a display to read: a connection, or a socket to connect to.
+    fn has_display(&self) -> bool {
+        self.path.is_some() || self.link.borrow().is_some()
+    }
+
     /// The layout is unknown, for `missing`.
     fn end(&self, missing: Missing, changed: &LayoutSignal) {
         self.missing.set(Some(missing));

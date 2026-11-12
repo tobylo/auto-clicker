@@ -325,17 +325,22 @@ struct Watched {
 
 /// Starts a connection on two outputs and watches it on `local`.
 async fn watched(local: &LocalSet, fake: &mut Fake, link: UnixStream) -> Watched {
-    watched_at(local, fake, link, None, NonZeroU32::new(std::process::id())).await
+    let at = At {
+        path: None,
+        compositor: NonZeroU32::new(std::process::id()),
+    };
+    watched_at(local, fake, link, at).await
 }
 
-/// The same, the display's socket at `path` and its listener `compositor`.
-async fn watched_at(
-    local: &LocalSet,
-    fake: &mut Fake,
-    link: UnixStream,
+/// Where the display is: its socket, and the process found listening on it.
+struct At {
     path: Option<PathBuf>,
     compositor: Option<NonZeroU32>,
-) -> Watched {
+}
+
+/// The same, on the display `at`.
+async fn watched_at(local: &LocalSet, fake: &mut Fake, link: UnixStream, at: At) -> Watched {
+    let At { path, compositor } = at;
     let (started, ()) = timeout(BOUND, async {
         tokio::join!(Link::start(link), fake.start_with_two())
     })
@@ -939,9 +944,11 @@ impl Drop for Display {
 /// listened on by this process.
 async fn watched_display(local: &LocalSet, display: &Display) -> (Watched, Fake) {
     let (link, mut fake) = Fake::pair();
-    let us = NonZeroU32::new(std::process::id());
-    let path = Some(display.path.clone());
-    let watched = watched_at(local, &mut fake, link, path, us).await;
+    let at = At {
+        path: Some(display.path.clone()),
+        compositor: NonZeroU32::new(std::process::id()),
+    };
+    let watched = watched_at(local, &mut fake, link, at).await;
     (watched, fake)
 }
 
@@ -1034,8 +1041,11 @@ async fn a_display_another_process_listens_on_now_gives_no_layout() {
             let display = Display::new();
             let (link, mut fake) = Fake::pair();
             // At start, the display's listener was another process.
-            let path = Some(display.path.clone());
-            let watched = watched_at(&local, &mut fake, link, path, NonZeroU32::new(1)).await;
+            let at = At {
+                path: Some(display.path.clone()),
+                compositor: NonZeroU32::new(1),
+            };
+            let watched = watched_at(&local, &mut fake, link, at).await;
             drop(fake);
             watched.again.changed();
             timeout(BOUND, async {
