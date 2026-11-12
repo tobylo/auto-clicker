@@ -1,7 +1,10 @@
 use super::*;
+use crate::config::Reason;
 use crate::config::{Config, Field};
+use crate::controller::Blocked;
 use crate::controller::{Route, Routes, WINDOW_RECORDINGS};
 use crate::hotkeys::{Binding, Unavailable};
+use crate::message::{ChangeFailure, ConfigProblem, RecordingChange};
 
 fn file(text: &str) -> FileName {
     FileName::parse(text).unwrap()
@@ -44,7 +47,7 @@ fn view() -> WindowView {
             toggle_playback: Hotkey::Desktop(Some("Meta+P".to_owned())),
         },
         no_recording: Some(NoRecording::Keyboards(Unavailable::NoPermission)),
-        problems: vec!["a problem".to_owned()],
+        problems: vec![Problem::Unlisted(Quoted::new("a problem"))],
         recordings: RecordingsView {
             listed: vec![listed(1, Some("Farm loop")), listed(0, None)],
             more: 3,
@@ -54,10 +57,18 @@ fn view() -> WindowView {
             id: 7,
             outcome: Outcome::Refused(Refusal::new(
                 Field::Hotkey(Action::TogglePlayback),
-                "no".to_owned(),
+                Reason::Binding(Quoted::new("no")),
             )),
         }),
     }
+}
+
+/// The view showing `trigger` as the desktop's playback hotkey: text only
+/// [`WindowView::bounded`] cuts.
+fn with_trigger(trigger: String) -> WindowView {
+    let mut shown = view();
+    shown.hotkeys.toggle_playback = Hotkey::Desktop(Some(trigger));
+    shown
 }
 
 /// The line without its newline.
@@ -78,7 +89,9 @@ fn requests_and_views_read_back_as_sent() {
 fn every_answer_reads_back_as_sent() {
     let outcomes = [
         Outcome::Saved,
-        Outcome::Failed("disk full".to_owned()),
+        Outcome::SavedUnsynced(Quoted::new("no fsync")),
+        Outcome::Failed(Failure::Write(Quoted::new("disk full"))),
+        Outcome::Refused(Refusal::new(Field::Interval, Reason::Speed)),
         Outcome::Confirm(Confirm::Replace(Stale::Changed)),
         Outcome::Confirm(Confirm::Replace(Stale::Unusable)),
         Outcome::Confirm(Confirm::WithoutModifier(vec![Action::ToggleRecording])),
@@ -86,13 +99,21 @@ fn every_answer_reads_back_as_sent() {
         Outcome::CapturedKey(57),
         Outcome::CaptureEnded(CaptureEnd::TimedOut),
         Outcome::Configured,
-        Outcome::Unavailable("no keyboard".to_owned()),
+        Outcome::Unavailable(Unavailability::Hotkeys(Unavailable::NoKeyboard)),
         Outcome::Recording(RecordingOutcome::Renamed),
         Outcome::Recording(RecordingOutcome::Deleted),
         Outcome::Recording(RecordingOutcome::Chosen),
         Outcome::Recording(RecordingOutcome::Playing),
-        Outcome::Recording(RecordingOutcome::NotDone("Not renamed: gone".to_owned())),
-        Outcome::Recording(RecordingOutcome::Unsynced("Deleted, but …".to_owned())),
+        Outcome::Recording(RecordingOutcome::NotChanged(
+            RecordingChange::Rename,
+            ChangeFailure::Missing,
+        )),
+        Outcome::Recording(RecordingOutcome::Unsynced(
+            RecordingChange::Delete,
+            Quoted::new("no flush"),
+        )),
+        Outcome::Recording(RecordingOutcome::NotPlaying(Some(Notice::NothingToPlay))),
+        Outcome::Recording(RecordingOutcome::NotPlaying(None)),
     ];
     for outcome in outcomes {
         let answer = Answer { id: 1, outcome };
@@ -171,8 +192,7 @@ fn a_shown_binding_is_read_only_in_its_one_form() {
 
 #[test]
 fn lines_longer_than_the_limit_are_neither_read_nor_sent() {
-    let mut long = view();
-    long.problems = vec!["x".repeat(MAX_LINE)];
+    let long = with_trigger("x".repeat(MAX_LINE));
     assert!(line(&long).is_err());
     let padded = format!("{{\"id\":1,\"ask\":\"{}\"}}", "x".repeat(MAX_LINE));
     let err = parse::<Request>(padded.as_bytes()).unwrap_err();
@@ -181,11 +201,8 @@ fn lines_longer_than_the_limit_are_neither_read_nor_sent() {
 
 /// A view whose line, newline included, is `size` bytes long.
 fn view_of_size(size: usize) -> WindowView {
-    let mut sized = view();
-    sized.problems = vec![String::new()];
-    let bare = line(&sized).unwrap().len();
-    sized.problems = vec!["x".repeat(size - bare)];
-    sized
+    let bare = line(&with_trigger(String::new())).unwrap().len();
+    with_trigger("x".repeat(size - bare))
 }
 
 #[test]
@@ -213,7 +230,13 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
         toggle_recording: desktop(),
         toggle_playback: desktop(),
     };
-    widest.problems = vec![worst.clone(); MAX_PROBLEMS + 1];
+    // The problem that quotes the most: two texts.
+    let config = Problem::Config(ConfigProblem::Invalid {
+        file: Quoted::new(worst.clone()),
+        line: Some(usize::MAX),
+        why: Quoted::new(worst.clone()),
+    });
+    widest.problems = vec![config; MAX_PROBLEMS + 1];
     // The longest names a recording may have, in the widest characters
     // JSON writes as they are: four bytes each.
     let longest = "😀".repeat(200);
@@ -226,12 +249,15 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
     };
     widest.answer = Some(Answer {
         id: u64::MAX,
-        outcome: Outcome::Refused(Refusal::new(Field::Key, worst.clone())),
+        outcome: Outcome::Refused(Refusal::new(
+            Field::Key,
+            Reason::Binding(Quoted::new(worst.clone())),
+        )),
     });
     for why in [
-        Unavailable::ReadFailed(worst.clone()),
-        Unavailable::WatchFailed(worst.clone()),
-        Unavailable::Desktop(worst.clone()),
+        Unavailable::ReadFailed(worst.clone().into()),
+        Unavailable::WatchFailed(worst.clone().into()),
+        Unavailable::Desktop(worst.clone().into()),
     ] {
         widest.no_recording = Some(NoRecording::Keyboards(why));
         let shown = widest.clone().bounded();
@@ -242,15 +268,157 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
     assert_eq!(bounded(&worst).chars().count(), MAX_TEXT + 1);
     assert_eq!(bounded("short"), "short");
     for outcome in [
-        Outcome::Failed(worst.clone()),
-        Outcome::SavedUnsynced(worst.clone()),
-        Outcome::Recording(RecordingOutcome::NotDone(worst.clone())),
-        Outcome::Recording(RecordingOutcome::Unsynced(worst.clone())),
+        Outcome::Failed(Failure::Desktop(Quoted::new(worst.clone()))),
+        Outcome::Failed(Failure::Hotkeys(Unavailable::Desktop(worst.clone().into()))),
+        Outcome::SavedUnsynced(Quoted::new(worst.clone())),
+        Outcome::Unavailable(Unavailability::Hotkeys(Unavailable::ReadFailed(
+            worst.clone().into(),
+        ))),
+        Outcome::Unavailable(Unavailability::Blocked(Blocked::Unknown(
+            worst.clone().into(),
+        ))),
+        Outcome::Recording(RecordingOutcome::NotChanged(
+            RecordingChange::Delete,
+            ChangeFailure::Folder(Quoted::new(worst.clone())),
+        )),
+        Outcome::Recording(RecordingOutcome::Unsynced(
+            RecordingChange::Rename,
+            Quoted::new(worst.clone()),
+        )),
     ] {
-        let answer = Answer {
-            id: 1,
-            outcome: outcome.bounded(),
-        };
+        let answer = Answer { id: 1, outcome };
         assert!(line(&answer).unwrap().len() < MAX_TEXT * 7);
     }
+}
+
+#[test]
+fn every_problem_cut_for_the_window_fits_and_reads_back_as_values() {
+    let worst = "\u{1}".repeat(MAX_LINE);
+    let problems = [
+        Problem::Blocked(Blocked::Unknown(worst.clone().into())),
+        Problem::Hotkeys(Unavailable::ReadFailed(worst.clone().into())),
+        Problem::Hotkeys(Unavailable::WatchFailed(worst.clone().into())),
+        Problem::Hotkeys(Unavailable::Desktop(worst.clone().into())),
+        Problem::Unlisted(Quoted::new(worst.clone())),
+    ];
+    for problem in problems {
+        let mut shown = view();
+        shown.problems = vec![problem];
+        let sent = line(&shown.bounded()).unwrap();
+        assert!(sent.len() < MAX_TEXT * 7 + 2048, "{}", sent.len());
+        let read = parse::<WindowView>(&sent[..sent.len() - 1]).unwrap();
+        // The quoted text, cut, inside the problem's own words.
+        let shown = read.problems[0].to_string();
+        assert!(shown.chars().count() < MAX_TEXT + 100, "{shown}");
+        assert!(shown.contains(&bounded(&worst)), "{shown}");
+    }
+}
+
+#[test]
+fn a_message_is_read_only_as_one_of_its_values_and_no_longer_than_cut() {
+    let answer = |outcome: serde_json::Value| {
+        let value = serde_json::json!({ "id": 1, "outcome": outcome });
+        parse::<Answer>(&serde_json::to_vec(&value).unwrap())
+    };
+    let cut = format!("{}…", "a".repeat(MAX_TEXT));
+    let over = "a".repeat(MAX_TEXT + 2);
+    assert!(answer(serde_json::json!({ "failed": { "write": cut } })).is_ok());
+    assert!(answer(serde_json::json!({ "failed": { "write": over } })).is_err());
+    assert!(answer(serde_json::json!({ "failed": "disk full" })).is_err());
+    assert!(answer(serde_json::json!({ "failed": { "nope": "x" } })).is_err());
+    let refused = |reason: serde_json::Value| {
+        answer(serde_json::json!({ "refused": { "field": "key", "reason": reason } }))
+    };
+    assert!(refused(serde_json::json!({ "key_code": { "code": 300 } })).is_ok());
+    assert!(refused(serde_json::json!({ "binding": over })).is_err());
+    assert!(refused(serde_json::json!("key code 300 is not from 1 to 248")).is_err());
+    assert!(refused(serde_json::json!({ "key_code": { "code": "300" } })).is_err());
+}
+
+#[test]
+fn a_message_with_an_unknown_field_is_not_read() {
+    let mut value = serde_json::to_value(view()).unwrap();
+    value["problems"] = serde_json::json!([
+        { "config": { "invalid": { "file": "c", "line": 1, "why": "w", "extra": 1 } } }
+    ]);
+    assert!(parse::<WindowView>(&serde_json::to_vec(&value).unwrap()).is_err());
+    value["problems"] = serde_json::json!([
+        { "config": { "invalid": { "file": "c", "line": 1, "why": "w" } } }
+    ]);
+    assert!(parse::<WindowView>(&serde_json::to_vec(&value).unwrap()).is_ok());
+}
+
+#[test]
+fn a_nested_reason_longer_than_cut_is_not_read() {
+    let with = |problem: serde_json::Value| {
+        let mut value = serde_json::to_value(view()).unwrap();
+        value["problems"] = serde_json::json!([problem]);
+        parse::<WindowView>(&serde_json::to_vec(&value).unwrap())
+    };
+    let cut = format!("{}…", "a".repeat(MAX_TEXT));
+    let over = "a".repeat(MAX_TEXT + 2);
+    for text in [&cut, &over] {
+        let fits = text == &cut;
+        let problems = [
+            serde_json::json!({ "blocked": { "unknown": text } }),
+            serde_json::json!({ "hotkeys": { "read_failed": text } }),
+            serde_json::json!({ "hotkeys": { "watch_failed": text } }),
+            serde_json::json!({ "hotkeys": { "desktop": text } }),
+            serde_json::json!({ "input": { "portal": text } }),
+        ];
+        for problem in problems {
+            assert_eq!(with(problem.clone()).is_ok(), fits, "{problem}");
+        }
+    }
+}
+
+#[test]
+fn what_comes_of_a_recording_reads_as_the_window_says_it() {
+    let cases = [
+        (RecordingOutcome::Renamed, "Renamed."),
+        (RecordingOutcome::Deleted, "Deleted."),
+        (
+            RecordingOutcome::Chosen,
+            "The playback hotkey plays this recording now.",
+        ),
+        (RecordingOutcome::Playing, "Playing."),
+        (
+            RecordingOutcome::Unsynced(RecordingChange::Rename, Quoted::new("EIO")),
+            "Renamed, but it may not survive a power loss: EIO",
+        ),
+        (
+            RecordingOutcome::NotChanged(RecordingChange::Delete, ChangeFailure::Missing),
+            "Not deleted: the file is no longer there",
+        ),
+        (
+            RecordingOutcome::NotChanged(RecordingChange::Rename, ChangeFailure::Missing),
+            "Not renamed: the file is no longer there",
+        ),
+        (
+            RecordingOutcome::NotPlaying(Some(Notice::NothingToPlay)),
+            "Nothing to play: no recordings yet",
+        ),
+        (RecordingOutcome::NotPlaying(None), "Not playing"),
+    ];
+    for (outcome, english) in cases {
+        assert_eq!(outcome.to_string(), english);
+    }
+}
+
+#[test]
+fn a_notice_reads_back_as_sent_with_its_key_and_refuses_a_key_that_is_none() {
+    use crate::hotkeys::Refusal;
+    use crate::input::Key;
+    use crate::message::{Hindrance, Start};
+    let notice = Notice::Refused {
+        start: Start::Clicking,
+        why: Hindrance::OwnKey(Refusal::Modifier(Key::new(42).unwrap())),
+    };
+    let outcome = Outcome::Recording(RecordingOutcome::NotPlaying(Some(notice)));
+    let answer = Answer { id: 2, outcome };
+    let sent = body(&answer);
+    assert!(String::from_utf8_lossy(&sent).contains("\"modifier\":42"));
+    assert_eq!(parse::<Answer>(&sent).unwrap(), answer);
+    let none = String::from_utf8_lossy(&sent).replace("\"modifier\":42", "\"modifier\":0");
+    assert!(parse::<Answer>(none.as_bytes()).is_err());
 }

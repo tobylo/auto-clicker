@@ -126,7 +126,13 @@ async fn the_tray_counts_down_plays_and_says_when_it_finished() {
         d.send(Message::Play(file)).await;
         let view = d.view();
         assert_eq!(view.activity, Activity::PlayingIn(5));
-        assert_eq!(view.playing.as_deref(), Some(LABEL));
+        assert_eq!(
+            view.playing
+                .as_ref()
+                .map(|playing| playing.to_string())
+                .as_deref(),
+            Some(LABEL)
+        );
         assert!(view.details().contains(&format!("Playing {LABEL}")));
         sleep(secs(5)).await;
         d.settle().await;
@@ -785,7 +791,7 @@ async fn a_folder_that_cannot_be_listed_is_a_problem_not_an_empty_list() {
         fs::write(&folder, b"").unwrap();
 
         d.send(Message::MenuOpened).await;
-        let problems = d.view().problems;
+        let problems = d.problems();
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(
             problems[0].starts_with("The recordings cannot be listed: "),
@@ -804,7 +810,7 @@ async fn a_folder_that_cannot_be_listed_is_a_problem_not_an_empty_list() {
         fs::remove_file(&folder).unwrap();
         fs::create_dir(&folder).unwrap();
         d.send(Message::MenuOpened).await;
-        assert_eq!(d.view().problems, [""; 0]);
+        assert_eq!(d.problems(), [""; 0]);
     })
     .await;
 }
@@ -821,7 +827,13 @@ async fn playback_opens_the_devices_for_its_run_and_closes_them_after() {
 
         d.send(Message::Play(file.clone())).await;
         assert_eq!(d.activity(), Activity::PlayOpening);
-        assert_eq!(d.view().playing.as_deref(), Some(LABEL));
+        assert_eq!(
+            d.view()
+                .playing
+                .map(|playing| playing.to_string())
+                .as_deref(),
+            Some(LABEL)
+        );
         // A stop drops the open, the desktop's dialog with it.
         d.send(Message::Stop).await;
         assert_eq!(gates.gates(|g| g.opens_dropped), 1);

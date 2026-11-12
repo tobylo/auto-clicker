@@ -106,7 +106,7 @@ async fn key_runs_are_allowed_while_the_desktop_delivers_no_hotkeys() {
         // the tray must still be able to start a key run.
         let d = desktop_daemon(pressing(Mode::HoldKey, "f6")).await;
         d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(
-            Unavailable::Desktop("no portal".to_owned()),
+            Unavailable::Desktop("no portal".to_owned().into()),
         )))
         .await;
         d.send(Message::Start).await;
@@ -136,7 +136,7 @@ async fn a_start_between_the_new_triggers_and_available_is_still_refused() {
     local(async {
         let d = desktop_daemon(pressing(Mode::HoldKey, "f6")).await;
         d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(
-            Unavailable::Desktop("the portal stopped".to_owned()),
+            Unavailable::Desktop("the portal stopped".to_owned().into()),
         )))
         .await;
         // The new session's triggers arrived; "available" has not yet.
@@ -358,11 +358,12 @@ async fn losing_the_desktops_hotkeys_stops_neither_a_run_nor_the_tray() {
         .await;
         d.hotkey(defaults()).await;
         d.send(Message::Start).await;
-        let lost = Unavailable::Desktop("the desktop's shortcuts service stopped".to_owned());
+        let lost =
+            Unavailable::Desktop("the desktop's shortcuts service stopped".to_owned().into());
         d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(lost.clone())))
             .await;
         assert_eq!(d.activity(), Activity::Clicking);
-        assert_eq!(d.view().problems, [lost.to_string()]);
+        assert_eq!(d.problems(), [lost.to_string()]);
         assert_eq!(
             lost.to_string(),
             "hotkeys are unavailable: the desktop's shortcuts service stopped"
@@ -374,7 +375,7 @@ async fn losing_the_desktops_hotkeys_stops_neither_a_run_nor_the_tray() {
         assert_eq!(d.activity(), Activity::Clicking);
         // The hotkeys come back: the problem goes.
         d.hotkey(HotkeyEvent::Status(HotkeyStatus::Available)).await;
-        assert_eq!(d.view().problems, [] as [String; 0]);
+        assert_eq!(d.problems(), [] as [String; 0]);
     })
     .await;
 }
@@ -387,7 +388,7 @@ async fn losing_the_desktops_hotkeys_cancels_a_start_waiting_for_the_release() {
         assert_eq!(d.activity(), Activity::WaitingForRelease);
         let start = Instant::now();
         d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(
-            Unavailable::Desktop("gone".to_owned()),
+            Unavailable::Desktop("gone".to_owned().into()),
         )))
         .await;
         assert_eq!(d.activity(), Activity::Idle);
@@ -435,7 +436,7 @@ async fn a_hotkey_set_off_by_the_programs_own_keys_as_the_desktop_returns_does_n
         let d = desktop_daemon_with_recording(&["w"]).await;
         d.hotkey(defaults()).await;
         d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(
-            Unavailable::Desktop("a portal service of the desktop stopped".to_owned()),
+            Unavailable::Desktop("a portal service of the desktop stopped".to_owned().into()),
         )))
         .await;
         d.hotkey(PLAY).await;
@@ -512,7 +513,7 @@ async fn a_trigger_report_during_the_echo_window_leaves_it_open() {
         let d = desktop_daemon(ClickerSettings::default()).await;
         d.hotkey(defaults()).await;
         d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(
-            Unavailable::Desktop("a portal service of the desktop stopped".to_owned()),
+            Unavailable::Desktop("a portal service of the desktop stopped".to_owned().into()),
         )))
         .await;
         d.hotkey(defaults()).await;

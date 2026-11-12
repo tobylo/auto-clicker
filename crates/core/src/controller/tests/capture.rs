@@ -7,6 +7,7 @@
 use super::settings::{Setup, Window, draft, setup, setup_with};
 use super::*;
 use crate::hotkeys::{Captured, Trigger, Triggers};
+use crate::message::{Failure, Quoted, Unavailability};
 use crate::window::{Ask, CAPTURE_TIME, CaptureEnd, Outcome};
 
 fn ctrl_f9() -> Binding {
@@ -196,12 +197,12 @@ async fn keyboards_that_stop_working_end_it_and_say_why() {
     local(async {
         let mut s = setup().await;
         let id = capturing(&mut s).await;
-        let gone = Unavailable::WatchFailed("gone".to_owned());
+        let gone = Unavailable::WatchFailed("gone".to_owned().into());
         s.d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(gone.clone())))
             .await;
         assert_eq!(
             s.window.answer_to(id),
-            Some(Outcome::Unavailable(gone.to_string()))
+            Some(Outcome::Unavailable(Unavailability::Hotkeys(gone.clone())))
         );
         assert!(hotkeys_back(&s.d));
     })
@@ -255,7 +256,7 @@ async fn the_capture_reader_finds_out_whether_a_keyboard_can_be_read() {
         s.d.hotkey(status).await;
         assert_eq!(
             s.window.answer_to(id),
-            Some(Outcome::Unavailable(none.to_string()))
+            Some(Outcome::Unavailable(Unavailability::Hotkeys(none.clone())))
         );
         assert!(hotkeys_back(&s.d));
     })
@@ -268,7 +269,10 @@ async fn no_capture_starts_while_the_session_may_not_be_read() {
         let mut s = setup().await;
         s.d.send(Message::Session(Some(Blocked::Locked))).await;
         let asked = s.window.ask(&s.d, Ask::Capture(Capture::Hotkey)).await;
-        assert_eq!(asked, Outcome::Unavailable(Blocked::Locked.to_string()));
+        assert_eq!(
+            asked,
+            Outcome::Unavailable(Unavailability::Blocked(Blocked::Locked))
+        );
         assert!(captures(&s.d).iter().all(Option::is_none));
     })
     .await;
@@ -345,7 +349,7 @@ async fn the_desktops_settings_open_through_the_reader() {
         s.d.hotkey(answered(2, Err("refused"))).await;
         assert_eq!(
             s.window.answer_to(id),
-            Some(Outcome::Failed("refused".to_owned()))
+            Some(Outcome::Failed(Failure::Desktop(Quoted::new("refused"))))
         );
     })
     .await;
@@ -359,9 +363,7 @@ async fn a_reader_that_never_answers_is_given_up_on_and_one_thing_at_a_time() {
         assert_eq!(s.window.ask(&s.d, configure(None)).await, Outcome::Busy);
         sleep(Duration::from_secs(60)).await;
         s.d.settle().await;
-        let failed = Some(Outcome::Failed(
-            "the desktop did not open its settings".to_owned(),
-        ));
+        let failed = Some(Outcome::Failed(Failure::NotOpened));
         assert_eq!(s.window.answer_to(id), failed);
         // A late answer changes nothing.
         s.d.hotkey(answered(1, Ok(()))).await;
@@ -377,9 +379,7 @@ async fn an_answer_the_controller_gets_to_only_at_the_deadline_is_not_taken() {
         let id = s.window.send(&s.d, configure(None)).await;
         tokio::time::advance(Duration::from_secs(60)).await;
         s.d.hotkey(answered(1, Ok(()))).await;
-        let failed = Some(Outcome::Failed(
-            "the desktop did not open its settings".to_owned(),
-        ));
+        let failed = Some(Outcome::Failed(Failure::NotOpened));
         assert_eq!(s.window.answer_to(id), failed);
     })
     .await;
@@ -390,12 +390,12 @@ async fn the_desktops_shortcuts_going_away_ends_the_wait_for_their_settings() {
     local(async {
         let mut s = desktop_setup().await;
         let id = s.window.send(&s.d, configure(None)).await;
-        let gone = Unavailable::Desktop("the session closed".to_owned());
+        let gone = Unavailable::Desktop("the session closed".to_owned().into());
         s.d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(gone.clone())))
             .await;
         assert_eq!(
             s.window.answer_to(id),
-            Some(Outcome::Failed(gone.to_string()))
+            Some(Outcome::Failed(Failure::Hotkeys(gone.clone())))
         );
         // Nothing is pending any more: the next request goes to the reader.
         let next = s.window.send(&s.d, configure(None)).await;
@@ -422,7 +422,7 @@ async fn an_answer_for_a_window_since_gone_is_not_taken_for_the_next_one() {
         s.d.hotkey(answered(1, Ok(()))).await;
         assert_eq!(second.answer_to(id), None);
         s.d.hotkey(answered(2, Err("refused"))).await;
-        let refused = Some(Outcome::Failed("refused".to_owned()));
+        let refused = Some(Outcome::Failed(Failure::Desktop(Quoted::new("refused"))));
         assert_eq!(second.answer_to(id), refused);
     })
     .await;
@@ -453,9 +453,7 @@ async fn the_wait_for_the_desktops_settings_ends_during_a_run_too() {
         sleep(Duration::from_secs(60)).await;
         s.d.settle().await;
         assert!(s.d.activity().clicking());
-        let failed = Some(Outcome::Failed(
-            "the desktop did not open its settings".to_owned(),
-        ));
+        let failed = Some(Outcome::Failed(Failure::NotOpened));
         assert_eq!(s.window.answer_to(id), failed);
     })
     .await;

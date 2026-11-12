@@ -1,6 +1,12 @@
-//! The tray's menu labels and title line in the user's language. The menu
-//! is built in English; [`label`] gives each label in the language shown.
-//! The tooltip's other lines stay English for now (#60).
+//! What the tray shows, in the user's language: the menu labels, the title
+//! line and the tooltip's lines, notices and problems. The menu is built
+//! in English; [`label`] gives each label in the language shown. Core
+//! gives the rest as values, whose English is their `Display`; the
+//! Swedish forms are here, one module per family of messages.
+
+mod lines;
+mod notice;
+mod problem;
 
 use auto_clicker_core::controller::{Activity, Hotkey, View};
 use auto_clicker_core::hotkeys::{Binding, DESKTOP_RELEASE_PAUSE};
@@ -43,6 +49,14 @@ pub fn label(english: &str, language: Language) -> String {
     match english.strip_prefix(RECORDING.0) {
         Some(when) => format!("{}{when}", RECORDING.1),
         None => english.to_owned(),
+    }
+}
+
+/// The tooltip's lines for `view` in `language`.
+pub fn details(view: &View, language: Language) -> Vec<String> {
+    match language {
+        Language::English => view.details(),
+        Language::Swedish => lines::details(view),
     }
 }
 
@@ -97,88 +111,4 @@ fn modifiers_of(binding: Binding) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use auto_clicker_core::config::Config;
-    use auto_clicker_core::controller::NoRecording;
-    use auto_clicker_core::hotkeys::Unavailable;
-
-    use super::*;
-
-    fn view(activity: Activity) -> View {
-        let config = Config::default();
-        View {
-            activity,
-            settings: config.clicker,
-            hotkey: Hotkey::Bound(config.hotkeys.toggle_clicking),
-            record_hotkey: Hotkey::Bound(config.hotkeys.toggle_recording),
-            no_recording: None,
-            play_hotkey: Hotkey::Desktop(Some("Meta+P".to_owned())),
-            playback: config.playback,
-            recordings: Arc::from([]),
-            current: None,
-            playing: None,
-            notice: None,
-            problems: Vec::new(),
-            routes: auto_clicker_core::controller::Routes::default(),
-        }
-    }
-
-    #[test]
-    fn english_is_as_built_and_swedish_has_every_menu_label() {
-        let labels = [
-            "Start clicking",
-            "Stop clicking",
-            "Record",
-            "Stop recording",
-            "Play",
-            "Stop playing",
-            "Settings",
-            "Quit",
-            "No recordings yet",
-            NoRecording::DesktopHotkeys.label(),
-            NoRecording::Keyboards(Unavailable::NoPermission).label(),
-            NoRecording::Keyboards(Unavailable::NoKeyboard).label(),
-        ];
-        for english in labels {
-            assert_eq!(label(english, Language::English), english);
-            assert_ne!(label(english, Language::Swedish), english, "{english}");
-        }
-        assert_eq!(
-            label("Recording 2026-11-09 18:04:05", Language::Swedish),
-            "Inspelning 2026-11-09 18:04:05"
-        );
-    }
-
-    #[test]
-    fn the_title_line_speaks_the_language() {
-        let waiting = view(Activity::WaitingForRelease);
-        assert_eq!(title(&waiting, Language::English), waiting.title());
-        assert_eq!(
-            title(&waiting, Language::Swedish),
-            "Autoklickare: börjar när du släpper Ctrl och Shift"
-        );
-        let pause = DESKTOP_RELEASE_PAUSE.as_secs();
-        assert_eq!(
-            title(&view(Activity::PlayWaitingForRelease), Language::Swedish),
-            format!("Autoklickare: spelar upp {pause} s efter att du släppt snabbtangenten")
-        );
-        let every = [
-            Activity::Idle,
-            Activity::StartingIn(3),
-            Activity::Opening,
-            Activity::Clicking,
-            Activity::RecordingIn(2),
-            Activity::Recording,
-            Activity::PlayingIn(1),
-            Activity::PlayOpening,
-            Activity::Playing,
-        ];
-        for activity in every {
-            let shown = title(&view(activity), Language::Swedish);
-            assert!(shown.starts_with("Autoklickare: "), "{shown}");
-            assert_ne!(shown, view(activity).title());
-        }
-    }
-}
+mod tests;

@@ -158,8 +158,11 @@ async fn positions_that_cannot_play_fall_back_and_say_why() {
         ] {
             let (d, file) = daemon_playing(layout, true).await;
             d.play_file_until_w_is_down(&file).await;
-            assert!(why.notice().starts_with("Playing with relative motion: "));
-            assert_eq!(d.notice(), why.notice());
+            assert!(
+                why.to_string()
+                    .starts_with("Playing with relative motion: ")
+            );
+            assert_eq!(d.notice(), why.to_string());
             assert_eq!(d.shared.calls(), [w(PressState::Down)]);
         }
     })

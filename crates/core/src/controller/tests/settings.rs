@@ -5,8 +5,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use super::*;
-use crate::config::{CountDraft, Draft, Field, IntervalDraft, ModeName, RouteName, Stale};
+use crate::config::{CountDraft, Draft, Field, IntervalDraft, ModeName, Reason, RouteName, Stale};
 use crate::input::Button;
+use crate::message::Failure;
 use crate::window::{Ask, Confirm, Outcome, Request, WindowView};
 
 /// A settings window as the controller sees it: the other ends of a link.
@@ -371,8 +372,18 @@ async fn a_refusal_quoting_a_long_value_still_reaches_the_window() {
             other => panic!("{other:?}"),
         };
         assert_eq!(refusal.field, Field::Hotkey(Action::ToggleClicking));
-        assert_eq!(refusal.reason.chars().count(), crate::window::MAX_TEXT + 1);
-        assert!(crate::window::line(&s.window.view()).is_ok());
+        assert!(refusal.reason.to_string().chars().count() > 40_000);
+        // Cut on its way to the window.
+        let sent = crate::window::line(&s.window.view()).unwrap();
+        let read: WindowView = crate::window::parse(&sent[..sent.len() - 1]).unwrap();
+        let reason = read.answer.map(|answer| answer.outcome);
+        let Some(Outcome::Refused(refusal)) = reason else {
+            panic!("{reason:?}");
+        };
+        assert_eq!(
+            refusal.reason.to_string().chars().count(),
+            crate::window::MAX_TEXT + 1
+        );
     })
     .await;
 }
@@ -426,7 +437,7 @@ async fn without_a_config_file_a_save_fails_and_says_why() {
         let mut window = Window::open(&opener.unwrap());
         d.settle().await;
         match window.save(&d, draft(hold_right)).await {
-            Outcome::Failed(why) => assert!(why.contains("no config directory"), "{why}"),
+            Outcome::Failed(why) => assert_eq!(why, Failure::NoConfigDirectory),
             other => panic!("{other:?}"),
         }
         assert_eq!(d.view().settings, ClickerSettings::default());
@@ -591,11 +602,7 @@ async fn where_the_desktop_delivers_hotkeys_they_stay_and_the_rest_saves() {
             other => panic!("{other:?}"),
         };
         assert_eq!(refusal.field, Field::Hotkey(Action::TogglePlayback));
-        assert!(
-            refusal.reason.contains("System Settings"),
-            "{}",
-            refusal.reason
-        );
+        assert_eq!(refusal.reason, Reason::DesktopChooses);
         let other = draft(|d| {
             portal(d);
             hold_right(d);

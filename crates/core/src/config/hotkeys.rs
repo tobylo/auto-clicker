@@ -7,9 +7,9 @@
 use toml::Spanned;
 
 use super::HotkeyRoute;
-use super::check;
 use super::raw::RawHotkeys;
 use super::validate::{Invalid, at};
+use super::{Reason, check};
 use crate::clicker::ClickerSettings;
 use crate::hotkeys::{Action, Binding, Bindings};
 
@@ -19,10 +19,13 @@ struct Placed<'a> {
 }
 
 impl Placed<'_> {
-    fn invalid(&self, reason: String) -> Invalid {
+    fn invalid(&self, reason: &Reason) -> Invalid {
         match self.written {
             Some(value) => at(value, reason),
-            None => Invalid { span: None, reason },
+            None => Invalid {
+                span: None,
+                reason: reason.to_string(),
+            },
         }
     }
 }
@@ -50,14 +53,14 @@ pub(super) fn hotkeys(
         let reason = check::bound_twice(bindings.binding(later));
         let later = placed(later);
         return Err(match later.written {
-            Some(_) => later.invalid(reason),
-            None => placed(earlier).invalid(reason),
+            Some(_) => later.invalid(&reason),
+            None => placed(earlier).invalid(&reason),
         });
     }
     if route.may_read_keyboards()
         && let Some((action, reason)) = check::on_the_clicker_key(&bindings, clicker)
     {
-        return Err(placed(action).invalid(reason));
+        return Err(placed(action).invalid(&reason));
     }
     Ok(bindings)
 }

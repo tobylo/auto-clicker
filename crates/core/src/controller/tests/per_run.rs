@@ -315,7 +315,7 @@ async fn a_failed_open_says_why_the_start_did_not_happen() {
             d.notice()
         );
         // A per-run failure is told once, not kept as a problem.
-        assert!(d.view().problems.is_empty(), "{:?}", d.view().problems);
+        assert!(d.problems().is_empty(), "{:?}", d.problems());
     })
     .await;
 }
@@ -340,7 +340,7 @@ async fn a_problem_found_at_start_shows_until_an_open_works() {
             task,
         };
         d.send(Message::Session(None)).await;
-        let problems = d.view().problems;
+        let problems = d.problems();
         assert!(
             problems.iter().any(|p| p.contains("no portal")),
             "{problems:?}"
@@ -349,7 +349,7 @@ async fn a_problem_found_at_start_shows_until_an_open_works() {
         shared.finish_open(Ok(()));
         d.settle().await;
         assert_eq!(d.activity(), Activity::Clicking);
-        assert!(d.view().problems.is_empty(), "{:?}", d.view().problems);
+        assert!(d.problems().is_empty(), "{:?}", d.problems());
     })
     .await;
 }

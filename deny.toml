@@ -55,6 +55,9 @@ exceptions = [
     { crate = "i-slint-core", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
     { crate = "i-slint-core-macros", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
     { crate = "i-slint-renderer-femtovg", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    # Only the settings window's tests draw with these, without a display.
+    { crate = "i-slint-backend-testing", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-renderer-software", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
 ]
 # Crates used only by tests are built on the machine too.
 include-dev = true

@@ -7,6 +7,7 @@
 //! renames it over the old one, so a crash or a failure leaves the old file
 //! whole.
 
+use std::cell::Cell;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -16,6 +17,7 @@ use super::library::{FileName, LoadError, MAX_FILE_BYTES, load_in};
 use super::store::{held_path, named, open_folder};
 use super::{InvalidRecording, check_name};
 use crate::fs::{Place, atomic_save_with};
+use crate::message::{ChangeFailure, Quoted, Step, Unplayable};
 
 /// Why a recording was not changed. Nothing was.
 #[derive(Debug)]
@@ -26,18 +28,37 @@ pub enum ChangeError {
     Refused(InvalidRecording),
     /// The file could not be read, or is not a valid recording.
     Unreadable(LoadError),
-    /// Writing or removing failed, or the folder could not be opened.
+    /// The folder could not be opened.
     Failed(io::Error),
+    /// Writing or removing the file failed.
+    NotDone { step: Step, err: io::Error },
+    /// The renamed recording would be larger than a load reads.
+    TooLarge,
 }
 
+impl From<&ChangeError> for ChangeFailure {
+    fn from(err: &ChangeError) -> ChangeFailure {
+        let quoted = |err: &dyn fmt::Display| Quoted::new(err.to_string());
+        match err {
+            ChangeError::Missing => ChangeFailure::Missing,
+            ChangeError::Refused(why) => ChangeFailure::Refused(quoted(why)),
+            ChangeError::Unreadable(why) => ChangeFailure::Unreadable(Unplayable::from(why)),
+            ChangeError::Failed(why) => ChangeFailure::Folder(quoted(why)),
+            ChangeError::NotDone { step, err } => ChangeFailure::NotDone {
+                step: *step,
+                why: quoted(err),
+            },
+            ChangeError::TooLarge => ChangeFailure::TooLarge {
+                mib: MAX_FILE_BYTES / (1024 * 1024),
+            },
+        }
+    }
+}
+
+/// The same words the window shows, in English: see [`ChangeFailure`].
 impl fmt::Display for ChangeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ChangeError::Missing => f.write_str("the file is no longer there"),
-            ChangeError::Refused(err) => write!(f, "{err}"),
-            ChangeError::Unreadable(err) => write!(f, "{err}"),
-            ChangeError::Failed(err) => write!(f, "{err}"),
-        }
+        ChangeFailure::from(self).fmt(f)
     }
 }
 
@@ -78,7 +99,15 @@ fn rename_capped(
     })?;
     let renamed = recording.renamed(name).map_err(ChangeError::Refused)?;
     let path = held_path(&folder).join(file.as_str());
-    let write = |out: &mut dyn Write| renamed.write_json(&mut Capped { out, left: cap });
+    let over = Cell::new(false);
+    let write = |out: &mut dyn Write| {
+        let over = &over;
+        renamed.write_json(&mut Capped {
+            out,
+            left: cap,
+            over,
+        })
+    };
     match atomic_save_with(&path, write, Place::Replace) {
         Ok(Ok(())) => Ok(Changed::Synced),
         Ok(Err(unsynced)) => Ok(Changed::Unsynced(named(
@@ -86,27 +115,33 @@ fn rename_capped(
             dir,
             &unsynced.into_error(),
         ))),
-        Err(err) => Err(failed(&folder, dir, "written", &err)),
+        Err(err) if too_large(over.get(), &err) => Err(ChangeError::TooLarge),
+        Err(err) => Err(failed(&folder, dir, Step::Written, &err)),
     }
 }
 
-/// A writer that refuses to take more than `left` bytes more.
+/// Whether a failed write failed for the cap alone: the cap was reached
+/// (`over`), and `err` is still the cap's own bare error. A temporary file
+/// that could not be removed after it turns the error into one that names
+/// that file, which is reported as it is.
+fn too_large(over: bool, err: &io::Error) -> bool {
+    over && err.kind() == io::ErrorKind::FileTooLarge && err.get_ref().is_none()
+}
+
+/// A writer that refuses to take more than `left` bytes more, and notes in
+/// `over` that it did.
 struct Capped<'a> {
     out: &'a mut dyn Write,
     left: u64,
+    over: &'a Cell<bool>,
 }
 
 impl Write for Capped<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let fits = u64::try_from(bytes.len()).is_ok_and(|len| len <= self.left);
         if !fits {
-            return Err(io::Error::new(
-                io::ErrorKind::FileTooLarge,
-                format!(
-                    "the renamed recording would be larger than {} MiB",
-                    MAX_FILE_BYTES / (1024 * 1024)
-                ),
-            ));
+            self.over.set(true);
+            return Err(io::ErrorKind::FileTooLarge.into());
         }
         let written = self.out.write(bytes)?;
         self.left = self
@@ -123,14 +158,14 @@ impl Write for Capped<'_> {
 /// Deletes the recording `file` in `dir`, for good.
 ///
 /// # Errors
-/// [`ChangeError::Missing`] when it is already gone; [`ChangeError::Failed`]
-/// when it cannot be removed.
+/// [`ChangeError::Missing`] when it is already gone;
+/// [`ChangeError::NotDone`] when it cannot be removed.
 pub fn delete(dir: &Path, file: &FileName) -> Result<Changed, ChangeError> {
     let folder = open(dir)?;
     match fs::remove_file(held_path(&folder).join(file.as_str())) {
         Ok(()) => {}
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Err(ChangeError::Missing),
-        Err(err) => return Err(failed(&folder, dir, "deleted", &err)),
+        Err(err) => return Err(failed(&folder, dir, Step::Deleted, &err)),
     }
     Ok(match folder.sync_all() {
         Ok(()) => Changed::Synced,
@@ -146,14 +181,13 @@ fn open(dir: &Path) -> Result<File, ChangeError> {
     })
 }
 
-/// `err`, from a file that could not be `done`, naming the folder by its
-/// path rather than by the handle it was reached through.
-fn failed(folder: &File, dir: &Path, done: &str, err: &io::Error) -> ChangeError {
-    let err = named(folder, dir, err);
-    ChangeError::Failed(io::Error::new(
-        err.kind(),
-        format!("the file could not be {done}: {err}"),
-    ))
+/// `err`, from a file that could not be through `step`, naming the folder
+/// by its path rather than by the handle it was reached through.
+fn failed(folder: &File, dir: &Path, step: Step, err: &io::Error) -> ChangeError {
+    ChangeError::NotDone {
+        step,
+        err: named(folder, dir, err),
+    }
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@
 mod app;
 mod link;
 mod model;
+mod said;
 mod shelf;
 mod state;
 
@@ -91,28 +92,66 @@ fn fail(message: &str) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    /// The string literal at the start of `text`, still escaped as Slint
+    /// and the .po file both escape it, and what follows it.
+    fn literal(text: &str) -> Option<(&str, &str)> {
+        let body = text.strip_prefix('"')?;
+        let mut escaped = false;
+        let end = body.char_indices().find_map(|(at, c)| match (escaped, c) {
+            (false, '\\') => {
+                escaped = true;
+                None
+            }
+            (false, '"') => Some(at),
+            _ => {
+                escaped = false;
+                None
+            }
+        })?;
+        Some((&body[..end], &body[end + 1..]))
+    }
+
+    /// Every `@tr` text of `ui`, with its context if it has one.
+    fn texts(ui: &str) -> Vec<(Option<&str>, &str)> {
+        ui.split("@tr(")
+            .skip(1)
+            .filter_map(|rest| {
+                let (first, after) = literal(rest)?;
+                match after.strip_prefix(" => ").and_then(literal) {
+                    Some((text, _)) => Some((Some(first), text)),
+                    None => Some((None, first)),
+                }
+            })
+            .collect()
+    }
+
     /// Every text the window shows has a Swedish translation: a missing one
     /// would show English in a Swedish window.
     #[test]
     fn every_text_is_translated_to_swedish() {
         let ui = include_str!("../ui/window.slint");
         let po = include_str!("../translations/sv/LC_MESSAGES/auto-clicker-settings.po");
-        let texts: Vec<&str> = ui
-            .split("@tr(\"")
-            .skip(1)
-            .filter_map(|rest| rest.split('"').next())
-            .collect();
-        assert!(texts.len() > 60, "{}", texts.len());
-        for text in texts {
-            let entry = format!("msgid \"{text}\"\nmsgstr \"");
-            let translated = po
-                .split(&entry)
-                .nth(1)
-                .and_then(|rest| rest.split('"').next());
+        let texts = texts(ui);
+        assert!(texts.len() > 100, "{}", texts.len());
+        for (context, text) in texts {
+            let context = context
+                .map(|c| format!("msgctxt \"{c}\"\n"))
+                .unwrap_or_default();
+            let entry = format!("\n{context}msgid \"{text}\"\nmsgstr ");
+            let translated = po.split(&entry).nth(1).and_then(literal);
             assert!(
-                translated.is_some_and(|swedish| !swedish.is_empty()),
+                translated.is_some_and(|(swedish, _)| !swedish.is_empty()),
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn texts_are_read_with_their_context_and_escapes() {
+        let ui = r#"@tr("a \"b\" c") @tr("ctx" => "{}: {}", x) @tr("d")"#;
+        assert_eq!(
+            texts(ui),
+            [(None, r#"a \"b\" c"#), (Some("ctx"), "{}: {}"), (None, "d")]
+        );
     }
 }

@@ -75,7 +75,16 @@ fn a_rename_that_cannot_write_leaves_the_old_file_whole() {
         return;
     }
     let err = renamed.unwrap_err();
-    assert!(matches!(err, ChangeError::Failed(_)), "{err:?}");
+    assert!(
+        matches!(
+            err,
+            ChangeError::NotDone {
+                step: Step::Written,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
     let text = err.to_string();
     assert!(
         text.starts_with("the file could not be written: "),
@@ -113,7 +122,7 @@ fn a_delete_that_is_not_allowed_is_a_failure_not_a_file_gone() {
     }
     let err = deleted.unwrap_err();
     assert!(
-        matches!(&err, ChangeError::Failed(io) if io.kind() == io::ErrorKind::PermissionDenied),
+        matches!(&err, ChangeError::NotDone { step: Step::Deleted, err } if err.kind() == io::ErrorKind::PermissionDenied),
         "{err:?}"
     );
     assert!(
@@ -150,10 +159,27 @@ fn a_rename_that_would_outgrow_what_a_load_reads_leaves_the_old_file_whole() {
     let same = "x".repeat(sample().name().chars().count());
     rename_capped(dir.path(), &file, same.clone(), size).unwrap();
     let err = rename_capped(dir.path(), &file, format!("{same}y"), size).unwrap_err();
-    assert!(
-        err.to_string().contains("would be larger than 256 MiB"),
-        "{err}"
+    assert!(matches!(err, ChangeError::TooLarge), "{err:?}");
+    assert_eq!(
+        err.to_string(),
+        "the file could not be written: the renamed recording would be larger than 256 MiB"
     );
     assert_eq!(load(dir.path(), &file).unwrap().name(), same);
     assert_eq!(dir.entries(), [file.as_str()]);
+}
+
+#[test]
+fn only_the_caps_own_error_is_too_large() {
+    let bare = || io::Error::from(io::ErrorKind::FileTooLarge);
+    assert!(too_large(true, &bare()));
+    assert!(!too_large(false, &bare()));
+    let left = io::Error::new(
+        io::ErrorKind::FileTooLarge,
+        "file too large; removing .tmp failed too: denied",
+    );
+    assert!(!too_large(true, &left));
+    assert!(!too_large(
+        true,
+        &io::Error::from(io::ErrorKind::StorageFull)
+    ));
 }

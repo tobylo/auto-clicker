@@ -16,6 +16,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::{Controller, LISTED_RECORDINGS, Listed, Platform, State};
+use crate::message::{ChangeFailure, Problem, Quoted, RecordingChange};
 use crate::recording::{ChangeError, Changed, CurrentFile, FileName, delete, list, rename};
 use crate::window::{Outcome, RecordingAction, RecordingOutcome, RecordingsView};
 
@@ -34,14 +35,14 @@ pub(super) struct Shelf {
     /// The last listing found no file for the current recording.
     current_gone: bool,
     /// Why the recordings could not be listed.
-    pub(super) error: Option<String>,
+    pub(super) error: Option<Quoted>,
     /// The recording the playback hotkey plays: the one last chosen,
     /// recorded or played. `None` until then, which means the newest.
     pub(super) current: Option<FileName>,
     /// Where the current recording is kept.
     file: CurrentFile,
     /// Why the current recording could not be read at start, or kept.
-    pub(super) current_error: Option<String>,
+    pub(super) current_error: Option<Problem>,
     /// The state file holds the current recording: it was read from there,
     /// or written there.
     kept: bool,
@@ -84,10 +85,8 @@ impl<P: Platform> Controller<P> {
                 self.shelf.kept = true;
             }
             Err(err) => {
-                self.shelf.current_error = Some(format!(
-                    "The recording the playback hotkey plays could not be read, so it plays \
-                     the newest: {err}"
-                ));
+                let why = Quoted::new(err.to_string());
+                self.shelf.current_error = Some(Problem::CurrentUnread(why));
             }
         }
         self.shelf.file = file;
@@ -104,22 +103,22 @@ impl<P: Platform> Controller<P> {
         self.shelf.current = Some(file.clone());
         let written = self.shelf.file.write(file);
         self.shelf.kept = written.is_ok();
-        self.shelf.current_error = written.err().map(|err| {
-            format!(
-                "The recording the playback hotkey plays could not be kept for the next start: \
-                 {err}"
-            )
-        });
+        self.shelf.current_error = written
+            .err()
+            .map(|err| Problem::CurrentUnkept(Quoted::new(err.to_string())));
     }
 
     /// A recording was saved at `path`: it is the current one now, and the
     /// list has it.
-    pub(super) fn saved(&mut self, path: &Path) {
+    /// The file, when its name is one a recording's file has.
+    pub(super) fn saved(&mut self, path: &Path) -> Option<FileName> {
         let name = path.file_name().and_then(|name| name.to_str());
-        if let Some(file) = name.and_then(FileName::parse) {
-            self.make_current(&file);
+        let file = name.and_then(FileName::parse);
+        if let Some(file) = &file {
+            self.make_current(file);
         }
         self.list_recordings();
+        file
     }
 
     /// A settings window opened: it gets the longer list once the
@@ -160,7 +159,7 @@ impl<P: Platform> Controller<P> {
             None => Ok(Default::default()),
         };
         self.shelf.relist = false;
-        self.shelf.error = found.as_ref().err().map(ToString::to_string);
+        self.shelf.error = found.as_ref().err().map(|err| Quoted::new(err.to_string()));
         let found = found.unwrap_or_default();
         self.shelf.total = found.total;
         self.shelf.current_gone = self.shelf.current.is_some() && !found.holds;
@@ -188,19 +187,11 @@ impl<P: Platform> Controller<P> {
         Outcome::Recording(match action {
             RecordingAction::Rename { name } => {
                 let renamed = self.change(|dir| rename(dir, file, name));
-                done(
-                    renamed,
-                    RecordingOutcome::Renamed,
-                    ["Renamed", "Not renamed"],
-                )
+                done(renamed, RecordingOutcome::Renamed, RecordingChange::Rename)
             }
             RecordingAction::Delete => {
                 let deleted = self.change(|dir| delete(dir, file));
-                done(
-                    deleted,
-                    RecordingOutcome::Deleted,
-                    ["Deleted", "Not deleted"],
-                )
+                done(deleted, RecordingOutcome::Deleted, RecordingChange::Delete)
             }
             RecordingAction::Choose => {
                 self.make_current(file);
@@ -232,27 +223,26 @@ impl<P: Platform> Controller<P> {
     fn play_from_window(&mut self, file: &FileName) -> RecordingOutcome {
         self.play_from_tray(file);
         if matches!(self.state, State::Idle) {
-            let why = self.notice.clone();
-            RecordingOutcome::NotDone(why.unwrap_or_else(|| "Not playing".to_owned()))
+            RecordingOutcome::NotPlaying(self.notice.clone())
         } else {
             RecordingOutcome::Playing
         }
     }
 }
 
-/// `ok` when `changed` went through and reached the disk; else a sentence
-/// that starts with `done` or `not`.
+/// `ok` when `changed` went through and reached the disk; else how
+/// `change` went short of that.
 fn done(
     changed: Result<Changed, ChangeError>,
     ok: RecordingOutcome,
-    [done, not]: [&str; 2],
+    change: RecordingChange,
 ) -> RecordingOutcome {
     match changed {
         Ok(Changed::Synced) => ok,
-        Ok(Changed::Unsynced(err)) => RecordingOutcome::Unsynced(format!(
-            "{done}, but it may not survive a power loss: {err}"
-        )),
-        Err(err) => RecordingOutcome::NotDone(format!("{not}: {err}")),
+        Ok(Changed::Unsynced(err)) => {
+            RecordingOutcome::Unsynced(change, Quoted::new(err.to_string()))
+        }
+        Err(err) => RecordingOutcome::NotChanged(change, ChangeFailure::from(&err)),
     }
 }
 
@@ -264,24 +254,17 @@ mod tests {
 
     #[test]
     fn a_change_says_whether_it_was_done_and_whether_it_reached_the_disk() {
-        let said = |changed| {
-            done(
-                changed,
-                RecordingOutcome::Deleted,
-                ["Deleted", "Not deleted"],
-            )
-        };
-        assert_eq!(said(Ok(Changed::Synced)), RecordingOutcome::Deleted);
+        let said =
+            |changed| done(changed, RecordingOutcome::Deleted, RecordingChange::Delete).to_string();
+        assert_eq!(said(Ok(Changed::Synced)), "Deleted.");
         let unsynced = Changed::Unsynced(io::Error::other("no flush"));
         assert_eq!(
             said(Ok(unsynced)),
-            RecordingOutcome::Unsynced(
-                "Deleted, but it may not survive a power loss: no flush".to_owned()
-            )
+            "Deleted, but it may not survive a power loss: no flush"
         );
         assert_eq!(
             said(Err(ChangeError::Missing)),
-            RecordingOutcome::NotDone("Not deleted: the file is no longer there".to_owned())
+            "Not deleted: the file is no longer there"
         );
     }
 }

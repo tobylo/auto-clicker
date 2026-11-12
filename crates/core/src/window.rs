@@ -19,7 +19,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{Draft, InputDraft, Refusal, Stale};
 use crate::controller::{Activity, Hotkey, Listed, NoRecording, Routes};
-use crate::hotkeys::{Action, Binding, Capture, Unavailable};
+use crate::hotkeys::{Action, Binding, Capture};
+use crate::message::{
+    ChangeFailure, Failure, Notice, Problem, Quoted, RecordingChange, Unavailability,
+};
 use crate::recording::FileName;
 
 /// The longest line either side sends or reads, newline included. A view
@@ -27,10 +30,10 @@ use crate::recording::FileName;
 /// fits with room to spare (`window::tests`).
 pub const MAX_LINE: usize = 1024 * 1024;
 
-/// The most characters of one message (a problem, a refusal, a failure) a
-/// view carries; a longer one is cut, so it can quote what it is about
-/// (a hotkey the window sent, a line of the config file) and the view still
-/// fits in [`MAX_LINE`], escaped as JSON escapes it.
+/// The most characters of one text from outside the program (a reader's
+/// error, a trigger the desktop reports, a parser's message) a view
+/// carries; a longer one is cut, so the view still fits in [`MAX_LINE`],
+/// escaped as JSON escapes it.
 pub const MAX_TEXT: usize = 500;
 
 /// The most problems a view lists.
@@ -127,7 +130,7 @@ pub struct WindowView {
     /// can.
     pub no_recording: Option<NoRecording>,
     /// What is wrong now, as the tray lists it.
-    pub problems: Vec<String>,
+    pub problems: Vec<Problem>,
     pub recordings: RecordingsView,
     /// The answer to the window's last request, once there is one.
     pub answer: Option<Answer>,
@@ -170,7 +173,7 @@ pub enum Outcome {
     /// Written and in use.
     Saved,
     /// Written and in use, but not flushed to disk: why.
-    SavedUnsynced(String),
+    SavedUnsynced(Quoted),
     /// Nothing was written: the program is clicking, recording or playing,
     /// or about to. Save once it is idle.
     Busy,
@@ -180,7 +183,7 @@ pub enum Outcome {
     /// again with the matching flag set.
     Confirm(Confirm),
     /// Writing failed, or there is nowhere to write; nothing was written.
-    Failed(String),
+    Failed(Failure),
     /// What a capture got: a hotkey, which may have no modifier, or the
     /// clicker's key, as a Linux key code.
     CapturedHotkey(Binding),
@@ -192,7 +195,7 @@ pub enum Outcome {
     /// This cannot be done here, and why: capturing where the desktop
     /// delivers the hotkeys or no keyboard can be read, or opening the
     /// desktop's settings where the program reads the keyboards.
-    Unavailable(String),
+    Unavailable(Unavailability),
     /// What came of a [`Ask::Recording`] that was not busy.
     Recording(RecordingOutcome),
 }
@@ -206,11 +209,34 @@ pub enum RecordingOutcome {
     Chosen,
     /// Its countdown began, or it plays.
     Playing,
-    /// Done, but it may not survive a power loss, as a whole sentence:
-    /// "Deleted, but …".
-    Unsynced(String),
-    /// Nothing changed, and why, as a whole sentence: "Not renamed: …".
-    NotDone(String),
+    /// Done, but it may not survive a power loss: why.
+    Unsynced(RecordingChange, Quoted),
+    /// Nothing changed, and why.
+    NotChanged(RecordingChange, ChangeFailure),
+    /// It does not play: what the tray says about it, if anything.
+    NotPlaying(Option<Notice>),
+}
+
+/// What the window says of it, in English.
+impl fmt::Display for RecordingOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RecordingOutcome::Renamed => f.write_str("Renamed."),
+            RecordingOutcome::Deleted => f.write_str("Deleted."),
+            RecordingOutcome::Chosen => {
+                f.write_str("The playback hotkey plays this recording now.")
+            }
+            RecordingOutcome::Playing => f.write_str("Playing."),
+            RecordingOutcome::Unsynced(change, why) => write!(
+                f,
+                "{}, but it may not survive a power loss: {why}",
+                change.done()
+            ),
+            RecordingOutcome::NotChanged(change, why) => write!(f, "{}: {why}", change.not_done()),
+            RecordingOutcome::NotPlaying(Some(notice)) => notice.fmt(f),
+            RecordingOutcome::NotPlaying(None) => f.write_str("Not playing"),
+        }
+    }
 }
 
 /// Why a capture ended without a key.
@@ -239,32 +265,11 @@ pub enum Confirm {
     WithoutModifier(Vec<Action>),
 }
 
-impl Outcome {
-    /// The outcome with its message cut to [`MAX_TEXT`].
-    pub fn bounded(self) -> Outcome {
-        match self {
-            Outcome::Refused(Refusal { field, reason }) => {
-                Outcome::Refused(Refusal::new(field, bounded(&reason)))
-            }
-            Outcome::Failed(why) => Outcome::Failed(bounded(&why)),
-            Outcome::Unavailable(why) => Outcome::Unavailable(bounded(&why)),
-            Outcome::SavedUnsynced(why) => Outcome::SavedUnsynced(bounded(&why)),
-            Outcome::Recording(RecordingOutcome::NotDone(why)) => {
-                Outcome::Recording(RecordingOutcome::NotDone(bounded(&why)))
-            }
-            Outcome::Recording(RecordingOutcome::Unsynced(why)) => {
-                Outcome::Recording(RecordingOutcome::Unsynced(bounded(&why)))
-            }
-            other => other,
-        }
-    }
-}
-
 impl WindowView {
-    /// The view with every text from outside the program cut to
-    /// [`MAX_TEXT`] (a reader's error, a trigger the desktop reports, a
-    /// problem, an answer's message) and at most [`MAX_PROBLEMS`]
-    /// problems, so it always fits a line.
+    /// The view with the triggers the desktop reports cut to [`MAX_TEXT`]
+    /// and at most [`MAX_PROBLEMS`] problems, so it always fits a line.
+    /// Text from outside the program in a message is [`Quoted`], which is
+    /// cut on its way out.
     pub fn bounded(self) -> WindowView {
         let shown = |hotkey: Hotkey| match hotkey {
             Hotkey::Desktop(Some(trigger)) => Hotkey::Desktop(Some(bounded(&trigger))),
@@ -281,31 +286,9 @@ impl WindowView {
                 toggle_recording: shown(toggle_recording),
                 toggle_playback: shown(toggle_playback),
             },
-            no_recording: self.no_recording.map(bounded_no_recording),
-            problems: self
-                .problems
-                .iter()
-                .take(MAX_PROBLEMS)
-                .map(|problem| bounded(problem))
-                .collect(),
-            answer: self.answer.map(|answer| Answer {
-                id: answer.id,
-                outcome: answer.outcome.bounded(),
-            }),
+            problems: self.problems.into_iter().take(MAX_PROBLEMS).collect(),
             ..self
         }
-    }
-}
-
-fn bounded_no_recording(why: NoRecording) -> NoRecording {
-    match why {
-        NoRecording::Keyboards(unavailable) => NoRecording::Keyboards(match unavailable {
-            Unavailable::ReadFailed(why) => Unavailable::ReadFailed(bounded(&why)),
-            Unavailable::WatchFailed(why) => Unavailable::WatchFailed(bounded(&why)),
-            Unavailable::Desktop(why) => Unavailable::Desktop(bounded(&why)),
-            other => other,
-        }),
-        other => other,
     }
 }
 

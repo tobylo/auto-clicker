@@ -52,7 +52,7 @@ fn fired(action: Action) -> HotkeyEvent {
 
 fn lost(why: &str) -> HotkeyEvent {
     HotkeyEvent::Status(HotkeyStatus::Unavailable(Unavailable::Desktop(
-        why.to_owned(),
+        why.to_owned().into(),
     )))
 }
 

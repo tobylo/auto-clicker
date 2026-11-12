@@ -20,8 +20,9 @@ use tokio::time::Instant;
 
 use super::capture::Pending;
 use super::{Controller, InputReader, Platform, State};
-use crate::config::{Config, ConfigFile, Draft, Field, Refusal, SaveError, Saved, check};
+use crate::config::{Config, ConfigFile, Draft, Field, Reason, Refusal, SaveError, Saved, check};
 use crate::hotkeys::{Action, Bindings, Capture, Modifiers};
+use crate::message::{Failure, Quoted};
 use crate::window::{Answer, Ask, Confirm, Outcome, Request, ShownHotkeys, WindowView};
 
 /// A settings window's link to the controller. The controller drops it to
@@ -160,7 +161,6 @@ impl<P: Platform> Controller<P> {
                     Ask::Recording { file, action } => Some(self.recording_request(&file, action)),
                 };
                 if let Some(outcome) = outcome {
-                    let outcome = outcome.bounded();
                     self.settings.answer = Some(Answer { id, outcome });
                 }
             }
@@ -186,16 +186,11 @@ impl<P: Platform> Controller<P> {
         }
         let outcome = match self.settings.file.save(&config, replace) {
             Ok(Saved::Synced) => Outcome::Saved,
-            Ok(Saved::Unsynced(err)) => Outcome::SavedUnsynced(err.to_string()),
+            Ok(Saved::Unsynced(err)) => Outcome::SavedUnsynced(Quoted::new(err.to_string())),
             Err(SaveError::Stale(stale)) => return Outcome::Confirm(Confirm::Replace(stale)),
-            Err(SaveError::NoPath) => {
-                return Outcome::Failed(
-                    "there is no config directory: neither XDG_CONFIG_HOME nor HOME is set"
-                        .to_owned(),
-                );
-            }
+            Err(SaveError::NoPath) => return Outcome::Failed(Failure::NoConfigDirectory),
             Err(SaveError::Write(err)) => {
-                return Outcome::Failed(format!("the config file could not be written: {err}"));
+                return Outcome::Failed(Failure::Write(Quoted::new(err.to_string())));
             }
         };
         self.use_saved(config);
@@ -219,12 +214,7 @@ impl<P: Platform> Controller<P> {
     fn allowed(&self, config: Config) -> Result<Config, Refusal> {
         if self.platform.input_reader() == InputReader::Desktop {
             return match changed_action(&self.settings.saved.hotkeys, &config.hotkeys) {
-                Some(action) => Err(Refusal::new(
-                    Field::Hotkey(action),
-                    "the desktop delivers the hotkeys: change them in System Settings, under \
-                     Shortcuts"
-                        .to_owned(),
-                )),
+                Some(action) => Err(Refusal::new(Field::Hotkey(action), Reason::DesktopChooses)),
                 None => Ok(config),
             };
         }

@@ -8,13 +8,12 @@ use auto_clicker_core::config::Field;
 use auto_clicker_core::config::Stale;
 use auto_clicker_core::hotkeys::Action;
 use auto_clicker_core::recording::FileName;
-use auto_clicker_core::window::{
-    CaptureEnd, RecordingAction, RecordingOutcome, Request, Update, WindowView,
-};
+use auto_clicker_core::window::{CaptureEnd, RecordingAction, Request, Update, WindowView};
 use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecModel};
 
 use crate::link::Link;
 use crate::model::{Fields, Unreadable, hotkey_text, key_text};
+use crate::said::Said;
 use crate::shelf;
 use crate::state::{self, Note, Question, State, Target};
 use crate::ui::{SettingsWindow, Texts};
@@ -100,14 +99,16 @@ impl App {
         w.set_idle(state::idle(view));
         w.set_desktop_hotkeys(state::desktop_hotkeys(view));
         w.set_routes_pending(state::routes_pending(view));
+        let texts = w.global::<Texts>();
+        let said = self.said(&texts);
         w.set_no_recording(
             view.no_recording
                 .as_ref()
-                .map(|n| n.to_string())
-                .unwrap_or_default()
-                .into(),
+                .map(|why| said.no_recording(why))
+                .unwrap_or_default(),
         );
-        w.set_problems(view.problems.join("\n").into());
+        let problems: Vec<SharedString> = view.problems.iter().map(|p| said.problem(p)).collect();
+        w.set_problems(problems.join("\n").into());
         if relisted {
             self.show_recordings(view);
         }
@@ -315,9 +316,17 @@ impl App {
         self.window.set_may_ask(self.state.may_ask());
     }
 
+    /// Says the daemon's messages through `texts`.
+    fn said<'a>(&self, texts: &'a Texts<'a>) -> Said<'a> {
+        Said {
+            texts,
+            decimal: self.decimal,
+        }
+    }
+
     fn note(&self, note: &Note) {
         let texts = self.window.global::<Texts>();
-        self.window.set_message(note_text(&texts, note));
+        self.window.set_message(note_text(&self.said(&texts), note));
         self.window.set_message_is_error(note.is_error());
         if let Note::CapturedKey(code) = note {
             self.window.set_key_text(key_text(*code).into());
@@ -347,21 +356,24 @@ impl App {
 }
 
 /// The text of `note`, in the window's language.
-fn note_text(texts: &Texts<'_>, note: &Note) -> SharedString {
+fn note_text(said: &Said<'_>, note: &Note) -> SharedString {
+    let texts = said.texts;
     match note {
         Note::Saved => texts.invoke_saved(),
-        Note::SavedUnsynced(why) => texts.invoke_saved_unsynced(why.into()),
+        Note::SavedUnsynced(why) => texts.invoke_saved_unsynced((&**why).into()),
         Note::Busy => texts.invoke_busy(),
-        Note::Failed(why) => texts.invoke_failed(why.into()),
-        Note::Refused(field, why) => texts.invoke_refused(field_name(texts, *field), why.into()),
-        Note::Unavailable(why) => texts.invoke_unavailable(why.into()),
+        Note::Failed(why) => texts.invoke_failed(said.failure(why)),
+        Note::Refused(field, why) => {
+            texts.invoke_refused(field_name(texts, *field), said.reason(why))
+        }
+        Note::Unavailable(why) => texts.invoke_unavailable(said.unavailability(why)),
         Note::Capturing(Target::Key) => texts.invoke_capturing_key(),
         Note::Capturing(Target::Hotkey(_)) => texts.invoke_capturing_hotkey(),
         Note::CapturedHotkey(keys) => texts.invoke_captured_hotkey(keys.into()),
         Note::CapturedKey(code) => texts.invoke_captured_key(key_text(*code).into()),
         Note::CaptureEnded(why) => capture_end(texts, *why),
         Note::Configured => texts.invoke_configured(),
-        Note::Recording(outcome) => recording_text(texts, outcome),
+        Note::Recording(outcome) => said.recording(outcome),
         Note::Unreadable(field) => {
             let name = match field {
                 Unreadable::Interval => texts.invoke_field_interval(),
@@ -372,16 +384,6 @@ fn note_text(texts: &Texts<'_>, note: &Note) -> SharedString {
             };
             texts.invoke_unreadable(name)
         }
-    }
-}
-
-fn recording_text(texts: &Texts<'_>, outcome: &RecordingOutcome) -> SharedString {
-    match outcome {
-        RecordingOutcome::Renamed => texts.invoke_renamed(),
-        RecordingOutcome::Deleted => texts.invoke_deleted(),
-        RecordingOutcome::Chosen => texts.invoke_chosen(),
-        RecordingOutcome::Playing => texts.invoke_playing(),
-        RecordingOutcome::NotDone(why) | RecordingOutcome::Unsynced(why) => why.into(),
     }
 }
 
@@ -414,3 +416,6 @@ fn action_name(texts: &Texts<'_>, action: Action) -> SharedString {
         Action::TogglePlayback => texts.invoke_action_playback(),
     }
 }
+
+#[cfg(test)]
+mod tests;
