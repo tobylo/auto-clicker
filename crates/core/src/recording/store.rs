@@ -61,7 +61,7 @@ pub fn save(dir: &Path, recording: &Recording) -> io::Result<PathBuf> {
 
 /// `err`, naming the folder where it is now, as the kernel sees the open
 /// directory `checked`, rather than by its handle; as `dir` if that fails.
-fn named(checked: &File, dir: &Path, err: &io::Error) -> io::Error {
+pub(super) fn named(checked: &File, dir: &Path, err: &io::Error) -> io::Error {
     let held = held_path(checked);
     let now_at = fs::read_link(&held).unwrap_or_else(|_| dir.to_path_buf());
     let message = err

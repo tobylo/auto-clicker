@@ -26,7 +26,7 @@ pub(super) fn details(view: &View) -> Vec<String> {
     lines.extend(hotkey_line(
         &view.play_hotkey,
         &format!(
-            "spelar upp den senaste inspelningen {}, och stoppar den",
+            "spelar upp den aktuella inspelningen {}, och stoppar den",
             describe_playback(&view.playback)
         ),
     ));

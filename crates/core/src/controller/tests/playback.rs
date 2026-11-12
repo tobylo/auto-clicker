@@ -64,7 +64,7 @@ impl Shared {
             })
             .collect();
         let recording =
-            Recording::new("stored".to_owned(), created, duration_ms * 1000, events).unwrap();
+            Recording::new(created.default_name(), created, duration_ms * 1000, events).unwrap();
         let path = save(&self.recordings_path(), &recording).unwrap();
         FileName::parse(path.file_name().unwrap().to_str().unwrap()).unwrap()
     }
@@ -512,13 +512,8 @@ async fn a_damaged_current_recording_is_reported_and_no_other_plays_in_its_place
             (Activity::Idle, true)
         );
         // Too short to repeat: refused, and it stays the current one.
-        let short = Recording::new(
-            "short".to_owned(),
-            Created::parse("2026-11-09T18:00:00.000+01:00").unwrap(),
-            1000,
-            Vec::new(),
-        )
-        .unwrap();
+        let made = Created::parse("2026-11-09T18:00:00.000+01:00").unwrap();
+        let short = Recording::new(made.default_name(), made, 1000, Vec::new()).unwrap();
         let mut json = Vec::new();
         short.write_json(&mut json).unwrap();
         fs::write(&path, json).unwrap();

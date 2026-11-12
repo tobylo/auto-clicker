@@ -233,6 +233,51 @@ msgstr "Nej"
 msgid "Save"
 msgstr "Spara"
 
+msgid "Renamed."
+msgstr "Bytte namn."
+
+msgid "Deleted."
+msgstr "Raderad."
+
+msgid "The playback hotkey plays this recording now."
+msgstr "Snabbtangenten för uppspelning spelar nu den här inspelningen."
+
+msgid "Playing."
+msgstr "Spelar upp."
+
+msgid "Delete {} for good? It cannot be undone."
+msgstr "Radera {} för gott? Det går inte att ångra."
+
+msgid "(the name cannot be read)"
+msgstr "(namnet kan inte läsas)"
+
+msgid "{} older recordings are not listed."
+msgstr "{} äldre inspelningar visas inte."
+
+msgid "Speed and plays apply from the next playback once saved. Changes to the recordings below apply at once."
+msgstr "Hastighet och antal uppspelningar gäller från nästa uppspelning när de sparats. Ändringar av inspelningarna nedan gäller direkt."
+
+msgid "Recordings, newest first; ✓ marks the one the playback hotkey plays"
+msgstr "Inspelningar, nyaste först; ✓ markerar den som snabbtangenten för uppspelning spelar"
+
+msgid "No recordings yet."
+msgstr "Inga inspelningar än."
+
+msgid "Name"
+msgstr "Namn"
+
+msgid "Rename"
+msgstr "Byt namn"
+
+msgid "Play"
+msgstr "Spela upp"
+
+msgid "Play with the hotkey"
+msgstr "Spela med snabbtangenten"
+
+msgid "Delete…"
+msgstr "Radera…"
+
 msgid "Clicking cannot start: {}"
 msgstr "Kan inte börja klicka: {}"
 
@@ -362,3 +407,155 @@ msgstr "snabbtangenten {} används av två åtgärder"
 
 msgid "hotkey {} uses the key the clicker presses; choose another key"
 msgstr "snabbtangenten {} använder tangenten som klickaren trycker; välj en annan tangent"
+
+msgid "The recording the playback hotkey plays could not be read, so it plays the newest: {}"
+msgstr "Inspelningen som snabbtangenten för uppspelning spelar kunde inte läsas, så den spelar den nyaste: {}"
+
+msgid "The recording the playback hotkey plays could not be kept for the next start: {}"
+msgstr "Inspelningen som snabbtangenten för uppspelning spelar kunde inte sparas till nästa start: {}"
+
+msgid "Not started: {}"
+msgstr "Startade inte: {}"
+
+msgid "Not playing: {}"
+msgstr "Spelar inte upp: {}"
+
+msgid "Not recording: {}"
+msgstr "Spelar inte in: {}"
+
+msgid "Not playing {}: {}"
+msgstr "Spelar inte upp {}: {}"
+
+msgid "Nothing to play: no recordings yet"
+msgstr "Inget att spela upp: inga inspelningar än"
+
+msgid "Clicking stopped: {}"
+msgstr "Klickandet stoppades: {}"
+
+msgid "Playback stopped: {}"
+msgstr "Uppspelningen stoppades: {}"
+
+msgid "Finished playing {}"
+msgstr "Spelade upp {} till slutet"
+
+msgid "Finished every action"
+msgstr "Gjorde alla åtgärder"
+
+msgid "{}. {}"
+msgstr "{}. {}"
+
+msgid "the hotkey was held for {} s; let go of it to start"
+msgstr "snabbtangenten hölls nere i {} s; släpp den för att starta"
+
+msgid "could not tell when the hotkey was let go; press {} again"
+msgstr "kunde inte avgöra när snabbtangenten släpptes; tryck {} igen"
+
+msgid "hotkeys stopped working"
+msgstr "snabbtangenterna slutade fungera"
+
+msgid "clicking is on; stop it first"
+msgstr "klickandet är på; stoppa det först"
+
+msgid "the recordings cannot be listed: {}"
+msgstr "inspelningarna kan inte listas: {}"
+
+msgid "the clock could not be read"
+msgstr "klockan kunde inte läsas"
+
+msgid "the file is no longer there"
+msgstr "filen finns inte längre"
+
+msgid "the file could not be read: {}"
+msgstr "filen kunde inte läsas: {}"
+
+msgid "the file is larger than {} MiB"
+msgstr "filen är större än {} MiB"
+
+msgctxt "invalid recording"
+msgid "{}"
+msgstr "filen är ingen giltig inspelning: {}"
+
+msgid "it is shorter than {} ms, too short to play more than once"
+msgstr "den är kortare än {} ms, för kort för att spelas mer än en gång"
+
+msgid "it presses a hotkey's key: {}"
+msgstr "den trycker på en snabbtangents tangent: {}"
+
+msgid "Stopped: {}"
+msgstr "Stoppat: {}"
+
+msgid "Playback stopped: the screen layout changed"
+msgstr "Uppspelningen stoppades: skärmlayouten ändrades"
+
+msgid "Playback stopped: the screen layout is no longer known"
+msgstr "Uppspelningen stoppades: skärmlayouten är inte längre känd"
+
+msgid "Recording stopped: {}"
+msgstr "Inspelningen stoppades: {}"
+
+msgid "Recording stopped: it reached the largest size a recording may have"
+msgstr "Inspelningen stoppades: den nådde den största storlek en inspelning får ha"
+
+msgid "Recording stopped at its {}-minute limit"
+msgstr "Inspelningen stoppades vid sin gräns på {} minuter"
+
+msgid "Playing although the hotkey was still held after {} s; its keys mix into what plays"
+msgstr "Spelar upp fast snabbtangenten fortfarande hölls nere efter {} s; dess tangenter blandas in i det som spelas upp"
+
+msgid "Playing with relative motion: the screen layout is not known, so the recorded positions cannot be used"
+msgstr "Spelar upp med relativa rörelser: skärmlayouten är inte känd, så de inspelade positionerna kan inte användas"
+
+msgid "Playing with relative motion: a screen this recording used has moved, changed size or is gone"
+msgstr "Spelar upp med relativa rörelser: en skärm som inspelningen använde har flyttats, bytt storlek eller försvunnit"
+
+msgid "Nothing was recorded, so nothing was saved"
+msgstr "Inget spelades in, så inget sparades"
+
+msgid "Saved “{}”"
+msgstr "Sparade ”{}”"
+
+msgid "The recording could not be saved: {}"
+msgstr "Inspelningen kunde inte sparas: {}"
+
+msgid "no data directory: neither XDG_DATA_HOME nor HOME is set"
+msgstr "ingen datamapp: varken XDG_DATA_HOME eller HOME är satt"
+
+msgctxt "recorded invalid"
+msgid "{}"
+msgstr "det inspelade är ingen giltig inspelning: {}"
+
+msgid "{} is a modifier, and the program holding it would change which hotkey the desktop sees"
+msgstr "{} är en modifierare, och om programmet håller den ändras vilken snabbtangent skrivbordet ser"
+
+msgid "{} is the key of the hotkey {}, and the desktop cannot tell the program's key presses from yours"
+msgstr "{} är tangenten i snabbtangenten {}, och skrivbordet kan inte skilja programmets tangenttryck från dina"
+
+msgid "the hotkey “{}” is not on a function key (F1 to F24), so the program cannot tell whether its own key presses would set it off; change it in System Settings"
+msgstr "snabbtangenten ”{}” ligger inte på en funktionstangent (F1 till F24), så programmet kan inte avgöra om dess egna tangenttryck skulle utlösa den; ändra den i Systeminställningar"
+
+msgid "the desktop has not said yet which keys the hotkeys use, and the program must not press one of them"
+msgstr "skrivbordet har inte sagt än vilka tangenter snabbtangenterna använder, och programmet får inte trycka på någon av dem"
+
+msgid "Renamed, but it may not survive a power loss: {}"
+msgstr "Bytte namn, men det kanske inte klarar ett strömavbrott: {}"
+
+msgid "Deleted, but it may not survive a power loss: {}"
+msgstr "Borttagen, men det kanske inte klarar ett strömavbrott: {}"
+
+msgid "Not renamed: {}"
+msgstr "Bytte inte namn: {}"
+
+msgid "Not deleted: {}"
+msgstr "Inte borttagen: {}"
+
+msgid "Not playing"
+msgstr "Spelar inte upp"
+
+msgid "the file could not be written: {}"
+msgstr "filen kunde inte skrivas: {}"
+
+msgid "the file could not be deleted: {}"
+msgstr "filen kunde inte tas bort: {}"
+
+msgid "the file could not be written: the renamed recording would be larger than {} MiB"
+msgstr "filen kunde inte skrivas: inspelningen med det nya namnet skulle bli större än {} MiB"

@@ -2,9 +2,23 @@ use super::*;
 use crate::config::Reason;
 use crate::config::{Config, Field};
 use crate::controller::Blocked;
-use crate::controller::{Route, Routes};
+use crate::controller::{Route, Routes, WINDOW_RECORDINGS};
 use crate::hotkeys::{Binding, Unavailable};
-use crate::message::ConfigProblem;
+use crate::message::{ChangeFailure, ConfigProblem, RecordingChange};
+
+fn file(text: &str) -> FileName {
+    FileName::parse(text).unwrap()
+}
+
+/// A listed recording named `name`, made at 18:04:05 on day `day`.
+fn listed(day: usize, name: Option<&str>) -> Listed {
+    let file = file(&format!("2026-11-{:02}_18-04-05.123.json", day % 28 + 1));
+    Listed {
+        label: file.titled(name),
+        name: name.map(str::to_owned),
+        file,
+    }
+}
 
 fn save(id: u64) -> Request {
     Request {
@@ -34,6 +48,11 @@ fn view() -> WindowView {
         },
         no_recording: Some(NoRecording::Keyboards(Unavailable::NoPermission)),
         problems: vec![Problem::Unlisted(Quoted::new("a problem"))],
+        recordings: RecordingsView {
+            listed: vec![listed(1, Some("Farm loop")), listed(0, None)],
+            more: 3,
+            current: Some(file("2026-11-02_18-04-05.123.json")),
+        },
         answer: Some(Answer {
             id: 7,
             outcome: Outcome::Refused(Refusal::new(
@@ -81,6 +100,20 @@ fn every_answer_reads_back_as_sent() {
         Outcome::CaptureEnded(CaptureEnd::TimedOut),
         Outcome::Configured,
         Outcome::Unavailable(Unavailability::Hotkeys(Unavailable::NoKeyboard)),
+        Outcome::Recording(RecordingOutcome::Renamed),
+        Outcome::Recording(RecordingOutcome::Deleted),
+        Outcome::Recording(RecordingOutcome::Chosen),
+        Outcome::Recording(RecordingOutcome::Playing),
+        Outcome::Recording(RecordingOutcome::NotChanged(
+            RecordingChange::Rename,
+            ChangeFailure::Missing,
+        )),
+        Outcome::Recording(RecordingOutcome::Unsynced(
+            RecordingChange::Delete,
+            Quoted::new("no flush"),
+        )),
+        Outcome::Recording(RecordingOutcome::NotPlaying(Some(Notice::NothingToPlay))),
+        Outcome::Recording(RecordingOutcome::NotPlaying(None)),
     ];
     for outcome in outcomes {
         let answer = Answer { id: 1, outcome };
@@ -99,6 +132,24 @@ fn every_request_reads_back_as_sent() {
         Ask::ConfigureShortcuts {
             activation_token: None,
         },
+        Ask::Recording {
+            file: file("2026-11-09_18-04-05.123-1.json"),
+            action: RecordingAction::Rename {
+                name: "Farm \"loop\"".to_owned(),
+            },
+        },
+        Ask::Recording {
+            file: file("2026-11-09_18-04-05.123.json"),
+            action: RecordingAction::Delete,
+        },
+        Ask::Recording {
+            file: file("2026-11-09_18-04-05.123.json"),
+            action: RecordingAction::Choose,
+        },
+        Ask::Recording {
+            file: file("2026-11-09_18-04-05.123.json"),
+            action: RecordingAction::Play,
+        },
     ];
     for ask in asks {
         let request = Request { id: 4, ask };
@@ -111,6 +162,25 @@ fn a_request_with_an_unknown_field_is_not_read() {
     let mut value = serde_json::to_value(save(1)).unwrap();
     value["extra"] = serde_json::json!(true);
     assert!(parse::<Request>(&serde_json::to_vec(&value).unwrap()).is_err());
+}
+
+#[test]
+fn a_recording_is_named_only_by_its_file_names_one_form() {
+    let ask = Ask::Recording {
+        file: file("2026-11-09_18-04-05.123.json"),
+        action: RecordingAction::Delete,
+    };
+    let mut value = serde_json::to_value(Request { id: 1, ask }).unwrap();
+    for named in [
+        "../2026-11-09_18-04-05.123.json",
+        "2026-11-09_18-04-05.123.json/",
+        "config.toml",
+        "",
+    ] {
+        value["ask"]["recording"]["file"] = serde_json::json!(named);
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert!(parse::<Request>(&bytes).is_err(), "{named}");
+    }
 }
 
 #[test]
@@ -167,6 +237,16 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
         why: Quoted::new(worst.clone()),
     });
     widest.problems = vec![config; MAX_PROBLEMS + 1];
+    // The longest names a recording may have, in the widest characters
+    // JSON writes as they are: four bytes each.
+    let longest = "😀".repeat(200);
+    widest.recordings = RecordingsView {
+        listed: (0..WINDOW_RECORDINGS)
+            .map(|day| listed(day, Some(&longest)))
+            .collect(),
+        more: u64::MAX,
+        current: Some(file("2026-11-09_18-04-05.123-9.json")),
+    };
     widest.answer = Some(Answer {
         id: u64::MAX,
         outcome: Outcome::Refused(Refusal::new(
@@ -197,6 +277,14 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
         Outcome::Unavailable(Unavailability::Blocked(Blocked::Unknown(
             worst.clone().into(),
         ))),
+        Outcome::Recording(RecordingOutcome::NotChanged(
+            RecordingChange::Delete,
+            ChangeFailure::Folder(Quoted::new(worst.clone())),
+        )),
+        Outcome::Recording(RecordingOutcome::Unsynced(
+            RecordingChange::Rename,
+            Quoted::new(worst.clone()),
+        )),
     ] {
         let answer = Answer { id: 1, outcome };
         assert!(line(&answer).unwrap().len() < MAX_TEXT * 7);

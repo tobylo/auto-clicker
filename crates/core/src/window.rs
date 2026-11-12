@@ -18,12 +18,17 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Draft, InputDraft, Refusal, Stale};
-use crate::controller::{Activity, Hotkey, NoRecording, Routes};
+use crate::controller::{Activity, Hotkey, Listed, NoRecording, Routes};
 use crate::hotkeys::{Action, Binding, Capture};
-use crate::message::{Failure, Problem, Quoted, Unavailability};
+use crate::message::{
+    ChangeFailure, Failure, Notice, Problem, Quoted, RecordingChange, Unavailability,
+};
+use crate::recording::FileName;
 
-/// The longest line either side sends or reads, newline included.
-pub const MAX_LINE: usize = 64 * 1024;
+/// The longest line either side sends or reads, newline included. A view
+/// with the most recordings the window lists, each with the longest name,
+/// fits with room to spare (`window::tests`).
+pub const MAX_LINE: usize = 1024 * 1024;
 
 /// The most characters of one text from outside the program (a reader's
 /// error, a trigger the desktop reports, a parser's message) a view
@@ -79,6 +84,26 @@ pub enum Ask {
     /// desktop delivers the hotkeys. The token, from the window's
     /// activation, lets the desktop raise the settings.
     ConfigureShortcuts { activation_token: Option<String> },
+    /// Do `action` with the recording in `file`. Answered
+    /// [`Outcome::Busy`] unless the program is idle.
+    Recording {
+        file: FileName,
+        action: RecordingAction,
+    },
+}
+
+/// What the window does with a recording.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum RecordingAction {
+    /// Give it this name, in its file.
+    Rename { name: String },
+    /// Delete its file, for good: the user agreed.
+    Delete,
+    /// Make it the one the playback hotkey plays.
+    Choose,
+    /// Play it after the tray's countdown; it becomes the current one.
+    Play,
 }
 
 /// How long a capture waits for a key.
@@ -106,8 +131,22 @@ pub struct WindowView {
     pub no_recording: Option<NoRecording>,
     /// What is wrong now, as the tray lists it.
     pub problems: Vec<Problem>,
+    pub recordings: RecordingsView,
     /// The answer to the window's last request, once there is one.
     pub answer: Option<Answer>,
+}
+
+/// The recordings, as the controller last listed them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordingsView {
+    /// The newest, newest first, at most
+    /// [`WINDOW_RECORDINGS`](crate::controller::WINDOW_RECORDINGS).
+    pub listed: Vec<Listed>,
+    /// How many more there are than are listed.
+    pub more: u64,
+    /// The one the playback hotkey plays, when it is listed.
+    pub current: Option<FileName>,
 }
 
 /// The hotkeys as they are now: the config's bindings on the kernel route,
@@ -157,6 +196,47 @@ pub enum Outcome {
     /// delivers the hotkeys or no keyboard can be read, or opening the
     /// desktop's settings where the program reads the keyboards.
     Unavailable(Unavailability),
+    /// What came of a [`Ask::Recording`] that was not busy.
+    Recording(RecordingOutcome),
+}
+
+/// What came of something done with a recording.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum RecordingOutcome {
+    Renamed,
+    Deleted,
+    Chosen,
+    /// Its countdown began, or it plays.
+    Playing,
+    /// Done, but it may not survive a power loss: why.
+    Unsynced(RecordingChange, Quoted),
+    /// Nothing changed, and why.
+    NotChanged(RecordingChange, ChangeFailure),
+    /// It does not play: what the tray says about it, if anything.
+    NotPlaying(Option<Notice>),
+}
+
+/// What the window says of it, in English.
+impl fmt::Display for RecordingOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RecordingOutcome::Renamed => f.write_str("Renamed."),
+            RecordingOutcome::Deleted => f.write_str("Deleted."),
+            RecordingOutcome::Chosen => {
+                f.write_str("The playback hotkey plays this recording now.")
+            }
+            RecordingOutcome::Playing => f.write_str("Playing."),
+            RecordingOutcome::Unsynced(change, why) => write!(
+                f,
+                "{}, but it may not survive a power loss: {why}",
+                change.done()
+            ),
+            RecordingOutcome::NotChanged(change, why) => write!(f, "{}: {why}", change.not_done()),
+            RecordingOutcome::NotPlaying(Some(notice)) => notice.fmt(f),
+            RecordingOutcome::NotPlaying(None) => f.write_str("Not playing"),
+        }
+    }
 }
 
 /// Why a capture ended without a key.

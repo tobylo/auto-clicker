@@ -3,6 +3,8 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use super::{InputFailure, Quoted};
 use crate::controller::{Blocked, NoRecording};
 use crate::hotkeys::{Binding, Refusal, Unavailable};
@@ -10,7 +12,8 @@ use crate::playback::Fallback;
 use crate::recording::{LoadError, MAX_FILE_BYTES};
 
 /// The tray's notice.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Notice {
     /// A start did not happen.
     Refused { start: Start, why: Hindrance },
@@ -55,7 +58,8 @@ impl fmt::Display for Notice {
 }
 
 /// What did not start.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Start {
     Clicking,
     Playback,
@@ -73,7 +77,8 @@ impl Start {
 }
 
 /// Why a start did not happen.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Hindrance {
     Blocked(Blocked),
     /// The run would press a key the desktop's hotkeys use.
@@ -122,7 +127,8 @@ impl fmt::Display for Hindrance {
 }
 
 /// Why a recording cannot be played.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Unplayable {
     Missing,
     Unreadable(Quoted),
@@ -134,7 +140,7 @@ pub enum Unplayable {
     /// Shorter than this many milliseconds, and asked to play more than
     /// once.
     TooShort {
-        ms: u128,
+        ms: u64,
     },
     /// It presses a key the desktop's hotkeys use.
     PressesHotkeyKey(Refusal),
@@ -170,7 +176,8 @@ impl fmt::Display for Unplayable {
 }
 
 /// Why a run, a start or a recording stopped.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Stop {
     Blocked(Blocked),
     /// It presses a key the desktop's hotkeys use now.
@@ -208,7 +215,8 @@ impl fmt::Display for Stop {
 }
 
 /// How a playback began other than as asked.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum PlayStart {
     /// The hotkey's modifiers were still down after this many seconds.
     Held { seconds: u64 },
@@ -253,7 +261,8 @@ impl fmt::Display for PlayStart {
 }
 
 /// How saving a recording went.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Saving {
     /// Nothing was recorded.
     Nothing,
@@ -273,7 +282,8 @@ impl fmt::Display for Saving {
 }
 
 /// Why a recording could not be saved.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum SaveFailure {
     /// Neither `XDG_DATA_HOME` nor `HOME` is set.
     NoDataDirectory,

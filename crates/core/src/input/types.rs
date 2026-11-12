@@ -2,6 +2,8 @@
 
 use std::ops::RangeInclusive;
 
+use serde::{Deserialize, Serialize};
+
 /// Whether a button or key goes down or comes up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PressState {
@@ -55,8 +57,23 @@ impl Button {
 /// codes (0x100 and up) so a keyboard declaring all of it is never taken for
 /// a joystick or a mouse. A backend declares exactly this range, so every
 /// `Key` it is given can be emitted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(try_from = "u16", into = "u16")]
 pub struct Key(u16);
+
+impl TryFrom<u16> for Key {
+    type Error = String;
+
+    fn try_from(code: u16) -> Result<Key, String> {
+        Key::new(code).ok_or_else(|| format!("key code {code} is not one"))
+    }
+}
+
+impl From<Key> for u16 {
+    fn from(key: Key) -> u16 {
+        key.0
+    }
+}
 
 impl Key {
     /// Every key code a `Key` may hold.

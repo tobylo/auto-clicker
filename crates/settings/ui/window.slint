@@ -2,7 +2,7 @@
 // reads them back for a save; every text the window shows is here, under
 // @tr, so the bundled translations cover it all.
 
-import { AboutSlint, Button, CheckBox, ComboBox, GroupBox, LineEdit, SpinBox, TabWidget, ScrollView, Palette } from "std-widgets.slint";
+import { AboutSlint, Button, CheckBox, ComboBox, GroupBox, LineEdit, SpinBox, StandardListView, TabWidget, ScrollView, Palette } from "std-widgets.slint";
 
 // Texts Rust builds messages from.
 export global Texts {
@@ -37,6 +37,13 @@ export global Texts {
     public pure function unreadable(field: string) -> string { @tr("{}: cannot be read", field) }
     public pure function captured-hotkey(keys: string) -> string { @tr("Captured {}; save to keep it.", keys) }
     public pure function captured-key(key: string) -> string { @tr("Key set to {}; save to keep it.", key) }
+    public pure function renamed() -> string { @tr("Renamed.") }
+    public pure function deleted() -> string { @tr("Deleted.") }
+    public pure function chosen() -> string { @tr("The playback hotkey plays this recording now.") }
+    public pure function playing() -> string { @tr("Playing.") }
+    public pure function delete-question(name: string) -> string { @tr("Delete {} for good? It cannot be undone.", name) }
+    public pure function no-name() -> string { @tr("(the name cannot be read)") }
+    public pure function more-recordings(count: string) -> string { @tr("{} older recordings are not listed.", count) }
     // What the daemon says, as core's messages give it: each with its own
     // values, and text from other programs passed through as it is.
     public pure function problem-clicking(why: string) -> string { @tr("Clicking cannot start: {}", why) }
@@ -82,6 +89,57 @@ export global Texts {
     public pure function reason-count(count: string, max: string) -> string { @tr("repeat {} is not from 1 to {}; use \"until_stopped\" to repeat until stopped", count, max) }
     public pure function reason-bound-twice(hotkey: string) -> string { @tr("hotkey {} is bound to two actions", hotkey) }
     public pure function reason-on-clicker-key(hotkey: string) -> string { @tr("hotkey {} uses the key the clicker presses; choose another key", hotkey) }
+    // The tray's notices, as the window shows them when Play does not start.
+    public pure function problem-current-unread(why: string) -> string { @tr("The recording the playback hotkey plays could not be read, so it plays the newest: {}", why) }
+    public pure function problem-current-unkept(why: string) -> string { @tr("The recording the playback hotkey plays could not be kept for the next start: {}", why) }
+    public pure function refused-clicking(why: string) -> string { @tr("Not started: {}", why) }
+    public pure function refused-playback(why: string) -> string { @tr("Not playing: {}", why) }
+    public pure function refused-recording(why: string) -> string { @tr("Not recording: {}", why) }
+    public pure function unplayable(recording: string, why: string) -> string { @tr("Not playing {}: {}", recording, why) }
+    public pure function nothing-to-play() -> string { @tr("Nothing to play: no recordings yet") }
+    public pure function run-failed-clicking(why: string) -> string { @tr("Clicking stopped: {}", why) }
+    public pure function run-failed-playback(why: string) -> string { @tr("Playback stopped: {}", why) }
+    public pure function finished-playing(recording: string) -> string { @tr("Finished playing {}", recording) }
+    public pure function finished-all() -> string { @tr("Finished every action") }
+    public pure function two-sentences(first: string, second: string) -> string { @tr("{}. {}", first, second) }
+    public pure function held-too-long(seconds: string) -> string { @tr("the hotkey was held for {} s; let go of it to start", seconds) }
+    public pure function release-lost(hotkey: string) -> string { @tr("could not tell when the hotkey was let go; press {} again", hotkey) }
+    public pure function hotkeys-stopped() -> string { @tr("hotkeys stopped working") }
+    public pure function clicking-on() -> string { @tr("clicking is on; stop it first") }
+    public pure function unlisted(why: string) -> string { @tr("the recordings cannot be listed: {}", why) }
+    public pure function no-clock() -> string { @tr("the clock could not be read") }
+    public pure function file-missing() -> string { @tr("the file is no longer there") }
+    public pure function file-unreadable(why: string) -> string { @tr("the file could not be read: {}", why) }
+    public pure function file-too-large(mib: string) -> string { @tr("the file is larger than {} MiB", mib) }
+    public pure function file-invalid(why: string) -> string { @tr("invalid recording" => "{}", why) }
+    public pure function too-short(ms: string) -> string { @tr("it is shorter than {} ms, too short to play more than once", ms) }
+    public pure function presses-hotkey-key(why: string) -> string { @tr("it presses a hotkey's key: {}", why) }
+    public pure function stopped(why: string) -> string { @tr("Stopped: {}", why) }
+    public pure function layout-changed() -> string { @tr("Playback stopped: the screen layout changed") }
+    public pure function layout-unknown() -> string { @tr("Playback stopped: the screen layout is no longer known") }
+    public pure function recording-stopped(why: string) -> string { @tr("Recording stopped: {}", why) }
+    public pure function recording-full() -> string { @tr("Recording stopped: it reached the largest size a recording may have") }
+    public pure function recording-limit(minutes: string) -> string { @tr("Recording stopped at its {}-minute limit", minutes) }
+    public pure function played-held(seconds: string) -> string { @tr("Playing although the hotkey was still held after {} s; its keys mix into what plays", seconds) }
+    public pure function fallback-unknown() -> string { @tr("Playing with relative motion: the screen layout is not known, so the recorded positions cannot be used") }
+    public pure function fallback-changed() -> string { @tr("Playing with relative motion: a screen this recording used has moved, changed size or is gone") }
+    public pure function saved-nothing() -> string { @tr("Nothing was recorded, so nothing was saved") }
+    public pure function saved-as(name: string) -> string { @tr("Saved “{}”", name) }
+    public pure function save-failed(why: string) -> string { @tr("The recording could not be saved: {}", why) }
+    public pure function no-data-directory() -> string { @tr("no data directory: neither XDG_DATA_HOME nor HOME is set") }
+    public pure function recorded-invalid(why: string) -> string { @tr("recorded invalid" => "{}", why) }
+    public pure function own-key-modifier(key: string) -> string { @tr("{} is a modifier, and the program holding it would change which hotkey the desktop sees", key) }
+    public pure function own-key-hotkey(key: string, trigger: string) -> string { @tr("{} is the key of the hotkey {}, and the desktop cannot tell the program's key presses from yours", key, trigger) }
+    public pure function own-key-unreadable(trigger: string) -> string { @tr("the hotkey “{}” is not on a function key (F1 to F24), so the program cannot tell whether its own key presses would set it off; change it in System Settings", trigger) }
+    public pure function own-key-not-reported() -> string { @tr("the desktop has not said yet which keys the hotkeys use, and the program must not press one of them") }
+    public pure function unsynced-renamed(why: string) -> string { @tr("Renamed, but it may not survive a power loss: {}", why) }
+    public pure function unsynced-deleted(why: string) -> string { @tr("Deleted, but it may not survive a power loss: {}", why) }
+    public pure function not-renamed(why: string) -> string { @tr("Not renamed: {}", why) }
+    public pure function not-deleted(why: string) -> string { @tr("Not deleted: {}", why) }
+    public pure function not-playing() -> string { @tr("Not playing") }
+    public pure function file-not-written(why: string) -> string { @tr("the file could not be written: {}", why) }
+    public pure function file-not-deleted(why: string) -> string { @tr("the file could not be deleted: {}", why) }
+    public pure function rename-too-large(mib: string) -> string { @tr("the file could not be written: the renamed recording would be larger than {} MiB", mib) }
 }
 
 component Row inherits HorizontalLayout {
@@ -127,6 +185,11 @@ export component SettingsWindow inherits Window {
     in-out property <string> speed-text;
     in-out property <bool> plays-forever;
     in-out property <string> plays-text: "1";
+    // Recordings
+    in property <[StandardListViewItem]> recordings;
+    in property <string> more-recordings;
+    in-out property <int> selected: -1;
+    in-out property <string> recording-name;
     // State
     in property <bool> idle;
     // The window may send a request: nothing waits on an answer, and no
@@ -145,6 +208,11 @@ export component SettingsWindow inherits Window {
     callback configure-shortcuts();
     callback confirm();
     callback dismiss();
+    callback select-recording(int);
+    callback rename-recording();
+    callback delete-recording();
+    callback choose-recording();
+    callback play-recording();
 
     VerticalLayout {
         padding: 12px;
@@ -347,6 +415,60 @@ export component SettingsWindow inherits Window {
                     if root.no-recording != "": Text {
                         text: root.no-recording;
                         wrap: word-wrap;
+                    }
+                    Text {
+                        text: @tr("Speed and plays apply from the next playback once saved. Changes to the recordings below apply at once.");
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: @tr("Recordings, newest first; ✓ marks the one the playback hotkey plays");
+                        font-weight: 600;
+                    }
+                    if root.recordings.length == 0: Text {
+                        text: @tr("No recordings yet.");
+                    }
+                    // Arrow keys move the selection, as a click does.
+                    StandardListView {
+                        min-height: 180px;
+                        vertical-stretch: 1;
+                        model: root.recordings;
+                        current-item <=> root.selected;
+                        current-item-changed(index) => { root.select-recording(index); }
+                    }
+                    if root.more-recordings != "": Text {
+                        text: root.more-recordings;
+                        wrap: word-wrap;
+                    }
+                    Row {
+                        label: @tr("Name");
+                        LineEdit {
+                            enabled: root.selected >= 0 && !root.waiting;
+                            text <=> root.recording-name;
+                        }
+                        Button {
+                            text: @tr("Rename");
+                            enabled: root.selected >= 0 && root.idle && root.may-ask;
+                            clicked => { root.rename-recording(); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Button {
+                            text: @tr("Play");
+                            enabled: root.selected >= 0 && root.idle && root.may-ask;
+                            clicked => { root.play-recording(); }
+                        }
+                        Button {
+                            text: @tr("Play with the hotkey");
+                            enabled: root.selected >= 0 && root.idle && root.may-ask;
+                            clicked => { root.choose-recording(); }
+                        }
+                        Button {
+                            text: @tr("Delete…");
+                            enabled: root.selected >= 0 && root.idle && root.may-ask;
+                            clicked => { root.delete-recording(); }
+                        }
                     }
                 }
             }
