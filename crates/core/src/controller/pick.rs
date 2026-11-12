@@ -87,7 +87,7 @@ fn located(screens: Layout, at: Spot, on: Rect) -> Outcome {
     if !still_there || !on.holds(at.x(), at.y()) {
         return Outcome::Unavailable(Unavailability::ScreensChanged);
     }
-    let absolute = screens.absolute_at(at.x(), at.y());
+    let absolute = screens.absolute_at(at.x(), at.y(), on);
     Outcome::Located(Located {
         x: absolute.x,
         y: absolute.y,
