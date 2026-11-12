@@ -228,8 +228,9 @@ impl Layout {
 
     /// The same for a position to a fraction of a pixel, such as where the
     /// user clicked, kept to the values that land inside `on`: rounding can
-    /// otherwise cross onto the next screen. Off by at most one step of the
-    /// range, `W / 65536` logical pixels, half a step away from an edge.
+    /// otherwise cross onto the next screen. Off by at most half a step of
+    /// the range (`W / 131072` logical pixels) away from a screen's far
+    /// edge, and by a step and a 64th of a pixel at it.
     pub fn absolute_at(&self, x: f64, y: f64, on: Rect) -> AbsolutePosition {
         let (width, height) = self.size();
         let across = Along {
@@ -292,7 +293,8 @@ impl Along {
         let rounded = u64::from(scaled.clamp(0.0, 65_535.0) as u16);
         // The first value at or past `start`, and the last that lands a
         // 64th of a pixel short of the end, so a backend that converts in
-        // `f32` (the portal's) cannot round it across: 65536 * 64 steps.
+        // `f32` (the portal's) cannot round it across: `f32` is exact to a
+        // 64th of a pixel on layouts up to 262,144 px wide.
         let first = (u64::from(self.start) * 65_536).div_ceil(size);
         let end = (u64::from(self.start) + u64::from(self.span)) * 65_536 * 64 - 65_536;
         let last = (end / (size * 64)).min(65_535);
