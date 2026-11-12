@@ -1,13 +1,13 @@
 # 0004: The screen layout and the pointer on niri and Hyprland
 
-- Status: accepted for niri, 2026-11-12; Hyprland and Plasma parts read from source, to be measured by W01c and W01a.
+- Status: accepted, 2026-11-12. niri and Plasma measured; Hyprland read from source, to be measured by W01c.
 - Issue: W01 (#75). It shapes the slices in the [W01 brief](../planning/features/w01-other-desktops.md).
-- Measured on: the dev box, niri 26.04 (8ed0da4), Linux 7.3.3-1-cachyos, one output (HDMI-A-1, LG 34GN850, 3440x1440 at 85 Hz). Read from source: niri v26.04 (6a0a862) with its pinned smithay (ff5fa7d), Hyprland v0.57.2, KWin v6.8.2.
+- Measured on: the dev box, niri 26.04 (8ed0da4), Linux 7.3.3-1-cachyos, one output (HDMI-A-1, LG 34GN850, 3440x1440 at 85 Hz); the laptop, KWin 6.8.2, eDP-1 (2560x1600) and DP-1 (3440x1440). Read from source: niri v26.04 (6a0a862) with its pinned smithay (ff5fa7d), Hyprland v0.57.2, KWin v6.8.2.
 
 ## Decision
 
 - **niri maps the absolute device over the bounding box of all outputs,** as KWin does, so decision 0001's formula holds there, with W and H the box's size. At a fractional scale where physical/scale is not a whole number, niri's box (ceil) can be one logical px larger than the size xdg-output reports (round), so a point lands up to 1 logical px off near the far edges. Accepted (W01 decision 8): no workaround.
-- **xdg-output is the layout source on niri and Hyprland.** Both report each output's logical position and size; the daemon moves the bounding box to (0, 0).
+- **xdg-output is the layout source on every desktop.** niri and Hyprland report each output's logical position and size there; on Plasma it matched KWin's own layout in every layout tried, so Plasma moves to it too (W01b). The daemon moves the bounding box to (0, 0).
 - **niri gives no pointer position in 26.04.** Recordings there keep relative movement. ext-image-copy-capture cursor sessions, on niri's main branch, are the way to get it later (W02).
 - **Hyprland, from its source,** maps like KWin and reports sizes consistent with its mapping; it offers the pointer through `cursorpos` and through cursor sessions. W01c measures both before W01d builds one.
 
@@ -49,7 +49,23 @@ A virtual mouse shaped like C01's (buttons, `REL_X`, `REL_Y`, `REL_WHEEL`, `ABS_
 - **`cursorpos`.** It answers with floored whole logical px in global coordinates (`src/ipc/s1/Commands.cpp:1384`), over `$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket.sock`, one connection per request.
 - **Cursor sessions.** The position is in fractional logical px from the output's corner (`src/protocols/ImageCopyCapture.cpp:333-357`). It is sent on each monitor commit, so at most once per frame. A cursor move schedules a frame except under VRR fullscreen with `cursor:no_break_fs_vrr` (`Monitor.cpp:1109-1121`, `PointerManager.cpp:476`). It is allowed unless `ecosystem:enforce_permissions` is on (default off, `src/config/values/ConfigValues.cpp:731`), in which case Hyprland asks the user.
 
-## KWin, from source (v6.8.2; W01a measures)
+## KWin 6.8.2: xdg-output against KWin's layout (measured)
+
+On the laptop, `kscreen-doctor` set each layout below; 3 s later a raw Wayland client read every output's xdg-output position and size, and `qdbus6 org.kde.KWin /KWin supportInformation` gave KWin's own geometry per screen (the rounded rectangle the layout script reports). The original layout was restored after.
+
+| Layout | KWin and xdg-output (both the same) |
+| --- | --- |
+| panel @1.25, DP-1 @1 right | eDP-1 0,0 2048x1280; DP-1 2048,0 3440x1440 |
+| panel @1.25, DP-1 @1.5 right | eDP-1 0,0 2048x1280; DP-1 2048,0 2293x960 |
+| DP-1 @1.5 left of the panel | DP-1 0,0 2293x960; eDP-1 2294,0 2048x1280 |
+| DP-1 @1.5 above the panel | DP-1 0,0 2293x960; eDP-1 0,960 2048x1280 |
+| panel @1.5 left of DP-1 @1 | eDP-1 0,0 1707x1067; DP-1 1707,0 3440x1440 |
+| panel @1.5 above DP-1 @1 | eDP-1 0,0 1707x1067; DP-1 0,1067 3440x1440 |
+| panel @1.25, DP-1 @1.25 right | eDP-1 0,0 2048x1280; DP-1 2048,0 2752x1152 |
+
+Every output's rectangle was identical in both, fractional widths (2293.33, 1706.67 and 1066.67 logical) included. KScreen places outputs at whole logical positions, which is the case where the two roundings below agree.
+
+From source:
 
 - xdg-output sends round(size) and round(position) of an output's fractional geometry (`src/wayland/xdgoutput_v1.cpp:191,199`). The layout script's `output.geometry` rounds the edges instead (`src/core/rect.h:2439`). The two agree when an output sits at a whole logical position.
 - KWin 6.8.2 has no ext-image-copy-capture.
