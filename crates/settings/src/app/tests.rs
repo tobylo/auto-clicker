@@ -10,9 +10,11 @@ use auto_clicker_core::hotkeys::Unavailable;
 use auto_clicker_core::locale::Language;
 use auto_clicker_core::message::{
     ChangeFailure, ConfigProblem, Failure, Hindrance, InputFailure, Notice, PlayStart, Problem,
-    Quoted, RecordingChange, SaveFailure, Saving, Start, Step, Stop, Unavailability, Unplayable,
+    Quoted, RecordingChange, SaveFailure, Saving, Start, Step, Stop, Titled, Unavailability,
+    Unplayable,
 };
 use auto_clicker_core::playback::Fallback;
+use auto_clicker_core::recording::FileName;
 use auto_clicker_core::window::RecordingOutcome;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
@@ -144,12 +146,15 @@ fn recordings(said: &Said<'_>) {
          positionerna kan inte användas"
     );
     let not_playing = RecordingOutcome::NotPlaying(Some(Notice::Unplayable {
-        recording: "Farm loop".to_owned(),
+        recording: Titled::new(
+            FileName::parse("2026-11-09_18-04-05.123.json").unwrap(),
+            Some("Farm loop"),
+        ),
         why: Unplayable::TooShort { ms: 20 },
     }));
     assert_eq!(
         note(Note::Recording(not_playing)),
-        "Spelar inte upp Farm loop: den är kortare än 20 ms, för kort för att spelas mer än en \
+        "Spelar inte upp Farm loop (2026-11-09 18:04:05): den är kortare än 20 ms, för kort för att spelas mer än en \
          gång"
     );
     let recorded = RecordingOutcome::NotPlaying(Some(Notice::Recorded {

@@ -196,7 +196,7 @@ impl<P: Platform> Controller<P> {
         match save(&dir, recording) {
             Ok(path) => {
                 self.saved(&path);
-                Saving::Saved(recording.name().to_owned())
+                Saving::Saved(recording.name().to_owned().into())
             }
             Err(err) => failed(SaveFailure::Write(Quoted::new(err.to_string()))),
         }

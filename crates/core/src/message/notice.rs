@@ -5,7 +5,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use super::{InputFailure, Quoted};
+use super::{InputFailure, Quoted, Titled};
 use crate::controller::{Blocked, NoRecording};
 use crate::hotkeys::{Binding, Refusal, Unavailable};
 use crate::playback::Fallback;
@@ -18,7 +18,7 @@ pub enum Notice {
     /// A start did not happen.
     Refused { start: Start, why: Hindrance },
     /// This recording cannot be played.
-    Unplayable { recording: String, why: Unplayable },
+    Unplayable { recording: Titled, why: Unplayable },
     /// The playback hotkey found no recording.
     NothingToPlay,
     /// A run, a start or a recording stopped.
@@ -27,7 +27,7 @@ pub enum Notice {
     RunFailed { playback: bool, why: InputFailure },
     /// A run did all it was asked: the recording it played, if it played
     /// one.
-    Finished(Option<String>),
+    Finished(Option<Titled>),
     /// A playback began, but not quite as asked.
     Playing(PlayStart),
     /// A recording ended, and why when it did not end by the user's hand.
@@ -267,7 +267,7 @@ pub enum Saving {
     /// Nothing was recorded.
     Nothing,
     /// Saved under this name.
-    Saved(String),
+    Saved(Quoted),
     Failed(SaveFailure),
 }
 

@@ -131,7 +131,7 @@ impl Setup {
     async fn hotkey_plays(&self) -> Option<String> {
         self.d.hotkey(PLAY).await;
         self.d.hotkey(HotkeyEvent::ModifiersReleased).await;
-        let playing = self.d.view().playing;
+        let playing = self.d.view().playing.map(|playing| playing.to_string());
         sleep(secs(2)).await;
         self.d.settle().await;
         assert_eq!(self.d.activity(), Activity::Idle);
@@ -524,7 +524,10 @@ async fn play_in_the_window_counts_down_like_the_tray_and_says_why_when_it_canno
 
         assert_eq!(outcome, done(RecordingOutcome::Playing));
         assert_eq!(s.d.activity(), Activity::PlayingIn(3));
-        assert_eq!(s.d.view().playing, Some(label("18:00:00")));
+        assert_eq!(
+            s.d.view().playing.map(|playing| playing.to_string()),
+            Some(label("18:00:00"))
+        );
         s.d.send(Message::Stop).await;
 
         fs::write(folder(&s.d.shared).join(files[1].as_str()), b"").unwrap();

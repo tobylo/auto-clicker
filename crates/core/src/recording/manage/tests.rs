@@ -167,3 +167,19 @@ fn a_rename_that_would_outgrow_what_a_load_reads_leaves_the_old_file_whole() {
     assert_eq!(load(dir.path(), &file).unwrap().name(), same);
     assert_eq!(dir.entries(), [file.as_str()]);
 }
+
+#[test]
+fn only_the_caps_own_error_is_too_large() {
+    let bare = || io::Error::from(io::ErrorKind::FileTooLarge);
+    assert!(too_large(true, &bare()));
+    assert!(!too_large(false, &bare()));
+    let left = io::Error::new(
+        io::ErrorKind::FileTooLarge,
+        "file too large; removing .tmp failed too: denied",
+    );
+    assert!(!too_large(true, &left));
+    assert!(!too_large(
+        true,
+        &io::Error::from(io::ErrorKind::StorageFull)
+    ));
+}

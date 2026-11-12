@@ -115,9 +115,17 @@ fn rename_capped(
             dir,
             &unsynced.into_error(),
         ))),
-        Err(_) if over.get() => Err(ChangeError::TooLarge),
+        Err(err) if too_large(over.get(), &err) => Err(ChangeError::TooLarge),
         Err(err) => Err(failed(&folder, dir, Step::Written, &err)),
     }
+}
+
+/// Whether a failed write failed for the cap alone: the cap was reached
+/// (`over`), and `err` is still the cap's own bare error. A temporary file
+/// that could not be removed after it turns the error into one that names
+/// that file, which is reported as it is.
+fn too_large(over: bool, err: &io::Error) -> bool {
+    over && err.kind() == io::ErrorKind::FileTooLarge && err.get_ref().is_none()
 }
 
 /// A writer that refuses to take more than `left` bytes more, and notes in

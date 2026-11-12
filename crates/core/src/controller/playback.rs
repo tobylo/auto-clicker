@@ -27,7 +27,7 @@ use tokio::time::Instant;
 use super::desktop::OwnKeys;
 use super::{Controller, Job, PLAY_RELEASE_WAIT, Platform, RunFuture, State};
 use crate::input::{Held, Input, InputBackend, Key};
-use crate::message::{Hindrance, Notice, PlayStart, Start, Stop, Unplayable};
+use crate::message::{Hindrance, Notice, PlayStart, Start, Stop, Titled, Unplayable};
 use crate::playback::{MIN_LOOP_LENGTH, Motion, Playback, play};
 use crate::recording::{Change, FileName, Layout, LoadError, Recording, load};
 use crate::run::Signals;
@@ -35,7 +35,7 @@ use crate::run::Signals;
 /// A recording about to play: loaded, checked, and named for the tray.
 pub(super) struct Playing {
     playback: Playback,
-    label: String,
+    label: Titled,
     /// Every key it presses.
     keys: Arc<[Key]>,
     /// The hotkey's modifiers were still down when the wait for them ended.
@@ -44,7 +44,7 @@ pub(super) struct Playing {
 
 impl Playing {
     /// The recording, as the tray names it.
-    pub(super) fn label(&self) -> &str {
+    pub(super) fn label(&self) -> &Titled {
         &self.label
     }
 
@@ -209,7 +209,7 @@ impl<P: Platform> Controller<P> {
     /// recording as the lists do.
     fn checked(&mut self, file: &FileName, read: Result<Recording, LoadError>) -> Option<Job> {
         let name = read.as_ref().ok().map(|recording| recording.name());
-        let label = file.titled(name);
+        let label = Titled::new(file.clone(), name);
         let playback = read
             .map_err(|err| Unplayable::from(&err))
             .and_then(|recording| {
