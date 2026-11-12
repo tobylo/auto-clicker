@@ -33,7 +33,7 @@ use crate::window::bounded;
 
 /// What is wrong now, as the tray and the settings window list it.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Problem {
     /// The config could not be used; the program runs on the defaults.
     Config(ConfigProblem),
@@ -93,7 +93,7 @@ impl fmt::Display for Problem {
 /// Why the config could not be used. What a parser said stays its own
 /// words.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConfigProblem {
     /// Neither `XDG_CONFIG_HOME` nor `HOME` is set.
     NoDirectory,

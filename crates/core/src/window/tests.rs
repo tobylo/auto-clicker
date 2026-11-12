@@ -248,3 +248,16 @@ fn a_message_is_read_only_as_one_of_its_values_and_no_longer_than_cut() {
     assert!(refused(serde_json::json!("key code 300 is not from 1 to 248")).is_err());
     assert!(refused(serde_json::json!({ "key_code": { "code": "300" } })).is_err());
 }
+
+#[test]
+fn a_message_with_an_unknown_field_is_not_read() {
+    let mut value = serde_json::to_value(view()).unwrap();
+    value["problems"] = serde_json::json!([
+        { "config": { "invalid": { "file": "c", "line": 1, "why": "w", "extra": 1 } } }
+    ]);
+    assert!(parse::<WindowView>(&serde_json::to_vec(&value).unwrap()).is_err());
+    value["problems"] = serde_json::json!([
+        { "config": { "invalid": { "file": "c", "line": 1, "why": "w" } } }
+    ]);
+    assert!(parse::<WindowView>(&serde_json::to_vec(&value).unwrap()).is_ok());
+}

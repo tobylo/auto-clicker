@@ -11,7 +11,7 @@ use crate::playback::Speed;
 
 /// Why a setting is refused, with the limits it broke.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Reason {
     /// The tray's start delay is over `max` seconds.
     TrayStartDelay { max: u64 },
