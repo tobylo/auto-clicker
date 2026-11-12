@@ -490,3 +490,17 @@ fn a_refused_pick_is_noted_and_keeps_nothing() {
         }
     );
 }
+
+#[test]
+fn nothing_else_is_asked_while_a_pick_is_up() {
+    let mut state = started();
+    state.set_picking(true);
+    asks_nothing(&mut state);
+    state.set_picking(false);
+    assert!(state.may_ask());
+    assert!(
+        state
+            .locate(spot(1.0, 1.0), panel_rect(), Since::default())
+            .is_some()
+    );
+}

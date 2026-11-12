@@ -290,10 +290,12 @@ impl Along {
         let scaled = (value * 65_536.0 / f64::from(self.size.max(1))).round();
         // Clamped to the range, or NaN, which the cast takes to 0: exact.
         let rounded = u64::from(scaled.clamp(0.0, 65_535.0) as u16);
-        // The first value at or past `start`, and the last short of the end.
+        // The first value at or past `start`, and the last that lands a
+        // 64th of a pixel short of the end, so a backend that converts in
+        // `f32` (the portal's) cannot round it across: 65536 * 64 steps.
         let first = (u64::from(self.start) * 65_536).div_ceil(size);
-        let end = (u64::from(self.start) + u64::from(self.span)) * 65_536;
-        let last = end.div_ceil(size).saturating_sub(1).min(65_535);
+        let end = (u64::from(self.start) + u64::from(self.span)) * 65_536 * 64 - 65_536;
+        let last = (end / (size * 64)).min(65_535);
         // A screen narrower than one step (`size / 65536`, under 2 px on a
         // layout 130,000 px wide) holds no value: its nearest one is kept.
         let kept = rounded.clamp(first.min(last), last);
@@ -509,9 +511,25 @@ mod tests {
         ];
         for (x, on) in cases {
             let landed = lands(layout.absolute_at(x, 10.0, on).x);
-            assert!(on.holds(landed, 10.0), "{x} landed at {landed}");
+            // A 64th of a pixel inside, which `f32` cannot round across.
+            assert!(
+                on.holds(landed + 1.0 / 64.0, 10.0),
+                "{x} landed at {landed}"
+            );
             assert!((landed - x).abs() < 0.06, "{x} landed at {landed}");
         }
+    }
+
+    #[test]
+    fn a_position_stays_on_its_screen_through_f32() {
+        // 1024 + 1707: the last value short of 1024 lands within 0.00002 px
+        // of it, which `f32` rounds to 1024, on the right screen.
+        let layout = Layout::new(vec![output(0, 0, 1024, 768), output(1024, 0, 1707, 960)]);
+        let left = rect(0, 0, 1024, 768);
+        let v = layout.unwrap().absolute_at(1023.99, 10.0, left).x;
+        #[allow(clippy::cast_possible_truncation)]
+        let landed = (f64::from(v) * 2731.0 / 65_536.0) as f32;
+        assert!(landed < 1024.0, "{v} lands at {landed}");
     }
 
     #[test]

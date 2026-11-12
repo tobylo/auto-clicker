@@ -23,7 +23,7 @@ use slint::{CloseRequestResponse, ComponentHandle, Timer, TimerMode};
 
 use crate::ui::PickWindow;
 
-pub use place::{Screen, corner, hook, monitors, place, units};
+pub use place::{Screen, corner, hook, left_full_screen, monitors, place, units};
 
 /// How a pick ended.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -35,8 +35,8 @@ pub enum PickEnd {
     },
     Cancelled,
     TimedOut,
-    /// An overlay was clicked on another screen than its own: moved there
-    /// (Plasma's "Move Window to Next Screen"), or the screens changed.
+    /// An overlay was clicked on another screen than its own, moved there
+    /// (Plasma's "Move Window to Next Screen"), or out of full screen.
     Moved,
 }
 
@@ -230,7 +230,7 @@ fn told_by(window: &PickWindow, placed: Placed, ending: &Ending) {
             return;
         };
         let window = overlay.window();
-        if placed.moved(corner(window)) {
+        if left_full_screen(window) || placed.moved(corner(window)) {
             return end(&clicked, PickEnd::Moved);
         }
         // Slint's own scale (`SLINT_SCALE_FACTOR`) may differ from the

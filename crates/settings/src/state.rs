@@ -118,6 +118,9 @@ pub struct State {
     next_id: u64,
     asked: Option<(u64, Asked)>,
     question: Option<(Question, Agreed)>,
+    /// The overlays to pick a point are up: nothing else is asked until
+    /// they close.
+    picking: bool,
 }
 
 impl State {
@@ -208,7 +211,14 @@ impl State {
     /// Whether the user may ask something now: the settings came, nothing
     /// waits on an answer and no question is open.
     pub fn may_ask(&self) -> bool {
-        self.hotkeys.is_some() && self.asked.is_none() && self.question.is_none()
+        let free = self.asked.is_none() && self.question.is_none() && !self.picking;
+        self.hotkeys.is_some() && free
+    }
+
+    /// The overlays to pick a point are up, or `false`, closed: while they
+    /// are up, nothing else is asked.
+    pub fn set_picking(&mut self, picking: bool) {
+        self.picking = picking;
     }
 
     /// A save of `fields`; which field cannot be read instead, if one
