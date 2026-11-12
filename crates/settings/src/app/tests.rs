@@ -22,11 +22,14 @@ use slint::platform::{Platform, WindowAdapter};
 use super::*;
 use crate::ui::SettingsWindow;
 
-struct Headless(Rc<MinimalSoftwareWindow>);
+/// A platform giving every window a software window of its own.
+struct Headless;
 
 impl Platform for Headless {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
-        Ok(self.0.clone())
+        let window: Rc<dyn WindowAdapter> =
+            MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        Ok(window)
     }
 }
 
@@ -34,8 +37,7 @@ impl Platform for Headless {
 /// windows live on the thread that made them.
 #[test]
 fn a_swedish_window_says_the_daemons_messages_in_swedish() {
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    slint::platform::set_platform(Box::new(Headless(window))).unwrap();
+    slint::platform::set_platform(Box::new(Headless)).unwrap();
     // As the window's main does: the translations are there once a window is.
     let window = SettingsWindow::new().unwrap();
     slint::select_bundled_translation(Language::Swedish.code()).unwrap();
@@ -48,6 +50,7 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
     problems(&said);
     recordings(&said);
     titles(&said);
+    crate::pick::tests::every_end_is_told_once_and_closes_every_overlay();
 }
 
 /// A refusal, a failure and an unavailable, as a note.

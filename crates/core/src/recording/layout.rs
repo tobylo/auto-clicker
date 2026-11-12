@@ -5,7 +5,11 @@
 //! A [`Layout`] is only ever built through [`Layout::new`], which checks it,
 //! so a layout from a file and one from the compositor are the same type
 //! with the same rules: one to [`MAX_OUTPUTS`] outputs, each of positive
-//! area, whose bounding box starts at (0, 0).
+//! area, whose bounding box starts at (0, 0). One that arrives over the
+//! settings window's socket or in the config file is read through
+//! [`Layout::new`] too: it deserialises only through [`OutputSpec`].
+
+use serde::{Deserialize, Serialize};
 
 use crate::input::AbsolutePosition;
 
@@ -14,14 +18,16 @@ pub const MAX_OUTPUTS: usize = 16;
 
 /// A point on the screens, in whole logical pixels from the layout's
 /// top-left corner.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Point {
     pub x: u32,
     pub y: u32,
 }
 
 /// A rectangle in logical pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Rect {
     pub x: u32,
     pub y: u32,
@@ -79,14 +85,68 @@ impl Output {
     /// Whether `point` is on this output; its right and bottom edges are
     /// the next output's.
     pub fn contains(self, point: Point) -> bool {
-        (self.rect.x..self.right()).contains(&point.x)
-            && (self.rect.y..self.bottom()).contains(&point.y)
+        self.rect.contains(point)
+    }
+}
+
+impl Rect {
+    /// Whether `point` is inside, up to the last pixel before the right
+    /// and bottom edges.
+    pub fn contains(self, point: Point) -> bool {
+        let right = self.x.saturating_add(self.width);
+        let bottom = self.y.saturating_add(self.height);
+        (self.x..right).contains(&point.x) && (self.y..bottom).contains(&point.y)
+    }
+}
+
+/// One output as the config file and the settings window's socket spell
+/// it, checked by [`Output::new`] on its way in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputSpec {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub scale_milli: u32,
+}
+
+impl From<Output> for OutputSpec {
+    fn from(output: Output) -> OutputSpec {
+        let Rect {
+            x,
+            y,
+            width,
+            height,
+        } = output.rect;
+        OutputSpec {
+            x,
+            y,
+            width,
+            height,
+            scale_milli: output.scale_milli,
+        }
+    }
+}
+
+impl TryFrom<OutputSpec> for Output {
+    type Error = &'static str;
+
+    fn try_from(spec: OutputSpec) -> Result<Output, &'static str> {
+        let rect = Rect {
+            x: spec.x,
+            y: spec.y,
+            width: spec.width,
+            height: spec.height,
+        };
+        Output::new(rect, spec.scale_milli)
     }
 }
 
 /// A checked screen layout: the outputs, in a fixed order, so two reports of
 /// the same screens compare equal whatever order they came in.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(try_from = "Vec<OutputSpec>", into = "Vec<OutputSpec>")]
 pub struct Layout {
     outputs: Vec<Output>,
 }
@@ -157,6 +217,24 @@ impl Layout {
             x: normalised(point.x, width),
             y: normalised(point.y, height),
         }
+    }
+}
+
+impl TryFrom<Vec<OutputSpec>> for Layout {
+    type Error = &'static str;
+
+    fn try_from(specs: Vec<OutputSpec>) -> Result<Layout, &'static str> {
+        if specs.len() > MAX_OUTPUTS {
+            return Err("the layout has more than 16 screens");
+        }
+        let outputs = specs.into_iter().map(Output::try_from);
+        Layout::new(outputs.collect::<Result<_, _>>()?)
+    }
+}
+
+impl From<Layout> for Vec<OutputSpec> {
+    fn from(layout: Layout) -> Vec<OutputSpec> {
+        layout.outputs.into_iter().map(OutputSpec::from).collect()
     }
 }
 
@@ -301,6 +379,34 @@ mod tests {
         for ((x, y), (to_x, to_y)) in cases {
             let expected = AbsolutePosition { x: to_x, y: to_y };
             assert_eq!(layout.absolute(Point { x, y }), expected, "{x},{y}");
+        }
+    }
+
+    #[test]
+    fn a_layout_reads_back_as_written_and_only_when_valid() {
+        let layout = Layout::new(vec![
+            Output::new(rect(0, 0, 2048, 1280), 1250).unwrap(),
+            Output::new(rect(2048, 0, 2293, 960), 1500).unwrap(),
+        ])
+        .unwrap();
+        let json = serde_json::to_string(&layout).unwrap();
+        assert_eq!(
+            json,
+            r#"[{"x":0,"y":0,"width":2048,"height":1280,"scale_milli":1250},{"x":2048,"y":0,"width":2293,"height":960,"scale_milli":1500}]"#
+        );
+        assert_eq!(serde_json::from_str::<Layout>(&json).unwrap(), layout);
+        let one = r#"{"x":0,"y":0,"width":10,"height":10,"scale_milli":1000}"#;
+        let many = format!("[{}]", vec![one; MAX_OUTPUTS + 1].join(","));
+        let invalid = [
+            "[]".to_owned(),
+            r#"[{"x":1,"y":0,"width":10,"height":10,"scale_milli":1000}]"#.to_owned(),
+            r#"[{"x":0,"y":0,"width":0,"height":10,"scale_milli":1000}]"#.to_owned(),
+            r#"[{"x":0,"y":0,"width":10,"height":10,"scale_milli":0}]"#.to_owned(),
+            r#"[{"x":0,"y":0,"width":10,"height":10,"scale_milli":1000,"name":"DP-1"}]"#.to_owned(),
+            many,
+        ];
+        for json in invalid {
+            assert!(serde_json::from_str::<Layout>(&json).is_err(), "{json}");
         }
     }
 

@@ -59,7 +59,8 @@ pub(super) struct Settings {
 /// What happened with the settings window.
 pub(super) enum WindowEvent {
     Opened(WindowLink),
-    Request(Request),
+    /// Boxed: a request carries a whole draft of the settings.
+    Request(Box<Request>),
     /// The window closed its side, or crashed.
     Closed,
 }
@@ -111,7 +112,7 @@ pub(super) fn next_event(settings: &mut Settings) -> impl Future<Output = Window
             && let Poll::Ready(request) = window.requests.poll_recv(cx)
         {
             return Poll::Ready(match request {
-                Some(request) => WindowEvent::Request(request),
+                Some(request) => WindowEvent::Request(Box::new(request)),
                 None => WindowEvent::Closed,
             });
         }
@@ -147,7 +148,8 @@ impl<P: Platform> Controller<P> {
                 self.end_pending();
                 self.settings.window = None;
             }
-            WindowEvent::Request(Request { id, ask }) => {
+            WindowEvent::Request(request) => {
+                let Request { id, ask } = *request;
                 let outcome = match ask {
                     Ask::Save {
                         settings,
@@ -159,6 +161,7 @@ impl<P: Platform> Controller<P> {
                         self.configure_shortcuts(id, activation_token)
                     }
                     Ask::Recording { file, action } => Some(self.recording_request(&file, action)),
+                    Ask::Locate { point, on } => Some(self.locate(point, on)),
                 };
                 if let Some(outcome) = outcome {
                     self.settings.answer = Some(Answer { id, outcome });
@@ -274,6 +277,7 @@ impl<P: Platform> Controller<P> {
             no_recording: self.no_recording(),
             problems: self.problems(),
             recordings: self.shelf.window_view(),
+            screens: self.platform.layout(),
             answer: self.settings.answer.clone(),
         }
         .bounded();

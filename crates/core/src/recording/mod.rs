@@ -37,7 +37,7 @@ pub use codes::{name as code_name, parse as parse_code, recordable};
 pub use created::{Created, LocalTime};
 pub use current::CurrentFile;
 pub use json::event_bytes;
-pub use layout::{Layout, MAX_OUTPUTS, Output, Point, Rect};
+pub use layout::{Layout, MAX_OUTPUTS, Output, OutputSpec, Point, Rect};
 pub use library::{FileName, Found, Listing, LoadError, MAX_FILE_BYTES, list, load};
 pub use manage::{ChangeError, Changed, delete, rename};
 pub use recorder::{Ending, KeyInput, Recorder};

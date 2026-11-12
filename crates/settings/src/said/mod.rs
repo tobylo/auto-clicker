@@ -119,6 +119,8 @@ impl Said<'_> {
             Unavailability::ReadsKeyboards => t.invoke_reads_keyboards(),
             Unavailability::NoShortcuts => t.invoke_no_shortcuts(),
             Unavailability::Hotkeys(why) => self.unavailable(why),
+            Unavailability::ScreensUnknown => t.invoke_screens_unknown(),
+            Unavailability::ScreensChanged => t.invoke_screens_changed(),
         }
     }
 

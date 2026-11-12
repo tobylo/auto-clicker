@@ -9,10 +9,13 @@ use auto_clicker_core::config::Stale;
 use auto_clicker_core::hotkeys::Action;
 use auto_clicker_core::recording::FileName;
 use auto_clicker_core::window::{CaptureEnd, RecordingAction, Request, Update, WindowView};
-use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecModel};
+use slint::{
+    CloseRequestResponse, ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecModel,
+};
 
 use crate::link::Link;
 use crate::model::{Fields, Unreadable, hotkey_text, key_text};
+use crate::pick::Pick;
 use crate::said::Said;
 use crate::shelf;
 use crate::state::{self, Note, Question, State, Target};
@@ -29,6 +32,8 @@ pub struct App {
     decimal: char,
     /// The recording selected in the list.
     selected: Option<FileName>,
+    /// The overlays that pick the fixed point, while they are up.
+    pick: Option<Pick>,
 }
 
 impl App {
@@ -41,6 +46,7 @@ impl App {
             last: None,
             decimal,
             selected: None,
+            pick: None,
         }));
         let on = |act: fn(&mut App)| {
             let app = Rc::downgrade(&app);
@@ -59,6 +65,20 @@ impl App {
         window.on_delete_recording(on(|app| app.recording(RecordingAction::Delete)));
         window.on_choose_recording(on(|app| app.recording(RecordingAction::Choose)));
         window.on_play_recording(on(|app| app.recording(RecordingAction::Play)));
+        let weak = Rc::downgrade(&app);
+        window.on_pick_point(move || {
+            if let Some(app) = weak.upgrade() {
+                app.borrow_mut().pick(Rc::downgrade(&app));
+            }
+        });
+        // The overlays close with the window, so the program ends with it.
+        let weak = Rc::downgrade(&app);
+        window.window().on_close_requested(move || {
+            if let Some(app) = weak.upgrade() {
+                app.borrow_mut().close_pick();
+            }
+            CloseRequestResponse::HideWindow
+        });
         let weak = Rc::downgrade(&app);
         window.on_select_recording(move |index| {
             if let Some(app) = weak.upgrade() {
@@ -89,6 +109,7 @@ impl App {
     }
 
     fn view(&mut self, view: &WindowView) {
+        self.pick_follows(view);
         let shown = self.state.view(view);
         if let Some(settings) = &shown.fields {
             self.load(&Fields::from_draft(settings, self.decimal));
@@ -97,6 +118,7 @@ impl App {
         self.last = Some(view.clone());
         let w = &self.window;
         w.set_idle(state::idle(view));
+        w.set_screens_known(view.screens.is_some());
         w.set_desktop_hotkeys(state::desktop_hotkeys(view));
         w.set_routes_pending(state::routes_pending(view));
         let texts = w.global::<Texts>();
@@ -328,8 +350,10 @@ impl App {
         let texts = self.window.global::<Texts>();
         self.window.set_message(note_text(&self.said(&texts), note));
         self.window.set_message_is_error(note.is_error());
-        if let Note::CapturedKey(code) = note {
-            self.window.set_key_text(key_text(*code).into());
+        match note {
+            Note::CapturedKey(code) => self.window.set_key_text(key_text(*code).into()),
+            Note::Picked { x, y } => self.fill_picked(*x, *y),
+            _ => {}
         }
         self.show_hotkeys();
         self.show_asking();
@@ -373,6 +397,11 @@ fn note_text(said: &Said<'_>, note: &Note) -> SharedString {
         Note::CapturedKey(code) => texts.invoke_captured_key(key_text(*code).into()),
         Note::CaptureEnded(why) => capture_end(texts, *why),
         Note::Configured => texts.invoke_configured(),
+        Note::Picking => texts.invoke_picking(),
+        Note::Picked { .. } => texts.invoke_picked(),
+        Note::PickCancelled => texts.invoke_capture_cancelled(),
+        Note::PickTimedOut => texts.invoke_pick_timed_out(),
+        Note::PickFailed(why) => texts.invoke_pick_failed(why.into()),
         Note::Recording(outcome) => said.recording(outcome),
         Note::Unreadable(field) => {
             let name = match field {
@@ -417,5 +446,6 @@ fn action_name(texts: &Texts<'_>, action: Action) -> SharedString {
     }
 }
 
+mod picking;
 #[cfg(test)]
 mod tests;

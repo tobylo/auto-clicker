@@ -1,7 +1,7 @@
 //! The tray's notice in Swedish. Quoted text stays as it is.
 
 use auto_clicker_core::message::{
-    Hindrance, Notice, PlayStart, SaveFailure, Saving, Start, Stop, Unplayable,
+    Hindrance, Notice, PlayStart, PointScreens, SaveFailure, Saving, Start, Stop, Unplayable,
 };
 use auto_clicker_core::playback::Fallback;
 
@@ -67,6 +67,18 @@ fn hindrance(why: &Hindrance) -> String {
         Hindrance::NoRecording(why) => no_recording(why),
         Hindrance::NoClock => "klockan kunde inte läsas".to_owned(),
         Hindrance::Hotkeys(why) => unavailable(why),
+        Hindrance::Screens(why) => point_screens(*why).to_owned(),
+    }
+}
+
+fn point_screens(why: PointScreens) -> &'static str {
+    match why {
+        PointScreens::Changed => {
+            "skärmarna har ändrats sedan den fasta punkten valdes: välj den igen i Inställningar"
+        }
+        PointScreens::Unknown => {
+            "skärmlayouten är inte känd, så den valda punkten kan inte kontrolleras"
+        }
     }
 }
 
@@ -93,6 +105,7 @@ fn stop(why: &Stop) -> String {
         Stop::LayoutUnknown => {
             "Uppspelningen stoppades: skärmlayouten är inte längre känd".to_owned()
         }
+        Stop::Screens(why) => format!("Klickandet stoppades: {}", point_screens(*why)),
         Stop::Hotkeys(why) => format!("Inspelningen stoppades: {}", unavailable(why)),
         Stop::Full => {
             "Inspelningen stoppades: den nådde den största storlek en inspelning får ha".to_owned()

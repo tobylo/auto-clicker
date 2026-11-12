@@ -6,6 +6,8 @@ use crate::clicker::Jitter;
 use crate::config::{ButtonName, HotkeyRoute, OutputRoute, render};
 use crate::input::{Button, Key};
 use crate::playback::Speed;
+use crate::recording::Layout;
+use crate::recording::tests::positions::screen;
 
 fn key(name: &str) -> Key {
     Key::from_name(name).unwrap()
@@ -93,11 +95,26 @@ fn clicker_values() -> Vec<Named> {
             "position fixed",
             with_clicker(|c| c.position = Position::Fixed(AbsolutePosition { x: 0, y: 65535 })),
         ),
+        ("position picked", picked()),
         (
             "repeat counted",
             with_clicker(|c| c.repeat = times(u32::MAX)),
         ),
     ]
+}
+
+/// A fixed point picked on the panel with DP-1 at 1.5 beside it.
+fn picked() -> Config {
+    let mut config =
+        with_clicker(|c| c.position = Position::Fixed(AbsolutePosition { x: 1, y: 2 }));
+    config.fixed_screens = Some(
+        Layout::new(vec![
+            screen([0, 0, 2048, 1280], 1250),
+            screen([2048, 0, 2293, 960], 1500),
+        ])
+        .unwrap(),
+    );
+    config
 }
 
 fn other_sections() -> Vec<Named> {
@@ -196,6 +213,22 @@ fn every_option_survives_the_draft_and_the_wire() {
         assert_eq!(back, draft, "{name}");
         assert_eq!(back.to_config(), Ok(config), "{name}");
     }
+}
+
+#[test]
+fn a_picked_point_is_written_with_its_screens() {
+    assert!(render(&picked()).contains(
+        "\nposition = { x = 1, y = 2, screens = [\
+         { x = 0, y = 0, width = 2048, height = 1280, scale_milli = 1250 }, \
+         { x = 2048, y = 0, width = 2293, height = 960, scale_milli = 1500 }] }\n"
+    ));
+}
+
+#[test]
+fn a_draft_with_invalid_screens_is_not_read() {
+    let mut value = serde_json::to_value(Draft::from(&picked())).unwrap();
+    value["clicker"]["position"]["fixed"]["screens"][1]["width"] = serde_json::json!(0);
+    assert!(serde_json::from_value::<Draft>(value).is_err());
 }
 
 #[test]

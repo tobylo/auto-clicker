@@ -33,9 +33,9 @@ fn every_notice_has_a_swedish_form_that_keeps_quoted_text() {
     let all = notices();
     // A sample of each kind of notice and of each reason inside one.
     assert_eq!(kinds(&all), 8);
-    assert_eq!(kinds(&hindrances()), 11);
+    assert_eq!(kinds(&hindrances()), 12);
     assert_eq!(kinds(&unplayables()), 6);
-    assert_eq!(kinds(&stops()), 7);
+    assert_eq!(kinds(&stops()), 8);
     assert_eq!(kinds(&savings()), 3);
     for notice in all {
         assert_swedish(&notice.to_string(), &notice::swedish(&notice));

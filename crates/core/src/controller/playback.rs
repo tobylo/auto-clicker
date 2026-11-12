@@ -110,6 +110,7 @@ impl<P: Platform> Controller<P> {
     /// on another layout stops, and says why. The layout is read as it is
     /// now: a change undone before this runs leaves the positions right.
     pub(super) fn layout_changed(&mut self) {
+        self.screens_changed_for_clicking();
         let State::Running(running) = &self.state else {
             return;
         };

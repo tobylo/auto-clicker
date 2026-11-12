@@ -65,17 +65,22 @@ pub use write::render;
 use crate::clicker::ClickerSettings;
 use crate::hotkeys::Bindings;
 use crate::playback::PlaybackSettings;
+use crate::recording::Layout;
 
 /// The longest countdown before a start from the tray: an hour.
 pub const MAX_TRAY_START_DELAY: Duration = Duration::from_secs(60 * 60);
 
 /// Everything the config file sets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     /// How long "Start clicking" in the tray menu counts down before it
     /// clicks, so the user can switch to the game. The hotkey starts at once.
     pub tray_start_delay: Duration,
     pub clicker: ClickerSettings,
+    /// The screens the clicker's fixed point was picked on, which clicking
+    /// at it needs. `None` for a point typed in, and when the clicker
+    /// clicks where the pointer is.
+    pub fixed_screens: Option<Layout>,
     pub hotkeys: Bindings,
     pub input: InputSettings,
     pub playback: PlaybackSettings,
@@ -132,6 +137,7 @@ impl Default for Config {
         Config {
             tray_start_delay: Duration::from_secs(5),
             clicker: ClickerSettings::default(),
+            fixed_screens: None,
             hotkeys: Bindings::default(),
             input: InputSettings::default(),
             playback: PlaybackSettings::default(),

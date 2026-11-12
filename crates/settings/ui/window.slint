@@ -3,6 +3,7 @@
 // @tr, so the bundled translations cover it all.
 
 import { AboutSlint, Button, CheckBox, ComboBox, GroupBox, LineEdit, SpinBox, StandardListView, TabWidget, ScrollView, Palette } from "std-widgets.slint";
+export { PickWindow } from "pick.slint";
 
 // Texts Rust builds messages from.
 export global Texts {
@@ -19,6 +20,10 @@ export global Texts {
     public pure function capturing-key() -> string { @tr("Press the key the clicker should press, or Esc to cancel.") }
     public pure function capture-cancelled() -> string { @tr("Cancelled.") }
     public pure function capture-timed-out() -> string { @tr("Nothing was pressed in time.") }
+    public pure function picking() -> string { @tr("Click the point on any screen, or press Esc to cancel.") }
+    public pure function picked() -> string { @tr("Point picked. Save to keep it.") }
+    public pure function pick-timed-out() -> string { @tr("No point was picked in time.") }
+    public pure function pick-failed(why: string) -> string { @tr("The screen could not be covered to pick a point: {}", why) }
     public pure function capture-unnamed() -> string { @tr("That key has no name a hotkey can use; choose another.") }
     public pure function capture-interrupted() -> string { @tr("Stopped: something else happened.") }
     public pure function configured() -> string { @tr("System Settings opened at the program's shortcuts.") }
@@ -78,6 +83,10 @@ export global Texts {
     public pure function desktop-delivers() -> string { @tr("the desktop delivers the hotkeys: change them in System Settings, under Shortcuts") }
     public pure function reads-keyboards() -> string { @tr("the program reads the keyboards: set the hotkeys in this window") }
     public pure function no-shortcuts() -> string { @tr("the desktop's shortcuts are not available") }
+    public pure function screens-unknown() -> string { @tr("the screen layout is not known") }
+    public pure function screens-changed() -> string { @tr("the screens changed while the point was picked: pick it again") }
+    public pure function point-screens-changed() -> string { @tr("the screens changed since the fixed point was picked: pick it again in Settings") }
+    public pure function point-screens-unknown() -> string { @tr("the screen layout is not known, so the picked point cannot be checked") }
     public pure function reason-tray-start-delay(max: string) -> string { @tr("tray_start_delay must be from 0 to {} seconds", max) }
     public pure function reason-interval(floor: string, max: string) -> string { @tr("interval_ms must be from {} to {}", floor, max) }
     public pure function reason-interval-double(floor: string, max: string) -> string { @tr("interval_ms must be from {} to {} for a double click, which fits two clicks in each interval", floor, max) }
@@ -193,6 +202,10 @@ export component SettingsWindow inherits Window {
     in-out property <string> recording-name;
     // State
     in property <bool> idle;
+    // The screens are known, so a point can be picked on them.
+    in property <bool> screens-known;
+    // The overlay to pick a point is up.
+    in property <bool> picking;
     // The window may send a request: nothing waits on an answer, and no
     // question is open.
     in property <bool> may-ask;
@@ -206,6 +219,7 @@ export component SettingsWindow inherits Window {
     callback save();
     callback capture-hotkey(int);
     callback capture-key();
+    callback pick-point();
     callback configure-shortcuts();
     callback confirm();
     callback dismiss();
@@ -284,6 +298,15 @@ export component SettingsWindow inherits Window {
                                 current-index: root.position-fixed ? 1 : 0;
                                 selected => { root.position-fixed = self.current-index == 1; }
                             }
+                            Button {
+                                text: @tr("Pick on the screen…");
+                                enabled: root.idle && root.may-ask && root.screens-known && !root.picking;
+                                clicked => { root.pick-point(); }
+                            }
+                        }
+                        if !root.screens-known: Text {
+                            text: @tr("Picking a point needs the screen layout from KWin, which is not known now.");
+                            wrap: word-wrap;
                         }
                         if root.position-fixed: Row {
                             label: @tr("Point, 0 to 65535 across all screens");
