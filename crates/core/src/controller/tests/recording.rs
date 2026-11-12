@@ -309,7 +309,7 @@ async fn recording_is_refused_while_clicking_and_clicking_while_recording() {
 #[tokio::test(start_paused = true)]
 async fn the_view_says_recording_cannot_start_exactly_when_a_start_is_refused() {
     let no_permission = Unavailable::NoPermission;
-    let watch_failed = Unavailable::WatchFailed("gone".to_owned());
+    let watch_failed = Unavailable::WatchFailed("gone".to_owned().into());
     let cases = [
         (
             HotkeyStatus::Unavailable(no_permission.clone()),
@@ -319,11 +319,11 @@ async fn the_view_says_recording_cannot_start_exactly_when_a_start_is_refused() 
         // Recording reads the mice and later keyboards still.
         (HotkeyStatus::Unavailable(Unavailable::NoKeyboard), None),
         (
-            HotkeyStatus::Unavailable(Unavailable::ReadFailed("busy".to_owned())),
+            HotkeyStatus::Unavailable(Unavailable::ReadFailed("busy".to_owned().into())),
             None,
         ),
         (
-            HotkeyStatus::Unavailable(Unavailable::Desktop("gone".to_owned())),
+            HotkeyStatus::Unavailable(Unavailable::Desktop("gone".to_owned().into())),
             None,
         ),
         (
@@ -438,7 +438,7 @@ async fn nothing_the_tray_shows_names_a_recorded_key() {
 async fn losing_the_input_reader_stops_and_saves_or_cancels_at_once() {
     let lost = || {
         HotkeyEvent::Status(HotkeyStatus::Unavailable(Unavailable::WatchFailed(
-            "gone".to_owned(),
+            "gone".to_owned().into(),
         )))
     };
     let why = "hotkeys stopped: watching for keyboards failed: gone; restart the program";

@@ -197,7 +197,7 @@ async fn keyboards_that_stop_working_end_it_and_say_why() {
     local(async {
         let mut s = setup().await;
         let id = capturing(&mut s).await;
-        let gone = Unavailable::WatchFailed("gone".to_owned());
+        let gone = Unavailable::WatchFailed("gone".to_owned().into());
         s.d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(gone.clone())))
             .await;
         assert_eq!(
@@ -390,7 +390,7 @@ async fn the_desktops_shortcuts_going_away_ends_the_wait_for_their_settings() {
     local(async {
         let mut s = desktop_setup().await;
         let id = s.window.send(&s.d, configure(None)).await;
-        let gone = Unavailable::Desktop("the session closed".to_owned());
+        let gone = Unavailable::Desktop("the session closed".to_owned().into());
         s.d.hotkey(HotkeyEvent::Status(HotkeyStatus::Unavailable(gone.clone())))
             .await;
         assert_eq!(

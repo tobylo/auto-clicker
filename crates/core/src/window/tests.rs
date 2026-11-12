@@ -44,9 +44,12 @@ fn view() -> WindowView {
     }
 }
 
-/// A problem quoting `why`, which only [`WindowView::bounded`] cuts.
-fn unknown(why: String) -> Problem {
-    Problem::Blocked(Blocked::Unknown(why))
+/// The view showing `trigger` as the desktop's playback hotkey: text only
+/// [`WindowView::bounded`] cuts.
+fn with_trigger(trigger: String) -> WindowView {
+    let mut shown = view();
+    shown.hotkeys.toggle_playback = Hotkey::Desktop(Some(trigger));
+    shown
 }
 
 /// The line without its newline.
@@ -119,8 +122,7 @@ fn a_shown_binding_is_read_only_in_its_one_form() {
 
 #[test]
 fn lines_longer_than_the_limit_are_neither_read_nor_sent() {
-    let mut long = view();
-    long.problems = vec![unknown("x".repeat(MAX_LINE))];
+    let long = with_trigger("x".repeat(MAX_LINE));
     assert!(line(&long).is_err());
     let padded = format!("{{\"id\":1,\"ask\":\"{}\"}}", "x".repeat(MAX_LINE));
     let err = parse::<Request>(padded.as_bytes()).unwrap_err();
@@ -129,11 +131,8 @@ fn lines_longer_than_the_limit_are_neither_read_nor_sent() {
 
 /// A view whose line, newline included, is `size` bytes long.
 fn view_of_size(size: usize) -> WindowView {
-    let mut sized = view();
-    sized.problems = vec![unknown(String::new())];
-    let bare = line(&sized).unwrap().len();
-    sized.problems = vec![unknown("x".repeat(size - bare))];
-    sized
+    let bare = line(&with_trigger(String::new())).unwrap().len();
+    with_trigger("x".repeat(size - bare))
 }
 
 #[test]
@@ -176,9 +175,9 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
         )),
     });
     for why in [
-        Unavailable::ReadFailed(worst.clone()),
-        Unavailable::WatchFailed(worst.clone()),
-        Unavailable::Desktop(worst.clone()),
+        Unavailable::ReadFailed(worst.clone().into()),
+        Unavailable::WatchFailed(worst.clone().into()),
+        Unavailable::Desktop(worst.clone().into()),
     ] {
         widest.no_recording = Some(NoRecording::Keyboards(why));
         let shown = widest.clone().bounded();
@@ -190,17 +189,16 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
     assert_eq!(bounded("short"), "short");
     for outcome in [
         Outcome::Failed(Failure::Desktop(Quoted::new(worst.clone()))),
-        Outcome::Failed(Failure::Hotkeys(Unavailable::Desktop(worst.clone()))),
+        Outcome::Failed(Failure::Hotkeys(Unavailable::Desktop(worst.clone().into()))),
         Outcome::SavedUnsynced(Quoted::new(worst.clone())),
         Outcome::Unavailable(Unavailability::Hotkeys(Unavailable::ReadFailed(
-            worst.clone(),
+            worst.clone().into(),
         ))),
-        Outcome::Unavailable(Unavailability::Blocked(Blocked::Unknown(worst.clone()))),
+        Outcome::Unavailable(Unavailability::Blocked(Blocked::Unknown(
+            worst.clone().into(),
+        ))),
     ] {
-        let answer = Answer {
-            id: 1,
-            outcome: outcome.bounded(),
-        };
+        let answer = Answer { id: 1, outcome };
         assert!(line(&answer).unwrap().len() < MAX_TEXT * 7);
     }
 }
@@ -209,10 +207,10 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
 fn every_problem_cut_for_the_window_fits_and_reads_back_as_values() {
     let worst = "\u{1}".repeat(MAX_LINE);
     let problems = [
-        unknown(worst.clone()),
-        Problem::Hotkeys(Unavailable::ReadFailed(worst.clone())),
-        Problem::Hotkeys(Unavailable::WatchFailed(worst.clone())),
-        Problem::Hotkeys(Unavailable::Desktop(worst.clone())),
+        Problem::Blocked(Blocked::Unknown(worst.clone().into())),
+        Problem::Hotkeys(Unavailable::ReadFailed(worst.clone().into())),
+        Problem::Hotkeys(Unavailable::WatchFailed(worst.clone().into())),
+        Problem::Hotkeys(Unavailable::Desktop(worst.clone().into())),
         Problem::Unlisted(Quoted::new(worst.clone())),
     ];
     for problem in problems {
@@ -260,4 +258,28 @@ fn a_message_with_an_unknown_field_is_not_read() {
         { "config": { "invalid": { "file": "c", "line": 1, "why": "w" } } }
     ]);
     assert!(parse::<WindowView>(&serde_json::to_vec(&value).unwrap()).is_ok());
+}
+
+#[test]
+fn a_nested_reason_longer_than_cut_is_not_read() {
+    let with = |problem: serde_json::Value| {
+        let mut value = serde_json::to_value(view()).unwrap();
+        value["problems"] = serde_json::json!([problem]);
+        parse::<WindowView>(&serde_json::to_vec(&value).unwrap())
+    };
+    let cut = "a".repeat(MAX_TEXT + 1);
+    let over = "a".repeat(MAX_TEXT + 2);
+    for text in [&cut, &over] {
+        let fits = text == &cut;
+        let problems = [
+            serde_json::json!({ "blocked": { "unknown": text } }),
+            serde_json::json!({ "hotkeys": { "read_failed": text } }),
+            serde_json::json!({ "hotkeys": { "watch_failed": text } }),
+            serde_json::json!({ "hotkeys": { "desktop": text } }),
+            serde_json::json!({ "input": { "portal": text } }),
+        ];
+        for problem in problems {
+            assert_eq!(with(problem.clone()).is_ok(), fits, "{problem}");
+        }
+    }
 }

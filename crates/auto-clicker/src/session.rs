@@ -94,7 +94,7 @@ pub async fn watch(send: mpsc::UnboundedSender<Message>, released: watch::Receiv
         };
         let reason = format!("logind: {err}");
         if send
-            .send(Message::Session(Some(Blocked::Unknown(reason))))
+            .send(Message::Session(Some(Blocked::Unknown(reason.into()))))
             .is_err()
         {
             return;
@@ -147,7 +147,7 @@ async fn watch_logind(
             End::ControllerGone => return Ok(()),
             End::LogindGone { back } => back,
         };
-        let restarting = Blocked::Unknown("logind is restarting".to_owned());
+        let restarting = Blocked::Unknown("logind is restarting".to_owned().into());
         if send.send(Message::Session(Some(restarting))).is_err() {
             return Ok(());
         }
@@ -291,7 +291,7 @@ impl<'a> Logind<'a> {
         }
         if is_no_session(&path) {
             let reason = "no graphical session".to_owned();
-            return Ok(self.tell(Message::Session(Some(Blocked::Unknown(reason)))));
+            return Ok(self.tell(Message::Session(Some(Blocked::Unknown(reason.into())))));
         }
         let properties = properties(&self.bus, &path).await?;
         let session = SessionProxy::builder(&self.bus)

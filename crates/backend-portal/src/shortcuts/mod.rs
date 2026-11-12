@@ -247,8 +247,8 @@ fn unavailable(why: String) -> HotkeyEvent {
         .chars()
         .filter(|c| !c.is_control())
         .take(MAX_REASON)
-        .collect();
-    HotkeyEvent::Status(HotkeyStatus::Unavailable(Unavailable::Desktop(why)))
+        .collect::<String>();
+    HotkeyEvent::Status(HotkeyStatus::Unavailable(Unavailable::Desktop(why.into())))
 }
 
 #[cfg(test)]

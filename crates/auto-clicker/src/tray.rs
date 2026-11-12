@@ -700,7 +700,7 @@ mod tests {
         let reasons = [
             NoRecording::DesktopHotkeys,
             NoRecording::Keyboards(Unavailable::NoPermission),
-            NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned())),
+            NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned().into())),
         ];
         for no_recording in reasons {
             let label = no_recording.label();

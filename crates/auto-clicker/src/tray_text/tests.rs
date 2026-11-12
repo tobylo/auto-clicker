@@ -113,7 +113,7 @@ mod messages {
             Blocked::Locked,
             Blocked::Inactive,
             Blocked::Sleeping,
-            Blocked::Unknown(QUOTED.to_owned()),
+            Blocked::Unknown(QUOTED.to_owned().into()),
         ]
     }
 
@@ -135,9 +135,9 @@ mod messages {
         vec![
             Unavailable::NoKeyboard,
             Unavailable::NoPermission,
-            Unavailable::ReadFailed(QUOTED.to_owned()),
-            Unavailable::WatchFailed(QUOTED.to_owned()),
-            Unavailable::Desktop(QUOTED.to_owned()),
+            Unavailable::ReadFailed(QUOTED.to_owned().into()),
+            Unavailable::WatchFailed(QUOTED.to_owned().into()),
+            Unavailable::Desktop(QUOTED.to_owned().into()),
         ]
     }
 

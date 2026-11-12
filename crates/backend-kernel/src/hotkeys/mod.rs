@@ -492,7 +492,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
     /// release is sent for keys still held; the status ends any wait for
     /// one.
     fn stop(mut self, err: &io::Error) {
-        let why = Unavailable::WatchFailed(err.to_string());
+        let why = Unavailable::WatchFailed(err.to_string().into());
         (self.send)(HotkeyEvent::Status(HotkeyStatus::Unavailable(why)));
     }
 }

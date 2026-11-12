@@ -4,7 +4,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Quoted, bounded_blocked, bounded_unavailable};
+use super::Quoted;
 use crate::controller::Blocked;
 use crate::hotkeys::Unavailable;
 
@@ -24,16 +24,6 @@ pub enum Failure {
     NotOpened,
     /// Hotkeys stopped working while the desktop's settings were asked for.
     Hotkeys(Unavailable),
-}
-
-impl Failure {
-    /// The failure with its quoted text cut, for the window.
-    pub fn bounded(self) -> Failure {
-        match self {
-            Failure::Hotkeys(why) => Failure::Hotkeys(bounded_unavailable(why)),
-            other => other,
-        }
-    }
 }
 
 impl fmt::Display for Failure {
@@ -66,17 +56,6 @@ pub enum Unavailability {
     NoShortcuts,
     /// Hotkeys cannot be read.
     Hotkeys(Unavailable),
-}
-
-impl Unavailability {
-    /// The reason with its quoted text cut, for the window.
-    pub fn bounded(self) -> Unavailability {
-        match self {
-            Unavailability::Hotkeys(why) => Unavailability::Hotkeys(bounded_unavailable(why)),
-            Unavailability::Blocked(why) => Unavailability::Blocked(bounded_blocked(why)),
-            other => other,
-        }
-    }
 }
 
 impl fmt::Display for Unavailability {

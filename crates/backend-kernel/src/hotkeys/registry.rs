@@ -123,7 +123,7 @@ impl Registry {
         let why = if states().any(|state| *state == State::Denied) {
             Unavailable::NoPermission
         } else if let Some(failure) = self.first_failure() {
-            Unavailable::ReadFailed(failure.to_owned())
+            Unavailable::ReadFailed(failure.to_owned().into())
         } else {
             Unavailable::NoKeyboard
         };

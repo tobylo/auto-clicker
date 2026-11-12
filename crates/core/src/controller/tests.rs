@@ -910,7 +910,7 @@ async fn a_blocked_session_stops_clicking_and_refuses_starts() {
         Blocked::Locked,
         Blocked::Inactive,
         Blocked::Sleeping,
-        Blocked::Unknown("lost".to_owned()),
+        Blocked::Unknown("lost".to_owned().into()),
     ];
     for reason in reasons {
         local(async {
@@ -1203,7 +1203,7 @@ async fn a_flood_of_tray_requests_cannot_keep_a_stopped_run_holding() {
 async fn a_reader_that_ends_leaves_the_controller_working() {
     local(async {
         let shared = Shared::default();
-        let failed = Unavailable::WatchFailed("gone".to_owned());
+        let failed = Unavailable::WatchFailed("gone".to_owned().into());
         let status = HotkeyEvent::Status(HotkeyStatus::Unavailable(failed.clone()));
         shared.with(|r| r.reader_ends_with = Some(status));
         let d = daemon_with(config(Mode::HoldButton), shared, true).await;

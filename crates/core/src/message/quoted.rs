@@ -25,6 +25,26 @@ impl Quoted {
     }
 }
 
+impl From<String> for Quoted {
+    fn from(text: String) -> Quoted {
+        Quoted(text)
+    }
+}
+
+impl From<&str> for Quoted {
+    fn from(text: &str) -> Quoted {
+        Quoted(text.to_owned())
+    }
+}
+
+impl std::ops::Deref for Quoted {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
 impl fmt::Display for Quoted {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)

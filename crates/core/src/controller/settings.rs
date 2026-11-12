@@ -154,7 +154,6 @@ impl<P: Platform> Controller<P> {
                     }
                 };
                 if let Some(outcome) = outcome {
-                    let outcome = outcome.bounded();
                     self.settings.answer = Some(Answer { id, outcome });
                 }
             }
