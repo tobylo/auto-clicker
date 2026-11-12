@@ -7,7 +7,7 @@
 # files during its own build.
 
 pkgname=tobylo-auto-clicker
-pkgver=0.1.0
+pkgver=0.7.0
 pkgrel=1
 pkgdesc='Auto clicker for KDE Plasma on Wayland, in the system tray'
 arch=(x86_64)
