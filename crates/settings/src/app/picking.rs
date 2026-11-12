@@ -3,15 +3,17 @@
 //! clicks for the point picked, and fills the fields with it.
 //!
 //! Picking is offered only while the daemon is idle, and the overlays close
-//! when it leaves idle or the screens change: a run's own click must never
-//! land on them. The daemon answers a pick only while idle too.
+//! when it leaves idle, a run begins or the screens change: a run's own
+//! click must never land on them. The pick carries the counts of runs and
+//! screen changes the view showed when it began, and the daemon refuses it
+//! when either moved since, even if the window had not heard yet.
 
 use std::cell::RefCell;
 use std::rc::Weak;
 
 use auto_clicker_core::message::Unavailability;
 use auto_clicker_core::recording::Layout;
-use auto_clicker_core::window::{PICK_TIME, WindowView};
+use auto_clicker_core::window::{PICK_TIME, Since, WindowView};
 use slint::ComponentHandle;
 
 use super::App;
@@ -21,18 +23,19 @@ use crate::state::{self, Note};
 impl App {
     /// Opens the overlays, when the user may ask and the screens are known.
     pub(super) fn pick(&mut self, app: Weak<RefCell<App>>) {
-        let Some(screens) = self.pickable() else {
+        let Some((screens, since)) = self.pickable() else {
             return;
         };
         let monitors = pick::monitors(self.window.window()).unwrap_or_default();
         match pick::targets(monitors, &screens) {
-            Some(targets) => self.open_pick(targets, app),
+            Some(targets) => self.open_pick(targets, since, app),
             None => self.note(&Note::Unavailable(Unavailability::ScreensChanged)),
         }
     }
 
-    /// The screens to pick on, when a pick may begin.
-    fn pickable(&self) -> Option<Layout> {
+    /// The screens to pick on and what the pick is checked against, when a
+    /// pick may begin.
+    fn pickable(&self) -> Option<(Layout, Since)> {
         pickable(
             self.last.as_ref(),
             self.state.may_ask(),
@@ -40,7 +43,12 @@ impl App {
         )
     }
 
-    fn open_pick(&mut self, targets: Vec<Target<pick::Screen>>, app: Weak<RefCell<App>>) {
+    fn open_pick(
+        &mut self,
+        targets: Vec<Target<pick::Screen>>,
+        since: Since,
+        app: Weak<RefCell<App>>,
+    ) {
         let ended = move |how| {
             if let Some(app) = app.upgrade() {
                 app.borrow_mut().pick_ended(how);
@@ -48,7 +56,7 @@ impl App {
         };
         match Pick::open(targets, pick::place, PICK_TIME, ended) {
             Ok(opened) => {
-                self.pick = Some(opened);
+                self.pick = Some((opened, since));
                 self.note(&Note::Picking);
             }
             Err(why) => self.note(&Note::PickFailed(why)),
@@ -58,31 +66,34 @@ impl App {
 
     /// The overlays ended: a picked point goes to the daemon to locate.
     fn pick_ended(&mut self, how: PickEnd) {
-        self.close_pick();
-        match how {
-            PickEnd::At { point, on } => {
-                if let Some(request) = self.state.locate(point, on) {
+        let since = self.close_pick();
+        match (how, since) {
+            (PickEnd::At { at, on }, Some(since)) => {
+                if let Some(request) = self.state.locate(at, on, since) {
                     self.send(&request);
                 }
             }
-            PickEnd::Cancelled => self.note(&Note::PickCancelled),
-            PickEnd::TimedOut => self.note(&Note::PickTimedOut),
+            (PickEnd::Cancelled, _) => self.note(&Note::PickCancelled),
+            (PickEnd::TimedOut, _) => self.note(&Note::PickTimedOut),
+            // An end told after the pick was closed: nothing is up to end.
+            (PickEnd::At { .. }, None) => {}
         }
     }
 
-    /// Closes the overlays, if they are up.
-    pub(super) fn close_pick(&mut self) {
-        self.pick = None;
+    /// Closes the overlays, if they are up; what the pick was checked
+    /// against, if one was.
+    pub(super) fn close_pick(&mut self) -> Option<Since> {
         self.window.set_picking(false);
+        self.pick.take().map(|(_, since)| since)
     }
 
     /// A new view closes the overlays when the program left idle or the
     /// screens changed under them, and says why.
     pub(super) fn pick_follows(&mut self, view: &WindowView) {
-        if self.pick.is_none() {
+        let Some((_, since)) = &self.pick else {
             return;
-        }
-        if let Some(why) = ends_pick(self.last.as_ref(), view) {
+        };
+        if let Some(why) = ends_pick(*since, view) {
             self.close_pick();
             self.note(&why);
         }
@@ -96,21 +107,22 @@ impl App {
     }
 }
 
-/// The screens to pick on, when a pick may begin: the last view shows them,
-/// the program is idle, the user may ask and no pick is up.
-fn pickable(last: Option<&WindowView>, may_ask: bool, picking: bool) -> Option<Layout> {
+/// The screens to pick on and the view's counts, when a pick may begin:
+/// the last view shows the screens, the program is idle, the user may ask
+/// and no pick is up.
+fn pickable(last: Option<&WindowView>, may_ask: bool, picking: bool) -> Option<(Layout, Since)> {
     let view = last?;
     let free = may_ask && !picking;
-    view.screens.clone().filter(|_| free && state::idle(view))
+    let screens = view.screens.clone().filter(|_| free && state::idle(view))?;
+    Some((screens, view.since))
 }
 
-/// Why `view` ends a pick begun on `last`: the program left idle, or the
-/// screens changed.
-fn ends_pick(last: Option<&WindowView>, view: &WindowView) -> Option<Note> {
-    let shown = last.and_then(|last| last.screens.as_ref());
-    if !state::idle(view) {
+/// Why `view` ends a pick begun on the counts `since`: the program left
+/// idle or a run began, or the screens changed.
+fn ends_pick(since: Since, view: &WindowView) -> Option<Note> {
+    if !state::idle(view) || view.since.runs != since.runs {
         Some(Note::Busy)
-    } else if view.screens.as_ref() != shown {
+    } else if view.since.layouts != since.layouts {
         Some(Note::Unavailable(Unavailability::ScreensChanged))
     } else {
         None

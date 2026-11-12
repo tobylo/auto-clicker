@@ -67,6 +67,22 @@ pub fn monitors(window: &slint::Window) -> Option<Vec<Monitor<MonitorHandle>>> {
     })
 }
 
+/// How many of the compositor's logical pixels one of Slint's is on
+/// `window`: 1 unless `SLINT_SCALE_FACTOR` overrides the screen's scale,
+/// or the window is not a winit window.
+pub fn units(window: &slint::Window) -> f64 {
+    let native = window.with_winit_window(|winit| winit.scale_factor());
+    ratio(f64::from(window.scale_factor()), native)
+}
+
+/// Slint's scale over the screen's, or 1 when either is unknown or none.
+fn ratio(slint: f64, native: Option<f64>) -> f64 {
+    match native {
+        Some(native) if native > 0.0 && slint > 0.0 => slint / native,
+        _ => 1.0,
+    }
+}
+
 /// `physical` divided by the whole-number `scale`, when it divides evenly.
 fn logical(physical: i32, scale: f64) -> Option<i64> {
     let value = f64::from(physical) / scale;
@@ -91,6 +107,22 @@ mod tests {
         ];
         for ((physical, scale), expected) in cases {
             assert_eq!(logical(physical, scale), expected, "{physical} {scale}");
+        }
+    }
+
+    #[test]
+    fn slints_units_are_its_scale_over_the_screens() {
+        let cases = [
+            ((1.25, Some(1.25)), 1.0),
+            // SLINT_SCALE_FACTOR=2 on a screen at 1: a Slint pixel is two.
+            ((2.0, Some(1.0)), 2.0),
+            ((1.0, Some(2.0)), 0.5),
+            ((1.25, None), 1.0),
+            ((1.25, Some(0.0)), 1.0),
+            ((0.0, Some(1.0)), 1.0),
+        ];
+        for ((slint, native), expected) in cases {
+            assert_eq!(ratio(slint, native), expected, "{slint} {native:?}");
         }
     }
 

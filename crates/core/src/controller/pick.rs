@@ -3,10 +3,12 @@
 //! KWin has them now.
 //!
 //! The window picks on the layout its view showed; the screens may have
-//! changed since. A point is located only when the output it was picked on
-//! is still there, in the same place and size, and the point lies on it.
-//! It is answered only while idle: a run's own click must never be taken
-//! for a pick, and the window offers picking only while idle too.
+//! changed since. A point is located only when the screens have not
+//! changed since the pick began, the output it was picked on is there in
+//! the same place and size, and the point lies on it. It is answered only
+//! while idle and when no run began since the pick did: a run's own click,
+//! even one that ended before the window's request came, must never be
+//! taken for a pick. The window offers picking only while idle too.
 //!
 //! A point saved from a pick keeps the screens it was picked on. Clicking
 //! at it starts only on those screens, and stops when they change: on other
@@ -15,8 +17,8 @@
 use super::{Controller, Job, Platform, State};
 use crate::clicker::Position;
 use crate::message::{Hindrance, Notice, PointScreens, Start, Stop, Unavailability};
-use crate::recording::{Layout, Point, Rect};
-use crate::window::{Located, Outcome};
+use crate::recording::{Layout, Rect};
+use crate::window::{Located, Outcome, Since, Spot};
 
 impl<P: Platform> Controller<P> {
     /// Why clicking with the config's settings would land elsewhere than
@@ -62,29 +64,33 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    /// Where the clicker clicks for `point`, picked on the output at `on`.
-    pub(super) fn locate(&self, point: Point, on: Rect) -> Outcome {
-        if !self.settled() {
+    /// Where the clicker clicks for `at`, picked on the output at `on` in a
+    /// pick begun when the view showed `since`.
+    pub(super) fn locate(&self, at: Spot, on: Rect, since: Since) -> Outcome {
+        if !self.settled() || since.runs != self.since.runs {
             return Outcome::Busy;
         }
         match self.platform.layout() {
             None => Outcome::Unavailable(Unavailability::ScreensUnknown),
-            Some(screens) => located(screens, point, on),
+            Some(_) if since.layouts != self.since.layouts => {
+                Outcome::Unavailable(Unavailability::ScreensChanged)
+            }
+            Some(screens) => located(screens, at, on),
         }
     }
 }
 
-/// `point` on `screens`, when the output at `on` is still one of them and
+/// `at` on `screens`, when the output at `on` is still one of them and
 /// holds it.
-fn located(screens: Layout, point: Point, on: Rect) -> Outcome {
+fn located(screens: Layout, at: Spot, on: Rect) -> Outcome {
     let still_there = screens.outputs().iter().any(|output| output.rect() == on);
-    if !still_there || !on.contains(point) {
+    if !still_there || !on.holds(at.x(), at.y()) {
         return Outcome::Unavailable(Unavailability::ScreensChanged);
     }
-    let at = screens.absolute(point);
+    let absolute = screens.absolute_at(at.x(), at.y());
     Outcome::Located(Located {
-        x: at.x,
-        y: at.y,
+        x: absolute.x,
+        y: absolute.y,
         screens,
     })
 }
@@ -121,21 +127,25 @@ mod tests {
         })
     }
 
+    fn spot(x: f64, y: f64) -> Spot {
+        Spot::new(x, y).unwrap()
+    }
+
     #[test]
     fn a_point_on_either_screen_maps_by_the_formula() {
         let panel = rect(0, 0, 2048, 1280);
         let dp1 = rect(2048, 0, 2293, 960);
         let cases = [
             // round(1024 * 65536 / 4341) = 15459; round(640 * 65536 / 1280) = 32768.
-            (Point { x: 1024, y: 640 }, panel, at(15459, 32768)),
-            // The panel's last pixel: round(2047 * 65536 / 4341) = 30904,
-            // round(1279 * 65536 / 1280) = 65485.
-            (Point { x: 2047, y: 1279 }, panel, at(30904, 65485)),
+            (spot(1024.0, 640.0), panel, at(15459, 32768)),
+            // round(1000.36 * 65536 / 4341) = 15102; round(640.55 * 65536 / 1280) = 32796.
+            (spot(1000.36, 640.55), panel, at(15102, 32796)),
             // DP-1's first pixel: round(2048 * 65536 / 4341) = 30919.
-            (Point { x: 2048, y: 0 }, dp1, at(30919, 0)),
-            // DP-1's last pixel: round(4340 * 65536 / 4341) = 65521,
-            // round(959 * 65536 / 1280) = 49101.
-            (Point { x: 4340, y: 959 }, dp1, at(65521, 49101)),
+            (spot(2048.0, 0.0), dp1, at(30919, 0)),
+            // DP-1's last fraction of a pixel, past KWin's whole-pixel width
+            // at scale 1.5: round(4340.9 * 65536 / 4341) = 65534,
+            // round(959.9 * 65536 / 1280) = 49147.
+            (spot(4340.9, 959.9), dp1, at(65534, 49147)),
         ];
         for (point, on, expected) in cases {
             assert_eq!(located(screens(), point, on), expected, "{point:?}");
@@ -147,13 +157,13 @@ mod tests {
         let changed = Outcome::Unavailable(Unavailability::ScreensChanged);
         let cases = [
             // Below DP-1, inside the bounding box: on no screen.
-            (Point { x: 3000, y: 960 }, rect(2048, 0, 2293, 960)),
+            (spot(3000.0, 960.0), rect(2048, 0, 2293, 960)),
             // On the panel, but said to be picked on DP-1.
-            (Point { x: 10, y: 10 }, rect(2048, 0, 2293, 960)),
+            (spot(10.0, 10.0), rect(2048, 0, 2293, 960)),
             // DP-1 as KScreen rounds it, 2294 wide: not KWin's screen.
-            (Point { x: 2100, y: 10 }, rect(2048, 0, 2294, 960)),
+            (spot(2100.0, 10.0), rect(2048, 0, 2294, 960)),
             // A screen that is not there.
-            (Point { x: 10, y: 10 }, rect(0, 0, 1920, 1080)),
+            (spot(10.0, 10.0), rect(0, 0, 1920, 1080)),
         ];
         for (point, on) in cases {
             assert_eq!(located(screens(), point, on), changed, "{point:?} {on:?}");

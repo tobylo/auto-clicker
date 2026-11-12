@@ -406,6 +406,9 @@ pub struct Controller<P: Platform> {
     hotkey_status: Option<HotkeyStatus>,
     /// The screen layout's watcher.
     screen: LayoutSource,
+    /// How many runs began and how often the layout changed: what a pick
+    /// is checked against.
+    since: crate::window::Since,
     /// The desktop's hotkeys, when it delivers them.
     desktop: Option<desktop::DesktopHotkeys>,
     /// Starts out unknown: a state not yet read is not "unlocked".
@@ -473,6 +476,7 @@ impl<P: Platform> Controller<P> {
             hotkeys: HotkeySource::none(),
             hotkey_status: None,
             screen: LayoutSource::default(),
+            since: crate::window::Since::default(),
             desktop,
             blocked: Some(Blocked::Unknown("not read yet".to_owned().into())),
             notice: None,
@@ -884,6 +888,7 @@ impl<P: Platform> Controller<P> {
     }
 
     fn run_with(&mut self, input: Input<P::Backend>, job: Job) {
+        self.since.runs = self.since.runs.wrapping_add(1);
         let loss = self.platform.input_lost(&input);
         let (stop, stop_signal) = oneshot::channel();
         let (shutdown, shutdown_signal) = oneshot::channel();

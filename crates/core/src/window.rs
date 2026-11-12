@@ -23,7 +23,7 @@ use crate::hotkeys::{Action, Binding, Capture};
 use crate::message::{
     ChangeFailure, Failure, Notice, Problem, Quoted, RecordingChange, Unavailability,
 };
-use crate::recording::{FileName, Layout, Point, Rect};
+use crate::recording::{FileName, Layout, Rect};
 
 /// The longest line either side sends or reads, newline included. A view
 /// with the most recordings the window lists, each with the longest name,
@@ -90,10 +90,71 @@ pub enum Ask {
         file: FileName,
         action: RecordingAction,
     },
-    /// Where the clicker clicks for `point`, picked on the output covering
-    /// `on` in the view's layout. Answered [`Outcome::Busy`] unless the
-    /// program is idle, so a click of its own is never taken for a pick.
-    Locate { point: Point, on: Rect },
+    /// Where the clicker clicks for `at`, picked on the output covering
+    /// `on` in the view's layout while the view showed `since`. Answered
+    /// [`Outcome::Busy`] unless the program is idle and no run began since,
+    /// so a click of its own is never taken for a pick.
+    Locate { at: Spot, on: Rect, since: Since },
+}
+
+/// A position on the screens in logical pixels from the layout's top-left
+/// corner, to a fraction of a pixel: where the user clicked. Read only as
+/// two finite numbers from 0 to `u32::MAX`.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(try_from = "SpotSpec", into = "SpotSpec")]
+pub struct Spot {
+    x: f64,
+    y: f64,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SpotSpec {
+    x: f64,
+    y: f64,
+}
+
+impl Spot {
+    /// The position (`x`, `y`); `None` unless both are finite and from 0
+    /// to `u32::MAX`.
+    pub fn new(x: f64, y: f64) -> Option<Spot> {
+        let valid = |v: f64| (0.0..=f64::from(u32::MAX)).contains(&v);
+        (valid(x) && valid(y)).then_some(Spot { x, y })
+    }
+
+    pub fn x(self) -> f64 {
+        self.x
+    }
+
+    pub fn y(self) -> f64 {
+        self.y
+    }
+}
+
+impl TryFrom<SpotSpec> for Spot {
+    type Error = &'static str;
+
+    fn try_from(spec: SpotSpec) -> Result<Spot, &'static str> {
+        Spot::new(spec.x, spec.y).ok_or("a picked position is not on the screens")
+    }
+}
+
+impl From<Spot> for SpotSpec {
+    fn from(spot: Spot) -> SpotSpec {
+        SpotSpec {
+            x: spot.x,
+            y: spot.y,
+        }
+    }
+}
+
+/// How many runs have begun and how often the screens changed since the
+/// daemon started: a pick begun on one count is refused on another.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Since {
+    pub runs: u64,
+    pub layouts: u64,
 }
 
 /// What the window does with a recording.
@@ -142,6 +203,8 @@ pub struct WindowView {
     /// The screens as KWin has them now, which a point is picked on; `None`
     /// when they are not known.
     pub screens: Option<Layout>,
+    /// What a pick begun now is checked against.
+    pub since: Since,
     /// The answer to the window's last request, once there is one.
     pub answer: Option<Answer>,
 }

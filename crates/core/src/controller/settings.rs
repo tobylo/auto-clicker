@@ -161,7 +161,7 @@ impl<P: Platform> Controller<P> {
                         self.configure_shortcuts(id, activation_token)
                     }
                     Ask::Recording { file, action } => Some(self.recording_request(&file, action)),
-                    Ask::Locate { point, on } => Some(self.locate(point, on)),
+                    Ask::Locate { at, on, since } => Some(self.locate(at, on, since)),
                 };
                 if let Some(outcome) = outcome {
                     self.settings.answer = Some(Answer { id, outcome });
@@ -281,6 +281,7 @@ impl<P: Platform> Controller<P> {
             problems: self.problems(),
             recordings: self.shelf.window_view(),
             screens: self.platform.layout(),
+            since: self.since,
             answer: self.settings.answer.clone(),
         }
         .bounded();

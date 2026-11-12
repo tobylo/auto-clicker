@@ -49,6 +49,7 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
     refusals_and_failures(&said);
     problems(&said);
     recordings(&said);
+    point_screens(&said);
     titles(&said);
     crate::pick::tests::every_end_is_told_once_and_closes_every_overlay();
 }
@@ -90,6 +91,35 @@ fn refusals_and_failures(said: &Said<'_>) {
     assert_eq!(
         note(Note::Refused(Field::Speed, Reason::Speed)),
         "Hastighet: måste vara från 0,25 till 4"
+    );
+}
+
+/// Why a pick or clicking at a picked point does not go ahead.
+fn point_screens(said: &Said<'_>) {
+    let note = |note: Note| note_text(said, &note).to_string();
+    let refused = RecordingOutcome::NotPlaying(Some(Notice::Refused {
+        start: Start::Clicking,
+        why: Hindrance::Screens(PointScreens::Changed),
+    }));
+    assert_eq!(
+        note(Note::Recording(refused)),
+        "Startade inte: skärmarna har ändrats sedan den fasta punkten valdes: välj den igen \
+         i Inställningar"
+    );
+    let stopped =
+        RecordingOutcome::NotPlaying(Some(Notice::Stopped(Stop::Screens(PointScreens::Unknown))));
+    assert_eq!(
+        note(Note::Recording(stopped)),
+        "Klickandet stoppades: skärmlayouten är inte känd, så den valda punkten kan inte \
+         kontrolleras"
+    );
+    assert_eq!(
+        note(Note::Unavailable(Unavailability::ScreensChanged)),
+        "Inte tillgängligt: skärmarna ändrades medan punkten valdes: välj den igen"
+    );
+    assert_eq!(
+        note(Note::Unavailable(Unavailability::ScreensUnknown)),
+        "Inte tillgängligt: skärmlayouten är inte känd"
     );
 }
 
@@ -169,30 +199,6 @@ fn recordings(said: &Said<'_>) {
         note(Note::Recording(recorded)),
         "Stoppat: skärmen är låst. Inspelningen kunde inte sparas: ingen datamapp: varken \
          XDG_DATA_HOME eller HOME är satt"
-    );
-    let refused = RecordingOutcome::NotPlaying(Some(Notice::Refused {
-        start: Start::Clicking,
-        why: Hindrance::Screens(PointScreens::Changed),
-    }));
-    assert_eq!(
-        note(Note::Recording(refused)),
-        "Startade inte: skärmarna har ändrats sedan den fasta punkten valdes: välj den igen \
-         i Inställningar"
-    );
-    let stopped =
-        RecordingOutcome::NotPlaying(Some(Notice::Stopped(Stop::Screens(PointScreens::Unknown))));
-    assert_eq!(
-        note(Note::Recording(stopped)),
-        "Klickandet stoppades: skärmlayouten är inte känd, så den valda punkten kan inte \
-         kontrolleras"
-    );
-    assert_eq!(
-        note(Note::Unavailable(Unavailability::ScreensChanged)),
-        "Inte tillgängligt: skärmarna ändrades medan punkten valdes: välj den igen"
-    );
-    assert_eq!(
-        note(Note::Unavailable(Unavailability::ScreensUnknown)),
-        "Inte tillgängligt: skärmlayouten är inte känd"
     );
     let gone = RecordingOutcome::NotChanged(RecordingChange::Delete, ChangeFailure::Missing);
     assert_eq!(

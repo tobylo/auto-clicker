@@ -33,6 +33,10 @@ fn view(activity: Activity, screens: Option<Layout>) -> WindowView {
         problems: Vec::new(),
         recordings: Default::default(),
         screens,
+        since: Since {
+            runs: 1,
+            layouts: 1,
+        },
         answer: None,
     }
 }
@@ -40,7 +44,14 @@ fn view(activity: Activity, screens: Option<Layout>) -> WindowView {
 #[test]
 fn a_pick_begins_only_idle_on_known_screens_with_nothing_else_asked() {
     let idle = view(Activity::Idle, Some(screens(2048)));
-    assert_eq!(pickable(Some(&idle), true, false), Some(screens(2048)));
+    let since = Since {
+        runs: 1,
+        layouts: 1,
+    };
+    assert_eq!(
+        pickable(Some(&idle), true, false),
+        Some((screens(2048), since))
+    );
     let unknown = view(Activity::Idle, None);
     let clicking = view(Activity::Clicking, Some(screens(2048)));
     let cases = [
@@ -62,28 +73,28 @@ fn a_pick_begins_only_idle_on_known_screens_with_nothing_else_asked() {
 }
 
 #[test]
-fn a_pick_ends_when_the_program_leaves_idle_or_the_screens_change() {
-    let begun = view(Activity::Idle, Some(screens(2048)));
+fn a_pick_ends_when_the_program_leaves_idle_a_run_begins_or_the_screens_change() {
+    let begun = Since {
+        runs: 1,
+        layouts: 1,
+    };
+    let with = |activity, runs, layouts| {
+        let mut shown = view(activity, Some(screens(2048)));
+        shown.since = Since { runs, layouts };
+        shown
+    };
+    let changed = Some(Note::Unavailable(Unavailability::ScreensChanged));
     let cases = [
-        (view(Activity::Idle, Some(screens(2048))), None),
-        (
-            view(Activity::Clicking, Some(screens(2048))),
-            Some(Note::Busy),
-        ),
-        (
-            view(Activity::Recording, Some(screens(2048))),
-            Some(Note::Busy),
-        ),
-        (
-            view(Activity::Idle, Some(screens(2047))),
-            Some(Note::Unavailable(Unavailability::ScreensChanged)),
-        ),
-        (
-            view(Activity::Idle, None),
-            Some(Note::Unavailable(Unavailability::ScreensChanged)),
-        ),
+        (with(Activity::Idle, 1, 1), None),
+        (with(Activity::Clicking, 1, 1), Some(Note::Busy)),
+        (with(Activity::Recording, 1, 1), Some(Note::Busy)),
+        // A run that began and ended between two views.
+        (with(Activity::Idle, 2, 1), Some(Note::Busy)),
+        // Screens that changed, even back to the same layout.
+        (with(Activity::Idle, 1, 2), changed.clone()),
+        (view(Activity::Idle, None), None),
     ];
     for (now, ends) in cases {
-        assert_eq!(ends_pick(Some(&begun), &now), ends, "{now:?}");
+        assert_eq!(ends_pick(begun, &now), ends, "{now:?}");
     }
 }

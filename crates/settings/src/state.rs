@@ -6,10 +6,10 @@ use auto_clicker_core::config::{Draft, Field, HotkeysDraft, Reason, Stale};
 use auto_clicker_core::controller::{Activity, Route};
 use auto_clicker_core::hotkeys::{Action, Capture};
 use auto_clicker_core::message::{Failure, Quoted, Unavailability};
-use auto_clicker_core::recording::{FileName, Point, Rect};
+use auto_clicker_core::recording::{FileName, Rect};
 use auto_clicker_core::window::{
-    Ask, CaptureEnd, Confirm, Located, Outcome, RecordingAction, RecordingOutcome, Request,
-    WindowView,
+    Ask, CaptureEnd, Confirm, Located, Outcome, RecordingAction, RecordingOutcome, Request, Since,
+    Spot, WindowView,
 };
 
 use crate::model::{Fields, Picked, Unreadable, with_hotkey};
@@ -303,13 +303,14 @@ impl State {
         Some(self.send_recording(file, action))
     }
 
-    /// Where the clicker clicks for `point`, picked on the screen at `on`;
-    /// `None` while the user may not ask anything.
-    pub fn locate(&mut self, point: Point, on: Rect) -> Option<Request> {
+    /// Where the clicker clicks for `at`, picked on the screen at `on` in a
+    /// pick begun on the counts `since`; `None` while the user may not ask
+    /// anything.
+    pub fn locate(&mut self, at: Spot, on: Rect, since: Since) -> Option<Request> {
         if !self.may_ask() {
             return None;
         }
-        Some(self.send(Ask::Locate { point, on }, Asked::Locate))
+        Some(self.send(Ask::Locate { at, on, since }, Asked::Locate))
     }
 
     fn send_recording(&mut self, file: FileName, action: RecordingAction) -> Request {

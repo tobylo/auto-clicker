@@ -73,6 +73,10 @@ fn view() -> WindowView {
             current: Some(file("2026-11-02_18-04-05.123.json")),
         },
         screens: Some(screens()),
+        since: Since {
+            runs: 3,
+            layouts: u64::MAX,
+        },
         answer: Some(Answer {
             id: 7,
             outcome: Outcome::Refused(Refusal::new(
@@ -178,8 +182,12 @@ fn every_request_reads_back_as_sent() {
             action: RecordingAction::Play,
         },
         Ask::Locate {
-            point: Point { x: 2048, y: 1439 },
+            at: Spot::new(2048.5, 1439.99).unwrap(),
             on: rect(2048, 0, 3440, 1440),
+            since: Since {
+                runs: 1,
+                layouts: 2,
+            },
         },
     ];
     for ask in asks {
@@ -219,6 +227,29 @@ fn a_shown_binding_is_read_only_in_its_one_form() {
     let mut value = serde_json::to_value(view()).unwrap();
     value["hotkeys"]["toggle_clicking"] = serde_json::json!({ "bound": "Ctrl+Nope" });
     assert!(parse::<WindowView>(&serde_json::to_vec(&value).unwrap()).is_err());
+}
+
+#[test]
+fn a_picked_position_is_read_only_as_finite_numbers_on_the_screens() {
+    let ask = Ask::Locate {
+        at: Spot::new(1.5, 2.5).unwrap(),
+        on: rect(0, 0, 10, 10),
+        since: Since::default(),
+    };
+    let mut value = serde_json::to_value(Request { id: 1, ask }).unwrap();
+    for at in [
+        serde_json::json!({"x": -0.5, "y": 1.0}),
+        serde_json::json!({"x": 1.0, "y": 5e9}),
+        serde_json::json!({"x": 1.0}),
+        serde_json::json!({"x": 1.0, "y": 1.0, "z": 1.0}),
+        serde_json::json!("1,1"),
+    ] {
+        value["ask"]["locate"]["at"] = at.clone();
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert!(parse::<Request>(&bytes).is_err(), "{at}");
+    }
+    assert_eq!(Spot::new(f64::NAN, 1.0), None);
+    assert_eq!(Spot::new(1.0, f64::INFINITY), None);
 }
 
 #[test]

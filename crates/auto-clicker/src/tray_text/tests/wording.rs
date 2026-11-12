@@ -129,19 +129,6 @@ fn swedish_reads_as_written() {
             "Spelar inte in: inspelning går inte med skrivbordets genvägar",
         ),
         (
-            notice::swedish(&Notice::Refused {
-                start: Start::Clicking,
-                why: Hindrance::Screens(PointScreens::Changed),
-            }),
-            "Startade inte: skärmarna har ändrats sedan den fasta punkten valdes: välj den \
-             igen i Inställningar",
-        ),
-        (
-            notice::swedish(&Notice::Stopped(Stop::Screens(PointScreens::Unknown))),
-            "Klickandet stoppades: skärmlayouten är inte känd, så den valda punkten kan inte \
-             kontrolleras",
-        ),
-        (
             notice::swedish(&Notice::Playing(PlayStart::HeldAndRelative {
                 seconds: 2,
                 fallback: Fallback::Unknown,
@@ -170,6 +157,28 @@ fn swedish_reads_as_written() {
             "Stoppat: snabbtangenten \u{201d}Meta+P\u{201d} ligger inte på en \
              funktionstangent (F1 till F24), så programmet kan inte avgöra om dess egna \
              tangenttryck skulle utlösa den; ändra den i Systeminställningar",
+        ),
+    ];
+    for (swedish, expected) in rows {
+        assert_eq!(swedish, expected);
+    }
+}
+
+#[test]
+fn swedish_reasons_about_a_picked_point_read_as_written() {
+    let rows = [
+        (
+            notice::swedish(&Notice::Refused {
+                start: Start::Clicking,
+                why: Hindrance::Screens(PointScreens::Changed),
+            }),
+            "Startade inte: skärmarna har ändrats sedan den fasta punkten valdes: välj den \
+             igen i Inställningar",
+        ),
+        (
+            notice::swedish(&Notice::Stopped(Stop::Screens(PointScreens::Unknown))),
+            "Klickandet stoppades: skärmlayouten är inte känd, så den valda punkten kan inte \
+             kontrolleras",
         ),
     ];
     for (swedish, expected) in rows {

@@ -8,7 +8,7 @@ use auto_clicker_core::config::Field;
 use auto_clicker_core::config::Stale;
 use auto_clicker_core::hotkeys::Action;
 use auto_clicker_core::recording::FileName;
-use auto_clicker_core::window::{CaptureEnd, RecordingAction, Request, Update, WindowView};
+use auto_clicker_core::window::{CaptureEnd, RecordingAction, Request, Since, Update, WindowView};
 use slint::{
     CloseRequestResponse, ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecModel,
 };
@@ -32,8 +32,9 @@ pub struct App {
     decimal: char,
     /// The recording selected in the list.
     selected: Option<FileName>,
-    /// The overlays that pick the fixed point, while they are up.
-    pick: Option<Pick>,
+    /// The overlays that pick the fixed point, while they are up, and the
+    /// counts the pick is checked against.
+    pick: Option<(Pick, Since)>,
 }
 
 impl App {
@@ -75,7 +76,7 @@ impl App {
         let weak = Rc::downgrade(&app);
         window.window().on_close_requested(move || {
             if let Some(app) = weak.upgrade() {
-                app.borrow_mut().close_pick();
+                let _ = app.borrow_mut().close_pick();
             }
             CloseRequestResponse::HideWindow
         });

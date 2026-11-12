@@ -6,7 +6,8 @@
 //!
 //! An overlay's click is in logical pixels from its screen's corner, and a
 //! full-screen window's corner is its screen's: the screen's place in the
-//! layout plus the click is the point on the layout (decision 0001).
+//! layout plus the click is the point on the layout (decision 0001), to a
+//! fraction of a pixel.
 
 mod place;
 
@@ -14,21 +15,22 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use auto_clicker_core::recording::{Layout, Point, Rect};
+use auto_clicker_core::recording::{Layout, Rect};
 #[cfg(doc)]
 use auto_clicker_core::window::PICK_TIME;
+use auto_clicker_core::window::Spot;
 use slint::{CloseRequestResponse, ComponentHandle, Timer, TimerMode};
 
 use crate::ui::PickWindow;
 
-pub use place::{Screen, hook, monitors, place};
+pub use place::{Screen, hook, monitors, place, units};
 
 /// How a pick ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PickEnd {
-    /// The user clicked `point`, on the screen at `on`.
+    /// The user clicked `at`, on the screen at `on`.
     At {
-        point: Point,
+        at: Spot,
         on: Rect,
     },
     Cancelled,
@@ -51,15 +53,18 @@ pub struct Target<M> {
 
 /// Each monitor with the screen of `screens` it shows, matched by their
 /// top-left corners, one per corner: winit lists a Wayland output more than
-/// once. `None` when a monitor is on no screen of the layout or a screen
+/// once. Screens of different sizes on one corner (mirrored) take the
+/// largest, so a click anywhere on either monitor is on it. `None` when a monitor is on no screen of the layout or a screen
 /// has no monitor: the window and KWin see different screens, as while one
 /// is plugged in.
 pub fn targets<M>(monitors: Vec<Monitor<M>>, screens: &Layout) -> Option<Vec<Target<M>>> {
-    let rects: Vec<Rect> = screens
+    let mut rects: Vec<Rect> = screens
         .outputs()
         .iter()
         .map(|output| output.rect())
         .collect();
+    let area = |rect: &Rect| u64::from(rect.width) * u64::from(rect.height);
+    rects.sort_by_key(|rect| std::cmp::Reverse(area(rect)));
     let corner =
         |rect: &Rect, left: i64, top: i64| i64::from(rect.x) == left && i64::from(rect.y) == top;
     let mut targets = Vec::new();
@@ -77,28 +82,17 @@ pub fn targets<M>(monitors: Vec<Monitor<M>>, screens: &Layout) -> Option<Vec<Tar
     covered.then_some(targets)
 }
 
-/// The point on the layout for a click at (`x`, `y`) on the screen at
-/// `on`, rounded to a whole pixel on that screen. A click on the last
-/// fraction of a pixel stays on its screen: at a fractional scale the
-/// overlay can reach past KWin's whole-pixel size.
-pub fn point_on(on: Rect, x: f32, y: f32) -> Point {
-    Point {
-        x: on.x.saturating_add(axis(x, on.width)),
-        y: on.y.saturating_add(axis(y, on.height)),
-    }
-}
-
-/// `value` rounded, from 0 to the last pixel of `size`.
-fn axis(value: f32, size: u32) -> u32 {
-    let last = size.saturating_sub(1);
-    let rounded = f64::from(value).round();
-    if rounded >= f64::from(last) {
-        last
-    } else {
-        // Below `last`, a whole number casts exactly; the cast takes a
-        // negative number and NaN to 0.
-        rounded as u32
-    }
+/// The position on the layout for a click at (`x`, `y`) on the screen at
+/// `on`, kept on that screen: at a fractional scale the overlay can reach
+/// past KWin's whole-pixel size. `None` for a position off the screens,
+/// which no click on an overlay gives.
+pub fn spot_on(on: Rect, x: f64, y: f64) -> Option<Spot> {
+    let within = |start: u32, size: u32, value: f64| {
+        // Short of the far edge, which is the next screen's; NaN gives 0.
+        let last = (f64::from(size) - 1.0 / 1024.0).max(0.0);
+        f64::from(start) + value.clamp(0.0, last).max(0.0)
+    };
+    Spot::new(within(on.x, on.width, x), within(on.y, on.height, y))
 }
 
 /// What tells the app how a pick ended: the first end only.
@@ -159,9 +153,14 @@ impl Pick {
 /// the pick ended.
 fn told_by(window: &PickWindow, on: Rect, ending: &Ending) {
     let clicked = Rc::clone(ending);
+    let overlay = window.as_weak();
     window.on_picked(move |x, y| {
-        let point = point_on(on, x, y);
-        end(&clicked, PickEnd::At { point, on });
+        // Slint's own scale (`SLINT_SCALE_FACTOR`) may differ from the
+        // screen's: the click in the compositor's logical pixels.
+        let units = overlay.upgrade().map_or(1.0, |w| units(w.window()));
+        if let Some(at) = spot_on(on, f64::from(x) * units, f64::from(y) * units) {
+            end(&clicked, PickEnd::At { at, on });
+        }
     });
     let escaped = Rc::clone(ending);
     window.on_cancelled(move || end(&escaped, PickEnd::Cancelled));
