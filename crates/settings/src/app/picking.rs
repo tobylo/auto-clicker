@@ -10,29 +10,37 @@ use std::cell::RefCell;
 use std::rc::Weak;
 
 use auto_clicker_core::message::Unavailability;
+use auto_clicker_core::recording::Layout;
 use auto_clicker_core::window::{PICK_TIME, WindowView};
 use slint::ComponentHandle;
 
 use super::App;
-use crate::pick::{self, Pick, PickEnd};
+use crate::pick::{self, Pick, PickEnd, Target};
 use crate::state::{self, Note};
 
 impl App {
     /// Opens the overlays, when the user may ask and the screens are known.
     pub(super) fn pick(&mut self, app: Weak<RefCell<App>>) {
-        let Some(view) = self.last.as_ref() else {
+        let Some(screens) = self.pickable() else {
             return;
         };
-        let Some(screens) = view.screens.as_ref() else {
-            return;
-        };
-        if self.pick.is_some() || !self.state.may_ask() || !state::idle(view) {
-            return;
-        }
         let monitors = pick::monitors(self.window.window()).unwrap_or_default();
-        let Some(targets) = pick::targets(monitors, screens) else {
-            return self.note(&Note::Unavailable(Unavailability::ScreensChanged));
-        };
+        match pick::targets(monitors, &screens) {
+            Some(targets) => self.open_pick(targets, app),
+            None => self.note(&Note::Unavailable(Unavailability::ScreensChanged)),
+        }
+    }
+
+    /// The screens to pick on, when a pick may begin.
+    fn pickable(&self) -> Option<Layout> {
+        pickable(
+            self.last.as_ref(),
+            self.state.may_ask(),
+            self.pick.is_some(),
+        )
+    }
+
+    fn open_pick(&mut self, targets: Vec<Target<pick::Screen>>, app: Weak<RefCell<App>>) {
         let ended = move |how| {
             if let Some(app) = app.upgrade() {
                 app.borrow_mut().pick_ended(how);
@@ -74,16 +82,10 @@ impl App {
         if self.pick.is_none() {
             return;
         }
-        let shown = self.last.as_ref().and_then(|last| last.screens.as_ref());
-        let why = if !state::idle(view) {
-            Note::Busy
-        } else if view.screens.as_ref() != shown {
-            Note::Unavailable(Unavailability::ScreensChanged)
-        } else {
-            return;
-        };
-        self.close_pick();
-        self.note(&why);
+        if let Some(why) = ends_pick(self.last.as_ref(), view) {
+            self.close_pick();
+            self.note(&why);
+        }
     }
 
     /// Fills the fields with a picked point: the fixed point, at `x`, `y`.
@@ -93,3 +95,27 @@ impl App {
         self.window.set_position_y(i32::from(y));
     }
 }
+
+/// The screens to pick on, when a pick may begin: the last view shows them,
+/// the program is idle, the user may ask and no pick is up.
+fn pickable(last: Option<&WindowView>, may_ask: bool, picking: bool) -> Option<Layout> {
+    let view = last?;
+    let free = may_ask && !picking;
+    view.screens.clone().filter(|_| free && state::idle(view))
+}
+
+/// Why `view` ends a pick begun on `last`: the program left idle, or the
+/// screens changed.
+fn ends_pick(last: Option<&WindowView>, view: &WindowView) -> Option<Note> {
+    let shown = last.and_then(|last| last.screens.as_ref());
+    if !state::idle(view) {
+        Some(Note::Busy)
+    } else if view.screens.as_ref() != shown {
+        Some(Note::Unavailable(Unavailability::ScreensChanged))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests;

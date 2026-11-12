@@ -49,6 +49,14 @@ fn monitors_match_the_screens_by_their_corners() {
         matched(vec![monitor(2048, 0, "DP-1"), monitor(0, 0, "eDP-1")]),
         Some(vec![("DP-1", DP1), ("eDP-1", PANEL)])
     );
+    // winit lists each Wayland output twice: one overlay each.
+    let twice = vec![
+        monitor(0, 0, "eDP-1"),
+        monitor(2048, 0, "DP-1"),
+        monitor(0, 0, "eDP-1 again"),
+        monitor(2048, 0, "DP-1 again"),
+    ];
+    assert_eq!(matched(twice), Some(vec![("eDP-1", PANEL), ("DP-1", DP1)]));
     let unmatched = [
         // A screen of the layout no monitor shows.
         vec![monitor(0, 0, "eDP-1")],
@@ -103,7 +111,7 @@ fn open(time: Duration) -> (Pick, Told) {
             monitor: (),
         },
     ];
-    let place: Placer<()> = |_, ()| Ok(None);
+    let place: Placer<()> = |()| PickWindow::new();
     let pick = Pick::open(targets, place, time, move |how| {
         telling.borrow_mut().push(how)
     });

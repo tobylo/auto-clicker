@@ -1,9 +1,12 @@
 //! Picking a point through the controller: the view shows the screens as
 //! KWin has them, and a pick is located on them only while idle.
 
-use super::settings::setup_with;
+use std::fs;
+
+use super::settings::{draft, setup_with};
 use super::*;
 use crate::clicker::Position;
+use crate::config::{ModeName, PositionDraft};
 use crate::input::AbsolutePosition;
 use crate::message::Unavailability;
 use crate::recording::tests::positions::{screen, two_screens};
@@ -211,6 +214,64 @@ async fn a_countdown_to_clicking_ends_when_its_screens_change() {
         d.settle().await;
         d.assert_idle_after(&[]);
         assert_eq!(d.notice(), format!("Clicking stopped: {CHANGED}"));
+    })
+    .await;
+}
+
+// Saving a picked point
+
+/// The point `ask` located, as a draft holding the button down there.
+fn holding_picked(located: &Outcome) -> crate::config::Draft {
+    let Outcome::Located(Located { x, y, screens }) = located else {
+        panic!("{located:?}");
+    };
+    draft(|d| {
+        d.clicker.mode = ModeName::HoldButton;
+        d.clicker.position = PositionDraft::Fixed {
+            x: *x,
+            y: *y,
+            screens: Some(screens.clone()),
+        };
+    })
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_saved_pick_is_written_with_its_screens_and_used_at_once() {
+    local(async {
+        let mut s = setup_with(None, with_layout(Some(two_screens()))).await;
+        let located = s.window.ask(&s.d, locate(3768, 720)).await;
+        let saved = s.window.save(&s.d, holding_picked(&located)).await;
+        assert_eq!(saved, Outcome::Saved);
+        let text = fs::read_to_string(&s.path).unwrap();
+        assert!(
+            text.contains(
+                "position = { x = 44996, y = 32768, screens = [\
+                 { x = 0, y = 0, width = 2048, height = 1280, scale_milli = 1250 }, \
+                 { x = 2048, y = 0, width = 3440, height = 1440, scale_milli = 1000 }] }"
+            ),
+            "{text}"
+        );
+        // The running daemon checks the saved screens without a restart.
+        s.d.set_layout(Some(moved()));
+        s.d.press_hotkey().await;
+        s.d.hotkey(HotkeyEvent::ModifiersReleased).await;
+        s.d.assert_idle_after(&[]);
+        assert_eq!(s.d.notice(), format!("Not started: {CHANGED}"));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn picking_again_on_new_screens_replaces_the_old_ones_at_once() {
+    local(async {
+        let text = "version = 1\n[clicker.position]\nx = 1\ny = 2\nscreens = [\
+                    { x = 0, y = 0, width = 2048, height = 1280, scale_milli = 1250 }]\n";
+        let mut s = setup_with(Some(text), with_layout(Some(two_screens()))).await;
+        let located = s.window.ask(&s.d, locate(3768, 720)).await;
+        let saved = s.window.save(&s.d, holding_picked(&located)).await;
+        assert_eq!(saved, Outcome::Saved);
+        s.d.start_by_hotkey().await;
+        assert_eq!(s.d.shared.calls(), [Call::MoveAbsolute(AT), LEFT_DOWN]);
     })
     .await;
 }
