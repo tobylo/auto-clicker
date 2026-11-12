@@ -559,3 +559,6 @@ msgstr "filen kunde inte tas bort: {}"
 
 msgid "the file could not be written: the renamed recording would be larger than {} MiB"
 msgstr "filen kunde inte skrivas: inspelningen med det nya namnet skulle bli större än {} MiB"
+
+msgid "Recording {}"
+msgstr "Inspelning {}"

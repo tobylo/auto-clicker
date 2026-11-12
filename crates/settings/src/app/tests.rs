@@ -47,6 +47,7 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
     refusals_and_failures(&said);
     problems(&said);
     recordings(&said);
+    titles(&said);
 }
 
 /// A refusal, a failure and an unavailable, as a note.
@@ -192,5 +193,21 @@ fn recordings(said: &Said<'_>) {
         said.notice(&own_key),
         "Spelar inte upp: leftshift är en modifierare, och om programmet håller den ändras \
          vilken snabbtangent skrivbordet ser"
+    );
+}
+
+/// A recording named in a notice: generated names in Swedish, the user's
+/// as they are.
+fn titles(said: &Said<'_>) {
+    let made = || FileName::parse("2026-11-09_18-04-05.123.json").unwrap();
+    let finished = Notice::Finished(Some(Titled::new(made(), None)));
+    assert_eq!(
+        said.notice(&finished),
+        "Spelade upp Inspelning 2026-11-09 18:04:05 till slutet"
+    );
+    let named = Notice::Finished(Some(Titled::new(made(), Some("Recording practice"))));
+    assert_eq!(
+        said.notice(&named),
+        "Spelade upp Recording practice (2026-11-09 18:04:05) till slutet"
     );
 }

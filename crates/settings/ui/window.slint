@@ -136,6 +136,7 @@ export global Texts {
     public pure function unsynced-deleted(why: string) -> string { @tr("Deleted, but it may not survive a power loss: {}", why) }
     public pure function not-renamed(why: string) -> string { @tr("Not renamed: {}", why) }
     public pure function not-deleted(why: string) -> string { @tr("Not deleted: {}", why) }
+    public pure function generated-name(made: string) -> string { @tr("Recording {}", made) }
     public pure function not-playing() -> string { @tr("Not playing") }
     public pure function file-not-written(why: string) -> string { @tr("the file could not be written: {}", why) }
     public pure function file-not-deleted(why: string) -> string { @tr("the file could not be deleted: {}", why) }

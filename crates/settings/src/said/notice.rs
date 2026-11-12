@@ -5,7 +5,7 @@
 use auto_clicker_core::hotkeys::Refusal;
 use auto_clicker_core::message::{
     ChangeFailure, Hindrance, Notice, PlayStart, RecordingChange, SaveFailure, Saving, Start, Step,
-    Stop, Unplayable,
+    Stop, Titled, Unplayable,
 };
 use auto_clicker_core::playback::Fallback;
 use auto_clicker_core::window::RecordingOutcome;
@@ -70,7 +70,7 @@ impl Said<'_> {
                 refused(t, self.hindrance(why))
             }
             Notice::Unplayable { recording, why } => {
-                t.invoke_unplayable(s(recording), self.unplayable(why))
+                t.invoke_unplayable(self.titled(recording), self.unplayable(why))
             }
             Notice::NothingToPlay => t.invoke_nothing_to_play(),
             Notice::Stopped(why) => self.stop(why),
@@ -82,7 +82,7 @@ impl Said<'_> {
                 };
                 failed(t, self.input(why))
             }
-            Notice::Finished(Some(recording)) => t.invoke_finished_playing(s(recording)),
+            Notice::Finished(Some(recording)) => t.invoke_finished_playing(self.titled(recording)),
             Notice::Finished(None) => t.invoke_finished_all(),
             Notice::Playing(start) => self.play_start(*start),
             Notice::Recorded {
@@ -90,6 +90,17 @@ impl Said<'_> {
                 saving,
             } => t.invoke_two_sentences(self.stop(why), self.saving(saving)),
             Notice::Recorded { stop: None, saving } => self.saving(saving),
+        }
+    }
+
+    /// A recording by when it was made, worded in the window's language,
+    /// when it has the name a new recording gets; else by the name the user
+    /// gave it, as it is.
+    fn titled(&self, recording: &Titled) -> SharedString {
+        if recording.generated() {
+            self.texts.invoke_generated_name(s(recording.file.when()))
+        } else {
+            s(recording)
         }
     }
 
