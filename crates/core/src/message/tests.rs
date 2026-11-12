@@ -8,6 +8,12 @@ use crate::hotkeys::{Binding, Refusal};
 use crate::input::Key;
 use crate::playback::Fallback;
 
+/// A recording the user named "R".
+fn r() -> Titled {
+    let file = crate::recording::FileName::parse("2026-11-09_18-04-05.123.json").unwrap();
+    Titled::new(file, Some("R"))
+}
+
 fn q() -> Quoted {
     Quoted::new("why")
 }
@@ -270,7 +276,10 @@ fn notices_read_as_before() {
             },
             "Playback stopped: could not write to a virtual input device: why",
         ),
-        (Notice::Finished(Some("R".to_owned())), "Finished playing R"),
+        (
+            Notice::Finished(Some(r())),
+            "Finished playing R (2026-11-09 18:04:05)",
+        ),
         (Notice::Finished(None), "Finished every action"),
     ]);
 }
@@ -278,31 +287,34 @@ fn notices_read_as_before() {
 #[test]
 fn unplayables_read_as_before() {
     let unplayable = |why| Notice::Unplayable {
-        recording: "R".to_owned(),
+        recording: r(),
         why,
     };
     let modifier = Refusal::Modifier(Key::from_name("leftshift").unwrap());
     assert_english(&[
         (
             unplayable(Unplayable::Missing),
-            "Not playing R: the file is no longer there",
+            "Not playing R (2026-11-09 18:04:05): the file is no longer there",
         ),
         (
             unplayable(Unplayable::Unreadable(q())),
-            "Not playing R: the file could not be read: why",
+            "Not playing R (2026-11-09 18:04:05): the file could not be read: why",
         ),
         (
             unplayable(Unplayable::TooLarge { mib: 256 }),
-            "Not playing R: the file is larger than 256 MiB",
+            "Not playing R (2026-11-09 18:04:05): the file is larger than 256 MiB",
         ),
-        (unplayable(Unplayable::Invalid(q())), "Not playing R: why"),
+        (
+            unplayable(Unplayable::Invalid(q())),
+            "Not playing R (2026-11-09 18:04:05): why",
+        ),
         (
             unplayable(Unplayable::TooShort { ms: 20 }),
-            "Not playing R: it is shorter than 20 ms, too short to play more than once",
+            "Not playing R (2026-11-09 18:04:05): it is shorter than 20 ms, too short to play more than once",
         ),
         (
             unplayable(Unplayable::PressesHotkeyKey(modifier.clone())),
-            &format!("Not playing R: it presses a hotkey's key: {modifier}"),
+            &format!("Not playing R (2026-11-09 18:04:05): it presses a hotkey's key: {modifier}"),
         ),
     ]);
 }
@@ -351,7 +363,7 @@ fn recordings_ended_read_as_before() {
             "Nothing was recorded, so nothing was saved",
         ),
         (
-            recorded(Some(Stop::Full), Saving::Saved("R".to_owned())),
+            recorded(Some(Stop::Full), Saving::Saved("R".to_owned().into())),
             "Recording stopped: it reached the largest size a recording may have. Saved \
              \u{201c}R\u{201d}",
         ),

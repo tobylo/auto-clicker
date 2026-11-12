@@ -51,7 +51,9 @@ use crate::clicker::run;
 use crate::config::Config;
 use crate::hotkeys::{Action, Binding, Bindings, Capture, HotkeyEvent, HotkeyStatus, Unavailable};
 use crate::input::{Input, InputBackend, InputError};
-use crate::message::{ConfigProblem, Hindrance, InputFailure, Notice, Problem, Start, Stop};
+use crate::message::{
+    ConfigProblem, Hindrance, InputFailure, Notice, Problem, Start, Stop, Titled,
+};
 use crate::recording::{FileName, Layout, LocalTime, RecordingFeed, RecordingSlot};
 use crate::run::{Ended, RunEnd, Signals};
 use crate::window::{CaptureEnd, Outcome};
@@ -288,7 +290,7 @@ impl Job {
     }
 
     /// The recording it plays, as the tray names it.
-    fn playing(&self) -> Option<&str> {
+    fn playing(&self) -> Option<&Titled> {
         match self {
             Job::Click => None,
             Job::Play(playing) => Some(playing.label()),
@@ -319,7 +321,7 @@ type RunFuture<B> = Pin<Box<dyn Future<Output = RunEnd<B>>>>;
 /// A run, clicking or playing, and the signals that end it.
 struct Running<B: InputBackend> {
     /// The recording it plays, as the tray names it; `None` when clicking.
-    playing: Option<String>,
+    playing: Option<Titled>,
     /// The keys it presses by itself.
     keys: desktop::OwnKeys,
     /// The layout a playback moves to positions on; `None` when it moves
@@ -648,12 +650,12 @@ impl<P: Platform> Controller<P> {
     }
 
     /// The recording that plays or is about to, as the tray names it.
-    fn playing(&self) -> Option<&str> {
+    fn playing(&self) -> Option<&Titled> {
         match &self.state {
             State::Countdown(_, job) | State::Release(_, job) | State::Opening(job) => {
                 job.playing()
             }
-            State::Running(running) => running.playing.as_deref(),
+            State::Running(running) => running.playing.as_ref(),
             State::Idle | State::RecordCountdown(_) | State::Recording(_) => None,
         }
     }
@@ -893,7 +895,7 @@ impl<P: Platform> Controller<P> {
             Job::Click => None,
             Job::Play(playing) => playing.start_notice(layout.as_ref()),
         };
-        let playing = job.playing().map(str::to_owned);
+        let playing = job.playing().cloned();
         let keys = job.own_keys(&self.config);
         let (run, positions): (RunFuture<P::Backend>, _) = match job {
             Job::Click => {
@@ -1058,7 +1060,7 @@ impl<P: Platform> Controller<P> {
             playback: self.config.playback,
             recordings: Arc::clone(&self.shelf.listed),
             current: self.shelf.shown_current(),
-            playing: self.playing().map(str::to_owned),
+            playing: self.playing().cloned(),
             notice: self.notice.clone(),
             problems: self.problems(),
         };

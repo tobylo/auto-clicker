@@ -16,6 +16,7 @@ mod answer;
 mod input;
 mod notice;
 mod quoted;
+mod titled;
 
 use std::fmt;
 
@@ -25,6 +26,7 @@ pub use answer::{ChangeFailure, Failure, RecordingChange, Step, Unavailability};
 pub use input::InputFailure;
 pub use notice::{Hindrance, Notice, PlayStart, SaveFailure, Saving, Start, Stop, Unplayable};
 pub use quoted::Quoted;
+pub use titled::Titled;
 
 use crate::config::ConfigError;
 use crate::controller::Blocked;

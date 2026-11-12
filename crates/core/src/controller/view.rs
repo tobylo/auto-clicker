@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::clicker::{ClickerSettings, Mode, Position, Repeat};
 use crate::hotkeys::{Binding, DESKTOP_RELEASE_PAUSE, Unavailable};
 use crate::input::{Button, Key};
-use crate::message::{Notice, Problem};
+use crate::message::{Notice, Problem, Titled};
 use crate::playback::{PlaybackSettings, Speed};
 use crate::recording::{FileName, MAX_DURATION};
 
@@ -248,7 +248,7 @@ pub struct View {
     /// else the newest. `None` when it is not listed.
     pub current: Option<FileName>,
     /// The recording that plays or is about to, as the tray names it.
-    pub playing: Option<String>,
+    pub playing: Option<Titled>,
     /// What last happened that the user should know: why a start was
     /// refused or cancelled, or why a run stopped.
     pub notice: Option<Notice>,
@@ -647,7 +647,8 @@ mod tests {
     #[test]
     fn what_plays_is_named_before_the_notice() {
         let mut shown = view(Activity::Playing, "Ctrl+F6");
-        shown.playing = Some("Recording 2026-11-09 18:04:05".to_owned());
+        let file = crate::recording::FileName::parse("2026-11-09_18-04-05.123.json").unwrap();
+        shown.playing = Some(Titled::new(file, None));
         shown.notice = Some(Notice::NothingToPlay);
         let lines = shown.details();
         assert_eq!(

@@ -91,9 +91,10 @@ mod messages {
     use auto_clicker_core::input::Key;
     use auto_clicker_core::message::{
         ConfigProblem, Hindrance, InputFailure, Notice, PlayStart, Problem, Quoted, SaveFailure,
-        Saving, Start, Stop, Unplayable,
+        Saving, Start, Stop, Titled, Unplayable,
     };
     use auto_clicker_core::playback::Fallback;
+    use auto_clicker_core::recording::FileName;
 
     use super::super::{notice, problem};
     use super::*;
@@ -103,6 +104,12 @@ mod messages {
 
     fn quoted() -> Quoted {
         Quoted::new(QUOTED)
+    }
+
+    /// The recording made at 18:04:05, named `name` in its header.
+    fn generated(name: Option<&str>) -> Titled {
+        let file = FileName::parse("2026-11-09_18-04-05.123.json").unwrap();
+        Titled::new(file, name)
     }
 
     fn key(name: &str) -> Key {
@@ -231,7 +238,7 @@ mod messages {
     fn savings() -> Vec<Saving> {
         vec![
             Saving::Nothing,
-            Saving::Saved("Recording 2026-11-09 18:04".to_owned()),
+            Saving::Saved("Recording 2026-11-09 18:04".to_owned().into()),
             Saving::Failed(SaveFailure::NoDataDirectory),
             Saving::Failed(SaveFailure::Invalid(quoted())),
             Saving::Failed(SaveFailure::Write(quoted())),
@@ -239,7 +246,7 @@ mod messages {
     }
 
     fn notices() -> Vec<Notice> {
-        let recording = || "Recording 2026-11-09 18:04:05".to_owned();
+        let recording = || generated(None);
         let mut all = vec![
             Notice::NothingToPlay,
             Notice::Finished(Some(recording())),
@@ -356,14 +363,20 @@ mod messages {
 
     #[test]
     fn recordings_are_named_as_the_swedish_menu_names_them() {
-        let finished = Notice::Finished(Some("Recording 2026-11-09 18:04:05".to_owned()));
+        let finished = Notice::Finished(Some(generated(Some("Recording 2026-11-09 18:04"))));
         assert_eq!(
             notice::swedish(&finished),
             "Spelade upp Inspelning 2026-11-09 18:04:05 till slutet"
         );
+        // A name the user gave stays as it is, "Recording" and all.
+        let named = Notice::Finished(Some(generated(Some("Recording practice"))));
+        assert_eq!(
+            notice::swedish(&named),
+            "Spelade upp Recording practice (2026-11-09 18:04:05) till slutet"
+        );
         let saved = Notice::Recorded {
             stop: Some(Stop::Limit { minutes: 60 }),
-            saving: Saving::Saved("Recording 2026-11-09 18:04".to_owned()),
+            saving: Saving::Saved("Recording 2026-11-09 18:04".to_owned().into()),
         };
         assert_eq!(
             notice::swedish(&saved),
@@ -376,7 +389,7 @@ mod messages {
     fn the_tooltip_speaks_the_language_line_by_line() {
         let mut shown = view(Activity::Recording);
         shown.routes = Routes::default();
-        shown.playing = Some("Recording 2026-11-09 18:04:05".to_owned());
+        shown.playing = Some(generated(None));
         shown.notice = Some(Notice::NothingToPlay);
         shown.problems = vec![Problem::Blocked(Blocked::Locked)];
         assert_eq!(details(&shown, Language::English), shown.details());

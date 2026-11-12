@@ -401,7 +401,10 @@ mod tests {
     use auto_clicker_core::config::Config;
     use auto_clicker_core::controller::{Hotkey, Listed, NoRecording, Route, Routes};
     use auto_clicker_core::hotkeys::Unavailable;
-    use auto_clicker_core::message::{Hindrance, Notice, Quoted, Start};
+    use auto_clicker_core::message::{Hindrance, Notice, Quoted, Start, Titled};
+
+    /// The notice every test view shows, escaped.
+    const FINISHED: &str = "Finished playing a &lt;b&gt; &amp; c (2026-11-09 18:00:00)";
     use auto_clicker_core::recording::FileName;
 
     use super::*;
@@ -428,7 +431,10 @@ mod tests {
             recordings: Arc::from(recordings),
             current: None,
             playing: None,
-            notice: Some(Notice::Finished(Some("a <b> & c".to_owned()))),
+            notice: Some(Notice::Finished(Some(Titled::new(
+                file(0),
+                Some("a <b> & c"),
+            )))),
             problems: Vec::new(),
         }
     }
@@ -967,16 +973,13 @@ mod tests {
             let lines: Vec<&str> = body.split("<br/>").collect();
             // After the hotkeys, before the notice, which stays escaped.
             assert_eq!(lines[4], line, "{body}");
-            assert_eq!(lines[5], "Finished playing a &lt;b&gt; &amp; c", "{body}");
+            assert_eq!(lines[5], FINISHED, "{body}");
         }
     }
 
     #[test]
     fn tooltip_text_is_escaped() {
         let body = tooltip_body(&view(Activity::Idle), Language::English);
-        assert!(
-            body.ends_with("<br/>Finished playing a &lt;b&gt; &amp; c"),
-            "{body}"
-        );
+        assert!(body.ends_with(&format!("<br/>{FINISHED}")), "{body}");
     }
 }

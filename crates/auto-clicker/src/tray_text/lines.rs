@@ -8,9 +8,9 @@ use auto_clicker_core::input::{Button, Key};
 use auto_clicker_core::playback::{PlaybackSettings, Speed};
 use auto_clicker_core::recording::MAX_DURATION;
 
-use auto_clicker_core::locale::Language;
+use auto_clicker_core::message::Titled;
 
-use super::{label, notice, problem};
+use super::{notice, problem};
 
 /// Every line of the tooltip for `view`, in Swedish.
 pub(super) fn details(view: &View) -> Vec<String> {
@@ -45,9 +45,14 @@ pub(super) fn details(view: &View) -> Vec<String> {
     lines
 }
 
-/// A recording as the menu names it in Swedish.
-pub(super) fn recording_name(english: &str) -> String {
-    label(english, Language::Swedish)
+/// A recording as the Swedish menu names it: by when it was made when it
+/// has the name a new recording gets, else by the name the user gave it.
+pub(super) fn recording_name(recording: &Titled) -> String {
+    if recording.generated() {
+        format!("Inspelning {}", recording.file.when())
+    } else {
+        recording.to_string()
+    }
 }
 
 /// "`<hotkey>` `does`", or what to do about a hotkey the desktop has not
