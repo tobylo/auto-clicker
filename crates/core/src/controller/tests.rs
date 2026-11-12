@@ -1251,4 +1251,5 @@ mod per_run;
 mod playback;
 mod positions;
 mod recording;
+mod recordings;
 mod settings;

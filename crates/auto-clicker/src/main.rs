@@ -19,6 +19,7 @@ use auto_clicker_backend_portal::{PortalOutput, token_path};
 use auto_clicker_core::config::{Config, ConfigFile, config_path};
 use auto_clicker_core::controller::{Controller, Links, Message, Platform};
 use auto_clicker_core::input::{Input, InputError};
+use auto_clicker_core::recording::CurrentFile;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -161,6 +162,7 @@ async fn connect<P: Platform>(
         controller.report_input_problem(problem);
     }
     controller.keep_config_file(start.file);
+    controller.keep_current_file(CurrentFile::of_environment());
     let Links {
         send,
         view: views,

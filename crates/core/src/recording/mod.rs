@@ -17,9 +17,12 @@
 
 mod codes;
 mod created;
+mod current;
+mod header;
 mod json;
 mod layout;
 mod library;
+mod manage;
 mod recorder;
 mod store;
 mod tap;
@@ -32,9 +35,11 @@ use std::time::Duration;
 
 pub use codes::{name as code_name, parse as parse_code, recordable};
 pub use created::{Created, LocalTime};
+pub use current::CurrentFile;
 pub use json::event_bytes;
 pub use layout::{Layout, MAX_OUTPUTS, Output, Point, Rect};
-pub use library::{FileName, LoadError, MAX_FILE_BYTES, list, load};
+pub use library::{FileName, Found, Listing, LoadError, MAX_FILE_BYTES, list, load};
+pub use manage::{ChangeError, Changed, delete, rename};
 pub use recorder::{Ending, KeyInput, Recorder};
 pub use store::{recordings_dir, save};
 pub use tap::{RecordingFeed, RecordingSlot};
@@ -55,7 +60,7 @@ pub const MAX_DURATION: Duration = Duration::from_secs(60 * 60);
 const MAX_DURATION_US: u64 = 60 * 60 * 1_000_000;
 
 /// The longest name a recording may have, in characters.
-const MAX_NAME_CHARS: usize = 200;
+pub const MAX_NAME_CHARS: usize = 200;
 
 /// What happened at one moment of a recording.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -198,6 +203,16 @@ impl Recording {
         &self.name
     }
 
+    /// The same recording named `name`.
+    ///
+    /// # Errors
+    /// The name is empty, longer than 200 characters or holds a control
+    /// character.
+    pub fn renamed(self, name: String) -> Result<Recording, InvalidRecording> {
+        check_name(&name)?;
+        Ok(Recording { name, ..self })
+    }
+
     pub fn created(&self) -> Created {
         self.created
     }
@@ -236,7 +251,7 @@ impl fmt::Debug for Recording {
     }
 }
 
-fn check_name(name: &str) -> Result<(), InvalidRecording> {
+pub(crate) fn check_name(name: &str) -> Result<(), InvalidRecording> {
     if name.trim().is_empty() {
         return Err(InvalidRecording::new("the recording has no name"));
     }
