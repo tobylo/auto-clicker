@@ -392,4 +392,143 @@ mod messages {
             ]
         );
     }
+
+    #[test]
+    fn swedish_reads_as_written() {
+        let modifier = Refusal::Modifier(key("leftshift"));
+        let rows = [
+            (
+                notice::swedish(&Notice::Refused {
+                    start: Start::Clicking,
+                    why: Hindrance::OwnKey(modifier.clone()),
+                }),
+                "Startade inte: leftshift är en modifierare, och om programmet håller den \
+                 ändras vilken snabbtangent skrivbordet ser",
+            ),
+            (
+                notice::swedish(&Notice::Refused {
+                    start: Start::Playback,
+                    why: Hindrance::ClickingOn,
+                }),
+                "Spelar inte upp: klickandet är på; stoppa det först",
+            ),
+            (
+                notice::swedish(&Notice::Refused {
+                    start: Start::Recording,
+                    why: Hindrance::NoRecording(NoRecording::DesktopHotkeys),
+                }),
+                "Spelar inte in: inspelning går inte med skrivbordets genvägar",
+            ),
+            (
+                notice::swedish(&Notice::Playing(PlayStart::HeldAndRelative {
+                    seconds: 2,
+                    fallback: Fallback::Unknown,
+                })),
+                "Spelar upp fast snabbtangenten fortfarande hölls nere efter 2 s; dess tangenter \
+                 blandas in i det som spelas upp. Spelar upp med relativa rörelser: \
+                 skärmlayouten är inte känd, så de inspelade positionerna kan inte användas",
+            ),
+            (
+                notice::swedish(&Notice::Playing(PlayStart::Relative(Fallback::Changed))),
+                "Spelar upp med relativa rörelser: en skärm som inspelningen använde har \
+                 flyttats, bytt storlek eller försvunnit",
+            ),
+            (
+                notice::swedish(&Notice::Stopped(Stop::OwnKey(Refusal::HotkeyKey {
+                    key: key("f6"),
+                    trigger: "Meta+F6".to_owned(),
+                }))),
+                "Stoppat: f6 är tangenten i snabbtangenten Meta+F6, och skrivbordet kan inte \
+                 skilja programmets tangenttryck från dina",
+            ),
+            (
+                notice::swedish(&Notice::Stopped(Stop::OwnKey(Refusal::Unreadable(
+                    "Meta+P".to_owned(),
+                )))),
+                "Stoppat: snabbtangenten \u{201d}Meta+P\u{201d} ligger inte på en \
+                 funktionstangent (F1 till F24), så programmet kan inte avgöra om dess egna \
+                 tangenttryck skulle utlösa den; ändra den i Systeminställningar",
+            ),
+            (
+                problem::swedish(&Problem::Hotkeys(Unavailable::NoPermission)),
+                "snabbtangenterna är inte tillgängliga: tangentborden kan inte läsas; lägg till \
+                 din användare i gruppen input och logga in igen, eller sätt hotkeys = \
+                 \"portal\" under [input] för skrivbordets genvägar",
+            ),
+            (
+                problem::swedish(&Problem::Input(InputFailure::NotAllowed)),
+                "Kan inte börja klicka: inte tillåtet i skrivbordets dialog; nästa start frågar \
+                 igen",
+            ),
+        ];
+        for (swedish, expected) in rows {
+            assert_eq!(swedish, expected);
+        }
+    }
+
+    #[test]
+    fn swedish_tooltip_lines_read_as_written() {
+        use auto_clicker_core::clicker::{Interval, Jitter, Mode, Position, Repeat};
+        use auto_clicker_core::controller::Hotkey;
+        use auto_clicker_core::input::{AbsolutePosition, Button};
+        use auto_clicker_core::playback::Speed;
+        use std::num::NonZeroU32;
+        use std::time::Duration;
+
+        let mut shown = view(Activity::Idle);
+        shown.settings.interval = Interval::new(Duration::from_secs(2)).unwrap();
+        shown.settings.jitter = Jitter::new(10).unwrap();
+        shown.settings.button = Button::Side;
+        shown.settings.repeat = Repeat::Times(NonZeroU32::new(50).unwrap());
+        shown.settings.position = Position::Fixed(AbsolutePosition { x: 1, y: 2 });
+        shown.play_hotkey = Hotkey::Desktop(Some(String::new()));
+        shown.playback.repeat = Repeat::Times(NonZeroU32::new(3).unwrap());
+        shown.playback.speed = Speed::from_ratio(1.5).unwrap();
+        shown.no_recording = Some(NoRecording::DesktopHotkeys);
+        let lines = details(&shown, Language::Swedish);
+        assert_eq!(
+            lines[..4],
+            [
+                "Klickar med bakåtknappen var 2 s (±10 %), 50 gånger på en fast punkt",
+                "Ctrl+Shift+F6 startar och stoppar klickandet",
+                "Inspelning går inte med skrivbordets genvägar: inget läser tangentborden och \
+                 mössen. Den kräver gruppen input, och hotkeys = \"auto\" eller \"kernel\" \
+                 under [input] i konfigurationen.",
+                "Ingen snabbtangent spelar upp den senaste inspelningen 3 gånger i 1,5× \
+                 hastighet, och stoppar den: välj en i Systeminställningar, under Genvägar",
+            ]
+        );
+        let modes = [
+            (
+                Mode::DoubleClick,
+                "Dubbelklickar med vänsterknappen var 100 ms",
+            ),
+            (Mode::HoldButton, "Håller vänsterknappen nedtryckt"),
+            (Mode::KeyRepeat, "Trycker på space var 100 ms"),
+            (Mode::HoldKey, "Håller space nedtryckt"),
+        ];
+        for (mode, line) in modes {
+            let mut shown = view(Activity::Idle);
+            shown.settings.mode = mode;
+            shown.settings.position = Position::Fixed(AbsolutePosition { x: 1, y: 2 });
+            let expected = match mode {
+                Mode::DoubleClick | Mode::HoldButton => format!("{line} på en fast punkt"),
+                _ => line.to_owned(),
+            };
+            assert_eq!(details(&shown, Language::Swedish)[0], expected, "{mode:?}");
+        }
+        let mut unnamed = view(Activity::Idle);
+        unnamed.settings.mode = Mode::HoldKey;
+        unnamed.settings.key = Key::new(248).unwrap();
+        assert_eq!(
+            details(&unnamed, Language::Swedish)[0],
+            "Håller tangent 248 nedtryckt"
+        );
+        let mut forever = view(Activity::Idle);
+        forever.playback.repeat = Repeat::UntilStopped;
+        assert_eq!(
+            details(&forever, Language::Swedish)[3],
+            "Meta+P spelar upp den senaste inspelningen tills den stoppas, och stoppar den"
+        );
+    }
 }

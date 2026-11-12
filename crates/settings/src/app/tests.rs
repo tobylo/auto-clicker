@@ -4,9 +4,12 @@
 use std::rc::Rc;
 
 use auto_clicker_core::config::Reason;
-use auto_clicker_core::controller::Blocked;
+use auto_clicker_core::controller::{Blocked, NoRecording};
+use auto_clicker_core::hotkeys::Unavailable;
 use auto_clicker_core::locale::Language;
-use auto_clicker_core::message::{ConfigProblem, Failure, Problem, Quoted, Unavailability};
+use auto_clicker_core::message::{
+    ConfigProblem, Failure, InputFailure, Problem, Quoted, Unavailability,
+};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
 
@@ -80,6 +83,24 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
     assert_eq!(
         said.problem(&invalid(None)),
         "config.toml gick inte att använda: expected a boolean"
+    );
+    assert_eq!(
+        said.problem(&Problem::Input(InputFailure::Portal(Quoted::new(
+            "timed out"
+        )))),
+        "Kan inte börja klicka: portalen för fjärrinmatning misslyckades: timed out"
+    );
+    assert_eq!(
+        said.problem(&Problem::Hotkeys(Unavailable::NoKeyboard)),
+        "snabbtangenterna är inte tillgängliga: inget tangentbord hittades"
+    );
+    assert_eq!(
+        said.no_recording(&NoRecording::DesktopHotkeys),
+        "inspelning går inte med skrivbordets genvägar"
+    );
+    assert_eq!(
+        note(Note::SavedUnsynced(Quoted::new("EIO"))),
+        "Sparat, men det kanske inte klarar ett strömavbrott: EIO"
     );
     // The window's own "{}: {}" keeps its own form.
     assert_eq!(
