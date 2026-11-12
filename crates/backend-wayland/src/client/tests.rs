@@ -37,8 +37,8 @@ enum Offer {
     /// The manager at version 2: each xdg-output sends its own `done`.
     OldManager,
     Output(Name),
-    /// A `wl_output` at version 1, which sends no `done`.
-    OldOutput(Name),
+    /// A `wl_output` at an older version: 1 sends no `done`, 2 does.
+    OldOutput(Name, u32),
 }
 
 /// An output's logical place and size, as xdg-output sends it.
@@ -68,6 +68,12 @@ const LEFT: Place = Place {
     y: 0,
     width: 2048,
     height: 1280,
+};
+const BELOW: Place = Place {
+    x: 0,
+    y: 1280,
+    width: 1920,
+    height: 1080,
 };
 const RIGHT: Place = Place {
     x: 2048,
@@ -213,7 +219,7 @@ impl Fake {
             Offer::Manager => (MANAGER, "zxdg_output_manager_v1", 3),
             Offer::OldManager => (MANAGER, "zxdg_output_manager_v1", 2),
             Offer::Output(name) => (name, "wl_output", 4),
-            Offer::OldOutput(name) => (name, "wl_output", 1),
+            Offer::OldOutput(name, version) => (name, "wl_output", version),
         };
         let words = std::iter::once(name)
             .chain(string(interface))
@@ -404,12 +410,18 @@ async fn an_output_too_old_to_say_when_it_changed_leaves_the_layout_unknown() {
                 let callback = fake.until_sync().await;
                 fake.offer(Offer::Manager).await;
                 fake.offer(Offer::Output(A)).await;
-                fake.offer(Offer::OldOutput(B)).await;
+                fake.offer(Offer::OldOutput(B, 1)).await;
+                fake.offer(Offer::OldOutput(C, 2)).await;
                 fake.answer(callback).await;
                 let callback = fake.until_sync().await;
                 let bound: Vec<Name> = fake.outputs.iter().map(|(name, _)| *name).collect();
-                assert_eq!(bound, [A], "bound an output with no done");
+                assert_eq!(
+                    bound,
+                    [A, C],
+                    "bound an output with no done, or not one with"
+                );
                 fake.screen(A, LEFT).await;
+                fake.screen(C, BELOW).await;
                 fake.answer(callback).await;
                 let callback = fake.until_sync().await;
                 fake.answer(callback).await;
@@ -431,7 +443,7 @@ async fn an_output_too_old_to_say_when_it_changed_leaves_the_layout_unknown() {
             })
             .await
             .unwrap();
-            assert_eq!(wayland.layout(), layout(&[LEFT]));
+            assert_eq!(wayland.layout(), layout(&[LEFT, BELOW]));
         })
         .await;
 }
@@ -752,12 +764,7 @@ async fn an_output_plugged_in_later_joins_the_layout() {
         .run_until(async {
             let (link, mut fake) = Fake::pair();
             let watched = watched(&local, &mut fake, link).await;
-            let below = Place {
-                x: 0,
-                y: 1440,
-                width: 1920,
-                height: 1080,
-            };
+            let below = Place { y: 1440, ..BELOW };
             timeout(BOUND, async {
                 fake.offer(Offer::Output(C)).await;
                 let callback = fake.until_sync().await;
