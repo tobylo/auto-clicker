@@ -154,7 +154,11 @@ fn a_click_is_its_screens_corner_plus_its_place_kept_on_the_screen() {
 }
 
 #[test]
-fn an_overlay_on_another_screens_corner_has_moved() {
+fn an_overlay_on_another_screens_corner_has_moved_unless_they_overlap() {
+    let placed = Placed {
+        on: DP1,
+        screens: Rc::from([PANEL, DP1]),
+    };
     let cases = [
         (Some((2048, 0)), false),
         (None, false),
@@ -162,8 +166,23 @@ fn an_overlay_on_another_screens_corner_has_moved() {
         (Some((2048, 1)), true),
     ];
     for (corner, expected) in cases {
-        assert_eq!(moved(corner, DP1), expected, "{corner:?}");
+        assert_eq!(placed.moved(corner), expected, "{corner:?}");
     }
+    // Two screens that overlap: the overlay on the second covers part of
+    // the first, which winit may report.
+    let left = Rect {
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+    };
+    let right = Rect { x: 960, ..left };
+    let placed = Placed {
+        on: right,
+        screens: Rc::from([left, right]),
+    };
+    assert!(!placed.moved(Some((0, 0))));
+    assert!(placed.moved(Some((5000, 0))));
 }
 
 /// What the pick told, in order.
