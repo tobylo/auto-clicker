@@ -3,7 +3,7 @@
 
 use auto_clicker_core::controller::{Activity, LISTED_RECORDINGS, Message, View};
 use auto_clicker_core::locale::Language;
-use ksni::menu::{StandardItem, SubMenu};
+use ksni::menu::{CheckmarkItem, StandardItem, SubMenu};
 use ksni::{MenuItem, ToolTip, TrayMethods};
 use tokio::sync::{mpsc, watch};
 
@@ -104,6 +104,12 @@ struct Entry {
     enabled: bool,
     visible: bool,
     children: Vec<Entry>,
+    /// Whether it is checked, for an item that can be: a place in the Play
+    /// submenu, checked for the recording the playback hotkey plays.
+    checked: Option<bool>,
+    /// The label is a name the user gave, shown as written: never
+    /// translated.
+    named: bool,
 }
 
 impl Entry {
@@ -115,6 +121,8 @@ impl Entry {
             sends: sends.map(Choice::Send),
             visible,
             children: Vec::new(),
+            checked: None,
+            named: false,
         }
     }
 
@@ -126,6 +134,8 @@ impl Entry {
             enabled: true,
             visible: true,
             children: Vec::new(),
+            checked: None,
+            named: false,
         }
     }
 }
@@ -193,20 +203,29 @@ fn record(view: &View) -> Entry {
     )
 }
 
-/// The Play submenu: one place for each recording the controller may list,
-/// newest first, the unused ones hidden, and a line that shows when there
-/// are none. A recording can be chosen only while idle. `relisted` adds a
-/// hidden item at the end.
+/// The Play submenu: one place for each recording the tray lists, newest
+/// first, the unused ones hidden, and a line that shows when there are
+/// none. The recording the playback hotkey plays is checked; a place is
+/// always an item that can be, so a check never changes the menu's shape.
+/// A recording can be chosen only while idle. `relisted` adds a hidden item
+/// at the end.
 fn recordings(view: &View, relisted: bool) -> Vec<Entry> {
     let idle = view.activity == Activity::Idle;
     let listed = (0..LISTED_RECORDINGS).map(|place| match view.recordings.get(place) {
-        Some(listed) => Entry::item(
-            &listed.label,
-            Some(Message::Play(listed.file.clone())),
-            idle,
-            true,
-        ),
-        None => Entry::item("", None, false, false),
+        Some(listed) => Entry {
+            checked: Some(view.current.as_ref() == Some(&listed.file)),
+            named: listed.label != listed.file.label(),
+            ..Entry::item(
+                &listed.label,
+                Some(Message::Play(listed.file.clone())),
+                idle,
+                true,
+            )
+        },
+        None => Entry {
+            checked: Some(false),
+            ..Entry::item("", None, false, false)
+        },
     });
     let none = Entry::item("No recordings yet", None, false, view.recordings.is_empty());
     let marker = relisted.then(|| Entry::item("", None, false, false));
@@ -248,19 +267,31 @@ fn tooltip_body(view: &View) -> String {
 }
 
 /// The menu item for `entry`, labelled in `language`: a submenu when it
-/// has children.
+/// has children, an item with a check when it can be checked.
 fn item(entry: Entry, language: Language) -> MenuItem<Tray> {
-    let label = tray_text::label(&entry.label, language);
+    let label = if entry.named {
+        // An underscore marks an access key; two show as one.
+        entry.label.replace('_', "__")
+    } else {
+        tray_text::label(&entry.label, language)
+    };
+    if let Some(checked) = entry.checked {
+        return CheckmarkItem {
+            label,
+            enabled: entry.enabled,
+            visible: entry.visible,
+            checked,
+            activate: activation(entry.sends),
+            ..CheckmarkItem::default()
+        }
+        .into();
+    }
     if entry.children.is_empty() {
         return StandardItem {
             label,
             enabled: entry.enabled,
             visible: entry.visible,
-            activate: Box::new(move |tray: &mut Tray| {
-                if let Some(choice) = entry.sends.clone() {
-                    tray.choose(choice);
-                }
-            }),
+            activate: activation(entry.sends),
             ..StandardItem::default()
         }
         .into();
@@ -276,6 +307,15 @@ fn item(entry: Entry, language: Language) -> MenuItem<Tray> {
         ..SubMenu::default()
     }
     .into()
+}
+
+/// What choosing an item that `sends` does.
+fn activation(sends: Option<Choice>) -> Box<dyn Fn(&mut Tray) + Send> {
+    Box::new(move |tray: &mut Tray| {
+        if let Some(choice) = sends.clone() {
+            tray.choose(choice);
+        }
+    })
 }
 
 impl ksni::Tray for Tray {
@@ -373,10 +413,7 @@ mod tests {
     fn view_listing(activity: Activity, recordings: usize) -> View {
         let config = Config::default();
         let recordings: Vec<Listed> = (0..recordings)
-            .map(|minute| Listed {
-                label: file(minute).label(),
-                file: file(minute),
-            })
+            .map(|minute| Listed::new(file(minute), None))
             .collect();
         View {
             activity,
@@ -388,6 +425,7 @@ mod tests {
             play_hotkey: Hotkey::Bound(config.hotkeys.toggle_playback),
             playback: config.playback,
             recordings: Arc::from(recordings),
+            current: None,
             playing: None,
             notice: Some("a <b> & c".to_owned()),
             problems: Vec::new(),
@@ -516,6 +554,55 @@ mod tests {
             [("No recordings yet".to_owned(), false, None)]
         );
         assert_eq!(play_menu(&view_listing(Activity::Idle, 10)).len(), 10);
+    }
+
+    #[test]
+    fn the_play_menu_checks_the_recording_the_hotkey_plays_and_shows_names_as_written() {
+        use ksni::Tray as _;
+        let mut listing = view_listing(Activity::Idle, 3);
+        let mut named: Vec<Listed> = listing.recordings.to_vec();
+        named[0] = Listed::new(file(0), Some("Inställningar_1".to_owned()));
+        named[1] = Listed::new(file(1), Some("Recording 2026-11-09 18:01".to_owned()));
+        listing.recordings = Arc::from(named);
+        listing.current = Some(file(1));
+        let (send, _received) = mpsc::unbounded_channel();
+        let tray = Tray::new(
+            listing,
+            send,
+            mpsc::unbounded_channel().0,
+            Language::Swedish,
+        );
+        let MenuItem::SubMenu(play) = &tray.menu()[4] else {
+            panic!("Play is a submenu");
+        };
+        let places: Vec<(String, bool)> = play.submenu[..3]
+            .iter()
+            .map(|item| match item {
+                MenuItem::Checkmark(item) => (item.label.clone(), item.checked),
+                _ => panic!("a place can be checked"),
+            })
+            .collect();
+        assert_eq!(
+            places,
+            [
+                // A name is shown as written: never translated, and an
+                // underscore is no access key.
+                ("Inställningar__1 (2026-11-09 18:00:00)".to_owned(), false),
+                // A recording with the name it was made with is labelled,
+                // in the menu's language, as before.
+                ("Inspelning 2026-11-09 18:01:00".to_owned(), true),
+                ("Inspelning 2026-11-09 18:02:00".to_owned(), false),
+            ]
+        );
+        // Every place can be checked, used or not; the line for none cannot.
+        let kinds: Vec<bool> = play
+            .submenu
+            .iter()
+            .map(|item| matches!(item, MenuItem::Checkmark(_)))
+            .collect();
+        let mut expected = vec![true; LISTED_RECORDINGS];
+        expected.push(false);
+        assert_eq!(kinds, expected);
     }
 
     #[test]
@@ -665,6 +752,7 @@ mod tests {
     fn standard(item: &MenuItem<Tray>) -> (String, bool, bool) {
         match item {
             MenuItem::Standard(item) => (item.label.clone(), item.enabled, item.visible),
+            MenuItem::Checkmark(item) => (item.label.clone(), item.enabled, item.visible),
             _ => ("-".to_owned(), false, true),
         }
     }
@@ -689,6 +777,7 @@ mod tests {
         for item in items {
             match item {
                 MenuItem::Standard(item) => (item.activate)(tray),
+                MenuItem::Checkmark(item) => (item.activate)(tray),
                 MenuItem::SubMenu(menu) => activate(&menu.submenu, tray),
                 _ => {}
             }

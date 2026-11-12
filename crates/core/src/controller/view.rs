@@ -70,13 +70,27 @@ impl Activity {
     }
 }
 
-/// One recording in the tray's list.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// One recording in the lists of the tray and the settings window.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Listed {
     /// Its file, which [`Message::Play`](super::Message::Play) takes.
     pub file: FileName,
-    /// What the tray calls it.
+    /// The name in its header; `None` when that does not read.
+    pub name: Option<String>,
+    /// What the tray calls it ([`FileName::titled`]).
     pub label: String,
+}
+
+impl Listed {
+    /// `file`, named `name`.
+    pub fn new(file: FileName, name: Option<String>) -> Listed {
+        Listed {
+            label: file.titled(name.as_deref()),
+            file,
+            name,
+        }
+    }
 }
 
 /// A hotkey as the tray names it.
@@ -226,8 +240,12 @@ pub struct View {
     /// The hotkey that starts and stops playback.
     pub play_hotkey: Hotkey,
     pub playback: PlaybackSettings,
-    /// The newest recordings, newest first: what the tray offers to play.
+    /// The newest recordings, newest first: the tray offers the first
+    /// [`LISTED_RECORDINGS`](super::LISTED_RECORDINGS) to play.
     pub recordings: Arc<[Listed]>,
+    /// The listed recording the playback hotkey plays: the one chosen, or
+    /// else the newest. `None` when it is not listed.
+    pub current: Option<FileName>,
     /// The recording that plays or is about to, as the tray names it.
     pub playing: Option<String>,
     /// What last happened that the user should know: why a start was
@@ -277,7 +295,7 @@ impl View {
                 .line("starts recording, and stops and saves it"),
         });
         lines.extend(self.play_hotkey.line(&format!(
-            "plays the last recording {}, and stops it",
+            "plays the current recording {}, and stops it",
             describe_playback(&self.playback)
         )));
         lines.push(self.routes.line());
@@ -452,6 +470,7 @@ mod tests {
             play_hotkey: Hotkey::Bound(Binding::parse("Ctrl+Alt+F8").unwrap()),
             playback: PlaybackSettings::default(),
             recordings: Arc::from([]),
+            current: None,
             playing: None,
             notice: None,
             problems: Vec::new(),
@@ -523,7 +542,7 @@ mod tests {
                 "Clicks the left button every 100 ms",
                 "Ctrl+F6 starts and stops clicking",
                 "Ctrl+F7 starts recording, and stops and saves it",
-                "Ctrl+Alt+F8 plays the last recording once, and stops it",
+                "Ctrl+Alt+F8 plays the current recording once, and stops it",
                 "Clicks through /dev/uinput, hotkeys from the keyboards",
                 "notice",
                 "one",
@@ -563,7 +582,7 @@ mod tests {
                     Some("Clicks the left button every 100 ms"),
                     Some("Ctrl+F6 starts and stops clicking"),
                     line,
-                    Some("Ctrl+Alt+F8 plays the last recording once, and stops it"),
+                    Some("Ctrl+Alt+F8 plays the current recording once, and stops it"),
                     Some("Clicks through /dev/uinput, hotkeys from the keyboards"),
                 ]
                 .into_iter()

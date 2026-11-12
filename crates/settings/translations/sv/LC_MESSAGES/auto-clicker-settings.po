@@ -232,3 +232,48 @@ msgstr "Nej"
 
 msgid "Save"
 msgstr "Spara"
+
+msgid "Renamed."
+msgstr "Bytte namn."
+
+msgid "Deleted."
+msgstr "Raderad."
+
+msgid "The playback hotkey plays this recording now."
+msgstr "Snabbtangenten för uppspelning spelar nu den här inspelningen."
+
+msgid "Playing."
+msgstr "Spelar upp."
+
+msgid "Delete {} for good? It cannot be undone."
+msgstr "Radera {} för gott? Det går inte att ångra."
+
+msgid "(the name cannot be read)"
+msgstr "(namnet kan inte läsas)"
+
+msgid "{} older recordings are not listed."
+msgstr "{} äldre inspelningar visas inte."
+
+msgid "Speed and plays apply from the next playback once saved. Changes to the recordings below apply at once."
+msgstr "Hastighet och antal uppspelningar gäller från nästa uppspelning när de sparats. Ändringar av inspelningarna nedan gäller direkt."
+
+msgid "Recordings, newest first; ✓ marks the one the playback hotkey plays"
+msgstr "Inspelningar, nyaste först; ✓ markerar den som snabbtangenten för uppspelning spelar"
+
+msgid "No recordings yet."
+msgstr "Inga inspelningar än."
+
+msgid "Name"
+msgstr "Namn"
+
+msgid "Rename"
+msgstr "Byt namn"
+
+msgid "Play"
+msgstr "Spela upp"
+
+msgid "Play with the hotkey"
+msgstr "Spela med snabbtangenten"
+
+msgid "Delete…"
+msgstr "Radera…"

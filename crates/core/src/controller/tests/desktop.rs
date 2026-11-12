@@ -301,7 +301,7 @@ async fn the_tray_shows_the_triggers_the_desktop_reports() {
         );
         assert_eq!(
             lines[3],
-            "Ctrl+Shift+F8 plays the last recording once, and stops it"
+            "Ctrl+Shift+F8 plays the current recording once, and stops it"
         );
         // The user changes them in System Settings.
         d.hotkey(reported("Meta+F11", "", "")).await;
@@ -312,7 +312,7 @@ async fn the_tray_shows_the_triggers_the_desktop_reports() {
             "{lines:?}"
         );
         assert!(
-            lines[3].starts_with("No hotkey plays the last recording"),
+            lines[3].starts_with("No hotkey plays the current recording"),
             "{lines:?}"
         );
         d.press_hotkey().await;

@@ -5,7 +5,10 @@
 use auto_clicker_core::config::{Draft, Field, HotkeysDraft, Stale};
 use auto_clicker_core::controller::{Activity, Route};
 use auto_clicker_core::hotkeys::{Action, Capture};
-use auto_clicker_core::window::{Ask, CaptureEnd, Confirm, Outcome, Request, WindowView};
+use auto_clicker_core::recording::FileName;
+use auto_clicker_core::window::{
+    Ask, CaptureEnd, Confirm, Outcome, RecordingAction, RecordingOutcome, Request, WindowView,
+};
 
 use crate::model::{Fields, Unreadable, with_hotkey};
 
@@ -34,6 +37,8 @@ pub enum Note {
     CaptureEnded(CaptureEnd),
     Configured,
     Unreadable(Unreadable),
+    /// What came of something done with a recording.
+    Recording(RecordingOutcome),
 }
 
 impl Note {
@@ -41,16 +46,22 @@ impl Note {
     pub fn is_error(&self) -> bool {
         matches!(
             self,
-            Note::Failed(_) | Note::Refused(..) | Note::Unavailable(_) | Note::Unreadable(_)
+            Note::Failed(_)
+                | Note::Refused(..)
+                | Note::Unavailable(_)
+                | Note::Unreadable(_)
+                | Note::Recording(RecordingOutcome::NotDone(_))
         )
     }
 }
 
-/// A question a save asks before it goes ahead.
+/// A question a save or a delete asks before it goes ahead.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Question {
     Replace(Stale),
     WithoutModifier(Vec<Action>),
+    /// Delete this recording, for good? With what the list calls it.
+    Delete(FileName, String),
 }
 
 /// What the user agreed to for a save.
@@ -66,6 +77,7 @@ enum Asked {
     Save(Agreed),
     Capture(Target),
     Configure,
+    Recording,
 }
 
 /// What a new view changes on screen.
@@ -133,6 +145,7 @@ impl State {
             Outcome::CapturedKey(code) => Note::CapturedKey(code),
             Outcome::CaptureEnded(why) => Note::CaptureEnded(why),
             Outcome::Configured => Note::Configured,
+            Outcome::Recording(outcome) => Note::Recording(outcome),
         })
     }
 
@@ -193,6 +206,11 @@ impl State {
         match question {
             Question::Replace(_) => agreed.replace = true,
             Question::WithoutModifier(actions) => agreed.without_modifier.extend(actions),
+            Question::Delete(file, _) => {
+                let file = file.clone();
+                self.question = None;
+                return Some(Ok(self.send_recording(file, RecordingAction::Delete)));
+            }
         }
         let sent = self.send_save(fields, agreed);
         if matches!(sent, Some(Ok(_))) {
@@ -204,6 +222,15 @@ impl State {
     /// The user said no: nothing is saved.
     pub fn decline(&mut self) {
         self.question = None;
+    }
+
+    /// The user selected `file` in the list, or nothing (`None`) when the
+    /// one selected left it: a delete asked about another recording is
+    /// called off, so a yes never deletes one not selected.
+    pub fn selected(&mut self, file: Option<&FileName>) {
+        if matches!(&self.question, Some((Question::Delete(asked, _), _)) if Some(asked) != file) {
+            self.question = None;
+        }
     }
 
     /// A capture for `target`; `None` while the user may not ask anything.
@@ -228,6 +255,28 @@ impl State {
             activation_token: None,
         };
         Some(self.send(ask, Asked::Configure))
+    }
+
+    /// Does `action` with the recording `file`; a delete asks first.
+    /// `None` while the user may not ask anything, or when it asks.
+    pub fn recording(
+        &mut self,
+        file: FileName,
+        label: String,
+        action: RecordingAction,
+    ) -> Option<Request> {
+        if !self.may_ask() {
+            return None;
+        }
+        if action == RecordingAction::Delete {
+            self.question = Some((Question::Delete(file, label), Agreed::default()));
+            return None;
+        }
+        Some(self.send_recording(file, action))
+    }
+
+    fn send_recording(&mut self, file: FileName, action: RecordingAction) -> Request {
+        self.send(Ask::Recording { file, action }, Asked::Recording)
     }
 
     fn send_save(

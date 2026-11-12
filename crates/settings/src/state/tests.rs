@@ -20,6 +20,7 @@ fn view(settings: Draft, answer: Option<Answer>) -> WindowView {
         },
         no_recording: None,
         problems: Vec::new(),
+        recordings: Default::default(),
         answer,
     }
 }
@@ -56,8 +57,21 @@ fn asks_nothing(state: &mut State) {
         state.save(&fields()),
         state.capture(Target::Hotkey(0)),
         state.configure(),
+        state.recording(file(), "label".to_owned(), RecordingAction::Play),
     );
-    assert_eq!(asked, (None, None, None));
+    assert_eq!(asked, (None, None, None, None));
+}
+
+fn file() -> FileName {
+    FileName::parse("2026-11-09_18-04-05.123.json").unwrap()
+}
+
+/// What a request asks of a recording.
+fn recording_of(request: Request) -> (FileName, RecordingAction) {
+    match request.ask {
+        Ask::Recording { file, action } => (file, action),
+        other => panic!("{other:?}"),
+    }
 }
 
 /// The save a request asks for: its settings, and what it agreed to.
@@ -129,6 +143,14 @@ fn answers_become_notes() {
             Outcome::CaptureEnded(CaptureEnd::TimedOut),
             Note::CaptureEnded(CaptureEnd::TimedOut),
         ),
+        (
+            Outcome::Recording(RecordingOutcome::Renamed),
+            Note::Recording(RecordingOutcome::Renamed),
+        ),
+        (
+            Outcome::Recording(RecordingOutcome::NotDone("Not deleted: gone".into())),
+            Note::Recording(RecordingOutcome::NotDone("Not deleted: gone".into())),
+        ),
     ];
     for (outcome, note) in cases {
         let mut state = started();
@@ -139,7 +161,10 @@ fn answers_become_notes() {
         );
         let error = matches!(
             note,
-            Note::Failed(_) | Note::Refused(..) | Note::Unavailable(_)
+            Note::Failed(_)
+                | Note::Refused(..)
+                | Note::Unavailable(_)
+                | Note::Recording(RecordingOutcome::NotDone(_))
         );
         assert_eq!(note.is_error(), error, "{note:?}");
     }
@@ -286,4 +311,88 @@ fn a_yes_with_a_field_that_cannot_be_read_keeps_the_question() {
     assert_eq!(state.question(), Some(&Question::Replace(Stale::Changed)));
     let agreed = state.agree(&fields());
     assert!(matches!(agreed, Some(Ok(_))) && state.question().is_none());
+}
+
+#[test]
+fn a_rename_a_choice_or_a_play_goes_at_once_and_waits_for_its_answer() {
+    let actions = [
+        RecordingAction::Rename {
+            name: "Farm loop".to_owned(),
+        },
+        RecordingAction::Choose,
+        RecordingAction::Play,
+    ];
+    for action in actions {
+        let mut state = started();
+        let request = state
+            .recording(file(), "label".to_owned(), action.clone())
+            .unwrap();
+        let id = request.id;
+        assert_eq!(recording_of(request), (file(), action));
+        asks_nothing(&mut state);
+        let shown = answered(&mut state, id, Outcome::Recording(RecordingOutcome::Chosen));
+        assert_eq!(shown.note, Some(Note::Recording(RecordingOutcome::Chosen)));
+        assert!(state.may_ask());
+    }
+}
+
+#[test]
+fn a_delete_asks_first_and_goes_only_on_a_yes() {
+    let mut state = started();
+    let label = "Farm loop (2026-11-09 18:04:05)".to_owned();
+    let asked = state.recording(file(), label.clone(), RecordingAction::Delete);
+    assert_eq!(asked, None);
+    assert_eq!(
+        state.question(),
+        Some(&Question::Delete(file(), label.clone()))
+    );
+    asks_nothing(&mut state);
+
+    let request = state.agree(&fields()).unwrap().unwrap();
+    assert_eq!(recording_of(request), (file(), RecordingAction::Delete));
+    assert_eq!(state.question(), None);
+    assert!(state.waiting());
+
+    let mut state = started();
+    state.recording(file(), label, RecordingAction::Delete);
+    state.decline();
+    assert_eq!(state.question(), None);
+    assert_eq!(state.agree(&fields()), None);
+    assert!(state.may_ask());
+}
+
+#[test]
+fn selecting_another_recording_calls_off_a_delete_asked_about() {
+    let mut state = started();
+    let other = FileName::parse("2026-11-10_07-00-00.000.json").unwrap();
+    state.recording(file(), "label".to_owned(), RecordingAction::Delete);
+    // The same one again keeps the question.
+    state.selected(Some(&file()));
+    assert!(matches!(state.question(), Some(Question::Delete(..))));
+
+    state.selected(Some(&other));
+
+    assert_eq!(state.question(), None);
+    assert_eq!(state.agree(&fields()), None);
+    // A save's question stays whatever is selected.
+    let save = saved(&mut state);
+    answered(
+        &mut state,
+        save.id,
+        Outcome::Confirm(Confirm::Replace(Stale::Changed)),
+    );
+    state.selected(Some(&other));
+    state.selected(None);
+    assert_eq!(state.question(), Some(&Question::Replace(Stale::Changed)));
+}
+
+#[test]
+fn a_selected_recording_leaving_the_list_calls_off_its_delete() {
+    let mut state = started();
+    state.recording(file(), "label".to_owned(), RecordingAction::Delete);
+
+    state.selected(None);
+
+    assert_eq!(state.question(), None);
+    assert_eq!(state.agree(&fields()), None);
 }

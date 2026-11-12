@@ -18,11 +18,14 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Draft, InputDraft, Refusal, Stale};
-use crate::controller::{Activity, Hotkey, NoRecording, Routes};
+use crate::controller::{Activity, Hotkey, Listed, NoRecording, Routes};
 use crate::hotkeys::{Action, Binding, Capture, Unavailable};
+use crate::recording::FileName;
 
-/// The longest line either side sends or reads, newline included.
-pub const MAX_LINE: usize = 64 * 1024;
+/// The longest line either side sends or reads, newline included. A view
+/// with the most recordings the window lists, each with the longest name,
+/// fits with room to spare (`window::tests`).
+pub const MAX_LINE: usize = 1024 * 1024;
 
 /// The most characters of one message (a problem, a refusal, a failure) a
 /// view carries; a longer one is cut, so it can quote what it is about
@@ -78,6 +81,26 @@ pub enum Ask {
     /// desktop delivers the hotkeys. The token, from the window's
     /// activation, lets the desktop raise the settings.
     ConfigureShortcuts { activation_token: Option<String> },
+    /// Do `action` with the recording in `file`. Answered
+    /// [`Outcome::Busy`] unless the program is idle.
+    Recording {
+        file: FileName,
+        action: RecordingAction,
+    },
+}
+
+/// What the window does with a recording.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum RecordingAction {
+    /// Give it this name, in its file.
+    Rename { name: String },
+    /// Delete its file, for good: the user agreed.
+    Delete,
+    /// Make it the one the playback hotkey plays.
+    Choose,
+    /// Play it after the tray's countdown; it becomes the current one.
+    Play,
 }
 
 /// How long a capture waits for a key.
@@ -105,8 +128,22 @@ pub struct WindowView {
     pub no_recording: Option<NoRecording>,
     /// What is wrong now, as the tray lists it.
     pub problems: Vec<String>,
+    pub recordings: RecordingsView,
     /// The answer to the window's last request, once there is one.
     pub answer: Option<Answer>,
+}
+
+/// The recordings, as the controller last listed them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordingsView {
+    /// The newest, newest first, at most
+    /// [`WINDOW_RECORDINGS`](crate::controller::WINDOW_RECORDINGS).
+    pub listed: Vec<Listed>,
+    /// How many more there are than are listed.
+    pub more: u64,
+    /// The one the playback hotkey plays, when it is listed.
+    pub current: Option<FileName>,
 }
 
 /// The hotkeys as they are now: the config's bindings on the kernel route,
@@ -156,6 +193,24 @@ pub enum Outcome {
     /// delivers the hotkeys or no keyboard can be read, or opening the
     /// desktop's settings where the program reads the keyboards.
     Unavailable(String),
+    /// What came of a [`Ask::Recording`] that was not busy.
+    Recording(RecordingOutcome),
+}
+
+/// What came of something done with a recording.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum RecordingOutcome {
+    Renamed,
+    Deleted,
+    Chosen,
+    /// Its countdown began, or it plays.
+    Playing,
+    /// Done, but it may not survive a power loss, as a whole sentence:
+    /// "Deleted, but …".
+    Unsynced(String),
+    /// Nothing changed, and why, as a whole sentence: "Not renamed: …".
+    NotDone(String),
 }
 
 /// Why a capture ended without a key.
@@ -194,6 +249,12 @@ impl Outcome {
             Outcome::Failed(why) => Outcome::Failed(bounded(&why)),
             Outcome::Unavailable(why) => Outcome::Unavailable(bounded(&why)),
             Outcome::SavedUnsynced(why) => Outcome::SavedUnsynced(bounded(&why)),
+            Outcome::Recording(RecordingOutcome::NotDone(why)) => {
+                Outcome::Recording(RecordingOutcome::NotDone(bounded(&why)))
+            }
+            Outcome::Recording(RecordingOutcome::Unsynced(why)) => {
+                Outcome::Recording(RecordingOutcome::Unsynced(bounded(&why)))
+            }
             other => other,
         }
     }
