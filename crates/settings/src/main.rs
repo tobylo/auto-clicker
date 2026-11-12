@@ -7,6 +7,7 @@ mod app;
 mod link;
 mod model;
 mod said;
+mod shelf;
 mod state;
 
 use std::cell::RefCell;

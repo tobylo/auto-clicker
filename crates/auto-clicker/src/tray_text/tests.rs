@@ -17,6 +17,7 @@ fn view(activity: Activity) -> View {
         play_hotkey: Hotkey::Desktop(Some("Meta+P".to_owned())),
         playback: config.playback,
         recordings: Arc::from([]),
+        current: None,
         playing: None,
         notice: None,
         problems: Vec::new(),
@@ -146,9 +147,9 @@ mod messages {
             Refusal::Modifier(key("leftshift")),
             Refusal::HotkeyKey {
                 key: key("f6"),
-                trigger: "Meta+F6".to_owned(),
+                trigger: "Meta+F6".to_owned().into(),
             },
-            Refusal::Unreadable("Meta+P".to_owned()),
+            Refusal::Unreadable("Meta+P".to_owned().into()),
             Refusal::NotReported,
         ]
     }
@@ -171,6 +172,8 @@ mod messages {
                 why: quoted(),
             }),
             Problem::Unlisted(quoted()),
+            Problem::CurrentUnread(quoted()),
+            Problem::CurrentUnkept(quoted()),
         ];
         all.extend(unavailables().into_iter().map(Problem::Hotkeys));
         all.extend(blocked().into_iter().map(Problem::Blocked));
@@ -319,7 +322,7 @@ mod messages {
     #[test]
     fn every_problem_has_a_swedish_form_that_keeps_quoted_text() {
         let all = problems();
-        assert_eq!(kinds(&all), 5);
+        assert_eq!(kinds(&all), 7);
         assert_eq!(kinds(&blocked()), 4);
         assert_eq!(kinds(&inputs()), 9);
         assert_eq!(kinds(&unavailables()), 5);
@@ -383,7 +386,7 @@ mod messages {
                 "Klickar med vänsterknappen var 100 ms",
                 "Ctrl+Shift+F6 startar och stoppar klickandet",
                 "Ctrl+Shift+F7 startar inspelningen, och stoppar och sparar den",
-                "Meta+P spelar upp den senaste inspelningen en gång, och stoppar den",
+                "Meta+P spelar upp den aktuella inspelningen en gång, och stoppar den",
                 "Klickar via /dev/uinput, snabbtangenter från tangentborden",
                 "En inspelning stoppas av sig själv efter 60 minuter",
                 "Spelar upp Inspelning 2026-11-09 18:04:05",
@@ -436,14 +439,14 @@ mod messages {
             (
                 notice::swedish(&Notice::Stopped(Stop::OwnKey(Refusal::HotkeyKey {
                     key: key("f6"),
-                    trigger: "Meta+F6".to_owned(),
+                    trigger: "Meta+F6".to_owned().into(),
                 }))),
                 "Stoppat: f6 är tangenten i snabbtangenten Meta+F6, och skrivbordet kan inte \
                  skilja programmets tangenttryck från dina",
             ),
             (
                 notice::swedish(&Notice::Stopped(Stop::OwnKey(Refusal::Unreadable(
-                    "Meta+P".to_owned(),
+                    "Meta+P".to_owned().into(),
                 )))),
                 "Stoppat: snabbtangenten \u{201d}Meta+P\u{201d} ligger inte på en \
                  funktionstangent (F1 till F24), så programmet kan inte avgöra om dess egna \
@@ -494,7 +497,7 @@ mod messages {
                 "Inspelning går inte med skrivbordets genvägar: inget läser tangentborden och \
                  mössen. Den kräver gruppen input, och hotkeys = \"auto\" eller \"kernel\" \
                  under [input] i konfigurationen.",
-                "Ingen snabbtangent spelar upp den senaste inspelningen 3 gånger i 1,5× \
+                "Ingen snabbtangent spelar upp den aktuella inspelningen 3 gånger i 1,5× \
                  hastighet, och stoppar den: välj en i Systeminställningar, under Genvägar",
             ]
         );
@@ -528,7 +531,7 @@ mod messages {
         forever.playback.repeat = Repeat::UntilStopped;
         assert_eq!(
             details(&forever, Language::Swedish)[3],
-            "Meta+P spelar upp den senaste inspelningen tills den stoppas, och stoppar den"
+            "Meta+P spelar upp den aktuella inspelningen tills den stoppas, och stoppar den"
         );
     }
 }

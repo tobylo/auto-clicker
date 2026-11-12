@@ -15,8 +15,11 @@
 use std::fmt;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use super::Action;
 use crate::input::Key;
+use crate::message::Quoted;
 
 /// How long after the desktop reports a hotkey released a run it started
 /// begins. The desktop reports the release at the first key lifted, usually
@@ -162,9 +165,9 @@ impl Trigger {
             (Some(keys), _) if !keys.contains(&key) => None,
             (Some(_), text) => Some(Refusal::HotkeyKey {
                 key,
-                trigger: text.clone().unwrap_or_default(),
+                trigger: text.clone().unwrap_or_default().into(),
             }),
-            (None, Some(text)) => Some(Refusal::Unreadable(text.clone())),
+            (None, Some(text)) => Some(Refusal::Unreadable(text.clone().into())),
             (None, None) => Some(Refusal::NotReported),
         }
     }
@@ -172,15 +175,16 @@ impl Trigger {
 
 /// Why a run that presses a key may not start while the desktop delivers
 /// the hotkeys.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Refusal {
     /// The key is a modifier: held by the program, it would turn the user's
     /// Ctrl+F6 into Ctrl+Shift+F6.
     Modifier(Key),
     /// The key is the key of this trigger.
-    HotkeyKey { key: Key, trigger: String },
+    HotkeyKey { key: Key, trigger: Quoted },
     /// This trigger does not end in a function key, so its key is unknown.
-    Unreadable(String),
+    Unreadable(Quoted),
     /// The desktop has not reported the triggers yet.
     NotReported,
 }
@@ -337,7 +341,7 @@ mod tests {
             let refusal = triggers.refusal(key(name));
             let expected = Refusal::HotkeyKey {
                 key: key(name),
-                trigger: trigger.to_owned(),
+                trigger: trigger.to_owned().into(),
             };
             assert_eq!(refusal, Some(expected), "{name}");
         }
@@ -353,7 +357,7 @@ mod tests {
         let unreadable = triggers("Ctrl+Shift+F6", "Ctrl+Space", "");
         assert_eq!(
             unreadable.refusal(key("w")),
-            Some(Refusal::Unreadable("Ctrl+Space".to_owned()))
+            Some(Refusal::Unreadable("Ctrl+Space".to_owned().into()))
         );
         assert_eq!(
             unreadable.hotkey_refusal(key("w")),

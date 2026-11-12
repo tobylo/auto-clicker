@@ -21,7 +21,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-pub use answer::{Failure, Unavailability};
+pub use answer::{ChangeFailure, Failure, RecordingChange, Step, Unavailability};
 pub use input::InputFailure;
 pub use notice::{Hindrance, Notice, PlayStart, SaveFailure, Saving, Start, Stop, Unplayable};
 pub use quoted::Quoted;
@@ -44,6 +44,12 @@ pub enum Problem {
     Input(InputFailure),
     /// The recordings could not be listed.
     Unlisted(Quoted),
+    /// The recording the playback hotkey plays could not be read at start,
+    /// so it plays the newest.
+    CurrentUnread(Quoted),
+    /// The recording the playback hotkey plays could not be kept for the
+    /// next start.
+    CurrentUnkept(Quoted),
 }
 
 impl fmt::Display for Problem {
@@ -54,6 +60,16 @@ impl fmt::Display for Problem {
             Problem::Blocked(why) => write!(f, "Clicking cannot start: {why}"),
             Problem::Input(why) => write!(f, "Clicking cannot start: {why}"),
             Problem::Unlisted(why) => write!(f, "The recordings cannot be listed: {why}"),
+            Problem::CurrentUnread(why) => write!(
+                f,
+                "The recording the playback hotkey plays could not be read, so it plays the \
+                 newest: {why}"
+            ),
+            Problem::CurrentUnkept(why) => write!(
+                f,
+                "The recording the playback hotkey plays could not be kept for the next start: \
+                 {why}"
+            ),
         }
     }
 }

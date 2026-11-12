@@ -4,7 +4,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use super::Quoted;
+use super::{Quoted, Unplayable};
 use crate::controller::Blocked;
 use crate::hotkeys::Unavailable;
 
@@ -70,6 +70,80 @@ impl fmt::Display for Unavailability {
             }
             Unavailability::NoShortcuts => f.write_str("the desktop's shortcuts are not available"),
             Unavailability::Hotkeys(why) => why.fmt(f),
+        }
+    }
+}
+
+/// What the settings window asked to change about a recording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingChange {
+    Rename,
+    Delete,
+}
+
+impl RecordingChange {
+    /// "Renamed", "Deleted".
+    pub fn done(self) -> &'static str {
+        match self {
+            RecordingChange::Rename => "Renamed",
+            RecordingChange::Delete => "Deleted",
+        }
+    }
+
+    /// "Not renamed", "Not deleted".
+    pub fn not_done(self) -> &'static str {
+        match self {
+            RecordingChange::Rename => "Not renamed",
+            RecordingChange::Delete => "Not deleted",
+        }
+    }
+}
+
+/// Why a recording was not changed.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum ChangeFailure {
+    /// There is no such file, or no recordings folder.
+    Missing,
+    /// The new name is not one a recording may have: the check's words.
+    Refused(Quoted),
+    /// The file could not be read, or is not a valid recording.
+    Unreadable(Unplayable),
+    /// The recordings folder could not be opened.
+    Folder(Quoted),
+    /// Writing or removing the file failed.
+    NotDone { step: Step, why: Quoted },
+    /// The renamed recording would be larger than this many MiB.
+    TooLarge { mib: u64 },
+}
+
+/// What failed to happen to a recording's file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Step {
+    Written,
+    Deleted,
+}
+
+impl fmt::Display for ChangeFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ChangeFailure::Missing => f.write_str("the file is no longer there"),
+            ChangeFailure::Refused(why) | ChangeFailure::Folder(why) => why.fmt(f),
+            ChangeFailure::Unreadable(why) => why.fmt(f),
+            ChangeFailure::NotDone { step, why } => {
+                let done = match step {
+                    Step::Written => "written",
+                    Step::Deleted => "deleted",
+                };
+                write!(f, "the file could not be {done}: {why}")
+            }
+            ChangeFailure::TooLarge { mib } => write!(
+                f,
+                "the file could not be written: the renamed recording would be larger than \
+                 {mib} MiB"
+            ),
         }
     }
 }

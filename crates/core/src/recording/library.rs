@@ -1,5 +1,5 @@
-//! The recordings that can be played: which files there are, and reading
-//! one.
+//! The recordings that can be played: which files there are, with the name
+//! each holds, and reading one.
 //!
 //! Files are untrusted: a name is taken in one form only, and a file is
 //! opened once, checked as opened, read up to a cap and parsed whole by
@@ -11,6 +11,9 @@ use std::io::{self, Read};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
+use super::header;
 use super::store::{held_path, open_folder};
 use super::{InvalidRecording, Recording};
 use crate::message::Unplayable;
@@ -24,8 +27,23 @@ pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 /// The name of a recording's file, in the one form this program writes:
 /// `2026-11-09_18-04-05.123.json`, or with `-1` to `-9` before the extension.
 /// Nothing else in the folder is listed or opened, so a name is never a path.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct FileName(String);
+
+impl TryFrom<String> for FileName {
+    type Error = String;
+
+    fn try_from(name: String) -> Result<FileName, String> {
+        FileName::parse(&name).ok_or_else(|| "not a recording's file name".to_owned())
+    }
+}
+
+impl From<FileName> for String {
+    fn from(name: FileName) -> String {
+        name.0
+    }
+}
 
 impl FileName {
     /// `name` when it has a recording file's form.
@@ -56,17 +74,40 @@ impl FileName {
         (time, rest.len(), rest)
     }
 
-    /// What the tray calls the recording: "Recording 2026-11-09 18:04:05",
-    /// with " (2)" for the file ending in `-1`, the second made in the same
-    /// millisecond.
+    /// What the tray calls the recording when it has the name it was made
+    /// with: "Recording 2026-11-09 18:04:05", with " (2)" for the file
+    /// ending in `-1`, the second made in the same millisecond.
     pub fn label(&self) -> String {
+        format!("Recording {}", self.when())
+    }
+
+    /// When the recording was made, to the second, as the lists show it:
+    /// "2026-11-09 18:04:05", with " (2)" for the file ending in `-1`.
+    pub fn when(&self) -> String {
         let (date, rest) = self.0.split_at(DATE_LEN);
         let time = rest[1..TIME_LEN].replace('-', ":");
         let copy = match rest.as_bytes()[SUFFIX_AT..] {
             [b'-', n, ..] => format!(" ({})", n - b'0' + 1),
             _ => String::new(),
         };
-        format!("Recording {date} {time}{copy}")
+        format!("{date} {time}{copy}")
+    }
+
+    /// What the lists call the recording named `name`: its label when it
+    /// has the name a new recording gets (or none could be read), else the
+    /// name with when it was made, "Farm loop (2026-11-09 18:04:05)".
+    pub fn titled(&self, name: Option<&str>) -> String {
+        match name {
+            Some(name) if name != self.default_name() => format!("{name} ({})", self.when()),
+            _ => self.label(),
+        }
+    }
+
+    /// The name a recording made at this file's time gets:
+    /// "Recording 2026-11-09 18:04".
+    fn default_name(&self) -> String {
+        let (date, rest) = self.0.split_at(DATE_LEN);
+        format!("Recording {date} {}", rest[1..MINUTE_LEN].replace('-', ":"))
     }
 }
 
@@ -85,6 +126,9 @@ const DATE_LEN: usize = "0000-00-00".len();
 
 /// After the date: the length of `_00-00-00`, the time to the second.
 const TIME_LEN: usize = "_00-00-00".len();
+
+/// After the date: the length of `_00-00`, the time to the minute.
+const MINUTE_LEN: usize = "_00-00".len();
 
 /// After the date: where `.json` or `-N` begins.
 const SUFFIX_AT: usize = TIME_FORM.len() - DATE_LEN;
@@ -112,30 +156,71 @@ impl fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
+/// A recording found in the folder: its file, and the name its header
+/// holds; `None` when the start of the file does not read as a recording's
+/// header (see [`header`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Found {
+    pub file: FileName,
+    pub name: Option<String>,
+}
+
+/// The newest recordings in a folder, and how many it holds.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Listing {
+    /// Newest first.
+    pub newest: Vec<Found>,
+    /// Every file with a recording's name, listed or not.
+    pub total: usize,
+    /// Whether the folder holds the file the listing was asked about,
+    /// listed or not.
+    pub holds: bool,
+}
+
 /// The newest recordings in `dir`, newest first, at most `limit`: the files
 /// with a recording's name, by name, which is the local time each was made
 /// (in the hour the clocks go back, that order can differ from the true
-/// one). No file is opened. A folder that does not exist yet holds none.
+/// one). Only the start of each listed file is read, for its name. A folder
+/// that does not exist yet holds none. Whether it holds `asked`, listed or
+/// not, comes from the same read of the folder.
 ///
 /// # Errors
 /// The folder is a symlink or cannot be read.
-pub fn list(dir: &Path, limit: usize) -> io::Result<Vec<FileName>> {
+pub fn list(dir: &Path, limit: usize, asked: Option<&FileName>) -> io::Result<Listing> {
     let folder = match open_folder(dir) {
         Ok(folder) => folder,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Listing::default()),
         Err(err) => return Err(err),
     };
     let mut newest = Vec::new();
+    let mut total: usize = 0;
+    let mut holds = false;
     for entry in fs::read_dir(held_path(&folder))? {
         let name = entry?.file_name();
-        newest.extend(name.to_str().and_then(FileName::parse));
+        let Some(file) = name.to_str().and_then(FileName::parse) else {
+            continue;
+        };
+        total = total.saturating_add(1);
+        holds |= asked == Some(&file);
+        newest.push(file);
         // However many files there are, only about `limit` names are kept.
         if newest.len() >= limit.saturating_mul(2).saturating_add(64) {
             keep_newest(&mut newest, limit);
         }
     }
     keep_newest(&mut newest, limit);
-    Ok(newest)
+    let newest = newest
+        .into_iter()
+        .map(|file| Found {
+            name: header::name(&folder, &file),
+            file,
+        })
+        .collect();
+    Ok(Listing {
+        newest,
+        total,
+        holds,
+    })
 }
 
 /// Sorts `names` newest first and drops all but the first `limit`.
@@ -151,18 +236,32 @@ fn keep_newest(names: &mut Vec<FileName>, limit: usize) {
 /// # Errors
 /// See [`LoadError`].
 pub fn load(dir: &Path, name: &FileName) -> Result<Recording, LoadError> {
-    let missing_or = |err: io::Error| match err.kind() {
-        io::ErrorKind::NotFound => LoadError::Missing,
-        _ => LoadError::Unreadable(err),
-    };
     let folder = open_folder(dir).map_err(missing_or)?;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(held_path(&folder).join(name.as_str()))
-        .map_err(missing_or)?;
+    load_in(&folder, name)
+}
+
+/// [`load`] from the open recordings folder `folder`.
+pub(super) fn load_in(folder: &File, name: &FileName) -> Result<Recording, LoadError> {
+    let file = open_in(folder, name).map_err(missing_or)?;
     let bytes = read_capped(file, MAX_FILE_BYTES)?;
     Recording::from_json(&bytes).map_err(LoadError::Invalid)
+}
+
+/// `err` as a load error: a file or folder that is not there is missing.
+fn missing_or(err: io::Error) -> LoadError {
+    match err.kind() {
+        io::ErrorKind::NotFound => LoadError::Missing,
+        _ => LoadError::Unreadable(err),
+    }
+}
+
+/// Opens the file `name` in the open folder `folder` for reading, without
+/// following a symlink and without waiting on a FIFO.
+pub(super) fn open_in(folder: &File, name: &FileName) -> io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(held_path(folder).join(name.as_str()))
 }
 
 /// Everything in `file`, which must be a regular file of at most `cap`
@@ -257,6 +356,96 @@ mod tests {
     }
 
     #[test]
+    fn a_title_shows_a_name_with_its_time_unless_it_is_the_name_it_was_made_with() {
+        let plain = name("2026-11-09_18-04-05.123.json");
+        let copy = name("2026-11-09_18-04-05.123-1.json");
+        assert_eq!(plain.when(), "2026-11-09 18:04:05");
+        assert_eq!(copy.when(), "2026-11-09 18:04:05 (2)");
+        let cases = [
+            (&plain, Some("Farm loop"), "Farm loop (2026-11-09 18:04:05)"),
+            (
+                &copy,
+                Some("Farm loop"),
+                "Farm loop (2026-11-09 18:04:05 (2))",
+            ),
+            (&plain, None, "Recording 2026-11-09 18:04:05"),
+            // The name a recording made then gets.
+            (
+                &plain,
+                Some("Recording 2026-11-09 18:04"),
+                "Recording 2026-11-09 18:04:05",
+            ),
+            (
+                &copy,
+                Some("Recording 2026-11-09 18:04"),
+                "Recording 2026-11-09 18:04:05 (2)",
+            ),
+            // Another minute's default name is a name like any other.
+            (
+                &plain,
+                Some("Recording 2026-11-09 18:05"),
+                "Recording 2026-11-09 18:05 (2026-11-09 18:04:05)",
+            ),
+        ];
+        for (file, named, title) in cases {
+            assert_eq!(file.titled(named), title, "{file} {named:?}");
+        }
+        let made = sample();
+        let file = name(&format!("{}.json", made.created().file_stem()));
+        assert_eq!(file.titled(Some(made.name())), file.label());
+    }
+
+    #[test]
+    fn a_listing_reads_each_listed_files_name_and_tells_whether_it_holds_one_asked_about() {
+        let dir = TempDir::new();
+        let saved = save(dir.path(), &sample()).unwrap();
+        let file = name(saved.file_name().unwrap().to_str().unwrap());
+        // Older than the limit lets in.
+        fs::write(dir.path().join("2020-01-01_00-00-00.000.json"), b"").unwrap();
+        // A file that does not start as a recording has no name.
+        fs::write(dir.path().join("2030-01-01_00-00-00.000.json"), b"[]").unwrap();
+        let old = name("2020-01-01_00-00-00.000.json");
+        let found = list(dir.path(), 2, Some(&old)).unwrap();
+        assert!(found.holds);
+        assert_eq!(found.total, 3);
+        assert_eq!(
+            found.newest,
+            [
+                Found {
+                    file: name("2030-01-01_00-00-00.000.json"),
+                    name: None,
+                },
+                Found {
+                    file,
+                    name: Some(sample().name().to_owned()),
+                },
+            ]
+        );
+        let gone = name("2021-01-01_00-00-00.000.json");
+        assert!(!list(dir.path(), 2, Some(&gone)).unwrap().holds);
+        assert!(!list(dir.path(), 2, None).unwrap().holds);
+    }
+
+    #[test]
+    fn a_file_name_is_read_from_json_only_in_its_one_form() {
+        let read = |text: &str| serde_json::from_str::<FileName>(text).ok();
+        assert_eq!(
+            read("\"2026-11-09_18-04-05.123.json\""),
+            Some(name("2026-11-09_18-04-05.123.json"))
+        );
+        for text in [
+            "\"../2026-11-09_18-04-05.123.json\"",
+            "\"x.json\"",
+            "7",
+            "null",
+        ] {
+            assert_eq!(read(text), None, "{text}");
+        }
+        let written = serde_json::to_string(&name("2026-11-09_18-04-05.123-1.json")).unwrap();
+        assert_eq!(written, "\"2026-11-09_18-04-05.123-1.json\"");
+    }
+
+    #[test]
     fn lists_the_newest_recordings_first_and_nothing_else() {
         let dir = TempDir::new();
         let names = [
@@ -281,8 +470,13 @@ mod tests {
         fs::create_dir(dir.path().join("2024-01-01_00-00-00.000.json")).unwrap();
 
         let listed = |limit| -> Vec<String> {
-            let found = list(dir.path(), limit).unwrap();
-            found.iter().map(ToString::to_string).collect()
+            let found = list(dir.path(), limit, None).unwrap();
+            assert_eq!(found.total, 6);
+            found
+                .newest
+                .iter()
+                .map(|found| found.file.to_string())
+                .collect()
         };
 
         let newest_first = [
@@ -306,10 +500,12 @@ mod tests {
             let file = format!("2026-11-09_18-{:02}-{:02}.000.json", n / 60, n % 60);
             fs::write(dir.path().join(file), b"").unwrap();
         }
-        let listed: Vec<String> = list(dir.path(), 3)
-            .unwrap()
+        let found = list(dir.path(), 3, None).unwrap();
+        assert_eq!(found.total, 500);
+        let listed: Vec<String> = found
+            .newest
             .iter()
-            .map(ToString::to_string)
+            .map(|found| found.file.to_string())
             .collect();
         let newest = ["08-19", "08-18", "08-17"].map(|at| format!("2026-11-09_18-{at}.000.json"));
         assert_eq!(listed, newest);
@@ -318,17 +514,20 @@ mod tests {
     #[test]
     fn a_missing_folder_lists_nothing_and_a_symlink_is_an_error() {
         let root = TempDir::new();
-        assert_eq!(list(&root.path().join("none"), 10).unwrap(), []);
+        assert_eq!(
+            list(&root.path().join("none"), 10, None).unwrap(),
+            Listing::default()
+        );
 
         let real = root.path().join("real");
         fs::create_dir(&real).unwrap();
         fs::write(real.join("2026-11-09_18-04-05.123.json"), b"").unwrap();
         let link = root.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
-        let err = list(&link, 10).unwrap_err();
+        let err = list(&link, 10, None).unwrap_err();
         assert_eq!(err.raw_os_error(), Some(libc::ENOTDIR), "{err}");
         // A file in the folder's place is an error too, not an empty list.
-        let err = list(&real.join("2026-11-09_18-04-05.123.json"), 10).unwrap_err();
+        let err = list(&real.join("2026-11-09_18-04-05.123.json"), 10, None).unwrap_err();
         assert_eq!(err.raw_os_error(), Some(libc::ENOTDIR), "{err}");
     }
 

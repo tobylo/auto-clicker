@@ -14,6 +14,14 @@ pub(super) fn swedish(problem: &Problem) -> String {
         Problem::Blocked(why) => format!("Kan inte börja klicka: {}", blocked(why)),
         Problem::Input(why) => format!("Kan inte börja klicka: {}", input(why)),
         Problem::Unlisted(why) => format!("Inspelningarna kan inte listas: {why}"),
+        Problem::CurrentUnread(why) => format!(
+            "Inspelningen som snabbtangenten för uppspelning spelar kunde inte läsas, så den \
+             spelar den nyaste: {why}"
+        ),
+        Problem::CurrentUnkept(why) => format!(
+            "Inspelningen som snabbtangenten för uppspelning spelar kunde inte sparas till \
+             nästa start: {why}"
+        ),
     }
 }
 

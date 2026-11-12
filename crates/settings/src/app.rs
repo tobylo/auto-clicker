@@ -7,12 +7,14 @@ use std::rc::Rc;
 use auto_clicker_core::config::Field;
 use auto_clicker_core::config::Stale;
 use auto_clicker_core::hotkeys::Action;
-use auto_clicker_core::window::{CaptureEnd, Request, Update, WindowView};
-use slint::{ComponentHandle, SharedString};
+use auto_clicker_core::recording::FileName;
+use auto_clicker_core::window::{CaptureEnd, RecordingAction, Request, Update, WindowView};
+use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecModel};
 
 use crate::link::Link;
 use crate::model::{Fields, Unreadable, hotkey_text, key_text};
 use crate::said::Said;
+use crate::shelf;
 use crate::state::{self, Note, Question, State, Target};
 use crate::ui::{SettingsWindow, Texts};
 
@@ -25,6 +27,8 @@ pub struct App {
     last: Option<WindowView>,
     /// The decimal separator of the window's language.
     decimal: char,
+    /// The recording selected in the list.
+    selected: Option<FileName>,
 }
 
 impl App {
@@ -36,6 +40,7 @@ impl App {
             state: State::default(),
             last: None,
             decimal,
+            selected: None,
         }));
         let on = |act: fn(&mut App)| {
             let app = Rc::downgrade(&app);
@@ -50,6 +55,16 @@ impl App {
         window.on_configure_shortcuts(on(App::configure));
         window.on_confirm(on(App::agree));
         window.on_dismiss(on(App::decline));
+        window.on_rename_recording(on(App::rename));
+        window.on_delete_recording(on(|app| app.recording(RecordingAction::Delete)));
+        window.on_choose_recording(on(|app| app.recording(RecordingAction::Choose)));
+        window.on_play_recording(on(|app| app.recording(RecordingAction::Play)));
+        let weak = Rc::downgrade(&app);
+        window.on_select_recording(move |index| {
+            if let Some(app) = weak.upgrade() {
+                app.borrow_mut().select(index);
+            }
+        });
         let weak = Rc::downgrade(&app);
         window.on_capture_hotkey(move |action| {
             if let Some(app) = weak.upgrade() {
@@ -78,6 +93,7 @@ impl App {
         if let Some(settings) = &shown.fields {
             self.load(&Fields::from_draft(settings, self.decimal));
         }
+        let relisted = self.last.as_ref().map(|last| &last.recordings) != Some(&view.recordings);
         self.last = Some(view.clone());
         let w = &self.window;
         w.set_idle(state::idle(view));
@@ -93,6 +109,9 @@ impl App {
         );
         let problems: Vec<SharedString> = view.problems.iter().map(|p| said.problem(p)).collect();
         w.set_problems(problems.join("\n").into());
+        if relisted {
+            self.show_recordings(view);
+        }
         self.show_hotkeys();
         if let Some(note) = shown.note {
             self.note(&note);
@@ -176,6 +195,72 @@ impl App {
         w.set_hotkey_playback(playback.into());
     }
 
+    /// Shows the recordings, keeping the selected one selected while it is
+    /// listed. Only for a changed list: a new model resets where the list
+    /// is scrolled to.
+    fn show_recordings(&mut self, view: &WindowView) {
+        let w = &self.window;
+        let texts = w.global::<Texts>();
+        let no_name = texts.invoke_no_name();
+        let rows: Vec<StandardListViewItem> = shelf::lines(&view.recordings, &no_name)
+            .into_iter()
+            .map(|line| StandardListViewItem::from(SharedString::from(line)))
+            .collect();
+        w.set_recordings(ModelRc::new(VecModel::from(rows)));
+        let more = match view.recordings.more {
+            0 => SharedString::new(),
+            more => texts.invoke_more_recordings(more.to_string().into()),
+        };
+        w.set_more_recordings(more);
+        let place = shelf::place(&view.recordings, self.selected.as_ref());
+        if place < 0 {
+            self.selected = None;
+            self.state.selected(None);
+            w.set_recording_name(SharedString::new());
+        }
+        w.set_selected(place);
+        self.show_question();
+    }
+
+    /// The user picked the recording at `index` in the list: its name goes
+    /// in the name field. A place that holds none (-1 when a row is
+    /// deselected) selects nothing.
+    fn select(&mut self, index: i32) {
+        let listed = self
+            .last
+            .as_ref()
+            .and_then(|view| shelf::at(&view.recordings, index))
+            .cloned();
+        let file = listed.as_ref().map(|listed| listed.file.clone());
+        self.state.selected(file.as_ref());
+        self.selected = file;
+        let name = listed.and_then(|listed| listed.name).unwrap_or_default();
+        self.window.set_recording_name(name.into());
+        self.window
+            .set_selected(if self.selected.is_some() { index } else { -1 });
+        self.show_question();
+    }
+
+    fn rename(&mut self) {
+        let name = shelf::sendable_name(&self.window.get_recording_name());
+        self.recording(RecordingAction::Rename { name });
+    }
+
+    /// Does `action` with the selected recording; a delete asks first.
+    fn recording(&mut self, action: RecordingAction) {
+        let Some(file) = self.selected.clone() else {
+            return;
+        };
+        let label = self.last.as_ref().map_or_else(
+            || file.label(),
+            |view| shelf::label(&view.recordings, &file),
+        );
+        match self.state.recording(file, label, action) {
+            Some(request) => self.send(&request),
+            None => self.show_question(),
+        }
+    }
+
     fn save(&mut self) {
         let asked = self.state.save(&self.fields());
         self.sent(asked);
@@ -256,6 +341,7 @@ impl App {
             None => SharedString::new(),
             Some(Question::Replace(Stale::Changed)) => texts.invoke_replace_changed(),
             Some(Question::Replace(Stale::Unusable)) => texts.invoke_replace_unusable(),
+            Some(Question::Delete(_, label)) => texts.invoke_delete_question(label.into()),
             Some(Question::WithoutModifier(actions)) => {
                 let names: Vec<String> = actions
                     .iter()
@@ -287,6 +373,7 @@ fn note_text(said: &Said<'_>, note: &Note) -> SharedString {
         Note::CapturedKey(code) => texts.invoke_captured_key(key_text(*code).into()),
         Note::CaptureEnded(why) => capture_end(texts, *why),
         Note::Configured => texts.invoke_configured(),
+        Note::Recording(outcome) => said.recording(outcome),
         Note::Unreadable(field) => {
             let name = match field {
                 Unreadable::Interval => texts.invoke_field_interval(),

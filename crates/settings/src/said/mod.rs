@@ -11,6 +11,8 @@ use slint::SharedString;
 
 use crate::ui::Texts;
 
+mod notice;
+
 /// Shows numbers with the decimal separator of the window's language.
 pub struct Said<'a> {
     pub texts: &'a Texts<'a>,
@@ -31,6 +33,8 @@ impl Said<'_> {
             Problem::Blocked(why) => t.invoke_problem_clicking(self.blocked(why)),
             Problem::Input(why) => t.invoke_problem_clicking(self.input(why)),
             Problem::Unlisted(why) => t.invoke_problem_unlisted(s(why)),
+            Problem::CurrentUnread(why) => t.invoke_problem_current_unread(s(why)),
+            Problem::CurrentUnkept(why) => t.invoke_problem_current_unkept(s(why)),
         }
     }
 
@@ -52,7 +56,7 @@ impl Said<'_> {
         }
     }
 
-    fn blocked(&self, why: &Blocked) -> SharedString {
+    pub(super) fn blocked(&self, why: &Blocked) -> SharedString {
         let t = self.texts;
         match why {
             Blocked::Locked => t.invoke_blocked_locked(),
@@ -62,7 +66,7 @@ impl Said<'_> {
         }
     }
 
-    fn input(&self, why: &InputFailure) -> SharedString {
+    pub(super) fn input(&self, why: &InputFailure) -> SharedString {
         let t = self.texts;
         match why {
             InputFailure::NoPermission(e) => t.invoke_input_no_permission(s(e)),
@@ -77,7 +81,7 @@ impl Said<'_> {
         }
     }
 
-    fn unavailable(&self, why: &Unavailable) -> SharedString {
+    pub(super) fn unavailable(&self, why: &Unavailable) -> SharedString {
         let t = self.texts;
         match why {
             Unavailable::NoKeyboard => t.invoke_hotkeys_no_keyboard(),

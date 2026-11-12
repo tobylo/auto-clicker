@@ -22,6 +22,7 @@ use crate::clicker::{ClickerSettings, Mode, Repeat};
 use crate::hotkeys::Unavailable;
 use crate::input::fake::{Call, FakeBackend, FakeLog};
 use crate::input::{AbsolutePosition, Button, Key, PressState};
+use crate::message::Quoted;
 use crate::recording::{LocalTime, Recorder, RecordingFeed};
 use crate::test_support::TempDir;
 
@@ -1273,4 +1274,5 @@ mod per_run;
 mod playback;
 mod positions;
 mod recording;
+mod recordings;
 mod settings;

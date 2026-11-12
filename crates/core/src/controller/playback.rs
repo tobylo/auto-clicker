@@ -20,19 +20,16 @@
 
 use std::collections::BTreeSet;
 use std::future::Future;
-use std::path::Path;
 use std::sync::Arc;
 
 use tokio::time::Instant;
 
 use super::desktop::OwnKeys;
-use super::{
-    Controller, Job, LISTED_RECORDINGS, Listed, PLAY_RELEASE_WAIT, Platform, RunFuture, State,
-};
+use super::{Controller, Job, PLAY_RELEASE_WAIT, Platform, RunFuture, State};
 use crate::input::{Held, Input, InputBackend, Key};
-use crate::message::{Hindrance, Notice, PlayStart, Quoted, Start, Stop, Unplayable};
+use crate::message::{Hindrance, Notice, PlayStart, Start, Stop, Unplayable};
 use crate::playback::{MIN_LOOP_LENGTH, Motion, Playback, play};
-use crate::recording::{Change, FileName, Layout, LoadError, Recording, list, load};
+use crate::recording::{Change, FileName, Layout, LoadError, Recording, load};
 use crate::run::Signals;
 
 /// A recording about to play: loaded, checked, and named for the tray.
@@ -174,15 +171,15 @@ impl<P: Platform> Controller<P> {
     /// Loads the current recording: the last one recorded or played, or the
     /// newest when there is none or its file is gone.
     fn load_current(&mut self) -> Option<Job> {
-        if let Some(file) = self.current.clone() {
+        if let Some(file) = self.shelf.current.clone() {
             match self.read(&file) {
                 Err(LoadError::Missing) => {}
                 read => return self.checked(&file, read),
             }
         }
         self.list_recordings();
-        let Some(newest) = self.recordings.first().map(|listed| listed.file.clone()) else {
-            self.notice = Some(match &self.recordings_error {
+        let Some(newest) = self.shelf.listed.first().map(|listed| listed.file.clone()) else {
+            self.notice = Some(match &self.shelf.error {
                 None => Notice::NothingToPlay,
                 Some(why) => Notice::Refused {
                     start: Start::Playback,
@@ -208,14 +205,16 @@ impl<P: Platform> Controller<P> {
 
     /// What to play from a file that was read, which becomes the current
     /// recording; or `None` with a notice, and a fresh list, since the one
-    /// shown offered a file that cannot be played.
+    /// shown offered a file that cannot be played. Either names the
+    /// recording as the lists do.
     fn checked(&mut self, file: &FileName, read: Result<Recording, LoadError>) -> Option<Job> {
-        let label = file.label();
+        let name = read.as_ref().ok().map(|recording| recording.name());
+        let label = file.titled(name);
         let playback = read
             .map_err(|err| Unplayable::from(&err))
             .and_then(|recording| {
                 Playback::new(recording, self.config.playback).map_err(|_| Unplayable::TooShort {
-                    ms: MIN_LOOP_LENGTH.as_millis(),
+                    ms: u64::try_from(MIN_LOOP_LENGTH.as_millis()).unwrap_or(u64::MAX),
                 })
             });
         // Where the desktop delivers the hotkeys, a recording that presses
@@ -234,7 +233,7 @@ impl<P: Platform> Controller<P> {
         });
         match playing {
             Ok(playing) => {
-                self.current = Some(file.clone());
+                self.make_current(file);
                 Some(Job::Play(playing))
             }
             Err(why) => {
@@ -245,46 +244,6 @@ impl<P: Platform> Controller<P> {
                 self.list_recordings();
                 None
             }
-        }
-    }
-
-    /// A recording was saved at `path`: it is the current one now, and the
-    /// list has it.
-    pub(super) fn saved(&mut self, path: &Path) {
-        let name = path.file_name().and_then(|name| name.to_str());
-        if let Some(file) = name.and_then(FileName::parse) {
-            self.current = Some(file);
-        }
-        self.list_recordings();
-    }
-
-    /// Lists the recordings again when the tray menu opens, so it offers
-    /// what is there now. Only while idle: nothing can be played otherwise,
-    /// and a run never waits on a slow folder.
-    pub(super) fn list_recordings_while_idle(&mut self) {
-        if matches!(self.state, State::Idle) {
-            self.list_recordings();
-        }
-    }
-
-    /// Reads which recordings there are. A folder that cannot be read lists
-    /// none and shows as a problem.
-    pub(super) fn list_recordings(&mut self) {
-        let files = match self.platform.recordings_dir() {
-            Some(dir) => list(&dir, LISTED_RECORDINGS),
-            None => Ok(Vec::new()),
-        };
-        self.recordings_error = files.as_ref().err().map(|err| Quoted::new(err.to_string()));
-        let listed: Vec<Listed> = files
-            .unwrap_or_default()
-            .into_iter()
-            .map(|file| Listed {
-                label: file.label(),
-                file,
-            })
-            .collect();
-        if *self.recordings != *listed {
-            self.recordings = Arc::from(listed);
         }
     }
 }

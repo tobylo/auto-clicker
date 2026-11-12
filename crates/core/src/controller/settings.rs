@@ -90,6 +90,11 @@ impl Settings {
         self.pending.as_ref().and_then(Pending::capture)
     }
 
+    /// Whether a settings window is open.
+    pub(super) fn window_open(&self) -> bool {
+        self.window.is_some()
+    }
+
     /// When the pending request ends by itself, if one is pending.
     pub(super) fn deadline(&self) -> Option<Instant> {
         self.pending.as_ref().map(Pending::deadline)
@@ -136,6 +141,7 @@ impl<P: Platform> Controller<P> {
                 self.end_pending();
                 self.settings.window = Some(link);
                 self.settings.answer = None;
+                self.relist_for_window();
             }
             WindowEvent::Closed => {
                 self.end_pending();
@@ -152,6 +158,7 @@ impl<P: Platform> Controller<P> {
                     Ask::ConfigureShortcuts { activation_token } => {
                         self.configure_shortcuts(id, activation_token)
                     }
+                    Ask::Recording { file, action } => Some(self.recording_request(&file, action)),
                 };
                 if let Some(outcome) = outcome {
                     self.settings.answer = Some(Answer { id, outcome });
@@ -266,6 +273,7 @@ impl<P: Platform> Controller<P> {
             },
             no_recording: self.no_recording(),
             problems: self.problems(),
+            recordings: self.shelf.window_view(),
             answer: self.settings.answer.clone(),
         }
         .bounded();
