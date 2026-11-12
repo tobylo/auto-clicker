@@ -193,7 +193,9 @@ impl Placed {
     /// Whether the overlay is on the monitor whose corner is `corner`
     /// instead of its own. Not when that corner is not known, nor when it
     /// is a screen overlapping its own: winit reports one of the screens a
-    /// window covers, which may be the other one.
+    /// window covers, which may be the other one. An overlay moved between
+    /// two such screens is therefore not seen; screens that overlap without
+    /// sharing a corner are not a layout Plasma's settings make.
     fn moved(&self, corner: Option<(i64, i64)>) -> bool {
         let Some(corner) = corner else {
             return false;
