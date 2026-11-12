@@ -75,6 +75,7 @@ impl App {
             }
             (PickEnd::Cancelled, _) => self.note(&Note::PickCancelled),
             (PickEnd::TimedOut, _) => self.note(&Note::PickTimedOut),
+            (PickEnd::Moved, _) => self.note(&Note::Unavailable(Unavailability::ScreensChanged)),
             // An end told after the pick was closed: nothing is up to end.
             (PickEnd::At { .. }, None) => {}
         }

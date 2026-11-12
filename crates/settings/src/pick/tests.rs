@@ -153,6 +153,19 @@ fn a_click_is_its_screens_corner_plus_its_place_kept_on_the_screen() {
     }
 }
 
+#[test]
+fn an_overlay_on_another_screens_corner_has_moved() {
+    let cases = [
+        (Some((2048, 0)), false),
+        (None, false),
+        (Some((0, 0)), true),
+        (Some((2048, 1)), true),
+    ];
+    for (corner, expected) in cases {
+        assert_eq!(moved(corner, DP1), expected, "{corner:?}");
+    }
+}
+
 /// What the pick told, in order.
 type Told = Rc<RefCell<Vec<PickEnd>>>;
 

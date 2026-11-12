@@ -23,7 +23,7 @@ use slint::{CloseRequestResponse, ComponentHandle, Timer, TimerMode};
 
 use crate::ui::PickWindow;
 
-pub use place::{Screen, hook, monitors, place, units};
+pub use place::{Screen, corner, hook, monitors, place, units};
 
 /// How a pick ended.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -35,6 +35,9 @@ pub enum PickEnd {
     },
     Cancelled,
     TimedOut,
+    /// An overlay was clicked on another screen than its own: moved there
+    /// (Plasma's "Move Window to Next Screen"), or the screens changed.
+    Moved,
 }
 
 /// A monitor as the window sees it: its top-left corner in logical pixels,
@@ -172,15 +175,28 @@ impl Pick {
     }
 }
 
+/// Whether an overlay meant for the screen at `on` is on the monitor whose
+/// corner is `corner` instead; not when that corner is not known.
+fn moved(corner: Option<(i64, i64)>, on: Rect) -> bool {
+    corner.is_some_and(|corner| corner != (i64::from(on.x), i64::from(on.y)))
+}
+
 /// Makes `window`, the overlay for the screen at `on`, tell `ending` how
 /// the pick ended.
 fn told_by(window: &PickWindow, on: Rect, ending: &Ending) {
     let clicked = Rc::clone(ending);
     let overlay = window.as_weak();
     window.on_picked(move |x, y| {
+        let Some(overlay) = overlay.upgrade() else {
+            return;
+        };
+        let window = overlay.window();
+        if moved(corner(window), on) {
+            return end(&clicked, PickEnd::Moved);
+        }
         // Slint's own scale (`SLINT_SCALE_FACTOR`) may differ from the
         // screen's: the click in the compositor's logical pixels.
-        let units = overlay.upgrade().map_or(1.0, |w| units(w.window()));
+        let units = units(window);
         if let Some(at) = spot_on(on, f64::from(x) * units, f64::from(y) * units) {
             end(&clicked, PickEnd::At { at, on });
         }
