@@ -33,7 +33,9 @@ pub fn keyboard_access(bindings: Bindings, own: &[DeviceIdentity]) -> HotkeyStat
 pub(super) fn look(paths: Paths, bindings: Bindings, own: Vec<PathBuf>) -> HotkeyStatus {
     let _watch = match Watch::new(&paths.dev) {
         Ok(watch) => watch,
-        Err(err) => return HotkeyStatus::Unavailable(Unavailable::WatchFailed(err.to_string())),
+        Err(err) => {
+            return HotkeyStatus::Unavailable(Unavailable::WatchFailed(err.to_string().into()));
+        }
     };
     // The check is for the hotkeys, so it matches them: it captures nothing.
     let setup = Setup {
@@ -45,6 +47,6 @@ pub(super) fn look(paths: Paths, bindings: Bindings, own: Vec<PathBuf>) -> Hotke
     let mut reader = Reader::new(paths, setup, |_| {});
     match reader.scan() {
         Ok(()) => reader.registry.status(),
-        Err(err) => HotkeyStatus::Unavailable(Unavailable::WatchFailed(err.to_string())),
+        Err(err) => HotkeyStatus::Unavailable(Unavailable::WatchFailed(err.to_string().into())),
     }
 }

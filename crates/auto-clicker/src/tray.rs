@@ -258,8 +258,8 @@ fn escape(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn tooltip_body(view: &View) -> String {
-    view.details()
+fn tooltip_body(view: &View, language: Language) -> String {
+    tray_text::details(view, language)
         .iter()
         .map(|line| escape(line))
         .collect::<Vec<_>>()
@@ -365,7 +365,7 @@ impl ksni::Tray for Tray {
             icon_name: icon_name(self.view.activity).to_owned(),
             icon_pixmap: Vec::new(),
             title: escape(&tray_text::title(&self.view, self.language)),
-            description: tooltip_body(&self.view),
+            description: tooltip_body(&self.view, self.language),
         }
     }
 
@@ -401,6 +401,10 @@ mod tests {
     use auto_clicker_core::config::Config;
     use auto_clicker_core::controller::{Hotkey, Listed, NoRecording, Route, Routes};
     use auto_clicker_core::hotkeys::Unavailable;
+    use auto_clicker_core::message::{Hindrance, Notice, Quoted, Start, Titled};
+
+    /// The notice every test view shows, escaped.
+    const FINISHED: &str = "Finished playing a &lt;b&gt; &amp; c (2026-11-09 18:00:00)";
     use auto_clicker_core::recording::FileName;
 
     use super::*;
@@ -427,7 +431,10 @@ mod tests {
             recordings: Arc::from(recordings),
             current: None,
             playing: None,
-            notice: Some("a <b> & c".to_owned()),
+            notice: Some(Notice::Finished(Some(Titled::new(
+                file(0),
+                Some("a <b> & c"),
+            )))),
             problems: Vec::new(),
         }
     }
@@ -871,7 +878,7 @@ mod tests {
         let reasons = [
             NoRecording::DesktopHotkeys,
             NoRecording::Keyboards(Unavailable::NoPermission),
-            NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned())),
+            NoRecording::Keyboards(Unavailable::WatchFailed("gone".to_owned().into())),
         ];
         for no_recording in reasons {
             let label = no_recording.label();
@@ -906,10 +913,13 @@ mod tests {
     fn the_tooltip_gives_the_reason_and_the_fix_escaped_like_every_line() {
         let shown = View {
             no_recording: Some(NoRecording::DesktopHotkeys),
-            notice: Some("Not recording: <why>".to_owned()),
+            notice: Some(Notice::Refused {
+                start: Start::Recording,
+                why: Hindrance::Unlisted(Quoted::new("<why>")),
+            }),
             ..view(Activity::Idle)
         };
-        let lines: Vec<String> = tooltip_body(&shown)
+        let lines: Vec<String> = tooltip_body(&shown, Language::English)
             .split("<br/>")
             .map(str::to_owned)
             .collect();
@@ -925,7 +935,7 @@ mod tests {
         );
         assert_eq!(
             lines.last().map(String::as_str),
-            Some("Not recording: &lt;why&gt;")
+            Some("Not recording: the recordings cannot be listed: &lt;why&gt;")
         );
     }
 
@@ -959,17 +969,17 @@ mod tests {
                 routes: Routes { output, hotkeys },
                 ..view(Activity::Idle)
             };
-            let body = tooltip_body(&shown);
+            let body = tooltip_body(&shown, Language::English);
             let lines: Vec<&str> = body.split("<br/>").collect();
             // After the hotkeys, before the notice, which stays escaped.
             assert_eq!(lines[4], line, "{body}");
-            assert_eq!(lines[5], "a &lt;b&gt; &amp; c", "{body}");
+            assert_eq!(lines[5], FINISHED, "{body}");
         }
     }
 
     #[test]
     fn tooltip_text_is_escaped() {
-        let body = tooltip_body(&view(Activity::Idle));
-        assert!(body.ends_with("<br/>a &lt;b&gt; &amp; c"), "{body}");
+        let body = tooltip_body(&view(Activity::Idle), Language::English);
+        assert!(body.ends_with(&format!("<br/>{FINISHED}")), "{body}");
     }
 }

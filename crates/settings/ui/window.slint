@@ -44,6 +44,103 @@ export global Texts {
     public pure function delete-question(name: string) -> string { @tr("Delete {} for good? It cannot be undone.", name) }
     public pure function no-name() -> string { @tr("(the name cannot be read)") }
     public pure function more-recordings(count: string) -> string { @tr("{} older recordings are not listed.", count) }
+    // What the daemon says, as core's messages give it: each with its own
+    // values, and text from other programs passed through as it is.
+    public pure function problem-clicking(why: string) -> string { @tr("Clicking cannot start: {}", why) }
+    public pure function problem-unlisted(why: string) -> string { @tr("The recordings cannot be listed: {}", why) }
+    public pure function config-no-directory() -> string { @tr("no config directory: neither XDG_CONFIG_HOME nor HOME is set") }
+    public pure function config-unreadable(file: string, why: string) -> string { @tr("{}: could not read the file: {}", file, why) }
+    public pure function config-invalid-at(file: string, line: string, why: string) -> string { @tr("{}:{}: {}", file, line, why) }
+    public pure function config-invalid(file: string, why: string) -> string { @tr("config file" => "{}: {}", file, why) }
+    public pure function blocked-locked() -> string { @tr("the screen is locked") }
+    public pure function blocked-inactive() -> string { @tr("another session is in front") }
+    public pure function blocked-sleeping() -> string { @tr("the computer is going to sleep") }
+    public pure function blocked-unknown(why: string) -> string { @tr("the session state is unknown: {}", why) }
+    public pure function input-no-permission(why: string) -> string { @tr("no permission to open /dev/uinput ({}); install the package's udev rule and log in again, or add your user to the `input` group", why) }
+    public pure function input-uinput-missing(why: string) -> string { @tr("/dev/uinput is not available ({}); load the kernel module with `sudo modprobe uinput`", why) }
+    public pure function input-create-device(why: string) -> string { @tr("could not create a virtual input device: {}", why) }
+    public pure function input-write(why: string) -> string { @tr("could not write to a virtual input device: {}", why) }
+    public pure function input-portal-unavailable(why: string) -> string { @tr("the desktop's remote input portal cannot be used: {}", why) }
+    public pure function input-not-allowed() -> string { @tr("not allowed in the desktop's dialog; Start asks again") }
+    public pure function input-allowed-now() -> string { @tr("allowed; press Start again") }
+    public pure function input-portal(why: string) -> string { @tr("the remote input portal failed: {}", why) }
+    public pure function input-session-lost(why: string) -> string { @tr("the desktop ended remote input: {}", why) }
+    public pure function hotkeys-no-keyboard() -> string { @tr("hotkeys are unavailable: no keyboard found") }
+    public pure function hotkeys-no-permission() -> string { @tr("hotkeys are unavailable: keyboards cannot be read; add your user to the input group and log in again, or set hotkeys = \"portal\" under [input] for the desktop's shortcuts") }
+    public pure function hotkeys-read-failed(why: string) -> string { @tr("hotkeys are unavailable: a keyboard cannot be read: {}", why) }
+    public pure function hotkeys-watch-failed(why: string) -> string { @tr("hotkeys stopped: watching for keyboards failed: {}; restart the program", why) }
+    public pure function hotkeys-desktop(why: string) -> string { @tr("hotkeys are unavailable: {}", why) }
+    public pure function no-recording-desktop() -> string { @tr("recording is unavailable with the desktop's shortcuts") }
+    public pure function failure-no-config-directory() -> string { @tr("there is no config directory: neither XDG_CONFIG_HOME nor HOME is set") }
+    public pure function failure-write(why: string) -> string { @tr("the config file could not be written: {}", why) }
+    public pure function failure-bad-token() -> string { @tr("the activation token is not one") }
+    public pure function failure-not-opened() -> string { @tr("the desktop did not open its settings") }
+    public pure function desktop-delivers() -> string { @tr("the desktop delivers the hotkeys: change them in System Settings, under Shortcuts") }
+    public pure function reads-keyboards() -> string { @tr("the program reads the keyboards: set the hotkeys in this window") }
+    public pure function no-shortcuts() -> string { @tr("the desktop's shortcuts are not available") }
+    public pure function reason-tray-start-delay(max: string) -> string { @tr("tray_start_delay must be from 0 to {} seconds", max) }
+    public pure function reason-interval(floor: string, max: string) -> string { @tr("interval_ms must be from {} to {}", floor, max) }
+    public pure function reason-interval-double(floor: string, max: string) -> string { @tr("interval_ms must be from {} to {} for a double click, which fits two clicks in each interval", floor, max) }
+    public pure function reason-rate(least: string, most: string) -> string { @tr("clicks_per_second must be from {} to {}", least, most) }
+    public pure function reason-rate-double(least: string, most: string) -> string { @tr("clicks_per_second must be from {} to {} for a double click, which fits two clicks in each interval", least, most) }
+    public pure function reason-jitter(max: string) -> string { @tr("jitter_percent must be from 0 to {}", max) }
+    public pure function reason-speed(slowest: string, fastest: string) -> string { @tr("speed must be from {} to {}", slowest, fastest) }
+    public pure function reason-key-code(code: string) -> string { @tr("key code {} is not from 1 to 248", code) }
+    public pure function reason-count(count: string, max: string) -> string { @tr("repeat {} is not from 1 to {}; use \"until_stopped\" to repeat until stopped", count, max) }
+    public pure function reason-bound-twice(hotkey: string) -> string { @tr("hotkey {} is bound to two actions", hotkey) }
+    public pure function reason-on-clicker-key(hotkey: string) -> string { @tr("hotkey {} uses the key the clicker presses; choose another key", hotkey) }
+    // The tray's notices, as the window shows them when Play does not start.
+    public pure function problem-current-unread(why: string) -> string { @tr("The recording the playback hotkey plays could not be read, so it plays the newest: {}", why) }
+    public pure function problem-current-unkept(why: string) -> string { @tr("The recording the playback hotkey plays could not be kept for the next start: {}", why) }
+    public pure function refused-clicking(why: string) -> string { @tr("Not started: {}", why) }
+    public pure function refused-playback(why: string) -> string { @tr("Not playing: {}", why) }
+    public pure function refused-recording(why: string) -> string { @tr("Not recording: {}", why) }
+    public pure function unplayable(recording: string, why: string) -> string { @tr("Not playing {}: {}", recording, why) }
+    public pure function nothing-to-play() -> string { @tr("Nothing to play: no recordings yet") }
+    public pure function run-failed-clicking(why: string) -> string { @tr("Clicking stopped: {}", why) }
+    public pure function run-failed-playback(why: string) -> string { @tr("Playback stopped: {}", why) }
+    public pure function finished-playing(recording: string) -> string { @tr("Finished playing {}", recording) }
+    public pure function finished-all() -> string { @tr("Finished every action") }
+    public pure function two-sentences(first: string, second: string) -> string { @tr("{}. {}", first, second) }
+    public pure function held-too-long(seconds: string) -> string { @tr("the hotkey was held for {} s; let go of it to start", seconds) }
+    public pure function release-lost(hotkey: string) -> string { @tr("could not tell when the hotkey was let go; press {} again", hotkey) }
+    public pure function hotkeys-stopped() -> string { @tr("hotkeys stopped working") }
+    public pure function clicking-on() -> string { @tr("clicking is on; stop it first") }
+    public pure function unlisted(why: string) -> string { @tr("the recordings cannot be listed: {}", why) }
+    public pure function no-clock() -> string { @tr("the clock could not be read") }
+    public pure function file-missing() -> string { @tr("the file is no longer there") }
+    public pure function file-unreadable(why: string) -> string { @tr("the file could not be read: {}", why) }
+    public pure function file-too-large(mib: string) -> string { @tr("the file is larger than {} MiB", mib) }
+    public pure function file-invalid(why: string) -> string { @tr("invalid recording" => "{}", why) }
+    public pure function too-short(ms: string) -> string { @tr("it is shorter than {} ms, too short to play more than once", ms) }
+    public pure function presses-hotkey-key(why: string) -> string { @tr("it presses a hotkey's key: {}", why) }
+    public pure function stopped(why: string) -> string { @tr("Stopped: {}", why) }
+    public pure function layout-changed() -> string { @tr("Playback stopped: the screen layout changed") }
+    public pure function layout-unknown() -> string { @tr("Playback stopped: the screen layout is no longer known") }
+    public pure function recording-stopped(why: string) -> string { @tr("Recording stopped: {}", why) }
+    public pure function recording-full() -> string { @tr("Recording stopped: it reached the largest size a recording may have") }
+    public pure function recording-limit(minutes: string) -> string { @tr("Recording stopped at its {}-minute limit", minutes) }
+    public pure function played-held(seconds: string) -> string { @tr("Playing although the hotkey was still held after {} s; its keys mix into what plays", seconds) }
+    public pure function fallback-unknown() -> string { @tr("Playing with relative motion: the screen layout is not known, so the recorded positions cannot be used") }
+    public pure function fallback-changed() -> string { @tr("Playing with relative motion: a screen this recording used has moved, changed size or is gone") }
+    public pure function saved-nothing() -> string { @tr("Nothing was recorded, so nothing was saved") }
+    public pure function saved-as(name: string) -> string { @tr("Saved “{}”", name) }
+    public pure function save-failed(why: string) -> string { @tr("The recording could not be saved: {}", why) }
+    public pure function no-data-directory() -> string { @tr("no data directory: neither XDG_DATA_HOME nor HOME is set") }
+    public pure function recorded-invalid(why: string) -> string { @tr("recorded invalid" => "{}", why) }
+    public pure function own-key-modifier(key: string) -> string { @tr("{} is a modifier, and the program holding it would change which hotkey the desktop sees", key) }
+    public pure function own-key-hotkey(key: string, trigger: string) -> string { @tr("{} is the key of the hotkey {}, and the desktop cannot tell the program's key presses from yours", key, trigger) }
+    public pure function own-key-unreadable(trigger: string) -> string { @tr("the hotkey “{}” is not on a function key (F1 to F24), so the program cannot tell whether its own key presses would set it off; change it in System Settings", trigger) }
+    public pure function own-key-not-reported() -> string { @tr("the desktop has not said yet which keys the hotkeys use, and the program must not press one of them") }
+    public pure function unsynced-renamed(why: string) -> string { @tr("Renamed, but it may not survive a power loss: {}", why) }
+    public pure function unsynced-deleted(why: string) -> string { @tr("Deleted, but it may not survive a power loss: {}", why) }
+    public pure function not-renamed(why: string) -> string { @tr("Not renamed: {}", why) }
+    public pure function not-deleted(why: string) -> string { @tr("Not deleted: {}", why) }
+    public pure function generated-name(made: string) -> string { @tr("Recording {}", made) }
+    public pure function not-playing() -> string { @tr("Not playing") }
+    public pure function file-not-written(why: string) -> string { @tr("the file could not be written: {}", why) }
+    public pure function file-not-deleted(why: string) -> string { @tr("the file could not be deleted: {}", why) }
+    public pure function rename-too-large(mib: string) -> string { @tr("the file could not be written: the renamed recording would be larger than {} MiB", mib) }
 }
 
 component Row inherits HorizontalLayout {

@@ -45,12 +45,15 @@ pub use recordings::WINDOW_RECORDINGS;
 pub use screen::{LayoutSignal, LayoutWatch};
 pub use session::{Blocked, SessionFacts};
 pub use settings::{WindowLink, WindowOpener};
-pub use view::{Activity, Hotkey, Listed, NoRecording, Route, Routes, View, describe};
+pub use view::{Activity, Hotkey, Listed, NoRecording, Route, Routes, View, describe, duration};
 
 use crate::clicker::run;
 use crate::config::Config;
 use crate::hotkeys::{Action, Binding, Bindings, Capture, HotkeyEvent, HotkeyStatus, Unavailable};
 use crate::input::{Input, InputBackend, InputError};
+use crate::message::{
+    ConfigProblem, Hindrance, InputFailure, Notice, Problem, Start, Stop, Titled,
+};
 use crate::recording::{FileName, Layout, LocalTime, RecordingFeed, RecordingSlot};
 use crate::run::{Ended, RunEnd, Signals};
 use crate::window::{CaptureEnd, Outcome};
@@ -262,11 +265,19 @@ enum Job {
 }
 
 impl Job {
-    /// What a notice says when this start does not happen.
-    fn refused(&self) -> &'static str {
+    /// What a notice names when this start does not happen.
+    fn start(&self) -> Start {
         match self {
-            Job::Click => "Not started",
-            Job::Play(_) => "Not playing",
+            Job::Click => Start::Clicking,
+            Job::Play(_) => Start::Playback,
+        }
+    }
+
+    /// The notice that it did not start, and why.
+    fn refused(&self, why: Hindrance) -> Notice {
+        Notice::Refused {
+            start: self.start(),
+            why,
         }
     }
 
@@ -279,7 +290,7 @@ impl Job {
     }
 
     /// The recording it plays, as the tray names it.
-    fn playing(&self) -> Option<&str> {
+    fn playing(&self) -> Option<&Titled> {
         match self {
             Job::Click => None,
             Job::Play(playing) => Some(playing.label()),
@@ -310,7 +321,7 @@ type RunFuture<B> = Pin<Box<dyn Future<Output = RunEnd<B>>>>;
 /// A run, clicking or playing, and the signals that end it.
 struct Running<B: InputBackend> {
     /// The recording it plays, as the tray names it; `None` when clicking.
-    playing: Option<String>,
+    playing: Option<Titled>,
     /// The keys it presses by itself.
     keys: desktop::OwnKeys,
     /// The layout a playback moves to positions on; `None` when it moves
@@ -377,7 +388,7 @@ pub struct Controller<P: Platform> {
     /// What it runs with: the config at start, and of a later save what is
     /// in use yet (see [`settings`]).
     config: Config,
-    config_error: Option<String>,
+    config_error: Option<ConfigProblem>,
     /// The config file and the settings window.
     settings: settings::Settings,
     inbox: mpsc::UnboundedReceiver<Message>,
@@ -389,7 +400,7 @@ pub struct Controller<P: Platform> {
     /// The devices being opened.
     opening: Option<OpenInput<P::Backend>>,
     /// Why the devices could not be opened again.
-    input_error: Option<String>,
+    input_error: Option<InputFailure>,
     hotkeys: HotkeySource,
     hotkey_status: Option<HotkeyStatus>,
     /// The screen layout's watcher.
@@ -398,7 +409,7 @@ pub struct Controller<P: Platform> {
     desktop: Option<desktop::DesktopHotkeys>,
     /// Starts out unknown: a state not yet read is not "unlocked".
     blocked: Option<Blocked>,
-    notice: Option<String>,
+    notice: Option<Notice>,
     /// A [`Message::Sleep`] handled but not yet reported.
     sleep_notice: Option<u64>,
     released_for_sleep: watch::Sender<u64>,
@@ -419,7 +430,7 @@ impl<P: Platform> Controller<P> {
         platform: P,
         input: Option<Input<P::Backend>>,
         config: Config,
-        config_error: Option<String>,
+        config_error: Option<ConfigProblem>,
     ) -> (Controller<P>, Links) {
         let (send, inbox) = mpsc::unbounded_channel();
         let (released_for_sleep, sleep_reports) = watch::channel(0);
@@ -462,7 +473,7 @@ impl<P: Platform> Controller<P> {
             hotkey_status: None,
             screen: LayoutSource::default(),
             desktop,
-            blocked: Some(Blocked::Unknown("not read yet".to_owned())),
+            blocked: Some(Blocked::Unknown("not read yet".to_owned().into())),
             notice: None,
             sleep_notice: None,
             released_for_sleep,
@@ -482,7 +493,7 @@ impl<P: Platform> Controller<P> {
     /// Shows `err` as a problem until the devices open: what a check at
     /// start found, before any open.
     pub fn report_input_problem(&mut self, err: &InputError) {
-        self.input_error = Some(err.to_string());
+        self.input_error = Some(InputFailure::from(err));
     }
 
     /// Runs until [`Message::Quit`], or until every sender of the inbox is
@@ -607,7 +618,7 @@ impl<P: Platform> Controller<P> {
                 self.list_recordings_while_idle();
             }
             Message::Session(blocked) => self.session(blocked),
-            Message::LockRequested => self.stop(Some(format!("Stopped: {}", Blocked::Locked))),
+            Message::LockRequested => self.stop(Some(Stop::Blocked(Blocked::Locked))),
             Message::Sleep(notice) => {
                 self.session(Some(Blocked::Sleeping));
                 self.sleep_notice = Some(notice);
@@ -639,12 +650,12 @@ impl<P: Platform> Controller<P> {
     }
 
     /// The recording that plays or is about to, as the tray names it.
-    fn playing(&self) -> Option<&str> {
+    fn playing(&self) -> Option<&Titled> {
         match &self.state {
             State::Countdown(_, job) | State::Release(_, job) | State::Opening(job) => {
                 job.playing()
             }
-            State::Running(running) => running.playing.as_deref(),
+            State::Running(running) => running.playing.as_ref(),
             State::Idle | State::RecordCountdown(_) | State::Recording(_) => None,
         }
     }
@@ -684,11 +695,9 @@ impl<P: Platform> Controller<P> {
         };
         match self.take_start() {
             Some(Job::Play(playing)) => self.begin_run(Job::Play(playing.modifier_held())),
-            Some(Job::Click) => {
-                self.notice = Some(format!(
-                    "Not started: the hotkey was held for {} s; let go of it to start",
-                    RELEASE_WAIT.as_secs()
-                ));
+            Some(job @ Job::Click) => {
+                let seconds = RELEASE_WAIT.as_secs();
+                self.notice = Some(job.refused(Hindrance::HeldTooLong { seconds }));
             }
             None => {}
         }
@@ -701,21 +710,19 @@ impl<P: Platform> Controller<P> {
             return;
         };
         let hotkey = job.hotkey(&self.config);
-        self.cancel_release(&format!(
-            "could not tell when the hotkey was let go; press {hotkey} again"
-        ));
+        self.cancel_release(Hindrance::ReleaseLost(hotkey));
     }
 
     fn hotkey_status_changed(&mut self, status: HotkeyStatus) {
         let unavailable = matches!(status, HotkeyStatus::Unavailable(_));
         self.desktop_status_changed(&status);
         if let HotkeyStatus::Unavailable(why @ Unavailable::WatchFailed(_)) = &status {
-            self.input_lost(why.to_string());
+            self.input_lost(why);
         }
         let ended = status.clone();
         self.hotkey_status = Some(status);
         if unavailable {
-            self.cancel_release("hotkeys stopped working");
+            self.cancel_release(Hindrance::HotkeysStopped);
         }
         // Last: it starts the reader again, which reports anew.
         self.pending_status(&ended);
@@ -770,17 +777,17 @@ impl<P: Platform> Controller<P> {
     }
 
     /// Stops a run, a recording (saving it) or a start, and says why when
-    /// `notice` is given.
-    fn stop(&mut self, notice: Option<String>) {
+    /// `why` is given.
+    fn stop(&mut self, why: Option<Stop>) {
         match &mut self.state {
             State::Idle => return,
             State::Countdown(..) | State::Release(..) | State::Opening(_) => self.cancel_start(),
             State::RecordCountdown(_) => self.state = State::Idle,
             State::Running(running) => running.stop(),
-            State::Recording(_) => return self.stop_recording(notice),
+            State::Recording(_) => return self.stop_recording(why),
         }
-        if notice.is_some() {
-            self.notice = notice;
+        if let Some(why) = why {
+            self.notice = Some(Notice::Stopped(why));
         }
     }
 
@@ -794,33 +801,34 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    /// Cancels a start waiting for the modifiers, saying `why` after what
-    /// did not start.
-    fn cancel_release(&mut self, why: &str) {
+    /// Cancels a start waiting for the modifiers, saying `why` it did not
+    /// start.
+    fn cancel_release(&mut self, why: Hindrance) {
         if let State::Release(_, job) = &self.state {
-            self.notice = Some(format!("{}: {why}", job.refused()));
+            self.notice = Some(job.refused(why));
             self.state = State::Idle;
         }
     }
 
     fn session(&mut self, blocked: Option<Blocked>) {
         if let Some(reason) = &blocked {
-            self.stop(Some(format!("Stopped: {reason}")));
+            self.stop(Some(Stop::Blocked(reason.clone())));
         }
         self.blocked = blocked;
     }
 
     /// Whether a start may begin; says why not when it may not.
     fn may_start(&mut self) -> bool {
-        self.session_allows("Not started") && self.keys_allow()
+        self.session_allows(Start::Clicking) && self.keys_allow()
     }
 
     /// Whether the session lets anything start; when it does not, the
-    /// notice says why, after `refused`.
-    fn session_allows(&mut self, refused: &str) -> bool {
+    /// notice says why `start` did not happen.
+    fn session_allows(&mut self, start: Start) -> bool {
         match &self.blocked {
             Some(reason) => {
-                self.notice = Some(format!("{refused}: {reason}"));
+                let why = Hindrance::Blocked(reason.clone());
+                self.notice = Some(Notice::Refused { start, why });
                 false
             }
             None => true,
@@ -887,7 +895,7 @@ impl<P: Platform> Controller<P> {
             Job::Click => None,
             Job::Play(playing) => playing.start_notice(layout.as_ref()),
         };
-        let playing = job.playing().map(str::to_owned);
+        let playing = job.playing().cloned();
         let keys = job.own_keys(&self.config);
         let (run, positions): (RunFuture<P::Backend>, _) = match job {
             Job::Click => {
@@ -928,15 +936,12 @@ impl<P: Platform> Controller<P> {
         let devices_lost = lost.is_some();
         match (lost, end.result) {
             (Some(err), _) | (None, Err(err)) => {
-                let what = playing.map_or("Clicking", |_| "Playback");
-                self.notice = Some(format!("{what} stopped: {err}"));
-            }
-            (None, Ok(Ended::Finished)) => {
-                self.notice = Some(match playing {
-                    Some(recording) => format!("Finished playing {recording}"),
-                    None => "Finished every action".to_owned(),
+                self.notice = Some(Notice::RunFailed {
+                    playback: playing.is_some(),
+                    why: InputFailure::from(&err),
                 });
             }
+            (None, Ok(Ended::Finished)) => self.notice = Some(Notice::Finished(playing)),
             (None, Ok(Ended::Stopped | Ended::ShutDown)) => {}
         }
         // Lost devices are closed, and so are devices that live per run.
@@ -995,11 +1000,12 @@ impl<P: Platform> Controller<P> {
                 }
             }
             Err(err) => {
+                let why = InputFailure::from(&err);
                 if let Some(job) = waiting {
-                    self.notice = Some(format!("{}: {err}", job.refused()));
+                    self.notice = Some(job.refused(Hindrance::Input(why.clone())));
                 }
                 if kept {
-                    self.input_error = Some(err.to_string());
+                    self.input_error = Some(why);
                 }
             }
         }
@@ -1054,7 +1060,7 @@ impl<P: Platform> Controller<P> {
             playback: self.config.playback,
             recordings: Arc::clone(&self.shelf.listed),
             current: self.shelf.shown_current(),
-            playing: self.playing().map(str::to_owned),
+            playing: self.playing().cloned(),
             notice: self.notice.clone(),
             problems: self.problems(),
         };
@@ -1089,30 +1095,17 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    fn problems(&self) -> Vec<String> {
+    fn problems(&self) -> Vec<Problem> {
         let hotkeys = match &self.hotkey_status {
-            Some(HotkeyStatus::Unavailable(why)) => Some(why.to_string()),
+            Some(HotkeyStatus::Unavailable(why)) => Some(Problem::Hotkeys(why.clone())),
             _ => None,
         };
-        let blocked = self
-            .blocked
-            .as_ref()
-            .map(|reason| format!("Clicking cannot start: {reason}"));
-        let input = self
-            .input_error
-            .as_ref()
-            .map(|err| format!("Clicking cannot start: {err}"));
-        let recordings = self
-            .shelf
-            .error
-            .as_ref()
-            .map(|err| format!("The recordings cannot be listed: {err}"));
         [
-            self.config_error.clone(),
+            self.config_error.clone().map(Problem::Config),
             hotkeys,
-            blocked,
-            input,
-            recordings,
+            self.blocked.clone().map(Problem::Blocked),
+            self.input_error.clone().map(Problem::Input),
+            self.shelf.error.clone().map(Problem::Unlisted),
             self.shelf.current_error.clone(),
         ]
         .into_iter()

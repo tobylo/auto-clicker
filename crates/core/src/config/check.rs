@@ -5,35 +5,34 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use super::MAX_TRAY_START_DELAY;
+use super::{MAX_TRAY_START_DELAY, Reason};
 use crate::clicker::{ClickerSettings, INTERVAL_MAX, Interval, JITTER_MAX_PERCENT, Jitter, Mode};
 use crate::hotkeys::{Action, Binding, Bindings};
 use crate::input::Key;
 use crate::playback::Speed;
 
-pub(crate) fn tray_start_delay(seconds: i64) -> Result<Duration, String> {
+pub(crate) fn tray_start_delay(seconds: i64) -> Result<Duration, Reason> {
     let max = MAX_TRAY_START_DELAY.as_secs();
     u64::try_from(seconds)
         .ok()
         .filter(|seconds| *seconds <= max)
         .map(Duration::from_secs)
-        .ok_or_else(|| format!("tray_start_delay must be from 0 to {max} seconds"))
+        .ok_or(Reason::TrayStartDelay { max })
 }
 
-pub(crate) fn interval_ms(ms: i64, mode: Mode) -> Result<Interval, String> {
+pub(crate) fn interval_ms(ms: i64, mode: Mode) -> Result<Interval, Reason> {
     let (floor, max) = bounds_ms(mode);
     u64::try_from(ms)
         .ok()
         .and_then(|ms| for_mode_interval(Duration::from_millis(ms), mode))
-        .ok_or_else(|| {
-            format!(
-                "interval_ms must be from {floor} to {max}{}",
-                for_mode(mode)
-            )
+        .ok_or(Reason::Interval {
+            floor,
+            max,
+            double: mode == Mode::DoubleClick,
         })
 }
 
-pub(crate) fn clicks_per_second(rate: f64, mode: Mode) -> Result<Interval, String> {
+pub(crate) fn clicks_per_second(rate: f64, mode: Mode) -> Result<Interval, Reason> {
     // A zero, negative or NaN rate gives an interval that is infinite,
     // negative or NaN, which `try_from_secs_f64` rejects; an infinite rate
     // gives zero, which is below the floor.
@@ -42,13 +41,11 @@ pub(crate) fn clicks_per_second(rate: f64, mode: Mode) -> Result<Interval, Strin
         .and_then(|interval| for_mode_interval(interval, mode))
         .ok_or_else(|| {
             let (floor, max) = bounds_ms(mode);
-            // Shown rounded: the exact limits are 1000/floor and 1000/max.
-            let most = 1000.0 / floor as f64;
-            let least = 1000.0 / max as f64;
-            format!(
-                "clicks_per_second must be from {least:.6} to {most}{}",
-                for_mode(mode)
-            )
+            Reason::Rate {
+                floor,
+                max,
+                double: mode == Mode::DoubleClick,
+            }
         })
 }
 
@@ -66,48 +63,32 @@ fn bounds_ms(mode: Mode) -> (u64, u64) {
     (ms(mode.interval_floor()), ms(INTERVAL_MAX))
 }
 
-fn for_mode(mode: Mode) -> &'static str {
-    match mode {
-        Mode::DoubleClick => " for a double click, which fits two clicks in each interval",
-        _ => "",
-    }
-}
-
-pub(crate) fn jitter_percent(percent: i64) -> Result<Jitter, String> {
+pub(crate) fn jitter_percent(percent: i64) -> Result<Jitter, Reason> {
     u8::try_from(percent)
         .ok()
         .and_then(Jitter::new)
-        .ok_or_else(|| format!("jitter_percent must be from 0 to {JITTER_MAX_PERCENT}"))
+        .ok_or(Reason::Jitter {
+            max: JITTER_MAX_PERCENT,
+        })
 }
 
-pub(crate) fn speed(ratio: f64) -> Result<Speed, String> {
-    Speed::from_ratio(ratio).ok_or_else(|| {
-        format!(
-            "speed must be from {} to {}",
-            Speed::SLOWEST,
-            Speed::FASTEST
-        )
-    })
+pub(crate) fn speed(ratio: f64) -> Result<Speed, Reason> {
+    Speed::from_ratio(ratio).ok_or(Reason::Speed)
 }
 
-pub(crate) fn key_code(code: i64) -> Result<Key, String> {
+pub(crate) fn key_code(code: i64) -> Result<Key, Reason> {
     u16::try_from(code)
         .ok()
         .and_then(Key::new)
-        .ok_or_else(|| format!("key code {code} is not from 1 to 248"))
+        .ok_or(Reason::KeyCode { code })
 }
 
 /// A `repeat` count: actions or plays, from 1.
-pub(crate) fn count(count: i64) -> Result<NonZeroU32, String> {
+pub(crate) fn count(count: i64) -> Result<NonZeroU32, Reason> {
     u32::try_from(count)
         .ok()
         .and_then(NonZeroU32::new)
-        .ok_or_else(|| {
-            format!(
-                "repeat {count} is not from 1 to {}; use \"until_stopped\" to repeat until stopped",
-                u32::MAX
-            )
-        })
+        .ok_or(Reason::Count { count })
 }
 
 /// The first action, in [`Action::ALL`] order, whose binding an earlier
@@ -123,8 +104,8 @@ pub(crate) fn duplicate(bindings: &Bindings) -> Option<(Action, Action)> {
     })
 }
 
-pub(crate) fn bound_twice(binding: Binding) -> String {
-    format!("hotkey {binding} is bound to two actions")
+pub(crate) fn bound_twice(binding: Binding) -> Reason {
+    Reason::BoundTwice(binding)
 }
 
 /// The first action whose binding uses the key the clicker presses.
@@ -137,16 +118,11 @@ pub(crate) fn bound_twice(binding: Binding) -> String {
 pub(crate) fn on_the_clicker_key(
     bindings: &Bindings,
     clicker: &ClickerSettings,
-) -> Option<(Action, String)> {
+) -> Option<(Action, Reason)> {
     let pressed = clicker.pressed_key()?;
     bindings
         .actions()
         .into_iter()
         .find(|(_, binding)| binding.key() == pressed)
-        .map(|(action, binding)| {
-            (
-                action,
-                format!("hotkey {binding} uses the key the clicker presses; choose another key"),
-            )
-        })
+        .map(|(action, binding)| (action, Reason::OnClickerKey(binding)))
 }

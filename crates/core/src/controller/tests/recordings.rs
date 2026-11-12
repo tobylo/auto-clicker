@@ -131,7 +131,7 @@ impl Setup {
     async fn hotkey_plays(&self) -> Option<String> {
         self.d.hotkey(PLAY).await;
         self.d.hotkey(HotkeyEvent::ModifiersReleased).await;
-        let playing = self.d.view().playing;
+        let playing = self.d.view().playing.map(|playing| playing.to_string());
         sleep(secs(2)).await;
         self.d.settle().await;
         assert_eq!(self.d.activity(), Activity::Idle);
@@ -143,9 +143,12 @@ fn done(outcome: RecordingOutcome) -> Outcome {
     Outcome::Recording(outcome)
 }
 
-fn not_done(outcome: &Outcome) -> &str {
+/// What a change or a play that did not happen says, in English.
+fn not_done(outcome: &Outcome) -> String {
     match outcome {
-        Outcome::Recording(RecordingOutcome::NotDone(why)) => why,
+        Outcome::Recording(
+            said @ (RecordingOutcome::NotChanged(..) | RecordingOutcome::NotPlaying(_)),
+        ) => said.to_string(),
         other => panic!("{other:?}"),
     }
 }
@@ -269,7 +272,7 @@ async fn the_current_recording_survives_a_restart_and_a_bad_state_file_means_the
         // No file: the newest, and nothing wrong.
         let mut s = setup(shared, config(0), &state, true).await;
         assert_eq!(s.d.view().current.as_ref(), Some(&files[1]));
-        assert!(s.d.view().problems.is_empty());
+        assert!(s.d.problems().is_empty());
         s.ask(&files[0], RecordingAction::Choose).await;
         drop(s);
 
@@ -277,13 +280,13 @@ async fn the_current_recording_survives_a_restart_and_a_bad_state_file_means_the
         let s = setup(shared_over(&recordings), config(0), &state, false).await;
         assert_eq!(s.d.view().current.as_ref(), Some(&files[0]));
         assert_eq!(s.hotkey_plays().await, Some(label("18:00:00")));
-        assert!(s.d.view().problems.is_empty());
+        assert!(s.d.problems().is_empty());
         drop(s);
 
         // A file that holds no file name: the newest, and why.
         fs::write(state_file(&state), b"../config.toml\n").unwrap();
         let s = setup(shared_over(&recordings), config(0), &state, false).await;
-        let problems = s.d.view().problems;
+        let problems = s.d.problems();
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(
             problems[0].starts_with("The recording the playback hotkey plays could not be read"),
@@ -292,7 +295,7 @@ async fn the_current_recording_survives_a_restart_and_a_bad_state_file_means_the
         assert_eq!(s.hotkey_plays().await, Some(label("18:01:00")));
         // Played, it is kept, and the problem is over.
         assert_eq!(s.kept(), format!("{}\n", files[1]));
-        assert!(s.d.view().problems.is_empty());
+        assert!(s.d.problems().is_empty());
     })
     .await;
 }
@@ -427,7 +430,7 @@ async fn a_current_recording_that_cannot_be_kept_is_used_and_shown_as_a_problem(
         let outcome = s.ask(&files[0], RecordingAction::Choose).await;
 
         assert_eq!(outcome, done(RecordingOutcome::Chosen));
-        let problems = s.d.view().problems;
+        let problems = s.d.problems();
         assert!(
             problems.iter().any(|p| p.starts_with(
                 "The recording the playback hotkey plays could not be kept for the next start"
@@ -440,7 +443,7 @@ async fn a_current_recording_that_cannot_be_kept_is_used_and_shown_as_a_problem(
         fs::remove_dir(&s.current).unwrap();
         s.ask(&files[0], RecordingAction::Choose).await;
         assert_eq!(s.kept(), format!("{}\n", files[0]));
-        assert!(s.d.view().problems.is_empty());
+        assert!(s.d.problems().is_empty());
     })
     .await;
 }
@@ -521,7 +524,10 @@ async fn play_in_the_window_counts_down_like_the_tray_and_says_why_when_it_canno
 
         assert_eq!(outcome, done(RecordingOutcome::Playing));
         assert_eq!(s.d.activity(), Activity::PlayingIn(3));
-        assert_eq!(s.d.view().playing, Some(label("18:00:00")));
+        assert_eq!(
+            s.d.view().playing.map(|playing| playing.to_string()),
+            Some(label("18:00:00"))
+        );
         s.d.send(Message::Stop).await;
 
         fs::write(folder(&s.d.shared).join(files[1].as_str()), b"").unwrap();

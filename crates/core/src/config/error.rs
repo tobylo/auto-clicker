@@ -5,6 +5,8 @@ use std::io;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use crate::message::ConfigProblem;
+
 /// A config file that could not be used, and why. The program runs on the
 /// defaults meanwhile; the tray shows this message.
 #[derive(Debug)]
@@ -61,17 +63,10 @@ impl ConfigError {
     }
 }
 
+/// The same words the tray shows, in English: see [`ConfigProblem`].
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let path = self.path.display();
-        match &self.problem {
-            Problem::Read(err) => write!(f, "{path}: could not read the file: {err}"),
-            Problem::Invalid {
-                line: Some(line),
-                reason,
-            } => write!(f, "{path}:{line}: {reason}"),
-            Problem::Invalid { line: None, reason } => write!(f, "{path}: {reason}"),
-        }
+        ConfigProblem::from(self).fmt(f)
     }
 }
 

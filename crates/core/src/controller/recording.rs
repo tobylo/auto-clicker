@@ -12,6 +12,7 @@ use tokio::time::Instant;
 use super::view::NoRecording;
 use super::{Controller, InputReader, Platform, State};
 use crate::hotkeys::{Binding, HotkeyStatus, Unavailable};
+use crate::message::{Hindrance, Notice, Quoted, SaveFailure, Saving, Start, Stop};
 use crate::recording::{Created, Ending, MAX_DURATION, Recorder, Recording, save};
 
 /// How a recording was stopped, which decides how it is trimmed.
@@ -55,7 +56,7 @@ impl<P: Platform> Controller<P> {
             State::RecordCountdown(_) => self.state = State::Idle,
             State::Recording(_) => self.finish_recording(StoppedBy::Other, None),
             State::Countdown(..) | State::Release(..) | State::Opening(_) | State::Running(_) => {
-                self.notice = Some("Not recording: clicking is on; stop it first".to_owned());
+                self.notice = Some(not_recording(Hindrance::ClickingOn));
             }
         }
     }
@@ -91,7 +92,7 @@ impl<P: Platform> Controller<P> {
 
     /// Stops and saves a recording, saying why when `why` is given;
     /// anything else is left alone.
-    pub(super) fn stop_recording(&mut self, why: Option<String>) {
+    pub(super) fn stop_recording(&mut self, why: Option<Stop>) {
         if matches!(self.state, State::Recording(_)) {
             self.finish_recording(StoppedBy::Other, why);
         }
@@ -99,14 +100,14 @@ impl<P: Platform> Controller<P> {
 
     /// The input reader ended: a recording has nothing left to read, so it
     /// stops and saves what it has, and a countdown to one is cancelled.
-    pub(super) fn input_lost(&mut self, why: String) {
+    pub(super) fn input_lost(&mut self, why: &Unavailable) {
         match self.state {
             State::RecordCountdown(_) => {
                 self.state = State::Idle;
-                self.notice = Some(format!("Not recording: {why}"));
+                self.notice = Some(not_recording(Hindrance::Hotkeys(why.clone())));
             }
             State::Recording(_) => {
-                self.finish_recording(StoppedBy::Other, Some(format!("Recording stopped: {why}")));
+                self.finish_recording(StoppedBy::Other, Some(Stop::Hotkeys(why.clone())));
             }
             _ => {}
         }
@@ -115,25 +116,23 @@ impl<P: Platform> Controller<P> {
     /// The recording filled up: it stops and saves what it holds.
     pub(super) fn recording_full(&mut self) {
         if matches!(self.state, State::Recording(_)) && self.recording.is_full() {
-            let why = "Recording stopped: it reached the largest size a recording may have";
-            self.finish_recording(StoppedBy::Other, Some(why.to_owned()));
+            self.finish_recording(StoppedBy::Other, Some(Stop::Full));
         }
     }
 
     pub(super) fn recording_limit_reached(&mut self) {
         let minutes = MAX_DURATION.as_secs() / 60;
-        let why = format!("Recording stopped at its {minutes}-minute limit");
-        self.finish_recording(StoppedBy::Other, Some(why));
+        self.finish_recording(StoppedBy::Other, Some(Stop::Limit { minutes }));
     }
 
     /// Whether a recording may start; says why not when it may not.
     fn may_record(&mut self) -> bool {
-        if !self.session_allows("Not recording") {
+        if !self.session_allows(Start::Recording) {
             return false;
         }
         match self.no_recording() {
             Some(why) => {
-                self.notice = Some(format!("Not recording: {why}"));
+                self.notice = Some(not_recording(Hindrance::NoRecording(why)));
                 false
             }
             None => true,
@@ -150,7 +149,7 @@ impl<P: Platform> Controller<P> {
     pub(super) fn begin_recording(&mut self, started_by: Option<Binding>) {
         self.state = State::Idle;
         let Some(created) = self.platform.local_time().and_then(Created::new) else {
-            self.notice = Some("Not recording: the clock could not be read".to_owned());
+            self.notice = Some(not_recording(Hindrance::NoClock));
             return;
         };
         let Some(limit) = Instant::now().checked_add(MAX_DURATION) else {
@@ -169,7 +168,7 @@ impl<P: Platform> Controller<P> {
 
     /// Takes the recording from the reader, finishes and saves it, and says
     /// how that went, after `why`.
-    fn finish_recording(&mut self, stopped_by: StoppedBy, why: Option<String>) {
+    fn finish_recording(&mut self, stopped_by: StoppedBy, stop: Option<Stop>) {
         self.state = State::Idle;
         let menu_opened = self.menu_opened.take();
         let Some(recorder) = self.recording.take() else {
@@ -180,36 +179,41 @@ impl<P: Platform> Controller<P> {
             StoppedBy::Tray => Ending::Tray { at, menu_opened },
             StoppedBy::Other => Ending::At(at),
         };
-        let outcome = match recorder.finish(ending) {
+        let saving = match recorder.finish(ending) {
             Ok(Some(recording)) => self.save(&recording),
-            Ok(None) => "Nothing was recorded, so nothing was saved".to_owned(),
-            Err(err) => failed(&err.to_string()),
+            Ok(None) => Saving::Nothing,
+            Err(err) => failed(SaveFailure::Invalid(Quoted::new(err.to_string()))),
         };
-        self.notice = Some(match why {
-            Some(why) => format!("{why}. {outcome}"),
-            None => outcome,
-        });
+        self.notice = Some(Notice::Recorded { stop, saving });
     }
 
     /// Saves `recording`, which becomes the one the playback hotkey plays;
     /// what the tray says about it.
-    fn save(&mut self, recording: &Recording) -> String {
+    fn save(&mut self, recording: &Recording) -> Saving {
         let Some(dir) = self.platform.recordings_dir() else {
-            return failed("no data directory: neither XDG_DATA_HOME nor HOME is set");
+            return failed(SaveFailure::NoDataDirectory);
         };
         match save(&dir, recording) {
-            Ok(path) => {
-                self.saved(&path);
-                format!("Saved \u{201c}{}\u{201d}", recording.name())
-            }
-            Err(err) => failed(&err.to_string()),
+            Ok(path) => Saving::Saved {
+                name: Quoted::new(recording.name()),
+                file: self.saved(&path),
+            },
+            Err(err) => failed(SaveFailure::Write(Quoted::new(err.to_string()))),
         }
     }
 }
 
+/// The notice that no recording started, and why.
+fn not_recording(why: Hindrance) -> Notice {
+    Notice::Refused {
+        start: Start::Recording,
+        why,
+    }
+}
+
 /// A recording that could not be saved: logged, and shown.
-fn failed(why: &str) -> String {
-    let message = format!("The recording could not be saved: {why}");
-    eprintln!("auto-clicker: {message}");
-    message
+fn failed(why: SaveFailure) -> Saving {
+    let saving = Saving::Failed(why);
+    eprintln!("auto-clicker: {saving}");
+    saving
 }

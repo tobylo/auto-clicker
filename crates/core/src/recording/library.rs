@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use super::header;
 use super::store::{held_path, open_folder};
 use super::{InvalidRecording, Recording};
+use crate::message::Unplayable;
 
 /// The largest recording file that is read. An hour of fast mouse movement
 /// is under 110 MB, and about 245 MB with a position each millisecond; the
@@ -146,18 +147,10 @@ pub enum LoadError {
     Invalid(InvalidRecording),
 }
 
+/// The same words the tray shows, in English: see [`Unplayable`].
 impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LoadError::Missing => f.write_str("the file is no longer there"),
-            LoadError::Unreadable(err) => write!(f, "the file could not be read: {err}"),
-            LoadError::TooLarge => write!(
-                f,
-                "the file is larger than {} MiB",
-                MAX_FILE_BYTES / (1024 * 1024)
-            ),
-            LoadError::Invalid(err) => write!(f, "{err}"),
-        }
+        Unplayable::from(self).fmt(f)
     }
 }
 

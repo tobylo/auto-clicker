@@ -570,7 +570,7 @@ fn unavailable_hotkeys_say_why() {
     let messages = [
         Unavailable::NoKeyboard,
         Unavailable::NoPermission,
-        Unavailable::WatchFailed("no such directory".to_owned()),
+        Unavailable::WatchFailed("no such directory".to_owned().into()),
     ]
     .map(|why| why.to_string());
     assert_eq!(

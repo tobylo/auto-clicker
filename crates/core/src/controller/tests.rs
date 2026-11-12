@@ -22,6 +22,7 @@ use crate::clicker::{ClickerSettings, Mode, Repeat};
 use crate::hotkeys::Unavailable;
 use crate::input::fake::{Call, FakeBackend, FakeLog};
 use crate::input::{AbsolutePosition, Button, Key, PressState};
+use crate::message::Quoted;
 use crate::recording::{LocalTime, Recorder, RecordingFeed};
 use crate::test_support::TempDir;
 
@@ -511,8 +512,21 @@ impl Daemon {
         self.view.borrow().activity
     }
 
+    /// The notice, in English.
     fn notice(&self) -> String {
-        self.view().notice.unwrap_or_default()
+        self.view()
+            .notice
+            .map(|notice| notice.to_string())
+            .unwrap_or_default()
+    }
+
+    /// The problems, in English.
+    fn problems(&self) -> Vec<String> {
+        self.view()
+            .problems
+            .iter()
+            .map(ToString::to_string)
+            .collect()
     }
 
     /// Asserts the controller is idle and that `calls` were all the calls.
@@ -886,7 +900,7 @@ async fn starts_are_refused_until_the_session_is_known() {
         d.press_hotkey().await;
         d.assert_idle_after(&[]);
         assert!(d.notice().contains("unknown"), "{}", d.notice());
-        assert!(d.view().problems.iter().any(|p| p.contains("cannot start")));
+        assert!(d.problems().iter().any(|p| p.contains("cannot start")));
     })
     .await;
 }
@@ -897,7 +911,7 @@ async fn a_blocked_session_stops_clicking_and_refuses_starts() {
         Blocked::Locked,
         Blocked::Inactive,
         Blocked::Sleeping,
-        Blocked::Unknown("lost".to_owned()),
+        Blocked::Unknown("lost".to_owned().into()),
     ];
     for reason in reasons {
         local(async {
@@ -1077,7 +1091,7 @@ async fn when_opening_again_fails_the_next_start_tries_again() {
         d.start_by_hotkey().await;
         d.shared.log(0).fail_once(LEFT_UP);
         d.send(Message::Stop).await;
-        let problems = d.view().problems;
+        let problems = d.problems();
         assert!(
             problems.iter().any(|p| p.contains("injected")),
             "{problems:?}"
@@ -1086,7 +1100,7 @@ async fn when_opening_again_fails_the_next_start_tries_again() {
         sleep(secs(5)).await;
         d.settle().await;
         assert_eq!(d.activity(), Activity::Clicking);
-        assert!(d.view().problems.is_empty());
+        assert!(d.problems().is_empty());
         assert_eq!(
             d.shared.steps(),
             [
@@ -1190,11 +1204,11 @@ async fn a_flood_of_tray_requests_cannot_keep_a_stopped_run_holding() {
 async fn a_reader_that_ends_leaves_the_controller_working() {
     local(async {
         let shared = Shared::default();
-        let failed = Unavailable::WatchFailed("gone".to_owned());
+        let failed = Unavailable::WatchFailed("gone".to_owned().into());
         let status = HotkeyEvent::Status(HotkeyStatus::Unavailable(failed.clone()));
         shared.with(|r| r.reader_ends_with = Some(status));
         let d = daemon_with(config(Mode::HoldButton), shared, true).await;
-        assert!(d.view().problems.contains(&failed.to_string()));
+        assert!(d.problems().contains(&failed.to_string()));
         assert_eq!(
             d.shared.steps(),
             [Step::ReaderStarted(Some(0)), Step::ReaderDropped(0)]
@@ -1212,7 +1226,11 @@ async fn the_view_shows_the_config_error_and_hotkey_problems() {
     local(async {
         let shared = Shared::default();
         let input = shared.devices();
-        let error = Some("config.toml:3: bad".to_owned());
+        let error = Some(ConfigProblem::Invalid {
+            file: Quoted::new("config.toml"),
+            line: Some(3),
+            why: Quoted::new("bad"),
+        });
         let platform = FakePlatform(shared.clone());
         let (controller, links) = Controller::new(platform, Some(input), Config::default(), error);
         let view = links.view;
@@ -1225,7 +1243,12 @@ async fn the_view_shows_the_config_error_and_hotkey_problems() {
         for _ in 0..5 {
             yield_now().await;
         }
-        let problems = view.borrow().problems.clone();
+        let problems: Vec<String> = view
+            .borrow()
+            .problems
+            .iter()
+            .map(ToString::to_string)
+            .collect();
         assert_eq!(problems[0], "config.toml:3: bad");
         assert_eq!(problems[1], Unavailable::NoPermission.to_string());
         task.abort();

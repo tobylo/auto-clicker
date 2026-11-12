@@ -156,9 +156,9 @@ impl Nodes {
             Nodes::Readable => HotkeyStatus::Available,
             Nodes::Unreadable => HotkeyStatus::Unavailable(Unavailable::NoPermission),
             Nodes::Missing => HotkeyStatus::Unavailable(Unavailable::NoKeyboard),
-            Nodes::Unlisted => {
-                HotkeyStatus::Unavailable(Unavailable::WatchFailed("permission denied".to_owned()))
-            }
+            Nodes::Unlisted => HotkeyStatus::Unavailable(Unavailable::WatchFailed(
+                "permission denied".to_owned().into(),
+            )),
         }
     }
 }

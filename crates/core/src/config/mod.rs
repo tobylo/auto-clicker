@@ -43,6 +43,7 @@ mod hotkeys;
 mod names;
 mod raw;
 mod read;
+mod reason;
 mod validate;
 mod write;
 
@@ -58,6 +59,7 @@ pub use error::{ConfigError, Problem};
 use file::Seen;
 pub use file::{ConfigFile, SaveError, Saved, Stale};
 pub use names::{ButtonName, ModeName, RouteName};
+pub use reason::Reason;
 pub use write::render;
 
 use crate::clicker::ClickerSettings;

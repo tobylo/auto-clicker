@@ -122,21 +122,24 @@ fn a_save_waits_for_its_own_answer_and_nothing_else_is_asked_meanwhile() {
 
 #[test]
 fn answers_become_notes() {
-    let refusal = Refusal::new(Field::Interval, "too fast".to_owned());
+    let refusal = Refusal::new(Field::Interval, Reason::Speed);
     let cases = [
         (
-            Outcome::SavedUnsynced("disk".into()),
-            Note::SavedUnsynced("disk".into()),
+            Outcome::SavedUnsynced(Quoted::new("disk")),
+            Note::SavedUnsynced(Quoted::new("disk")),
         ),
         (Outcome::Busy, Note::Busy),
-        (Outcome::Failed("full".into()), Note::Failed("full".into())),
         (
-            Outcome::Refused(refusal),
-            Note::Refused(Field::Interval, "too fast".into()),
+            Outcome::Failed(Failure::BadToken),
+            Note::Failed(Failure::BadToken),
         ),
         (
-            Outcome::Unavailable("no".into()),
-            Note::Unavailable("no".into()),
+            Outcome::Refused(refusal),
+            Note::Refused(Field::Interval, Reason::Speed),
+        ),
+        (
+            Outcome::Unavailable(Unavailability::NoShortcuts),
+            Note::Unavailable(Unavailability::NoShortcuts),
         ),
         (Outcome::Configured, Note::Configured),
         (
@@ -148,8 +151,8 @@ fn answers_become_notes() {
             Note::Recording(RecordingOutcome::Renamed),
         ),
         (
-            Outcome::Recording(RecordingOutcome::NotDone("Not deleted: gone".into())),
-            Note::Recording(RecordingOutcome::NotDone("Not deleted: gone".into())),
+            Outcome::Recording(RecordingOutcome::NotPlaying(None)),
+            Note::Recording(RecordingOutcome::NotPlaying(None)),
         ),
     ];
     for (outcome, note) in cases {
@@ -164,7 +167,9 @@ fn answers_become_notes() {
             Note::Failed(_)
                 | Note::Refused(..)
                 | Note::Unavailable(_)
-                | Note::Recording(RecordingOutcome::NotDone(_))
+                | Note::Recording(
+                    RecordingOutcome::NotChanged(..) | RecordingOutcome::NotPlaying(_)
+                )
         );
         assert_eq!(note.is_error(), error, "{note:?}");
     }
