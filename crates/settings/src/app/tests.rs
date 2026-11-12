@@ -41,7 +41,14 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
         texts: &texts,
         decimal: ',',
     };
-    let note = |note: Note| note_text(&said, &note).to_string();
+    refusals_and_failures(&said);
+    problems(&said);
+    recordings(&said);
+}
+
+/// A refusal, a failure and an unavailable, as a note.
+fn refusals_and_failures(said: &Said<'_>) {
+    let note = |note: Note| note_text(said, &note).to_string();
     let interval = Reason::Interval {
         floor: 10,
         max: 86_400_000,
@@ -72,6 +79,16 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
         note(Note::Unavailable(Unavailability::Blocked(Blocked::Locked))),
         "Inte tillgängligt: skärmen är låst"
     );
+    // The window's own "{}: {}" keeps its own form.
+    assert_eq!(
+        note(Note::Refused(Field::Speed, Reason::Speed)),
+        "Hastighet: måste vara från 0,25 till 4"
+    );
+}
+
+/// Problems, with quoted text as it is.
+fn problems(said: &Said<'_>) {
+    let note = |note: Note| note_text(said, &note).to_string();
     let invalid = |line| {
         Problem::Config(ConfigProblem::Invalid {
             file: Quoted::new("config.toml"),
@@ -105,7 +122,11 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
         note(Note::SavedUnsynced(Quoted::new("EIO"))),
         "Sparat, men det kanske inte klarar ett strömavbrott: EIO"
     );
-    // What Play, Rename and Delete answer.
+}
+
+/// What Play, Rename and Delete answer.
+fn recordings(said: &Said<'_>) {
+    let note = |note: Note| note_text(said, &note).to_string();
     let not_playing = RecordingOutcome::NotPlaying(Some(Notice::Unplayable {
         recording: "Farm loop".to_owned(),
         why: Unplayable::TooShort { ms: 20 },
@@ -150,10 +171,5 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
         said.notice(&own_key),
         "Spelar inte upp: leftshift är en modifierare, och om programmet håller den ändras \
          vilken snabbtangent skrivbordet ser"
-    );
-    // The window's own "{}: {}" keeps its own form.
-    assert_eq!(
-        note(Note::Refused(Field::Speed, Reason::Speed)),
-        "Hastighet: måste vara från 0,25 till 4"
     );
 }

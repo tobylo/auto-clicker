@@ -452,6 +452,15 @@ mod messages {
                  funktionstangent (F1 till F24), så programmet kan inte avgöra om dess egna \
                  tangenttryck skulle utlösa den; ändra den i Systeminställningar",
             ),
+        ];
+        for (swedish, expected) in rows {
+            assert_eq!(swedish, expected);
+        }
+    }
+
+    #[test]
+    fn swedish_problems_read_as_written() {
+        let rows = [
             (
                 problem::swedish(&Problem::Hotkeys(Unavailable::NoPermission)),
                 "snabbtangenterna är inte tillgängliga: tangentborden kan inte läsas; lägg till \
