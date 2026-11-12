@@ -371,3 +371,36 @@ fn a_nested_reason_longer_than_cut_is_not_read() {
         }
     }
 }
+
+#[test]
+fn what_comes_of_a_recording_reads_as_the_window_says_it() {
+    let cases = [
+        (RecordingOutcome::Renamed, "Renamed."),
+        (RecordingOutcome::Deleted, "Deleted."),
+        (
+            RecordingOutcome::Chosen,
+            "The playback hotkey plays this recording now.",
+        ),
+        (RecordingOutcome::Playing, "Playing."),
+        (
+            RecordingOutcome::Unsynced(RecordingChange::Rename, Quoted::new("EIO")),
+            "Renamed, but it may not survive a power loss: EIO",
+        ),
+        (
+            RecordingOutcome::NotChanged(RecordingChange::Delete, ChangeFailure::Missing),
+            "Not deleted: the file is no longer there",
+        ),
+        (
+            RecordingOutcome::NotChanged(RecordingChange::Rename, ChangeFailure::Missing),
+            "Not renamed: the file is no longer there",
+        ),
+        (
+            RecordingOutcome::NotPlaying(Some(Notice::NothingToPlay)),
+            "Nothing to play: no recordings yet",
+        ),
+        (RecordingOutcome::NotPlaying(None), "Not playing"),
+    ];
+    for (outcome, english) in cases {
+        assert_eq!(outcome.to_string(), english);
+    }
+}

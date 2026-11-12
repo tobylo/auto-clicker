@@ -390,3 +390,45 @@ fn a_playback_that_starts_otherwise_says_how() {
     ]);
     assert!(relative.starts_with("Playing with relative motion: the screen layout is not known"));
 }
+
+#[test]
+fn recording_changes_read_as_before() {
+    assert_english(&[
+        (
+            Problem::CurrentUnread(q()),
+            "The recording the playback hotkey plays could not be read, so it plays the newest: \
+             why",
+        ),
+        (
+            Problem::CurrentUnkept(q()),
+            "The recording the playback hotkey plays could not be kept for the next start: why",
+        ),
+    ]);
+    assert_english(&[
+        (ChangeFailure::Missing, "the file is no longer there"),
+        (ChangeFailure::Refused(q()), "why"),
+        (
+            ChangeFailure::Unreadable(Unplayable::TooLarge { mib: 256 }),
+            "the file is larger than 256 MiB",
+        ),
+        (ChangeFailure::Folder(q()), "why"),
+        (
+            ChangeFailure::NotDone {
+                step: Step::Written,
+                why: q(),
+            },
+            "the file could not be written: why",
+        ),
+        (
+            ChangeFailure::NotDone {
+                step: Step::Deleted,
+                why: q(),
+            },
+            "the file could not be deleted: why",
+        ),
+        (
+            ChangeFailure::TooLarge { mib: 256 },
+            "the file could not be written: the renamed recording would be larger than 256 MiB",
+        ),
+    ]);
+}
