@@ -10,7 +10,7 @@ use crate::hotkeys::Unavailable;
 
 /// Why a save or the desktop's settings failed.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Failure {
     /// Neither `XDG_CONFIG_HOME` nor `HOME` is set.
     NoConfigDirectory,
@@ -53,7 +53,7 @@ impl fmt::Display for Failure {
 
 /// Why a capture or the desktop's settings cannot be had here.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Unavailability {
     /// The desktop delivers the hotkeys, so the program cannot capture one.
     DesktopDelivers,

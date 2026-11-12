@@ -10,7 +10,7 @@ use crate::input::InputError;
 /// An [`InputError`] as a message: what went wrong, with the operating
 /// system's or the portal's own words quoted.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum InputFailure {
     NoPermission(Quoted),
     UinputMissing(Quoted),
