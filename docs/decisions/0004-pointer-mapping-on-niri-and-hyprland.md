@@ -6,7 +6,7 @@
 
 ## Decision
 
-- **niri maps the absolute device over the bounding box of all outputs,** as KWin does, so decision 0001's formula holds there, with W and H the box's size. At a fractional scale where physical/scale is not a whole number, niri's box is one logical px larger than the size it reports, so a point lands up to 1 logical px off near the far edges. Accepted (W01 decision 8): no workaround.
+- **niri maps the absolute device over the bounding box of all outputs,** as KWin does, so decision 0001's formula holds there, with W and H the box's size. At a fractional scale where physical/scale is not a whole number, niri's box (ceil) can be one logical px larger than the size xdg-output reports (round), so a point lands up to 1 logical px off near the far edges. Accepted (W01 decision 8): no workaround.
 - **xdg-output is the layout source on niri and Hyprland.** Both report each output's logical position and size; the daemon moves the bounding box to (0, 0).
 - **niri gives no pointer position in 26.04.** Recordings there keep relative movement. ext-image-copy-capture cursor sessions, on niri's main branch, are the way to get it later (W02).
 - **Hyprland, from its source,** maps like KWin and reports sizes consistent with its mapping; it offers the pointer through `cursorpos` and through cursor sessions. W01c measures both before W01d builds one.
@@ -25,7 +25,7 @@ A virtual mouse shaped like C01's (buttons, `REL_X`, `REL_Y`, `REL_WHEEL`, `ABS_
 - At 1.4, `v = 32768` landed at x = 1229.00 and y = 514.50: half of 2458 and of 1029. At 1.5 it landed at 1147.00: half of 2294.
 - `v = 65535` landed past the reported width at 1.4 and 1.5, outside the probe window, so the probe saw nothing there.
 - The three sizes come from three roundings of physical/scale. smithay's `Space::output_geometry` rounds up (`to_i32_ceil`, `src/desktop/space/mod.rs:398`), and niri's pointer box is the union of those (`src/input/mod.rs:274-284`, used at 2646-2649). smithay's xdg-output rounds to nearest (`src/wayland/output/xdg.rs:67-71`). niri's IPC truncates (`src/utils/mod.rs:208-228`, `size.w as u32`).
-- niri maps every libinput pointer over the whole box: `NiriInputDevice::output` returns `None` for a libinput device (`src/input/backend_ext.rs:27`). Two outputs were not measured; the dev box has one monitor.
+- niri maps every libinput pointer over the whole box: `NiriInputDevice::output` returns `None` for a libinput device (`src/input/backend_ext.rs:27`). Two outputs, and an output at a negative position, were not measured: the dev box has one monitor. W01a measures them.
 - It matters where a scale's logical size is not whole: 3440 px at 1.4 or 1.5, 2560 px at 1.5. Common pairs such as 2560x1600 at 1.25 or 3840x2160 at 1.5 are exact. Today it affects only the picked fixed point, since niri gives no positions.
 
 ### For an upstream report (the owner files it)
