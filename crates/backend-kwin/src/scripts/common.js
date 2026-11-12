@@ -1,4 +1,4 @@
-// Shared by both scripts. The daemon puts `const TOKEN = "<hex>";` before
+// The calls and the layout report. The daemon puts `const TOKEN = "<hex>";` before
 // this: every call carries it, and the daemon accepts only the token of a
 // load it made. Values travel as text, which the daemon parses once.
 

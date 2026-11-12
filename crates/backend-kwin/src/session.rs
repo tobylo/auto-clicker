@@ -1,23 +1,20 @@
 //! What the watcher and the exit share: KWin, the script directory, whom
-//! calls are trusted from, and the current layout.
+//! calls are trusted from, and KWin's owner.
 //!
-//! Loading a script is: unload its plugin name, remove that script's files,
+//! Loading the position script is: unload its plugin name, remove its files,
 //! write a new file, load it and start it. An unload that fails ends the load
 //! there (KWin refuses a name that is still loaded). The watcher tries a
-//! failed layout load or position unload again after a back-off, and every
-//! load and the exit unload first, so a failure is never forgotten. A
-//! script's files stay until it is unloaded, and the start sweeps any a
-//! crash left.
+//! failed unload again after a back-off, and every load and the exit unload
+//! first, so a failure is never forgotten. A script's files stay until it is
+//! unloaded, and the start sweeps any a crash left.
 
 use std::cell::RefCell;
 use std::num::NonZeroU32;
 
-use auto_clicker_core::recording::Layout;
-
 use crate::dir::ScriptDir;
 use crate::display;
 use crate::receiver::SharedTrust;
-use crate::script::Script;
+use crate::script::{Script, position_source};
 use crate::scripting::{CallError, Scripting, bounded};
 use crate::token::Token;
 
@@ -26,8 +23,6 @@ pub(crate) struct Session<S> {
     /// The checked directory, or why there is none: then nothing loads.
     pub(crate) dir: Result<ScriptDir, String>,
     pub(crate) trust: SharedTrust,
-    /// The current layout (brief I4), which `Platform::layout` gives.
-    pub(crate) layout: RefCell<Option<Layout>>,
     /// `org.kde.KWin`'s owner as the watcher last saw it.
     pub(crate) owner: RefCell<Option<String>>,
     /// The process listening on the daemon's Wayland display; KWin counts
@@ -36,17 +31,13 @@ pub(crate) struct Session<S> {
 }
 
 impl<S: Scripting> Session<S> {
-    /// Loads and runs `script` with `token` on `owner`'s KWin.
-    pub(crate) async fn load(
-        &self,
-        owner: &str,
-        script: Script,
-        token: &Token,
-    ) -> Result<(), CallError> {
+    /// Loads and runs the position script with `token` on `owner`'s KWin.
+    pub(crate) async fn load(&self, owner: &str, token: &Token) -> Result<(), CallError> {
+        let script = Script::Position;
         self.unload(owner, script).await?;
         let dir = self.dir.as_ref().map_err(|why| CallError(why.clone()))?;
         let path = dir
-            .write(&script.file_name(token), &script.source(token))
+            .write(&script.file_name(token), &position_source(token))
             .map_err(CallError)?;
         let id = bounded(self.scripting.load(owner, &path, script)).await?;
         if id < 0 {
@@ -65,8 +56,9 @@ impl<S: Scripting> Session<S> {
         Ok(())
     }
 
-    /// Unloads both scripts at once, whatever was thought loaded, and
-    /// removes the files of each one unloaded; each failure is logged.
+    /// Unloads every name at once, whatever was thought loaded: the position
+    /// script, and a layout script an older version left. Removes the files
+    /// of each one unloaded; each failure is logged.
     pub(crate) async fn unload_all(&self, owner: &str) {
         let [first, second] = Script::ALL;
         tokio::join!(
@@ -81,7 +73,7 @@ impl<S: Scripting> Session<S> {
         }
     }
 
-    /// At exit: unloads both scripts from the KWin last seen, or, when the
+    /// At exit: unloads every name from the KWin last seen, or, when the
     /// watcher never saw one (the daemon failed to start after it claimed
     /// its name, or KWin runs another display), from KWin's owner now, which
     /// may still hold what a crashed daemon left, if it runs this display.

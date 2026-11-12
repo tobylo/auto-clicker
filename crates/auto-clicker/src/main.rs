@@ -4,7 +4,6 @@
 mod detect;
 mod instance;
 mod platform;
-mod screens;
 mod session;
 mod tray;
 mod tray_icon;
@@ -30,7 +29,6 @@ use tokio::time::timeout;
 use detect::{Detected, Output, detect};
 use instance::ClaimError;
 use platform::{Hotkeys, Kernel, Portal};
-use screens::Screens;
 
 /// Another daemon is running in this session. The user service does not
 /// restart on it.
@@ -66,13 +64,13 @@ async fn daemon() -> ExitCode {
     // them.
     let wayland = connect_wayland().await;
     let kwin = serve_kwin(&name, &wayland).await;
-    let status = run(name, Screens::new(kwin.clone(), wayland)).await;
+    let status = run(name, wayland, kwin.clone()).await;
     kwin.exit().await;
     status
 }
 
 /// Picks the routes and runs the controller on them until it ends.
-async fn run(name: instance::Claim, screens: Screens) -> ExitCode {
+async fn run(name: instance::Claim, wayland: Wayland, kwin: Kwin) -> ExitCode {
     let (config, config_error, file) = load_config();
     let portal = PortalOutput::new(token_path());
     // Whatever detection finds, the daemon runs: a job without a route says
@@ -94,7 +92,8 @@ async fn run(name: instance::Claim, screens: Screens) -> ExitCode {
                 Portal {
                     output: portal,
                     hotkeys,
-                    screens,
+                    wayland,
+                    kwin,
                 },
                 start,
                 name,
@@ -109,7 +108,11 @@ async fn run(name: instance::Claim, screens: Screens) -> ExitCode {
         config_error,
         file,
     };
-    let kernel = Kernel { hotkeys, screens };
+    let kernel = Kernel {
+        hotkeys,
+        wayland,
+        kwin,
+    };
     serve(kernel, start, name).await
 }
 
@@ -145,7 +148,8 @@ async fn serve<P: Platform>(platform: P, start: Start<P>, name: instance::Claim)
 }
 
 /// The daemon's Wayland display, and the first layout from it; none when it
-/// offers no xdg-output or does not answer in time.
+/// offers no xdg-output or does not answer in time. After a KWin restart
+/// its watcher connects again, with no deadline (W01 brief, W5).
 async fn connect_wayland() -> Wayland {
     Wayland::connect(tokio::time::Instant::now() + DISPLAY_TIMEOUT).await
 }

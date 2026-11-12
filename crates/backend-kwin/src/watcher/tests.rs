@@ -1,5 +1,5 @@
-//! The watcher against a fake KWin: what is loaded and unloaded when, and
-//! what reaches the recorder.
+//! The watcher against a fake KWin: what is loaded and unloaded when, what
+//! reaches the recorder, and when a KWin is said to have come back.
 
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -48,11 +48,11 @@ enum Call {
 
 use Call::{Load, Run, Unload};
 
-const LAYOUT: &str = "auto-clicker-layout";
 const POSITION: &str = "auto-clicker-position";
 
-/// A started layout load and a started position load, as KWin sees them.
-const LOAD_LAYOUT: [Call; 3] = [Unload(LAYOUT), Load(LAYOUT), Run(LAYOUT)];
+/// The plugin name of the layout script versions before W01b loaded.
+const LAYOUT: &str = "auto-clicker-layout";
+/// A started position load, as KWin sees it.
 const LOAD_POSITION: [Call; 3] = [Unload(POSITION), Load(POSITION), Run(POSITION)];
 
 #[derive(Default)]
@@ -70,7 +70,7 @@ struct State {
     hanging_start: bool,
     /// KWin refuses to load this plugin.
     refused: Option<&'static str>,
-    /// What a script reports as it runs; nothing when `None`.
+    /// The layout the script reports as it runs; nothing when `None`.
     screens: Option<&'static str>,
     pointer: &'static str,
     /// The scripts loaded, by id: plugin and file.
@@ -120,19 +120,18 @@ impl FakeKwin {
                 s.pointer,
             )
         });
-        let Some(screens) = screens else { return };
-        receiver.layout_from(Incoming {
-            sender: owner.as_deref(),
-            token: &token,
-            text: screens,
-        });
-        if plugin == POSITION {
-            receiver.position_from(Incoming {
+        if let Some(screens) = screens {
+            receiver.layout_from(Incoming {
                 sender: owner.as_deref(),
                 token: &token,
-                text: pointer,
+                text: screens,
             });
         }
+        receiver.position_from(Incoming {
+            sender: owner.as_deref(),
+            token: &token,
+            text: pointer,
+        });
     }
 }
 
@@ -241,7 +240,7 @@ struct Harness {
     slot: RecordingSlot,
     session: Rc<Session<FakeKwin>>,
     receiver: Rc<Receiver>,
-    changed: LayoutSignal,
+    restarted: LayoutSignal,
     runtime: Runtime,
 }
 
@@ -283,7 +282,6 @@ impl Harness {
             scripting: kwin.clone(),
             dir,
             trust,
-            layout: RefCell::default(),
             owner: RefCell::default(),
             compositor,
         });
@@ -292,7 +290,7 @@ impl Harness {
             slot: RecordingSlot::new(),
             session,
             receiver,
-            changed: LayoutSignal::default(),
+            restarted: LayoutSignal::default(),
             runtime,
         };
         let inbox = Inbox {
@@ -306,7 +304,7 @@ impl Harness {
         Watcher::new(
             Rc::clone(&self.session),
             self.slot.feed(),
-            self.changed.clone(),
+            self.restarted.clone(),
         )
         .with_rng(fastrand::Rng::with_seed(11))
     }
@@ -321,8 +319,9 @@ impl Harness {
         self.kwin.with(|s| mem::take(&mut s.calls))
     }
 
-    fn layout(&self) -> Option<Layout> {
-        self.session.layout.borrow().clone()
+    /// Whether the watcher counts KWin's owner: calls from it are heard.
+    fn counted(&self) -> bool {
+        self.session.trust.lock().unwrap().owner.is_some()
     }
 
     fn newest_token(&self, plugin: &str) -> Token {
@@ -332,14 +331,12 @@ impl Harness {
         })
     }
 
-    /// Starts a recording on the current layout.
+    /// Starts a recording on `SCREENS`, the display's layout.
     async fn record(&self) {
         let created = Created::parse("2026-11-11T12:00:00.000+01:00").unwrap();
-        let mut recorder = Recorder::new(Bindings::default(), clock(), created, None);
-        if let Some(layout) = self.layout() {
-            recorder = recorder.with_layout(layout);
-        }
-        self.slot.start(recorder);
+        let recorder = Recorder::new(Bindings::default(), clock(), created, None);
+        self.slot
+            .start(recorder.with_layout(two_screens().unwrap()));
         settle().await;
     }
 
@@ -361,6 +358,17 @@ impl Harness {
         positions.collect()
     }
 
+    /// The screens are `screens` (`x y width height scale` per output), as
+    /// the position script of `token` reports.
+    fn screens(&self, token: &Token, screens: &str) {
+        let owner = self.kwin.with(|s| s.owner.clone());
+        self.receiver.layout_from(Incoming {
+            sender: owner.as_deref(),
+            token: token.as_str(),
+            text: screens,
+        });
+    }
+
     /// The pointer moved to `x`, as the position script of `token` reports.
     fn moved(&self, token: &Token, x: u32) {
         tick();
@@ -380,9 +388,12 @@ impl Harness {
         settle().await;
     }
 
-    /// Whether the controller was told the layout changed since last asked.
+    /// Whether the daemon was told a KWin of its display came back since
+    /// last asked.
     async fn told(&self) -> bool {
-        timeout(Duration::ZERO, self.changed.fired()).await.is_ok()
+        timeout(Duration::ZERO, self.restarted.fired())
+            .await
+            .is_ok()
     }
 }
 
@@ -412,8 +423,11 @@ async fn after(wait: Duration) {
 
 const HOUR: Duration = Duration::from_secs(3600);
 
-/// A layout load KWin refuses, as KWin sees it.
-const REFUSED_LAYOUT: [Call; 2] = [Unload(LAYOUT), Load(LAYOUT)];
+/// The start's sweep: every name this program's scripts had.
+const SWEEP: [Call; 2] = [Unload(LAYOUT), Unload(POSITION)];
+
+/// One screen of `SCREENS`, as after the monitor is unplugged.
+const ONE_SCREEN: &str = "0 0 2048 1280 1.25";
 
 fn two_screens() -> Option<Layout> {
     crate::report::layout(SCREENS)
@@ -428,20 +442,20 @@ async fn local(test: impl Future<Output = ()>) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_start_sweeps_then_loads_the_layout_script() {
+async fn the_start_unloads_every_name_and_removes_their_files_an_older_layout_scripts_included() {
     local(async {
-        let stale = ["auto-clicker-position-0123.js", "notes.txt"];
+        let stale = [
+            "auto-clicker-layout-4567.js",
+            "auto-clicker-position-0123.js",
+            "notes.txt",
+        ];
         let (h, inbox) = Harness::new(true, &stale);
         h.start(inbox).await;
-        let swept = [Unload(LAYOUT), Unload(POSITION)];
-        assert_eq!(h.calls(), [swept.as_slice(), &LOAD_LAYOUT].concat());
-        assert_eq!(h.layout(), two_screens());
-        assert!(h.told().await);
-        let token = h.newest_token(LAYOUT);
-        assert_eq!(
-            h.runtime.files(),
-            [file_of(Script::Layout, &token), "notes.txt".to_owned()]
-        );
+        assert_eq!(h.calls(), SWEEP);
+        assert_eq!(h.runtime.files(), ["notes.txt"]);
+        assert!(!h.told().await, "the KWin it started with is no restart");
+        after(HOUR).await;
+        assert_eq!(h.calls(), [], "loaded without a recording");
     })
     .await;
 }
@@ -454,8 +468,8 @@ async fn without_kwin_nothing_is_loaded_and_nothing_is_called() {
         h.record().await;
         assert!(h.stop().await.is_empty());
         assert_eq!(h.calls(), []);
-        assert_eq!(h.layout(), None);
         assert!(h.runtime.files().is_empty());
+        assert!(!h.told().await);
     })
     .await;
 }
@@ -478,14 +492,58 @@ async fn a_recording_loads_the_position_script_and_its_end_unloads_it() {
             [Point { x: 100, y: 200 }, Point { x: 300, y: 200 }]
         );
         assert_eq!(h.calls(), [Unload(POSITION)]);
-        let layout = h.newest_token(LAYOUT);
-        assert_eq!(h.runtime.files(), [file_of(Script::Layout, &layout)]);
+        assert!(h.runtime.files().is_empty());
         // A report of the ended load reaches nothing.
         h.record().await;
         h.calls();
         h.moved(&token, 500);
         settle().await;
         assert_eq!(h.stop().await, [Point { x: 100, y: 200 }]);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn positions_are_kept_only_while_the_scripts_layout_is_the_recordings() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        h.record().await;
+        let token = h.newest_token(POSITION);
+        h.moved(&token, 300);
+        // Each position is judged by the layout reported just before it, in
+        // the order they reached the queue, with no poll between them.
+        h.screens(&token, ONE_SCREEN);
+        h.moved(&token, 400);
+        h.screens(&token, "10 0 5 5 1");
+        h.moved(&token, 450);
+        h.screens(&token, SCREENS);
+        h.moved(&token, 500);
+        settle().await;
+        let xs: Vec<u32> = h.stop().await.iter().map(|point| point.x).collect();
+        assert_eq!(xs, [100, 300, 500]);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_recording_on_other_screens_than_the_scripts_keeps_no_position() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.kwin.with(|s| s.screens = Some(ONE_SCREEN));
+        h.start(inbox).await;
+        h.record().await;
+        let token = h.newest_token(POSITION);
+        h.moved(&token, 300);
+        settle().await;
+        assert!(h.stop().await.is_empty());
+        // Nor without a layout from the script at all.
+        h.kwin.with(|s| s.screens = None);
+        h.record().await;
+        let token = h.newest_token(POSITION);
+        h.moved(&token, 300);
+        settle().await;
+        assert!(h.stop().await.is_empty());
     })
     .await;
 }
@@ -540,32 +598,6 @@ async fn reports_reach_the_recorder_in_order_and_at_once_while_kwin_hangs() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_layout_the_position_script_sent_before_a_lost_one_is_not_taken() {
-    local(async {
-        let (h, inbox) = Harness::new(true, &[]);
-        h.start(inbox).await;
-        h.record().await;
-        let token = h.newest_token(POSITION);
-        // A lost layout report has the layout script loaded again, by a
-        // call that never answers, so a new layout token is current.
-        h.kwin.with(|s| s.hanging = true);
-        h.receiver.layout_dropped.notify_one();
-        settle().await;
-        assert_eq!(h.calls().last(), Some(&Unload(LAYOUT)));
-        // What the position script queued before the loss is older than
-        // what was lost.
-        h.receiver.layout_from(Incoming {
-            sender: Some(KWIN),
-            token: token.as_str(),
-            text: SCREENS,
-        });
-        settle().await;
-        assert_eq!(h.layout(), None);
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
 async fn a_full_queue_drops_positions_and_the_recording_carries_on() {
     local(async {
         let (h, inbox) = Harness::new(true, &[]);
@@ -595,76 +627,30 @@ async fn a_full_queue_drops_positions_and_the_recording_carries_on() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_lost_layout_report_makes_the_layout_unknown_and_reloads_its_script() {
+async fn a_lost_layout_report_drops_what_follows_and_loads_the_script_again() {
     local(async {
         let (h, inbox) = Harness::new(true, &[]);
         h.start(inbox).await;
-        let token = h.newest_token(LAYOUT);
-        h.calls();
-        assert!(h.told().await);
-        let full = u32::try_from(QUEUE).unwrap();
-        for _ in 0..full {
-            h.receiver.layout_from(Incoming {
-                sender: Some(KWIN),
-                token: token.as_str(),
-                text: SCREENS,
-            });
-        }
-        h.receiver.layout_from(Incoming {
-            sender: Some(KWIN),
-            token: token.as_str(),
-            text: "0 0 2048 1280 1.25",
-        });
-        settle().await;
-        assert_eq!(h.calls(), LOAD_LAYOUT);
-        assert_eq!(h.layout(), two_screens());
-        assert!(h.told().await, "never said it was unknown");
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_layout_that_is_none_or_from_an_old_load_is_not_taken() {
-    local(async {
-        let (h, inbox) = Harness::new(true, &[]);
-        h.start(inbox).await;
-        assert!(h.told().await);
-        let token = h.newest_token(LAYOUT);
-        h.receiver.layout_from(Incoming {
-            sender: Some(KWIN),
-            token: token.as_str(),
-            text: "10 0 5 5 1",
-        });
-        settle().await;
-        assert_eq!((h.layout(), h.told().await), (None, true));
-        h.receiver.layout_from(Incoming {
-            sender: Some(KWIN),
-            token: token.as_str(),
-            text: SCREENS,
-        });
-        settle().await;
-        assert_eq!((h.layout(), h.told().await), (two_screens(), true));
-        // The same layout again changes nothing.
-        h.receiver.layout_from(Incoming {
-            sender: Some(KWIN),
-            token: token.as_str(),
-            text: SCREENS,
-        });
-        settle().await;
-        assert!(!h.told().await);
-        // A recording's position script reports the layout too.
-        h.kwin.with(|s| s.screens = Some("0 0 2048 1280 1.25"));
         h.record().await;
-        assert_eq!(h.layout(), crate::report::layout("0 0 2048 1280 1.25"));
-        h.stop().await;
-        let stopped = h.newest_token(POSITION);
-        h.receiver.layout_from(Incoming {
-            sender: Some(KWIN),
-            token: stopped.as_str(),
-            text: SCREENS,
-        });
+        let token = h.newest_token(POSITION);
+        h.calls();
+        // The daemon's thread does not get to the queue, and the screens
+        // change: the report that says so does not fit.
+        let full = u32::try_from(QUEUE).unwrap();
+        for x in 1..=full {
+            h.moved(&token, x);
+        }
+        h.screens(&token, ONE_SCREEN);
+        h.kwin.with(|s| s.pointer = "900 200");
         settle().await;
-        assert_eq!(h.layout(), crate::report::layout("0 0 2048 1280 1.25"));
+        assert_eq!(h.calls(), LOAD_POSITION);
+        assert_ne!(h.newest_token(POSITION), token);
+        h.moved(&token, 950);
+        settle().await;
+        // Nothing the lost load queued is judged by a layout it may not
+        // have been taken on; the new load reports its layout first.
+        let xs: Vec<u32> = h.stop().await.iter().map(|point| point.x).collect();
+        assert_eq!(xs, [100, 900]);
     })
     .await;
 }
@@ -698,34 +684,36 @@ async fn a_failed_unload_is_tried_again_before_the_next_load_and_at_exit() {
         h.session.exit().await;
         let mut exit = h.calls();
         exit.sort_by_key(|call| format!("{call:?}"));
-        assert_eq!(exit, [Unload(LAYOUT), Unload(POSITION)]);
+        assert_eq!(exit, SWEEP);
         assert!(h.runtime.files().is_empty());
     })
     .await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_new_owner_of_kwin_gets_the_scripts_again() {
+async fn a_new_kwin_is_told_and_gets_the_position_script_again() {
     local(async {
         let (h, inbox) = Harness::new(true, &[]);
         h.start(inbox).await;
         h.record().await;
         let old = h.newest_token(POSITION);
         h.calls();
-        assert!(h.told().await);
         h.new_owner(None).await;
-        // Nothing is known, nothing is called, and nothing old is heard.
-        assert_eq!((h.layout(), h.told().await), (None, true));
+        // Nothing is called, nothing old is heard, and no KWin came back.
         assert_eq!(h.calls(), []);
+        assert!(!h.told().await);
         h.moved(&old, 1);
         h.new_owner(Some(":1.9")).await;
         h.moved(&old, 2);
-        assert_eq!(h.calls(), [LOAD_LAYOUT, LOAD_POSITION].concat());
-        assert_eq!(h.layout(), two_screens());
+        assert!(h.told().await);
+        assert_eq!(h.calls(), LOAD_POSITION);
         assert_ne!(h.newest_token(POSITION), old);
         let positions = h.stop().await;
         assert_eq!(positions.last(), Some(&Point { x: 100, y: 200 }));
         assert!(!positions.iter().any(|point| point.x < 100));
+        // The same owner again is no restart.
+        h.new_owner(Some(":1.9")).await;
+        assert!(!h.told().await);
     })
     .await;
 }
@@ -742,12 +730,11 @@ async fn a_runtime_directory_open_to_others_loads_nothing() {
             scripting: h.kwin.clone(),
             dir: ScriptDir::open(&runtime.0),
             trust: Arc::clone(&h.session.trust),
-            layout: RefCell::default(),
             owner: RefCell::default(),
             compositor: None,
         };
         assert!(session.dir.is_err());
-        let watcher = Watcher::new(Rc::new(session), h.slot.feed(), h.changed.clone());
+        let watcher = Watcher::new(Rc::new(session), h.slot.feed(), h.restarted.clone());
         tokio::task::spawn_local(watcher.run(inbox));
         settle().await;
         h.record().await;
@@ -767,54 +754,14 @@ async fn a_call_that_never_answers_ends_at_its_deadline() {
         let (h, inbox) = Harness::new(true, &[]);
         h.kwin.with(|s| s.hanging = true);
         h.start(inbox).await;
-        assert_eq!(h.calls(), [Unload(LAYOUT), Unload(POSITION)]);
+        assert_eq!(h.calls(), SWEEP);
+        h.record().await;
+        assert_eq!(h.calls(), [], "a call went out while the sweep hangs");
+        h.kwin.with(|s| s.hanging = false);
         tokio::time::sleep(crate::scripting::CALL_TIMEOUT).await;
         settle().await;
-        // The sweep gave up; the layout load is the next call.
-        assert_eq!(h.calls(), [Unload(LAYOUT)]);
-        assert_eq!(h.layout(), None);
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn without_a_layout_script_a_recordings_layout_is_not_kept() {
-    local(async {
-        let (h, inbox) = Harness::new(true, &[]);
-        h.kwin.with(|s| s.refused = Some(LAYOUT));
-        h.start(inbox).await;
-        assert_eq!(h.layout(), None);
-        // The position script reports the layout, but nothing would see it
-        // change once the recording ends: it is not taken.
-        h.record().await;
-        assert_eq!(h.layout(), None);
-        assert!(h.stop().await.is_empty());
-        assert_eq!(h.layout(), None);
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_lost_layout_report_ends_the_old_load_while_a_call_is_in_flight() {
-    local(async {
-        let (h, inbox) = Harness::new(true, &[]);
-        h.start(inbox).await;
-        let token = h.newest_token(LAYOUT);
-        // A recording's position load hangs, so the layout script cannot be
-        // loaded again yet.
-        h.kwin.with(|s| s.hanging = true);
-        h.record().await;
-        let full = u32::try_from(QUEUE).unwrap();
-        for _ in 0..=full {
-            h.receiver.layout_from(Incoming {
-                sender: Some(KWIN),
-                token: token.as_str(),
-                text: "0 0 2048 1280 1.25",
-            });
-        }
-        settle().await;
-        // What the old load queued before the loss says nothing about now.
-        assert_eq!(h.layout(), None);
+        // The sweep gave up; the recording's load is the next call.
+        assert_eq!(h.calls(), LOAD_POSITION);
     })
     .await;
 }
@@ -829,7 +776,7 @@ async fn an_exit_before_the_watcher_ran_unloads_what_a_crash_left() {
         h.session.exit().await;
         let mut exit = h.calls();
         exit.sort_by_key(|call| format!("{call:?}"));
-        assert_eq!(exit, [Unload(LAYOUT), Unload(POSITION)]);
+        assert_eq!(exit, SWEEP);
         assert!(h.runtime.files().is_empty());
 
         // Without KWin, only the files go.
@@ -847,12 +794,12 @@ async fn a_new_owner_does_not_wait_for_a_call_to_the_old_one() {
         let (h, inbox) = Harness::new(true, &[]);
         h.kwin.with(|s| s.hanging = true);
         h.start(inbox).await;
+        h.record().await;
         h.calls();
         // The old KWin never answers the sweep; the new one answers at once.
         h.kwin.with(|s| s.hanging = false);
         h.new_owner(Some(":1.9")).await;
-        assert_eq!(h.calls(), LOAD_LAYOUT);
-        assert_eq!(h.layout(), two_screens());
+        assert_eq!(h.calls(), LOAD_POSITION);
     })
     .await;
 }
@@ -875,30 +822,7 @@ async fn a_stop_ends_a_position_load_still_in_flight() {
         tokio::time::sleep(crate::scripting::CALL_TIMEOUT * 2).await;
         settle().await;
         assert_eq!(h.calls(), []);
-        let layout = h.newest_token(LAYOUT);
-        assert_eq!(h.runtime.files(), [file_of(Script::Layout, &layout)]);
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_layout_load_that_fails_once_is_tried_again_after_its_back_off() {
-    local(async {
-        let (h, inbox) = Harness::new(true, &[]);
-        h.kwin.with(|s| s.refused = Some(LAYOUT));
-        h.start(inbox).await;
-        assert_eq!(h.calls().last(), Some(&Load(LAYOUT)));
-        assert_eq!(h.layout(), None);
-        h.kwin.with(|s| s.refused = None);
-        after(BACK_OFF[0] - Duration::from_millis(1)).await;
-        assert_eq!(h.calls(), []);
-        after(Duration::from_millis(1)).await;
-        // No recording started: the back-off alone tried it again.
-        assert_eq!(h.calls(), LOAD_LAYOUT);
-        assert_eq!(h.layout(), two_screens());
-        assert!(h.told().await);
-        after(HOUR).await;
-        assert_eq!(h.calls(), []);
+        assert!(h.runtime.files().is_empty());
     })
     .await;
 }
@@ -916,7 +840,9 @@ async fn a_position_unload_that_fails_once_is_tried_again_after_its_back_off() {
         assert_eq!(h.calls(), [Unload(POSITION)]);
         let file = file_of(Script::Position, &token);
         assert!(h.runtime.files().contains(&file));
-        after(BACK_OFF[0]).await;
+        after(BACK_OFF[0] - Duration::from_millis(1)).await;
+        assert_eq!(h.calls(), []);
+        after(Duration::from_millis(1)).await;
         assert_eq!(h.calls(), [Unload(POSITION)]);
         assert!(!h.runtime.files().contains(&file));
         after(HOUR).await;
@@ -926,31 +852,32 @@ async fn a_position_unload_that_fails_once_is_tried_again_after_its_back_off() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_kwin_that_keeps_failing_is_left_alone_until_its_owner_changes() {
+async fn an_unload_that_keeps_failing_is_left_alone_until_the_next_recording() {
     local(async {
         let (h, inbox) = Harness::new(true, &[]);
-        h.kwin.with(|s| s.refused = Some(LAYOUT));
         h.start(inbox).await;
+        h.record().await;
         h.calls();
+        h.kwin.with(|s| s.failing_unloads = 1 + BACK_OFF.len());
+        h.stop().await;
+        assert_eq!(h.calls(), [Unload(POSITION)]);
         for wait in BACK_OFF {
             after(wait - Duration::from_millis(1)).await;
             assert_eq!(h.calls(), [], "tried before its back-off of {wait:?}");
             after(Duration::from_millis(1)).await;
-            assert_eq!(h.calls(), REFUSED_LAYOUT);
+            assert_eq!(h.calls(), [Unload(POSITION)]);
         }
         after(HOUR).await;
         assert_eq!(h.calls(), []);
-        // A new owner starts the tries afresh.
-        h.new_owner(Some(":1.9")).await;
-        assert_eq!(h.calls(), REFUSED_LAYOUT);
-        after(BACK_OFF[0]).await;
-        assert_eq!(h.calls(), REFUSED_LAYOUT);
+        // The next recording's load unloads first.
+        h.record().await;
+        assert_eq!(h.calls(), LOAD_POSITION);
     })
     .await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_recording_or_a_new_owner_during_a_back_off_acts_at_once() {
+async fn a_recording_during_a_back_off_acts_at_once() {
     local(async {
         let (h, inbox) = Harness::new(true, &[]);
         h.start(inbox).await;
@@ -967,36 +894,6 @@ async fn a_recording_or_a_new_owner_during_a_back_off_acts_at_once() {
         assert!(begun.elapsed() < Duration::from_millis(100));
         after(HOUR).await;
         assert_eq!(h.calls(), []);
-
-        // A layout load fails, and KWin restarts during its back-off.
-        h.kwin.with(|s| s.refused = Some(LAYOUT));
-        h.receiver.layout_dropped.notify_one();
-        settle().await;
-        assert_eq!(h.calls(), REFUSED_LAYOUT);
-        h.kwin.with(|s| s.refused = None);
-        let begun = Instant::now();
-        h.new_owner(Some(":1.9")).await;
-        assert_eq!(h.calls(), LOAD_LAYOUT);
-        assert!(begun.elapsed() < Duration::from_millis(100));
-        after(HOUR).await;
-        assert_eq!(h.calls(), []);
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_recording_during_a_layout_back_off_loads_first_and_the_layout_follows() {
-    local(async {
-        let (h, inbox) = Harness::new(true, &[]);
-        h.kwin.with(|s| s.refused = Some(LAYOUT));
-        h.start(inbox).await;
-        h.calls();
-        h.kwin.with(|s| s.refused = None);
-        h.record().await;
-        assert_eq!(h.calls(), LOAD_POSITION);
-        after(BACK_OFF[0]).await;
-        assert_eq!(h.calls(), LOAD_LAYOUT);
-        assert_eq!(h.layout(), two_screens());
     })
     .await;
 }
@@ -1008,7 +905,7 @@ async fn with_nothing_failed_the_watcher_sets_no_timer() {
         let mut watcher = h.watcher();
         let mut owners = watcher.follow_owner().await;
         drive(&mut watcher, &mut owners, &mut inbox).await;
-        assert_eq!(h.calls().last(), Some(&Run(LAYOUT)));
+        assert_eq!(h.calls(), SWEEP);
         assert_eq!(watcher.retry_at, None);
         h.record().await;
         drive(&mut watcher, &mut owners, &mut inbox).await;
@@ -1020,8 +917,8 @@ async fn with_nothing_failed_the_watcher_sets_no_timer() {
         );
         assert_eq!(watcher.retry_at, None);
 
-        // A recording replaces an unload waiting for its back-off, and a
-        // new owner a layout load: nothing is left to wait for.
+        // A recording replaces an unload waiting for its back-off: nothing
+        // is left to wait for.
         h.record().await;
         drive(&mut watcher, &mut owners, &mut inbox).await;
         h.kwin.with(|s| s.failing_unloads = 1);
@@ -1031,28 +928,18 @@ async fn with_nothing_failed_the_watcher_sets_no_timer() {
         h.record().await;
         drive(&mut watcher, &mut owners, &mut inbox).await;
         assert_eq!(watcher.retry_at, None);
-        h.stop().await;
-        drive(&mut watcher, &mut owners, &mut inbox).await;
-        h.kwin.with(|s| s.refused = Some(LAYOUT));
-        h.receiver.layout_dropped.notify_one();
-        drive(&mut watcher, &mut owners, &mut inbox).await;
-        assert!(watcher.retry_at.is_some());
-        h.kwin.with(|s| s.refused = None);
-        h.new_owner(Some(":1.9")).await;
-        drive(&mut watcher, &mut owners, &mut inbox).await;
-        assert_eq!(watcher.retry_at, None);
-        h.calls();
 
         // Nor once the tries are spent.
-        h.kwin.with(|s| s.refused = Some(LAYOUT));
-        h.receiver.layout_dropped.notify_one();
+        h.calls();
+        h.kwin.with(|s| s.failing_unloads = 1 + BACK_OFF.len());
+        h.stop().await;
         drive(&mut watcher, &mut owners, &mut inbox).await;
         assert!(watcher.retry_at.is_some());
         for wait in BACK_OFF {
             tokio::time::sleep(wait).await;
             drive(&mut watcher, &mut owners, &mut inbox).await;
         }
-        assert_eq!(h.calls().len(), REFUSED_LAYOUT.len() * (BACK_OFF.len() + 1));
+        assert_eq!(h.calls().len(), 1 + BACK_OFF.len());
         assert_eq!(watcher.retry_at, None);
     })
     .await;
@@ -1066,14 +953,16 @@ async fn a_script_directory_that_failed_its_check_is_not_tried_again() {
             scripting: h.kwin.clone(),
             dir: Err("open to others".to_owned()),
             trust: Arc::clone(&h.session.trust),
-            layout: RefCell::default(),
             owner: RefCell::default(),
             compositor: None,
         };
-        let mut watcher = Watcher::new(Rc::new(session), h.slot.feed(), h.changed.clone());
+        let mut watcher = Watcher::new(Rc::new(session), h.slot.feed(), h.restarted.clone());
         let mut owners = watcher.follow_owner().await;
         drive(&mut watcher, &mut owners, &mut inbox).await;
-        assert_eq!(h.calls().last(), Some(&Unload(LAYOUT)));
+        assert_eq!(h.calls(), SWEEP);
+        h.record().await;
+        drive(&mut watcher, &mut owners, &mut inbox).await;
+        assert_eq!(h.calls(), [Unload(POSITION)], "a load was tried");
         assert_eq!(watcher.retry_at, None);
     })
     .await;
@@ -1098,25 +987,6 @@ async fn an_unload_that_fails_after_the_next_recording_started_leaves_its_load_d
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_layout_load_given_up_is_tried_again_at_the_next_recording() {
-    local(async {
-        let (h, inbox) = Harness::new(true, &[]);
-        h.kwin.with(|s| s.refused = Some(LAYOUT));
-        h.start(inbox).await;
-        for wait in BACK_OFF {
-            after(wait).await;
-        }
-        after(HOUR).await;
-        h.calls();
-        h.kwin.with(|s| s.refused = None);
-        h.record().await;
-        assert_eq!(h.calls(), [LOAD_LAYOUT, LOAD_POSITION].concat());
-        assert_eq!(h.layout(), two_screens());
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
 async fn a_crashed_daemons_position_script_that_fails_to_unload_at_start_is_tried_again() {
     local(async {
         let (h, inbox) = Harness::new(true, &[]);
@@ -1125,139 +995,10 @@ async fn a_crashed_daemons_position_script_that_fails_to_unload_at_start_is_trie
             s.failing_plugin = Some(POSITION);
         });
         h.start(inbox).await;
-        let swept = [Unload(LAYOUT), Unload(POSITION)];
-        assert_eq!(h.calls(), [swept.as_slice(), &LOAD_LAYOUT].concat());
+        assert_eq!(h.calls(), SWEEP);
         after(BACK_OFF[0]).await;
         assert_eq!(h.calls(), [Unload(POSITION)]);
         after(HOUR).await;
-        assert_eq!(h.calls(), []);
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_second_failure_does_not_put_off_a_call_already_waiting() {
-    local(async {
-        let (h, inbox) = Harness::new(true, &[]);
-        h.start(inbox).await;
-        h.record().await;
-        h.kwin.with(|s| {
-            s.failing_unloads = 1;
-            s.failing_plugin = Some(POSITION);
-        });
-        h.stop().await;
-        h.calls();
-        // A second later a layout load fails, with a longer back-off.
-        after(Duration::from_secs(1)).await;
-        h.kwin.with(|s| s.refused = Some(LAYOUT));
-        h.receiver.layout_dropped.notify_one();
-        settle().await;
-        assert_eq!(h.calls(), REFUSED_LAYOUT);
-        h.kwin.with(|s| s.refused = None);
-        after(BACK_OFF[0] - Duration::from_secs(1)).await;
-        assert_eq!(
-            h.calls(),
-            [LOAD_LAYOUT.as_slice(), &[Unload(POSITION)]].concat()
-        );
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_position_script_loaded_during_a_layout_back_off_reports_no_layout() {
-    local(async {
-        let (h, inbox) = Harness::new(true, &[]);
-        h.kwin.with(|s| s.refused = Some(LAYOUT));
-        h.start(inbox).await;
-        h.record().await;
-        let token = h.newest_token(POSITION);
-        // The layout load tried after the back-off never answers, so its
-        // new token is current while no layout script runs.
-        h.kwin.with(|s| {
-            s.refused = None;
-            s.hanging = true;
-        });
-        after(BACK_OFF[0]).await;
-        assert_eq!(h.calls().last(), Some(&Unload(LAYOUT)));
-        h.receiver.layout_from(Incoming {
-            sender: Some(KWIN),
-            token: token.as_str(),
-            text: SCREENS,
-        });
-        settle().await;
-        assert_eq!(h.layout(), None);
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_recording_during_the_starts_layout_load_keeps_a_failed_sweep_unload() {
-    local(async {
-        let (h, inbox) = Harness::new(true, &[]);
-        // The sweep's position unload fails, and the layout load that
-        // follows stays in flight while a recording starts and stops.
-        h.kwin.with(|s| {
-            s.failing_unloads = 1;
-            s.failing_plugin = Some(POSITION);
-            s.hanging_start = true;
-        });
-        h.start(inbox).await;
-        h.record().await;
-        h.stop().await;
-        h.kwin.with(|s| s.hanging_start = false);
-        h.calls();
-        after(crate::scripting::CALL_TIMEOUT).await;
-        assert_eq!(h.calls(), [Unload(POSITION)]);
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn an_unload_whose_tries_the_layout_spent_is_tried_again_once_kwin_answers() {
-    local(async {
-        let (h, inbox) = Harness::new(true, &[]);
-        h.start(inbox).await;
-        h.record().await;
-        h.kwin.with(|s| {
-            s.failing_unloads = 2;
-            s.failing_plugin = Some(POSITION);
-        });
-        h.stop().await;
-        h.kwin.with(|s| s.refused = Some(LAYOUT));
-        h.receiver.layout_dropped.notify_one();
-        settle().await;
-        // Both are tried after the first back-off and fail again: the
-        // unload's is the fourth failure, and it is given up on.
-        after(BACK_OFF[0]).await;
-        h.calls();
-        h.kwin.with(|s| s.refused = None);
-        after(BACK_OFF[2]).await;
-        assert_eq!(
-            h.calls(),
-            [LOAD_LAYOUT.as_slice(), &[Unload(POSITION)]].concat()
-        );
-        after(HOUR).await;
-        assert_eq!(h.calls(), []);
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_report_lost_during_the_last_try_does_not_add_another() {
-    local(async {
-        let (h, inbox) = Harness::new(true, &[]);
-        h.kwin.with(|s| s.refused = Some(LAYOUT));
-        h.start(inbox).await;
-        for wait in &BACK_OFF[..BACK_OFF.len() - 1] {
-            after(*wait).await;
-        }
-        // The last try never answers, and a layout report is lost meanwhile.
-        h.kwin.with(|s| s.hanging = true);
-        after(BACK_OFF[BACK_OFF.len() - 1]).await;
-        h.receiver.layout_dropped.notify_one();
-        settle().await;
-        h.calls();
-        after(crate::scripting::CALL_TIMEOUT).await;
         assert_eq!(h.calls(), []);
     })
     .await;

@@ -1,7 +1,7 @@
 //! The controller's platforms: uinput devices or the desktop's portal for
 //! output, and on either the hotkeys from the keyboards or from the
-//! desktop's shortcuts, the screen layout from KWin or the Wayland display
-//! and the pointer from KWin, and the clocks and directory recordings need.
+//! desktop's shortcuts, the screen layout from the Wayland display and the
+//! pointer from KWin, and the clocks and directory recordings need.
 
 use std::future::pending;
 use std::path::PathBuf;
@@ -10,15 +10,15 @@ use std::time::Duration;
 use auto_clicker_backend_kernel::{
     DeviceIdentity, InputSources, KernelBackend, local_time, monotonic_now, read_input,
 };
+use auto_clicker_backend_kwin::Kwin;
 use auto_clicker_backend_portal::{PortalBackend, PortalOutput, read_shortcuts};
+use auto_clicker_backend_wayland::Wayland;
 use auto_clicker_core::controller::{
     HotkeyReader, InputLifetime, InputLoss, InputReader, LayoutSignal, LayoutWatch, OpenInput,
     Platform, ReadInput, Route,
 };
 use auto_clicker_core::input::Input;
 use auto_clicker_core::recording::{Layout, LocalTime, RecordingFeed, recordings_dir};
-
-use crate::screens::Screens;
 
 /// Where hotkeys come from, on either output: the reader detection picked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,7 +53,8 @@ impl Hotkeys {
 
 pub struct Kernel {
     pub hotkeys: Hotkeys,
-    pub screens: Screens,
+    pub wayland: Wayland,
+    pub kwin: Kwin,
 }
 
 impl Platform for Kernel {
@@ -95,11 +96,11 @@ impl Platform for Kernel {
     }
 
     fn layout(&self) -> Option<Layout> {
-        self.screens.layout()
+        self.wayland.layout()
     }
 
     fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
-        self.screens.watch(feed, changed)
+        watch_layout(&self.wayland, &self.kwin, feed, changed)
     }
 }
 
@@ -107,7 +108,8 @@ impl Platform for Kernel {
 pub struct Portal {
     pub output: PortalOutput,
     pub hotkeys: Hotkeys,
-    pub screens: Screens,
+    pub wayland: Wayland,
+    pub kwin: Kwin,
 }
 
 impl Platform for Portal {
@@ -152,12 +154,43 @@ impl Platform for Portal {
     }
 
     fn layout(&self) -> Option<Layout> {
-        self.screens.layout()
+        self.wayland.layout()
     }
 
     fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
-        self.screens.watch(feed, changed)
+        watch_layout(&self.wayland, &self.kwin, feed, changed)
     }
+}
+
+/// The one watch of the layout and the positions: the display's watcher
+/// fires `changed` when the layout changes, KWin's feeds `feed`'s
+/// recordings their positions, and each KWin of the display that comes
+/// back after a restart has the display's watcher connect again (W01
+/// brief, W5).
+fn watch_layout(
+    wayland: &Wayland,
+    kwin: &Kwin,
+    feed: RecordingFeed,
+    changed: LayoutSignal,
+) -> LayoutWatch {
+    joined(
+        |restarted| kwin.watch(feed, restarted),
+        |again| wayland.watch(changed, again),
+    )
+}
+
+/// KWin's watcher and the display's, polled together, the first one's word
+/// of a restart reaching the second.
+fn joined(
+    kwin: impl FnOnce(LayoutSignal) -> LayoutWatch,
+    display: impl FnOnce(LayoutSignal) -> LayoutWatch,
+) -> LayoutWatch {
+    let restarted = LayoutSignal::default();
+    let kwin = kwin(restarted.clone());
+    let display = display(restarted);
+    Box::pin(async move {
+        tokio::join!(kwin, display);
+    })
 }
 
 /// The evdev input reader, ignoring the devices `own`. It has nothing to
@@ -187,13 +220,16 @@ fn evdev_reader(own: Vec<DeviceIdentity>, reading: ReadInput) -> HotkeyReader {
 mod tests {
     use std::time::Duration;
 
-    use auto_clicker_backend_kwin::Kwin;
-    use auto_clicker_backend_wayland::{Missing, Wayland};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use auto_clicker_backend_wayland::Missing;
+    use tokio::time::timeout;
 
     use super::*;
 
-    fn no_screens() -> Screens {
-        Screens::new(Kwin::none(), Wayland::none(Missing::NoDisplay))
+    fn no_display() -> Wayland {
+        Wayland::none(Missing::NoDisplay)
     }
 
     fn hotkeys(reader: InputReader) -> Hotkeys {
@@ -205,12 +241,14 @@ mod tests {
         for reader in [InputReader::Devices, InputReader::Desktop] {
             let kernel = Kernel {
                 hotkeys: hotkeys(reader),
-                screens: no_screens(),
+                wayland: no_display(),
+                kwin: Kwin::none(),
             };
             let portal = Portal {
                 output: PortalOutput::new(None),
                 hotkeys: hotkeys(reader),
-                screens: no_screens(),
+                wayland: no_display(),
+                kwin: Kwin::none(),
             };
             assert_eq!(kernel.input_reader(), reader);
             assert_eq!(portal.input_reader(), reader);
@@ -223,12 +261,14 @@ mod tests {
     fn the_clocks_and_directory_are_the_backends_and_cores() {
         let kernel = Kernel {
             hotkeys: hotkeys(InputReader::Devices),
-            screens: no_screens(),
+            wayland: no_display(),
+            kwin: Kwin::none(),
         };
         let portal = Portal {
             output: PortalOutput::new(None),
             hotkeys: hotkeys(InputReader::Desktop),
-            screens: no_screens(),
+            wayland: no_display(),
+            kwin: Kwin::none(),
         };
         for (clock, local, dir) in [
             (
@@ -247,5 +287,47 @@ mod tests {
             assert!(local.is_some());
             assert_eq!(dir, recordings_dir());
         }
+    }
+
+    #[tokio::test]
+    async fn a_kwin_that_came_back_has_the_display_connect_again() {
+        let connected_again = Rc::new(Cell::new(false));
+        let seen = Rc::clone(&connected_again);
+        let watch = joined(
+            |restarted| {
+                Box::pin(async move {
+                    restarted.changed();
+                    pending::<()>().await;
+                })
+            },
+            |again| {
+                Box::pin(async move {
+                    again.fired().await;
+                    seen.set(true);
+                    pending::<()>().await;
+                })
+            },
+        );
+        let ran = timeout(Duration::from_secs(1), watch).await;
+        assert!(ran.is_err(), "the watch ended");
+        assert!(connected_again.get());
+    }
+
+    #[tokio::test]
+    async fn a_watcher_that_ends_leaves_the_other_watched() {
+        let polled = Rc::new(Cell::new(0));
+        let seen = Rc::clone(&polled);
+        let watch = joined(
+            |_| Box::pin(async {}),
+            |_| {
+                Box::pin(std::future::poll_fn(move |_| {
+                    seen.set(seen.get() + 1);
+                    std::task::Poll::Pending
+                }))
+            },
+        );
+        let ran = timeout(Duration::from_millis(50), watch).await;
+        assert!(ran.is_err(), "the watch ended with one watcher");
+        assert!(polled.get() > 0);
     }
 }

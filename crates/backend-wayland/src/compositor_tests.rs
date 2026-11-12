@@ -26,7 +26,7 @@ async fn the_running_compositor_reports_a_screen_change() {
     let before = wayland.layout();
     eprintln!("before: {before:?}; change a screen's scale or place now");
     let changed = LayoutSignal::default();
-    let watch = wayland.watch(changed.clone());
+    let watch = wayland.watch(changed.clone(), LayoutSignal::default());
     tokio::select! {
         () = watch => panic!("the connection ended"),
         fired = timeout(Duration::from_secs(60), changed.fired()) => {
