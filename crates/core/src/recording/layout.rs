@@ -228,8 +228,8 @@ impl Layout {
 
     /// The same for a position to a fraction of a pixel, such as where the
     /// user clicked, kept to the values that land inside `on`: rounding can
-    /// otherwise cross onto the next screen by up to half a step of the
-    /// range (`W / 131072` logical pixels).
+    /// otherwise cross onto the next screen. Off by at most one step of the
+    /// range, `W / 65536` logical pixels, half a step away from an edge.
     pub fn absolute_at(&self, x: f64, y: f64, on: Rect) -> AbsolutePosition {
         let (width, height) = self.size();
         let across = Along {
@@ -294,6 +294,8 @@ impl Along {
         let first = (u64::from(self.start) * 65_536).div_ceil(size);
         let end = (u64::from(self.start) + u64::from(self.span)) * 65_536;
         let last = end.div_ceil(size).saturating_sub(1).min(65_535);
+        // A screen narrower than one step (`size / 65536`, under 2 px on a
+        // layout 130,000 px wide) holds no value: its nearest one is kept.
         let kept = rounded.clamp(first.min(last), last);
         u16::try_from(kept).unwrap_or(u16::MAX)
     }
