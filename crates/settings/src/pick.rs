@@ -59,8 +59,8 @@ pub struct Target<M> {
 /// once. Screens of different sizes on one corner (mirrored) take the one
 /// that contains the others, so a click anywhere on any of their monitors
 /// is on it; when none contains the others, picking is refused. `None` when a monitor is on no screen of the layout or a screen
-/// has no monitor: the window and KWin see different screens, as while one
-/// is plugged in.
+/// has no monitor: the window and the daemon see different screens, as
+/// while one is plugged in.
 pub fn targets<M>(monitors: Vec<Monitor<M>>, screens: &Layout) -> Option<Vec<Target<M>>> {
     let rects: Vec<Rect> = screens
         .outputs()

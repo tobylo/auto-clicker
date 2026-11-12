@@ -1,8 +1,8 @@
 # 0004: The screen layout and the pointer on niri and Hyprland
 
-- Status: accepted, 2026-11-12. niri and Plasma measured; Hyprland read from source, to be measured by W01c.
+- Status: accepted, 2026-11-12. niri and Plasma measured; Hyprland read from source, to be measured by W01c. W01a added niri at a negative position (one output); two outputs wait for a second monitor.
 - Issue: W01 (#75). It shapes the slices in the [W01 brief](../planning/features/w01-other-desktops.md).
-- Measured on: the dev box, niri 26.04 (8ed0da4), Linux 7.3.3-1-cachyos, one output (HDMI-A-1, LG 34GN850, 3440x1440 at 85 Hz); the laptop, KWin 6.8.2, eDP-1 (2560x1600) and DP-1 (3440x1440). Read from source: niri v26.04 (6a0a862) with its pinned smithay (ff5fa7d), Hyprland v0.57.2, KWin v6.8.2.
+- Measured on: the dev box, niri 26.04 (8ed0da4), Linux 7.3.3-1-cachyos, one output (HDMI-A-1, LG 34GN850, 3440x1440 at 85 Hz); the laptop, KWin 6.8.2, eDP-1 (2560x1600) and DP-1 (3440x1440). Read from source: niri v26.04 (commit 8ed0da4; 6a0a862 is its tag object) with its pinned smithay (ff5fa7d), Hyprland v0.57.2, KWin v6.8.2.
 
 ## Decision
 
@@ -25,7 +25,11 @@ A virtual mouse shaped like C01's (buttons, `REL_X`, `REL_Y`, `REL_WHEEL`, `ABS_
 - At 1.4, `v = 32768` landed at x = 1229.00 and y = 514.50: half of 2458 and of 1029. At 1.5 it landed at 1147.00: half of 2294.
 - `v = 65535` landed past the reported width at 1.4 and 1.5, outside the probe window, so the probe saw nothing there.
 - The three sizes come from three roundings of physical/scale. smithay's `Space::output_geometry` rounds up (`to_i32_ceil`, `src/desktop/space/mod.rs:398`), and niri's pointer box is the union of those (`src/input/mod.rs:274-284`, used at 2646-2649). smithay's xdg-output rounds to nearest (`src/wayland/output/xdg.rs:67-71`). niri's IPC truncates (`src/utils/mod.rs:208-228`, `size.w as u32`).
-- niri maps every libinput pointer over the whole box: `NiriInputDevice::output` returns `None` for a libinput device (`src/input/backend_ext.rs:27`). Two outputs, and an output at a negative position, were not measured: the dev box has one monitor. W01a measures them.
+- niri maps every libinput pointer over the whole box: `NiriInputDevice::output` returns `None` for a libinput device (`src/input/backend_ext.rs:27`). Two outputs were not measured: the dev box has one monitor. An output at a negative position was (below).
+
+### One output at a negative position (W01a, 2026-11-12)
+
+The same device and probe, with `niri msg output HDMI-A-1 position set -- -500 -300` at scale 1 (set back to 0, 0 after), over a 7x7 grid (0, 1, 1000, 16384, 32768, 49152 and 64000 per axis); the script is `.claude/local/w01a/niri_negative.py` in the main checkout. xdg-output reported the output at (-500, -300), 3440x1440; the daemon's layout source published it moved to (0, 0), 3440x1440, scale 1000 (`the_running_compositor_gives_a_layout_and_its_listener`). Every point landed at `v * W / 65536` from the output's own corner, worst error 0.002 logical px: niri maps over the box wherever it lies, so moving the box to (0, 0) keeps decision 0001's formula. Two outputs, one at a negative position, remain to measure.
 - It matters where a scale's logical size is not whole: 3440 px at 1.4 or 1.5, 2560 px at 1.5. Common pairs such as 2560x1600 at 1.25 or 3840x2160 at 1.5 are exact. Today it affects only the picked fixed point, since niri gives no positions.
 
 ### For an upstream report (the owner files it)
@@ -69,6 +73,16 @@ From source:
 
 - xdg-output sends round(size) and round(position) of an output's fractional geometry (`src/wayland/xdgoutput_v1.cpp:191,199`). The layout script's `output.geometry` rounds the edges instead (`src/core/rect.h:2439`). The two agree when an output sits at a whole logical position.
 - KWin 6.8.2 has no ext-image-copy-capture.
+
+## One change, every output's events before a sync answer (W01a review, from source)
+
+xdg-output and `wl_output` end an update per output; nothing marks the end of a change across outputs. The client reads the layout when a `wl_display.sync` comes back with nothing new and every output's update ended at its `done` (W3). That is whole only if a compositor queues every affected output's events before it reads the client's next request. Read from source (smithay ff5fa7d as pinned by niri 8ed0da4, KWin v6.8.2 f130ab3, Hyprland v0.57.2 11cbc6c, libwayland f2ecaa6), it does on all three:
+
+- **niri:** `reload_output_config` (`src/niri.rs:1718`) sets each output's scale and transform (`:1749`), resizes (`:1795`), applies modes and enables or disables outputs through the backend (`:1802`; `tty.rs:2495`, `:1545`, `:1601`) and repositions every output (`:1804`, `:2799`) in one call; smithay's `Output::change_current_state` (`src/output.rs:380`) sends the xdg-output and `wl_output` events and `done` at once (`src/wayland/output/xdg.rs:91-147`, `src/wayland/output/mod.rs:218-260`). Client requests are read only in `dispatch_clients` (`src/niri.rs:2465`). An output may get two `done`s in one change; both come before any answer.
+- **KWin:** `Workspace::updateOutputs` (`workspace.cpp:1370`, loop at `:1435`) sets every output's data in one loop, reached synchronously from a configuration change (`:564-568`) and from hotplug (`:1328`); each change sends its `wl_output` and xdg-output events at once (`wayland/output_interface.cpp:209-265`, `xdgoutput_v1.cpp:115-148`) and schedules that output's `done` on a 0 ms timer (`:187-195`, `:322-326`). KWin flushes before it blocks (`display.cpp:128`), so a client can see every output's events before their `done`s, and an answer between them: the client's per-output `done` rule waits for them.
+- **Hyprland:** a rule, configuration or output-management change only marks a reload, and the next render applies every rule and rearranges every output in one call (`MonitorRuleManager.cpp:22-28`, `:133-194`); a connect rearranges at once (`Monitor.cpp:118`, `:341`), a disconnect in an idle callback (`MonitorLayoutController.cpp:27`). Each output's `done` is deferred to an idle callback (`Monitor.cpp:1672`, `EventLoopManager.cpp:215`); libwayland drains every idle callback, new ones included, before the dispatch returns (`event-loop.c:969`, `:1064`), and Hyprland flushes clients only after that (`wayland-server.c:1740`). Two narrow exceptions: libwayland flushes a client whose buffer fills (`connection.c:594`, `:628`), and the retry after a failed mode set (`Monitor.cpp:1056`) applies one output's rule without rearranging the others, a layout the compositor itself holds. W01c measures Hyprland.
+
+A compositor that broke this would show one change as two layouts, each published whole per output and each firing, so a pick begun before either is refused and fixed-point clicking stops on the first; the Wayland source gives no positions, and a recording keeps only the layout it started on.
 
 ## The Wayland client's cost
 

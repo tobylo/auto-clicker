@@ -4,6 +4,7 @@
 mod detect;
 mod instance;
 mod platform;
+mod screens;
 mod session;
 mod tray;
 mod tray_icon;
@@ -16,6 +17,7 @@ use std::time::Duration;
 use auto_clicker_backend_kernel::monotonic_now;
 use auto_clicker_backend_kwin::Kwin;
 use auto_clicker_backend_portal::{PortalOutput, token_path};
+use auto_clicker_backend_wayland::Wayland;
 use auto_clicker_core::config::{Config, ConfigFile, config_path};
 use auto_clicker_core::controller::{Controller, Links, Message, Platform};
 use auto_clicker_core::input::{Input, InputError};
@@ -28,6 +30,7 @@ use tokio::time::timeout;
 use detect::{Detected, Output, detect};
 use instance::ClaimError;
 use platform::{Hotkeys, Kernel, Portal};
+use screens::Screens;
 
 /// Another daemon is running in this session. The user service does not
 /// restart on it.
@@ -35,6 +38,9 @@ const EXIT_ALREADY_RUNNING: u8 = 3;
 /// How long the session bus may take to answer at start: claiming the name
 /// and registering the tray icon.
 const BUS_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the Wayland display may take at start: connecting, and the two
+/// round trips that read the first layout.
+const DISPLAY_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn main() -> ExitCode {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -54,17 +60,19 @@ async fn daemon() -> ExitCode {
         Ok(name) => name,
         Err(status) => return status,
     };
-    // Only now, with the name claimed, may anything clean up after an
-    // earlier daemon: a second one never touches its scripts. However this
-    // one ends from here on, it unloads them.
-    let kwin = serve_kwin(&name).await;
-    let status = run(name, &kwin).await;
+    // The layout's sources are picked once, with the name claimed. Only now
+    // may anything clean up after an earlier daemon: a second one never
+    // touches its scripts. However this one ends from here on, it unloads
+    // them.
+    let wayland = connect_wayland().await;
+    let kwin = serve_kwin(&name, &wayland).await;
+    let status = run(name, Screens::new(kwin.clone(), wayland)).await;
     kwin.exit().await;
     status
 }
 
 /// Picks the routes and runs the controller on them until it ends.
-async fn run(name: instance::Claim, kwin: &Kwin) -> ExitCode {
+async fn run(name: instance::Claim, screens: Screens) -> ExitCode {
     let (config, config_error, file) = load_config();
     let portal = PortalOutput::new(token_path());
     // Whatever detection finds, the daemon runs: a job without a route says
@@ -86,7 +94,7 @@ async fn run(name: instance::Claim, kwin: &Kwin) -> ExitCode {
                 Portal {
                     output: portal,
                     hotkeys,
-                    kwin: kwin.clone(),
+                    screens,
                 },
                 start,
                 name,
@@ -101,10 +109,7 @@ async fn run(name: instance::Claim, kwin: &Kwin) -> ExitCode {
         config_error,
         file,
     };
-    let kernel = Kernel {
-        hotkeys,
-        kwin: kwin.clone(),
-    };
+    let kernel = Kernel { hotkeys, screens };
     serve(kernel, start, name).await
 }
 
@@ -139,10 +144,18 @@ async fn serve<P: Platform>(platform: P, start: Start<P>, name: instance::Claim)
     }
 }
 
+/// The daemon's Wayland display, and the first layout from it; none when it
+/// offers no xdg-output or does not answer in time.
+async fn connect_wayland() -> Wayland {
+    Wayland::connect(tokio::time::Instant::now() + DISPLAY_TIMEOUT).await
+}
+
 /// Receives from KWin on the claimed name; without it, recordings get no
-/// positions. Nothing is loaded until the controller runs.
-async fn serve_kwin(name: &instance::Claim) -> Kwin {
-    match timeout(BUS_TIMEOUT, Kwin::serve(name.connection(), monotonic_now)).await {
+/// positions. Nothing is loaded until the controller runs, and nothing into
+/// a KWin that is not `wayland`'s compositor.
+async fn serve_kwin(name: &instance::Claim, wayland: &Wayland) -> Kwin {
+    let serve = Kwin::serve(name.connection(), monotonic_now, wayland.compositor());
+    match timeout(BUS_TIMEOUT, serve).await {
         Ok(kwin) => kwin,
         Err(_) => {
             eprintln!("auto-clicker: the session bus did not answer; recordings get no positions");

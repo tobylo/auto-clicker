@@ -3,6 +3,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::fs;
+use std::num::NonZeroU32;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -16,6 +17,7 @@ use tokio::time::timeout;
 
 use super::*;
 use crate::dir::ScriptDir;
+use crate::display::Process;
 use crate::receiver::{Call as Incoming, QUEUE, Receiver, Trust};
 
 const KWIN: &str = ":1.7";
@@ -78,6 +80,12 @@ struct State {
     /// The token each run script carried, by plugin, newest last.
     tokens: Vec<(&'static str, Token)>,
     receiver: Option<Rc<Receiver>>,
+    /// Each owner's process, as the bus tells it.
+    processes: Vec<(&'static str, Process)>,
+    /// Process lookups that fail before the next one succeeds.
+    failing_lookups: usize,
+    /// How many processes were looked up.
+    lookups: usize,
 }
 
 #[derive(Clone, Default)]
@@ -170,6 +178,20 @@ impl Scripting for FakeKwin {
         })
     }
 
+    async fn owner_process(&self, owner: &str) -> Result<Process, CallError> {
+        self.with(|s| {
+            s.lookups += 1;
+            if s.failing_lookups > 0 {
+                s.failing_lookups -= 1;
+                return Err(CallError("the bus did not answer".to_owned()));
+            }
+            let found = s.processes.iter().find(|(name, _)| *name == owner);
+            found
+                .map(|(_, process)| *process)
+                .ok_or_else(|| CallError("no such name".to_owned()))
+        })
+    }
+
     /// Starts what was loaded since the last start, as KWin does.
     async fn start(&self, _owner: &str) -> Result<(), CallError> {
         let new = self.with(|s| {
@@ -227,6 +249,15 @@ impl Harness {
     /// A fake KWin owned by `KWIN` (none when `running` is false) whose
     /// scripts report `SCREENS`, and a runtime directory holding `stale`.
     fn new(running: bool, stale: &[&str]) -> (Harness, Inbox) {
+        Harness::on_display(running, stale, None)
+    }
+
+    /// The same, for a daemon whose Wayland display `compositor` listens on.
+    fn on_display(
+        running: bool,
+        stale: &[&str],
+        compositor: Option<NonZeroU32>,
+    ) -> (Harness, Inbox) {
         let runtime = Runtime::new();
         let dir = ScriptDir::open(&runtime.0);
         for name in stale {
@@ -254,6 +285,7 @@ impl Harness {
             trust,
             layout: RefCell::default(),
             owner: RefCell::default(),
+            compositor,
         });
         let harness = Harness {
             kwin,
@@ -712,6 +744,7 @@ async fn a_runtime_directory_open_to_others_loads_nothing() {
             trust: Arc::clone(&h.session.trust),
             layout: RefCell::default(),
             owner: RefCell::default(),
+            compositor: None,
         };
         assert!(session.dir.is_err());
         let watcher = Watcher::new(Rc::new(session), h.slot.feed(), h.changed.clone());
@@ -1035,6 +1068,7 @@ async fn a_script_directory_that_failed_its_check_is_not_tried_again() {
             trust: Arc::clone(&h.session.trust),
             layout: RefCell::default(),
             owner: RefCell::default(),
+            compositor: None,
         };
         let mut watcher = Watcher::new(Rc::new(session), h.slot.feed(), h.changed.clone());
         let mut owners = watcher.follow_owner().await;
@@ -1228,3 +1262,5 @@ async fn a_report_lost_during_the_last_try_does_not_add_another() {
     })
     .await;
 }
+
+mod display;

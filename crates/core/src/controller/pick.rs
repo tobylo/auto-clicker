@@ -1,6 +1,6 @@
 //! A point the user picked on the screens in the settings window: where the
 //! clicker clicks for it, by decision 0001's mapping, on the screens as
-//! KWin has them now.
+//! the compositor has them now.
 //!
 //! The window picks on the layout its view showed; the screens may have
 //! changed since. A point is located only when the screens have not
@@ -150,6 +150,31 @@ mod tests {
         for (point, on, expected) in cases {
             assert_eq!(located(screens(), point, on), expected, "{point:?}");
         }
+    }
+
+    #[test]
+    fn a_point_on_a_layout_moved_from_negative_positions_maps_by_the_formula() {
+        // niri's outputs at (-500, -300) and (1420, 100), as the Wayland
+        // source publishes them: moved to start at (0, 0), a 4480 x 1840 box.
+        let left = rect(0, 0, 1920, 1080);
+        let right = rect(1920, 400, 2560, 1440);
+        let moved = Layout::new(vec![
+            Output::new(left, 1000).unwrap(),
+            Output::new(right, 1000).unwrap(),
+        ])
+        .unwrap();
+        let located = |at: Spot, on: Rect| match super::located(moved.clone(), at, on) {
+            Outcome::Located(Located { x, y, .. }) => Some((x, y)),
+            _ => None,
+        };
+        // Compositor point (0, 0) is (500, 300) on the moved layout:
+        // round(500 * 65536 / 4480) = 7314; round(300 * 65536 / 1840) = 10685.
+        assert_eq!(located(spot(500.0, 300.0), left), Some((7314, 10685)));
+        // The right output's last pixel: round(4479 * 65536 / 4480) = 65521,
+        // round(1839 * 65536 / 1840) = 65500.
+        assert_eq!(located(spot(4479.0, 1839.0), right), Some((65521, 65500)));
+        // Above the right output, inside the box: on no screen.
+        assert_eq!(located(spot(3000.0, 100.0), right), None);
     }
 
     #[test]

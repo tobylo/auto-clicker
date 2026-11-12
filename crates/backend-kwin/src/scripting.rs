@@ -14,6 +14,7 @@ use std::time::Duration;
 use futures_util::{Stream, StreamExt};
 use zbus::Connection;
 
+use crate::display::{Process, parent_of};
 use crate::script::Script;
 use zbus::export::serde::{Deserialize, Serialize};
 use zbus::fdo::{self, DBusProxy};
@@ -71,6 +72,9 @@ pub(crate) trait Scripting {
     /// when applied, and answers before the script has run; it reports
     /// under its token when it does.
     async fn start(&self, owner: &str) -> Result<(), CallError>;
+
+    /// The process that owns the bus name `owner`, and its parent.
+    async fn owner_process(&self, owner: &str) -> Result<Process, CallError>;
 }
 
 /// `call`, failing when it takes longer than [`CALL_TIMEOUT`].
@@ -181,6 +185,16 @@ impl Scripting for Bus {
 
     async fn start(&self, owner: &str) -> Result<(), CallError> {
         self.call(Target::scripting(owner), "start", &()).await
+    }
+
+    async fn owner_process(&self, owner: &str) -> Result<Process, CallError> {
+        let dbus = DBusProxy::new(&self.0).await?;
+        let name = BusName::try_from(owner).map_err(|err| CallError(err.to_string()))?;
+        let pid = dbus.get_connection_unix_process_id(name).await?;
+        Ok(Process {
+            pid,
+            parent: parent_of(pid),
+        })
     }
 }
 

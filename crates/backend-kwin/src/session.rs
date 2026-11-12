@@ -10,10 +10,12 @@
 //! crash left.
 
 use std::cell::RefCell;
+use std::num::NonZeroU32;
 
 use auto_clicker_core::recording::Layout;
 
 use crate::dir::ScriptDir;
+use crate::display;
 use crate::receiver::SharedTrust;
 use crate::script::Script;
 use crate::scripting::{CallError, Scripting, bounded};
@@ -28,6 +30,9 @@ pub(crate) struct Session<S> {
     pub(crate) layout: RefCell<Option<Layout>>,
     /// `org.kde.KWin`'s owner as the watcher last saw it.
     pub(crate) owner: RefCell<Option<String>>,
+    /// The process listening on the daemon's Wayland display; KWin counts
+    /// only as it or its child. `None`: nothing to check against.
+    pub(crate) compositor: Option<NonZeroU32>,
 }
 
 impl<S: Scripting> Session<S> {
@@ -78,9 +83,9 @@ impl<S: Scripting> Session<S> {
 
     /// At exit: unloads both scripts from the KWin last seen, or, when the
     /// watcher never saw one (the daemon failed to start after it claimed
-    /// its name), from KWin's owner now, which may still hold what a crashed
-    /// daemon left. Without KWin nothing is loaded, and only files are left
-    /// to remove.
+    /// its name, or KWin runs another display), from KWin's owner now, which
+    /// may still hold what a crashed daemon left, if it runs this display.
+    /// Without KWin nothing is loaded, and only files are left to remove.
     pub(crate) async fn exit(&self) {
         let seen = self.owner.borrow().clone();
         let owner = match seen {
@@ -97,7 +102,7 @@ impl<S: Scripting> Session<S> {
     /// cannot tell.
     async fn owner_now(&self) -> Option<String> {
         match bounded(self.scripting.follow_owner()).await {
-            Ok((owner, _changes)) => owner,
+            Ok((owner, _changes)) => display::checked_once(self, owner).await,
             Err(err) => {
                 eprintln!("auto-clicker: cannot ask who runs KWin: {}", err.0);
                 None
