@@ -5,6 +5,7 @@ use crate::controller::Blocked;
 use crate::controller::{Route, Routes, WINDOW_RECORDINGS};
 use crate::hotkeys::{Binding, Unavailable};
 use crate::message::{ChangeFailure, ConfigProblem, RecordingChange};
+use crate::recording::{MAX_OUTPUTS, Output};
 
 fn file(text: &str) -> FileName {
     FileName::parse(text).unwrap()
@@ -31,6 +32,24 @@ fn save(id: u64) -> Request {
     }
 }
 
+fn rect(x: u32, y: u32, width: u32, height: u32) -> Rect {
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+/// The laptop's panel with DP-1 to its right.
+fn screens() -> Layout {
+    Layout::new(vec![
+        Output::new(rect(0, 0, 2048, 1280), 1250).unwrap(),
+        Output::new(rect(2048, 0, 3440, 1440), 1000).unwrap(),
+    ])
+    .unwrap()
+}
+
 fn view() -> WindowView {
     let config = Config::default();
     WindowView {
@@ -52,6 +71,11 @@ fn view() -> WindowView {
             listed: vec![listed(1, Some("Farm loop")), listed(0, None)],
             more: 3,
             current: Some(file("2026-11-02_18-04-05.123.json")),
+        },
+        screens: Some(screens()),
+        since: Since {
+            runs: 3,
+            layouts: u64::MAX,
         },
         answer: Some(Answer {
             id: 7,
@@ -114,6 +138,13 @@ fn every_answer_reads_back_as_sent() {
         )),
         Outcome::Recording(RecordingOutcome::NotPlaying(Some(Notice::NothingToPlay))),
         Outcome::Recording(RecordingOutcome::NotPlaying(None)),
+        Outcome::Unavailable(Unavailability::ScreensUnknown),
+        Outcome::Unavailable(Unavailability::ScreensChanged),
+        Outcome::Located(Located {
+            x: 0,
+            y: 65535,
+            screens: screens(),
+        }),
     ];
     for outcome in outcomes {
         let answer = Answer { id: 1, outcome };
@@ -149,6 +180,14 @@ fn every_request_reads_back_as_sent() {
         Ask::Recording {
             file: file("2026-11-09_18-04-05.123.json"),
             action: RecordingAction::Play,
+        },
+        Ask::Locate {
+            at: Spot::new(2048.5, 1439.99).unwrap(),
+            on: rect(2048, 0, 3440, 1440),
+            since: Since {
+                runs: 1,
+                layouts: 2,
+            },
         },
     ];
     for ask in asks {
@@ -188,6 +227,47 @@ fn a_shown_binding_is_read_only_in_its_one_form() {
     let mut value = serde_json::to_value(view()).unwrap();
     value["hotkeys"]["toggle_clicking"] = serde_json::json!({ "bound": "Ctrl+Nope" });
     assert!(parse::<WindowView>(&serde_json::to_vec(&value).unwrap()).is_err());
+}
+
+#[test]
+fn a_picked_position_is_read_only_as_finite_numbers_on_the_screens() {
+    let ask = Ask::Locate {
+        at: Spot::new(1.5, 2.5).unwrap(),
+        on: rect(0, 0, 10, 10),
+        since: Since::default(),
+    };
+    let mut value = serde_json::to_value(Request { id: 1, ask }).unwrap();
+    for at in [
+        serde_json::json!({"x": -0.5, "y": 1.0}),
+        serde_json::json!({"x": 1.0, "y": 5e9}),
+        serde_json::json!({"x": 1.0}),
+        serde_json::json!({"x": 1.0, "y": 1.0, "z": 1.0}),
+        serde_json::json!("1,1"),
+    ] {
+        value["ask"]["locate"]["at"] = at.clone();
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert!(parse::<Request>(&bytes).is_err(), "{at}");
+    }
+    assert_eq!(Spot::new(f64::NAN, 1.0), None);
+    assert_eq!(Spot::new(1.0, f64::INFINITY), None);
+}
+
+#[test]
+fn shown_screens_are_read_only_as_a_valid_layout() {
+    let mut value = serde_json::to_value(view()).unwrap();
+    value["screens"] = serde_json::Value::Null;
+    assert!(parse::<WindowView>(&serde_json::to_vec(&value).unwrap()).is_ok());
+    let one = serde_json::json!({"x": 0, "y": 0, "width": 10, "height": 10, "scale_milli": 1000});
+    let invalid = [
+        serde_json::json!([]),
+        serde_json::json!([{"x": 5, "y": 0, "width": 10, "height": 10, "scale_milli": 1000}]),
+        serde_json::Value::Array(vec![one; MAX_OUTPUTS + 1]),
+    ];
+    for screens in invalid {
+        value["screens"] = screens.clone();
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert!(parse::<WindowView>(&bytes).is_err(), "{screens}");
+    }
 }
 
 #[test]
@@ -247,6 +327,9 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
         more: u64::MAX,
         current: Some(file("2026-11-09_18-04-05.123-9.json")),
     };
+    // The most screens, at the largest numbers.
+    let far = Output::new(rect(0, 0, u32::MAX, u32::MAX), u32::MAX).unwrap();
+    widest.screens = Some(Layout::new(vec![far; MAX_OUTPUTS]).unwrap());
     widest.answer = Some(Answer {
         id: u64::MAX,
         outcome: Outcome::Refused(Refusal::new(

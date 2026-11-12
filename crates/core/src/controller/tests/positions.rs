@@ -112,7 +112,7 @@ impl Daemon {
         assert!(self.shared.calls().contains(&w(PressState::Down)));
     }
 
-    fn set_layout(&self, layout: Option<Layout>) {
+    pub(super) fn set_layout(&self, layout: Option<Layout>) {
         self.shared.with(|r| r.layout = layout);
     }
 }

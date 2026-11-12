@@ -107,9 +107,12 @@ fn pressed_keys(recording: &Recording) -> Arc<[Key]> {
 
 impl<P: Platform> Controller<P> {
     /// The layout changed or became unknown: a playback moving to positions
-    /// on another layout stops, and says why. The layout is read as it is
+    /// on another layout stops, and says why, as clicking at a point picked
+    /// on other screens does; a pick begun before is refused. The layout is read as it is
     /// now: a change undone before this runs leaves the positions right.
     pub(super) fn layout_changed(&mut self) {
+        self.since.layouts = self.since.layouts.wrapping_add(1);
+        self.screens_changed_for_clicking();
         let State::Running(running) = &self.state else {
             return;
         };

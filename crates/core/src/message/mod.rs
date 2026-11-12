@@ -24,7 +24,9 @@ use serde::{Deserialize, Serialize};
 
 pub use answer::{ChangeFailure, Failure, RecordingChange, Step, Unavailability};
 pub use input::InputFailure;
-pub use notice::{Hindrance, Notice, PlayStart, SaveFailure, Saving, Start, Stop, Unplayable};
+pub use notice::{
+    Hindrance, Notice, PlayStart, PointScreens, SaveFailure, Saving, Start, Stop, Unplayable,
+};
 pub use quoted::Quoted;
 pub use titled::Titled;
 

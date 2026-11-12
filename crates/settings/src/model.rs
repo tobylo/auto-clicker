@@ -8,6 +8,7 @@ use auto_clicker_core::config::{
 };
 use auto_clicker_core::controller::Hotkey;
 use auto_clicker_core::input::Key;
+use auto_clicker_core::recording::Layout;
 
 /// The modes in the order the window lists them.
 const MODES: [ModeName; 5] = [
@@ -54,6 +55,33 @@ pub struct Fields {
     pub plays_text: String,
 }
 
+/// A fixed point picked on the screens, and the screens it was picked on.
+/// A save keeps the screens while the fields still hold this point.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picked {
+    pub x: u16,
+    pub y: u16,
+    pub screens: Layout,
+}
+
+impl Picked {
+    /// The picked point a draft holds, if it holds one.
+    pub fn of(draft: &Draft) -> Option<Picked> {
+        match &draft.clicker.position {
+            PositionDraft::Fixed {
+                x,
+                y,
+                screens: Some(screens),
+            } => Some(Picked {
+                x: *x,
+                y: *y,
+                screens: screens.clone(),
+            }),
+            _ => None,
+        }
+    }
+}
+
 /// A field whose text cannot be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unreadable {
@@ -75,7 +103,7 @@ impl Fields {
         };
         let (position_fixed, position_x, position_y) = match clicker.position {
             PositionDraft::Cursor => (false, 0, 0),
-            PositionDraft::Fixed { x, y } => (true, i32::from(x), i32::from(y)),
+            PositionDraft::Fixed { x, y, .. } => (true, i32::from(x), i32::from(y)),
         };
         let (repeat_forever, repeat_text) = count_fields(clicker.repeat);
         let (plays_forever, plays_text) = count_fields(draft.playback.repeat);
@@ -101,18 +129,24 @@ impl Fields {
     }
 
     /// The draft these fields give, with the hotkeys of `hotkeys` (which
-    /// only a capture changes); which field cannot be read, if one cannot.
-    /// A decimal is read with a point or a comma.
-    pub fn to_draft(&self, hotkeys: &HotkeysDraft) -> Result<Draft, Unreadable> {
+    /// only a capture changes) and the screens of `picked` while the fields
+    /// hold its point; which field cannot be read, if one cannot. A decimal
+    /// is read with a point or a comma.
+    pub fn to_draft(
+        &self,
+        hotkeys: &HotkeysDraft,
+        picked: Option<&Picked>,
+    ) -> Result<Draft, Unreadable> {
         let interval = match self.interval_unit {
             1 => IntervalDraft::PerSecond(decimal(&self.interval_text, Unreadable::Interval)?),
             _ => IntervalDraft::Ms(whole(&self.interval_text, Unreadable::Interval)?),
         };
         let position = if self.position_fixed {
-            PositionDraft::Fixed {
-                x: coordinate(self.position_x),
-                y: coordinate(self.position_y),
-            }
+            let (x, y) = (coordinate(self.position_x), coordinate(self.position_y));
+            let screens = picked
+                .filter(|picked| (picked.x, picked.y) == (x, y))
+                .map(|picked| picked.screens.clone());
+            PositionDraft::Fixed { x, y, screens }
         } else {
             PositionDraft::Cursor
         };

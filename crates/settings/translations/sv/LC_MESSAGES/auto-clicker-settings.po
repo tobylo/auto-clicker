@@ -44,6 +44,30 @@ msgstr "Avbrutet."
 msgid "Nothing was pressed in time."
 msgstr "Ingenting trycktes i tid."
 
+msgid "Click the point on any screen, or press Esc to cancel."
+msgstr "Klicka på punkten på valfri skärm, eller tryck Esc för att avbryta."
+
+msgid "Point picked. Save to keep it."
+msgstr "Punkten är vald. Spara för att behålla den."
+
+msgid "No point was picked in time."
+msgstr "Ingen punkt valdes i tid."
+
+msgid "The screen could not be covered to pick a point: {}"
+msgstr "Skärmen kunde inte täckas för att välja en punkt: {}"
+
+msgid "Pick on the screen…"
+msgstr "Välj på skärmen…"
+
+msgid "Picking a point needs the screen layout from KWin, which is not known now."
+msgstr "För att välja en punkt behövs skärmlayouten från KWin, och den är inte känd nu."
+
+msgid "Pick the point"
+msgstr "Välj punkten"
+
+msgid "Click where the clicker should click. Esc cancels."
+msgstr "Klicka där klickaren ska klicka. Esc avbryter."
+
 msgid "That key has no name a hotkey can use; choose another."
 msgstr "Den tangenten har inget namn som en snabbtangent kan använda; välj en annan."
 
@@ -374,6 +398,18 @@ msgstr "programmet läser tangentborden: välj snabbtangenterna i det här föns
 
 msgid "the desktop's shortcuts are not available"
 msgstr "skrivbordets genvägar är inte tillgängliga"
+
+msgid "the screen layout is not known"
+msgstr "skärmlayouten är inte känd"
+
+msgid "the screens changed while the point was picked: pick it again"
+msgstr "skärmarna ändrades medan punkten valdes: välj den igen"
+
+msgid "the screens changed since the fixed point was picked: pick it again in Settings"
+msgstr "skärmarna har ändrats sedan den fasta punkten valdes: välj den igen i Inställningar"
+
+msgid "the screen layout is not known, so the picked point cannot be checked"
+msgstr "skärmlayouten är inte känd, så den valda punkten kan inte kontrolleras"
 
 msgid "tray_start_delay must be from 0 to {} seconds"
 msgstr "måste vara från 0 till {} sekunder"

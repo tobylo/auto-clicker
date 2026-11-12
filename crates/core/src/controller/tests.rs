@@ -1271,6 +1271,7 @@ fn the_countdown_wakes_on_each_whole_second_and_then_the_deadline() {
 mod capture;
 mod desktop;
 mod per_run;
+mod pick;
 mod playback;
 mod positions;
 mod recording;

@@ -6,6 +6,7 @@
 mod app;
 mod link;
 mod model;
+mod pick;
 mod said;
 mod shelf;
 mod state;
@@ -47,6 +48,16 @@ fn main() -> ExitCode {
         Ok(link) => link,
         Err(err) => return fail(&err.to_string()),
     };
+    // The overlays that pick the fixed point are made full-screen on their
+    // screens as they are created, through the backend's hook.
+    let backend = i_slint_backend_winit::Backend::builder()
+        .with_window_attributes_hook(pick::hook)
+        .build();
+    if let Err(err) = backend.and_then(|backend| {
+        slint::platform::set_platform(Box::new(backend)).map_err(|err| err.to_string().into())
+    }) {
+        return fail(&format!("could not start the window system: {err}"));
+    }
     // The desktop file's id, so the desktop names the window and gives it
     // the program's icon.
     let _ = slint::set_xdg_app_id(APP_ID);
@@ -129,9 +140,13 @@ mod tests {
     /// would show English in a Swedish window.
     #[test]
     fn every_text_is_translated_to_swedish() {
-        let ui = include_str!("../ui/window.slint");
+        let ui = [
+            include_str!("../ui/window.slint"),
+            include_str!("../ui/pick.slint"),
+        ]
+        .concat();
         let po = include_str!("../translations/sv/LC_MESSAGES/auto-clicker-settings.po");
-        let texts = texts(ui);
+        let texts = texts(&ui);
         assert!(texts.len() > 100, "{}", texts.len());
         for (context, text) in texts {
             let context = context

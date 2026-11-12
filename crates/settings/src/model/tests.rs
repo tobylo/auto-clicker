@@ -1,5 +1,6 @@
 use auto_clicker_core::config::Config;
 use auto_clicker_core::hotkeys::Binding;
+use auto_clicker_core::recording::{Output, Rect};
 
 use super::*;
 
@@ -21,7 +22,11 @@ fn drafts() -> Vec<Draft> {
             d.clicker.jitter_percent = 50;
             d.clicker.button = ButtonName::Forward;
             d.clicker.key = 113;
-            d.clicker.position = PositionDraft::Fixed { x: 0, y: 65535 };
+            d.clicker.position = PositionDraft::Fixed {
+                x: 0,
+                y: 65535,
+                screens: None,
+            };
             d.clicker.repeat = CountDraft::Times(u64::from(u32::MAX));
             d.input = InputDraft {
                 output: RouteName::Portal,
@@ -44,7 +49,65 @@ fn drafts() -> Vec<Draft> {
             d.playback.speed = 4.0;
             d.playback.repeat = CountDraft::Times(u64::from(u32::MAX));
         }),
+        draft(|d| d.clicker.position = picked_at(10, 20)),
     ]
+}
+
+/// The panel alone, at 1.25.
+fn panel() -> Layout {
+    let rect = Rect {
+        x: 0,
+        y: 0,
+        width: 2048,
+        height: 1280,
+    };
+    Layout::new(vec![Output::new(rect, 1250).unwrap()]).unwrap()
+}
+
+fn picked_at(x: u16, y: u16) -> PositionDraft {
+    PositionDraft::Fixed {
+        x,
+        y,
+        screens: Some(panel()),
+    }
+}
+
+#[test]
+fn a_picked_point_keeps_its_screens_only_while_the_fields_hold_it() {
+    let shown = draft(|d| d.clicker.position = picked_at(10, 20));
+    let picked = Picked::of(&shown);
+    assert_eq!(
+        picked,
+        Some(Picked {
+            x: 10,
+            y: 20,
+            screens: panel()
+        })
+    );
+    let position = |change: fn(&mut Fields)| {
+        let mut fields = Fields::from_draft(&shown, '.');
+        change(&mut fields);
+        let read = fields.to_draft(&shown.hotkeys, picked.as_ref()).unwrap();
+        read.clicker.position
+    };
+    let typed = |x, y| PositionDraft::Fixed {
+        x,
+        y,
+        screens: None,
+    };
+    assert_eq!(position(|_| {}), picked_at(10, 20));
+    assert_eq!(position(|f| f.position_x = 11), typed(11, 20));
+    assert_eq!(position(|f| f.position_y = 21), typed(10, 21));
+    assert_eq!(
+        position(|f| f.position_fixed = false),
+        PositionDraft::Cursor
+    );
+    // Typed back to the picked point: it is that point again.
+    assert_eq!(position(|f| f.position_x = 10), picked_at(10, 20));
+    assert_eq!(
+        Picked::of(&draft(|d| d.clicker.position = typed(1, 2))),
+        None
+    );
 }
 
 #[test]
@@ -53,7 +116,7 @@ fn the_fields_give_back_the_draft_they_show_in_either_language() {
         for shown in drafts() {
             let fields = Fields::from_draft(&shown, decimal);
             assert_eq!(
-                fields.to_draft(&shown.hotkeys),
+                fields.to_draft(&shown.hotkeys, Picked::of(&shown).as_ref()),
                 Ok(shown.clone()),
                 "{fields:?}"
             );
@@ -70,7 +133,11 @@ fn decimals_show_with_the_languages_separator_and_read_with_either() {
     for written in ["0,75", "0.75", " 0,75 "] {
         fields.speed_text = written.to_owned();
         assert_eq!(
-            fields.to_draft(&shown.hotkeys).unwrap().playback.speed,
+            fields
+                .to_draft(&shown.hotkeys, None)
+                .unwrap()
+                .playback
+                .speed,
             0.75,
             "{written}"
         );
@@ -81,7 +148,9 @@ fn decimals_show_with_the_languages_separator_and_read_with_either() {
 fn the_hotkeys_come_from_the_captures_not_the_fields() {
     let shown = draft(|_| {});
     let captured = draft(|d| d.hotkeys.toggle_recording = "Ctrl+F9".to_owned()).hotkeys;
-    let saved = Fields::from_draft(&shown, '.').to_draft(&captured).unwrap();
+    let saved = Fields::from_draft(&shown, '.')
+        .to_draft(&captured, None)
+        .unwrap();
     assert_eq!(saved.hotkeys, captured);
 }
 
@@ -101,13 +170,13 @@ fn the_key_is_a_name_in_any_case_or_a_code_after_a_hash() {
     ];
     for (written, code) in keys {
         fields.key_text = written.to_owned();
-        let read = fields.to_draft(&shown.hotkeys).unwrap();
+        let read = fields.to_draft(&shown.hotkeys, None).unwrap();
         assert_eq!(read.clicker.key, code, "{written}");
     }
     for unreadable in ["", "no such key", "113", "#70000", "#-1", "#"] {
         fields.key_text = unreadable.to_owned();
         assert_eq!(
-            fields.to_draft(&shown.hotkeys),
+            fields.to_draft(&shown.hotkeys, None),
             Err(Unreadable::Key),
             "{unreadable}"
         );
@@ -151,7 +220,11 @@ fn text_that_cannot_be_read_is_named() {
     for (change, field) in cases {
         let mut fields = base.clone();
         change(&mut fields);
-        assert_eq!(fields.to_draft(&shown.hotkeys), Err(field), "{fields:?}");
+        assert_eq!(
+            fields.to_draft(&shown.hotkeys, None),
+            Err(field),
+            "{fields:?}"
+        );
     }
 }
 
@@ -161,7 +234,7 @@ fn a_count_beyond_what_the_config_takes_goes_to_the_daemon_to_refuse() {
     let mut fields = Fields::from_draft(&shown, '.');
     fields.repeat_forever = false;
     fields.repeat_text = "5000000000".to_owned();
-    let read = fields.to_draft(&shown.hotkeys).unwrap();
+    let read = fields.to_draft(&shown.hotkeys, None).unwrap();
     assert_eq!(read.clicker.repeat, CountDraft::Times(5_000_000_000));
 }
 
@@ -175,12 +248,16 @@ fn a_choice_no_widget_gives_falls_back_and_numbers_stay_in_range() {
     fields.position_x = 70_000;
     fields.position_y = -5;
     fields.jitter = -1;
-    let read = fields.to_draft(&shown.hotkeys).unwrap();
+    let read = fields.to_draft(&shown.hotkeys, None).unwrap();
     assert_eq!(read.clicker.mode, ModeName::Click);
     assert_eq!(read.clicker.button, ButtonName::Left);
     assert_eq!(
         read.clicker.position,
-        PositionDraft::Fixed { x: 65535, y: 0 }
+        PositionDraft::Fixed {
+            x: 65535,
+            y: 0,
+            screens: None,
+        }
     );
     assert_eq!(read.clicker.jitter_percent, 0);
 }

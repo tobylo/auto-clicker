@@ -98,6 +98,7 @@ fn every_option_is_read() {
             position: Position::Fixed(AbsolutePosition { x: 0, y: 65535 }),
             repeat: Repeat::Times(NonZeroU32::new(7).unwrap()),
         },
+        fixed_screens: None,
         input: InputSettings {
             output: OutputRoute::Portal,
             hotkeys: HotkeyRoute::Portal,
@@ -174,6 +175,43 @@ fn position_and_repeat_take_their_words() {
         clicker("[clicker.position]\nx = 1\ny = 2").position,
         Position::Fixed(AbsolutePosition { x: 1, y: 2 })
     );
+}
+
+#[test]
+fn a_picked_point_reads_with_its_screens_and_only_valid_ones() {
+    let config = parse(
+        "version = 1\n[clicker.position]\nx = 1\ny = 2\nscreens = [\
+         { x = 0, y = 0, width = 2048, height = 1280, scale_milli = 1250 }]\n",
+    );
+    assert_eq!(
+        config.clicker.position,
+        Position::Fixed(AbsolutePosition { x: 1, y: 2 })
+    );
+    let screens = config.fixed_screens.unwrap();
+    assert_eq!(screens.outputs().len(), 1);
+    assert_eq!(screens.outputs()[0].scale_milli(), 1250);
+    assert_eq!(parse("version = 1\n").fixed_screens, None);
+    let cases = [
+        ("screens = []", "no screens"),
+        (
+            "screens = [{ x = 5, y = 0, width = 10, height = 10, scale_milli = 1000 }]",
+            "top-left",
+        ),
+        (
+            "screens = [{ x = 0, y = 0, width = 0, height = 10, scale_milli = 1000 }]",
+            "no area",
+        ),
+        (
+            "screens = [{ x = 0, y = 0, width = 10, height = 10 }]",
+            "scale_milli",
+        ),
+    ];
+    for (screens, said) in cases {
+        let (_, why) = invalid(&format!(
+            "version = 1\n[clicker.position]\nx = 1\ny = 2\n{screens}\n"
+        ));
+        assert!(why.contains(said), "{screens}: {why}");
+    }
 }
 
 // Invalid files

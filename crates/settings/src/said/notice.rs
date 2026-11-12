@@ -4,8 +4,8 @@
 
 use auto_clicker_core::hotkeys::Refusal;
 use auto_clicker_core::message::{
-    ChangeFailure, Hindrance, Notice, PlayStart, RecordingChange, SaveFailure, Saving, Start, Step,
-    Stop, Titled, Unplayable,
+    ChangeFailure, Hindrance, Notice, PlayStart, PointScreens, RecordingChange, SaveFailure,
+    Saving, Start, Step, Stop, Titled, Unplayable,
 };
 use auto_clicker_core::playback::Fallback;
 use auto_clicker_core::window::RecordingOutcome;
@@ -118,6 +118,14 @@ impl Said<'_> {
             Hindrance::NoRecording(why) => self.no_recording(why),
             Hindrance::NoClock => t.invoke_no_clock(),
             Hindrance::Hotkeys(why) => self.unavailable(why),
+            Hindrance::Screens(why) => self.point_screens(*why),
+        }
+    }
+
+    fn point_screens(&self, why: PointScreens) -> SharedString {
+        match why {
+            PointScreens::Changed => self.texts.invoke_point_screens_changed(),
+            PointScreens::Unknown => self.texts.invoke_point_screens_unknown(),
         }
     }
 
@@ -140,6 +148,7 @@ impl Said<'_> {
             Stop::OwnKey(why) => t.invoke_stopped(self.own_key(why)),
             Stop::LayoutChanged => t.invoke_layout_changed(),
             Stop::LayoutUnknown => t.invoke_layout_unknown(),
+            Stop::Screens(why) => t.invoke_run_failed_clicking(self.point_screens(*why)),
             Stop::Hotkeys(why) => t.invoke_recording_stopped(self.unavailable(why)),
             Stop::Full => t.invoke_recording_full(),
             Stop::Limit { minutes } => t.invoke_recording_limit(s(minutes)),
