@@ -164,9 +164,17 @@ impl Pick {
             windows: Vec::new(),
             _timeout: timeout,
         };
+        let screens: Rc<[Rect]> = targets.iter().map(|target| target.on).collect();
         for Target { on, monitor } in targets {
             let window = place(monitor).map_err(|err| err.to_string())?;
-            told_by(&window, on, &ending);
+            told_by(
+                &window,
+                Placed {
+                    on,
+                    screens: Rc::clone(&screens),
+                },
+                &ending,
+            );
             // Kept before it is shown, so a failure from here on closes it.
             pick.windows.push(window.clone_strong());
             window.show().map_err(|err| err.to_string())?;
@@ -175,15 +183,44 @@ impl Pick {
     }
 }
 
-/// Whether an overlay meant for the screen at `on` is on the monitor whose
-/// corner is `corner` instead; not when that corner is not known.
-fn moved(corner: Option<(i64, i64)>, on: Rect) -> bool {
-    corner.is_some_and(|corner| corner != (i64::from(on.x), i64::from(on.y)))
+/// Where an overlay was put: on the screen at `on`, among `screens`.
+struct Placed {
+    on: Rect,
+    screens: Rc<[Rect]>,
+}
+
+impl Placed {
+    /// Whether the overlay is on the monitor whose corner is `corner`
+    /// instead of its own. Not when that corner is not known, nor when it
+    /// is a screen overlapping its own: winit reports one of the screens a
+    /// window covers, which may be the other one.
+    fn moved(&self, corner: Option<(i64, i64)>) -> bool {
+        let Some(corner) = corner else {
+            return false;
+        };
+        let at = |rect: &Rect| (i64::from(rect.x), i64::from(rect.y)) == corner;
+        !at(&self.on)
+            && !self
+                .screens
+                .iter()
+                .any(|rect| at(rect) && overlap(*rect, self.on))
+    }
+}
+
+/// Whether `a` and `b` share any pixel.
+fn overlap(a: Rect, b: Rect) -> bool {
+    let before =
+        |start: u32, other: u32, size: u32| u64::from(start) < u64::from(other) + u64::from(size);
+    before(a.x, b.x, b.width)
+        && before(b.x, a.x, a.width)
+        && before(a.y, b.y, b.height)
+        && before(b.y, a.y, a.height)
 }
 
 /// Makes `window`, the overlay for the screen at `on`, tell `ending` how
 /// the pick ended.
-fn told_by(window: &PickWindow, on: Rect, ending: &Ending) {
+fn told_by(window: &PickWindow, placed: Placed, ending: &Ending) {
+    let on = placed.on;
     let clicked = Rc::clone(ending);
     let overlay = window.as_weak();
     window.on_picked(move |x, y| {
@@ -191,7 +228,7 @@ fn told_by(window: &PickWindow, on: Rect, ending: &Ending) {
             return;
         };
         let window = overlay.window();
-        if moved(corner(window), on) {
+        if placed.moved(corner(window)) {
             return end(&clicked, PickEnd::Moved);
         }
         // Slint's own scale (`SLINT_SCALE_FACTOR`) may differ from the
