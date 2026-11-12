@@ -6,12 +6,13 @@ use auto_clicker_core::config::{Draft, Field, HotkeysDraft, Reason, Stale};
 use auto_clicker_core::controller::{Activity, Route};
 use auto_clicker_core::hotkeys::{Action, Capture};
 use auto_clicker_core::message::{Failure, Quoted, Unavailability};
-use auto_clicker_core::recording::FileName;
+use auto_clicker_core::recording::{FileName, Rect};
 use auto_clicker_core::window::{
-    Ask, CaptureEnd, Confirm, Outcome, RecordingAction, RecordingOutcome, Request, WindowView,
+    Ask, CaptureEnd, Confirm, Located, Outcome, RecordingAction, RecordingOutcome, Request, Since,
+    Spot, WindowView,
 };
 
-use crate::model::{Fields, Unreadable, with_hotkey};
+use crate::model::{Fields, Picked, Unreadable, with_hotkey};
 
 /// What a capture is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +38,17 @@ pub enum Note {
     CapturedKey(u16),
     CaptureEnded(CaptureEnd),
     Configured,
+    /// The overlay to pick a point is up.
+    Picking,
+    /// A point was picked: where the clicker clicks for it, kept on a save.
+    Picked {
+        x: u16,
+        y: u16,
+    },
+    PickCancelled,
+    PickTimedOut,
+    /// The overlay could not be opened: why.
+    PickFailed(String),
     Unreadable(Unreadable),
     /// What came of something done with a recording.
     Recording(RecordingOutcome),
@@ -50,6 +62,7 @@ impl Note {
             Note::Failed(_)
                 | Note::Refused(..)
                 | Note::Unavailable(_)
+                | Note::PickFailed(_)
                 | Note::Unreadable(_)
                 | Note::Recording(
                     RecordingOutcome::NotChanged(..) | RecordingOutcome::NotPlaying(_)
@@ -81,6 +94,7 @@ enum Asked {
     Capture(Target),
     Configure,
     Recording,
+    Locate,
 }
 
 /// What a new view changes on screen.
@@ -99,9 +113,14 @@ pub struct State {
     saved: Option<Draft>,
     /// The hotkeys to save: as sent, or as captured since.
     hotkeys: Option<HotkeysDraft>,
+    /// The fixed point picked on the screens: as sent, or as picked since.
+    picked: Option<Picked>,
     next_id: u64,
     asked: Option<(u64, Asked)>,
     question: Option<(Question, Agreed)>,
+    /// The overlays to pick a point are up: nothing else is asked until
+    /// they close.
+    picking: bool,
 }
 
 impl State {
@@ -113,6 +132,7 @@ impl State {
         if self.saved.as_ref() != Some(&view.settings) {
             self.saved = Some(view.settings.clone());
             self.hotkeys = Some(view.settings.hotkeys.clone());
+            self.picked = Picked::of(&view.settings);
             shown.fields = Some(view.settings.clone());
         }
         let answered = view.answer.as_ref().and_then(|answer| {
@@ -149,7 +169,15 @@ impl State {
             Outcome::CaptureEnded(why) => Note::CaptureEnded(why),
             Outcome::Configured => Note::Configured,
             Outcome::Recording(outcome) => Note::Recording(outcome),
+            Outcome::Located(located) => self.located(located),
         })
+    }
+
+    /// Keeps a point the daemon located, for the fields and the next save.
+    fn located(&mut self, located: Located) -> Note {
+        let Located { x, y, screens } = located;
+        self.picked = Some(Picked { x, y, screens });
+        Note::Picked { x, y }
     }
 
     /// Keeps a question a save asked, to ask the user.
@@ -183,7 +211,14 @@ impl State {
     /// Whether the user may ask something now: the settings came, nothing
     /// waits on an answer and no question is open.
     pub fn may_ask(&self) -> bool {
-        self.hotkeys.is_some() && self.asked.is_none() && self.question.is_none()
+        let free = self.asked.is_none() && self.question.is_none() && !self.picking;
+        self.hotkeys.is_some() && free
+    }
+
+    /// The overlays to pick a point are up, or `false`, closed: while they
+    /// are up, nothing else is asked.
+    pub fn set_picking(&mut self, picking: bool) {
+        self.picking = picking;
     }
 
     /// A save of `fields`; which field cannot be read instead, if one
@@ -278,6 +313,16 @@ impl State {
         Some(self.send_recording(file, action))
     }
 
+    /// Where the clicker clicks for `at`, picked on the screen at `on` in a
+    /// pick begun on the counts `since`; `None` while the user may not ask
+    /// anything.
+    pub fn locate(&mut self, at: Spot, on: Rect, since: Since) -> Option<Request> {
+        if !self.may_ask() {
+            return None;
+        }
+        Some(self.send(Ask::Locate { at, on, since }, Asked::Locate))
+    }
+
     fn send_recording(&mut self, file: FileName, action: RecordingAction) -> Request {
         self.send(Ask::Recording { file, action }, Asked::Recording)
     }
@@ -287,7 +332,7 @@ impl State {
         fields: &Fields,
         agreed: Agreed,
     ) -> Option<Result<Request, Unreadable>> {
-        let draft = fields.to_draft(self.hotkeys.as_ref()?);
+        let draft = fields.to_draft(self.hotkeys.as_ref()?, self.picked.as_ref());
         Some(draft.map(|settings| {
             let ask = Ask::Save {
                 settings,

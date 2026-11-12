@@ -59,7 +59,8 @@ pub(super) struct Settings {
 /// What happened with the settings window.
 pub(super) enum WindowEvent {
     Opened(WindowLink),
-    Request(Request),
+    /// Boxed: a request carries a whole draft of the settings.
+    Request(Box<Request>),
     /// The window closed its side, or crashed.
     Closed,
 }
@@ -111,7 +112,7 @@ pub(super) fn next_event(settings: &mut Settings) -> impl Future<Output = Window
             && let Poll::Ready(request) = window.requests.poll_recv(cx)
         {
             return Poll::Ready(match request {
-                Some(request) => WindowEvent::Request(request),
+                Some(request) => WindowEvent::Request(Box::new(request)),
                 None => WindowEvent::Closed,
             });
         }
@@ -147,7 +148,8 @@ impl<P: Platform> Controller<P> {
                 self.end_pending();
                 self.settings.window = None;
             }
-            WindowEvent::Request(Request { id, ask }) => {
+            WindowEvent::Request(request) => {
+                let Request { id, ask } = *request;
                 let outcome = match ask {
                     Ask::Save {
                         settings,
@@ -159,6 +161,7 @@ impl<P: Platform> Controller<P> {
                         self.configure_shortcuts(id, activation_token)
                     }
                     Ask::Recording { file, action } => Some(self.recording_request(&file, action)),
+                    Ask::Locate { at, on, since } => Some(self.locate(at, on, since)),
                 };
                 if let Some(outcome) = outcome {
                     self.settings.answer = Some(Answer { id, outcome });
@@ -240,17 +243,20 @@ impl<P: Platform> Controller<P> {
             .collect()
     }
 
-    /// Takes a saved config into use: the clicker, playback and tray
-    /// settings for the next start, the hotkeys at once. The controller is
+    /// Takes a saved config into use: the clicker (with the screens a
+    /// picked point was picked on), playback and tray settings for the next
+    /// start, the hotkeys at once. The controller is
     /// settled, so the reader can start again: it knows every device. The
     /// file is valid now.
     fn use_saved(&mut self, saved: Config) {
-        self.config.tray_start_delay = saved.tray_start_delay;
-        self.config.clicker = saved.clicker;
-        self.config.playback = saved.playback;
+        let hotkeys_changed = saved.hotkeys != self.config.hotkeys;
+        // Everything but `[input]`, which picked the platform at start.
+        self.config = Config {
+            input: self.config.input,
+            ..saved.clone()
+        };
         self.config_error = None;
-        if saved.hotkeys != self.config.hotkeys {
-            self.config.hotkeys = saved.hotkeys;
+        if hotkeys_changed {
             self.restart_reader();
         }
         self.settings.saved = saved;
@@ -274,6 +280,8 @@ impl<P: Platform> Controller<P> {
             no_recording: self.no_recording(),
             problems: self.problems(),
             recordings: self.shelf.window_view(),
+            screens: self.platform.layout(),
+            since: self.since,
             answer: self.settings.answer.clone(),
         }
         .bounded();

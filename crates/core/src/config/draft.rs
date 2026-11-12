@@ -14,6 +14,7 @@ use crate::hotkeys::{Action, Binding, Bindings};
 use crate::input::AbsolutePosition;
 use crate::message::Quoted;
 use crate::playback::PlaybackSettings;
+use crate::recording::Layout;
 
 /// Every setting of the config file.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -49,12 +50,17 @@ pub enum IntervalDraft {
     PerSecond(f64),
 }
 
-/// `position`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+/// `position`: a fixed point carries the screens it was picked on, `None`
+/// when it was typed in.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum PositionDraft {
     Cursor,
-    Fixed { x: u16, y: u16 },
+    Fixed {
+        x: u16,
+        y: u16,
+        screens: Option<Layout>,
+    },
 }
 
 /// A `repeat`: until stopped, or a count from 1.
@@ -133,6 +139,10 @@ impl Draft {
         let tray_start_delay = check::tray_start_delay(signed(self.tray_start_delay))
             .map_err(at(Field::TrayStartDelay))?;
         let clicker = self.clicker.to_settings()?;
+        let fixed_screens = match &self.clicker.position {
+            PositionDraft::Fixed { screens, .. } => screens.clone(),
+            PositionDraft::Cursor => None,
+        };
         let input = InputSettings {
             output: self.input.output.into(),
             hotkeys: self.input.hotkeys.into(),
@@ -158,6 +168,7 @@ impl Draft {
         Ok(Config {
             tray_start_delay,
             clicker,
+            fixed_screens,
             hotkeys,
             input,
             playback,
@@ -183,7 +194,7 @@ impl ClickerDraft {
             key: check::key_code(i64::from(self.key)).map_err(at(Field::Key))?,
             position: match self.position {
                 PositionDraft::Cursor => Position::Cursor,
-                PositionDraft::Fixed { x, y } => Position::Fixed(AbsolutePosition { x, y }),
+                PositionDraft::Fixed { x, y, .. } => Position::Fixed(AbsolutePosition { x, y }),
             },
             repeat: self.repeat.to_repeat().map_err(at(Field::Repeat))?,
         })
@@ -237,7 +248,11 @@ impl From<&Config> for Draft {
                 key: clicker.key.code(),
                 position: match clicker.position {
                     Position::Cursor => PositionDraft::Cursor,
-                    Position::Fixed(AbsolutePosition { x, y }) => PositionDraft::Fixed { x, y },
+                    Position::Fixed(AbsolutePosition { x, y }) => PositionDraft::Fixed {
+                        x,
+                        y,
+                        screens: config.fixed_screens.clone(),
+                    },
                 },
                 repeat: clicker.repeat.into(),
             },

@@ -5,7 +5,11 @@
 //! A [`Layout`] is only ever built through [`Layout::new`], which checks it,
 //! so a layout from a file and one from the compositor are the same type
 //! with the same rules: one to [`MAX_OUTPUTS`] outputs, each of positive
-//! area, whose bounding box starts at (0, 0).
+//! area, whose bounding box starts at (0, 0). One that arrives over the
+//! settings window's socket or in the config file is read through
+//! [`Layout::new`] too: it deserialises only through [`OutputSpec`].
+
+use serde::{Deserialize, Serialize};
 
 use crate::input::AbsolutePosition;
 
@@ -14,14 +18,16 @@ pub const MAX_OUTPUTS: usize = 16;
 
 /// A point on the screens, in whole logical pixels from the layout's
 /// top-left corner.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Point {
     pub x: u32,
     pub y: u32,
 }
 
 /// A rectangle in logical pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Rect {
     pub x: u32,
     pub y: u32,
@@ -79,14 +85,75 @@ impl Output {
     /// Whether `point` is on this output; its right and bottom edges are
     /// the next output's.
     pub fn contains(self, point: Point) -> bool {
-        (self.rect.x..self.right()).contains(&point.x)
-            && (self.rect.y..self.bottom()).contains(&point.y)
+        self.rect.contains(point)
+    }
+}
+
+impl Rect {
+    /// Whether `point` is inside, up to the last pixel before the right
+    /// and bottom edges.
+    pub fn contains(self, point: Point) -> bool {
+        let right = self.x.saturating_add(self.width);
+        let bottom = self.y.saturating_add(self.height);
+        (self.x..right).contains(&point.x) && (self.y..bottom).contains(&point.y)
+    }
+
+    /// Whether the position (`x`, `y`), to a fraction of a pixel, is
+    /// inside, short of the right and bottom edges.
+    pub fn holds(self, x: f64, y: f64) -> bool {
+        let span = |start: u32, size: u32| f64::from(start)..f64::from(start) + f64::from(size);
+        span(self.x, self.width).contains(&x) && span(self.y, self.height).contains(&y)
+    }
+}
+
+/// One output as the config file and the settings window's socket spell
+/// it, checked by [`Output::new`] on its way in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputSpec {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub scale_milli: u32,
+}
+
+impl From<Output> for OutputSpec {
+    fn from(output: Output) -> OutputSpec {
+        let Rect {
+            x,
+            y,
+            width,
+            height,
+        } = output.rect;
+        OutputSpec {
+            x,
+            y,
+            width,
+            height,
+            scale_milli: output.scale_milli,
+        }
+    }
+}
+
+impl TryFrom<OutputSpec> for Output {
+    type Error = &'static str;
+
+    fn try_from(spec: OutputSpec) -> Result<Output, &'static str> {
+        let rect = Rect {
+            x: spec.x,
+            y: spec.y,
+            width: spec.width,
+            height: spec.height,
+        };
+        Output::new(rect, spec.scale_milli)
     }
 }
 
 /// A checked screen layout: the outputs, in a fixed order, so two reports of
 /// the same screens compare equal whatever order they came in.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(try_from = "Vec<OutputSpec>", into = "Vec<OutputSpec>")]
 pub struct Layout {
     outputs: Vec<Output>,
 }
@@ -158,6 +225,44 @@ impl Layout {
             y: normalised(point.y, height),
         }
     }
+
+    /// The same for a position to a fraction of a pixel, such as where the
+    /// user clicked, kept to the values that land inside `on`: rounding can
+    /// otherwise cross onto the next screen. Off by at most half a step of
+    /// the range (`W / 131072` logical pixels) away from a screen's far
+    /// edge, and by a step and a 64th of a pixel at it.
+    pub fn absolute_at(&self, x: f64, y: f64, on: Rect) -> AbsolutePosition {
+        let (width, height) = self.size();
+        let across = Along {
+            start: on.x,
+            span: on.width,
+            size: width,
+        };
+        let down = Along {
+            start: on.y,
+            span: on.height,
+            size: height,
+        };
+        AbsolutePosition {
+            x: across.normalised(x),
+            y: down.normalised(y),
+        }
+    }
+}
+
+impl TryFrom<Vec<OutputSpec>> for Layout {
+    type Error = &'static str;
+
+    fn try_from(specs: Vec<OutputSpec>) -> Result<Layout, &'static str> {
+        let outputs = specs.into_iter().map(Output::try_from);
+        Layout::new(outputs.collect::<Result<_, _>>()?)
+    }
+}
+
+impl From<Layout> for Vec<OutputSpec> {
+    fn from(layout: Layout) -> Vec<OutputSpec> {
+        layout.outputs.into_iter().map(OutputSpec::from).collect()
+    }
 }
 
 /// `round(value * 65536 / size)`, at most 65535. In `u64` it cannot
@@ -166,6 +271,38 @@ fn normalised(value: u32, size: u32) -> u16 {
     let size = u64::from(size.max(1));
     let scaled = (u64::from(value) * 65_536 + size / 2) / size;
     u16::try_from(scaled).unwrap_or(u16::MAX)
+}
+
+/// One axis of a screen in the layout: where it starts, how far it spans,
+/// and how long the layout is on that axis.
+struct Along {
+    start: u32,
+    span: u32,
+    size: u32,
+}
+
+impl Along {
+    /// `clamp(round(value * 65536 / size), 0, 65535)`, kept to the values
+    /// that land on the screen: a value `v` lands at `v * size / 65536`,
+    /// from `start` to short of `start + span`. NaN gives the screen's
+    /// first value.
+    fn normalised(&self, value: f64) -> u16 {
+        let size = u64::from(self.size.max(1));
+        let scaled = (value * 65_536.0 / f64::from(self.size.max(1))).round();
+        // Clamped to the range, or NaN, which the cast takes to 0: exact.
+        let rounded = u64::from(scaled.clamp(0.0, 65_535.0) as u16);
+        // The first value at or past `start`, and the last that lands a
+        // 64th of a pixel short of the end, so a backend that converts in
+        // `f32` (the portal's) cannot round it across: `f32` is exact to a
+        // 64th of a pixel on layouts up to 262,144 px wide.
+        let first = (u64::from(self.start) * 65_536).div_ceil(size);
+        let end = (u64::from(self.start) + u64::from(self.span)) * 65_536 * 64 - 65_536;
+        let last = (end / (size * 64)).min(65_535);
+        // A screen narrower than one step (`size / 65536`, under 2 px on a
+        // layout 130,000 px wide) holds no value: its nearest one is kept.
+        let kept = rounded.clamp(first.min(last), last);
+        u16::try_from(kept).unwrap_or(u16::MAX)
+    }
 }
 
 #[cfg(test)]
@@ -301,6 +438,115 @@ mod tests {
         for ((x, y), (to_x, to_y)) in cases {
             let expected = AbsolutePosition { x: to_x, y: to_y };
             assert_eq!(layout.absolute(Point { x, y }), expected, "{x},{y}");
+        }
+    }
+
+    #[test]
+    fn a_layout_reads_back_as_written_and_only_when_valid() {
+        let layout = Layout::new(vec![
+            Output::new(rect(0, 0, 2048, 1280), 1250).unwrap(),
+            Output::new(rect(2048, 0, 2293, 960), 1500).unwrap(),
+        ])
+        .unwrap();
+        let json = serde_json::to_string(&layout).unwrap();
+        assert_eq!(
+            json,
+            r#"[{"x":0,"y":0,"width":2048,"height":1280,"scale_milli":1250},{"x":2048,"y":0,"width":2293,"height":960,"scale_milli":1500}]"#
+        );
+        assert_eq!(serde_json::from_str::<Layout>(&json).unwrap(), layout);
+        let one = r#"{"x":0,"y":0,"width":10,"height":10,"scale_milli":1000}"#;
+        let many = format!("[{}]", vec![one; MAX_OUTPUTS + 1].join(","));
+        let invalid = [
+            "[]".to_owned(),
+            r#"[{"x":1,"y":0,"width":10,"height":10,"scale_milli":1000}]"#.to_owned(),
+            r#"[{"x":0,"y":0,"width":0,"height":10,"scale_milli":1000}]"#.to_owned(),
+            r#"[{"x":0,"y":0,"width":10,"height":10,"scale_milli":0}]"#.to_owned(),
+            r#"[{"x":0,"y":0,"width":10,"height":10,"scale_milli":1000,"name":"DP-1"}]"#.to_owned(),
+            many,
+        ];
+        for json in invalid {
+            assert!(serde_json::from_str::<Layout>(&json).is_err(), "{json}");
+        }
+    }
+
+    #[test]
+    fn a_position_to_a_fraction_maps_by_the_same_formula() {
+        let layout = two_screens(); // 5488 x 1440
+        let whole_box = rect(0, 0, 5488, 1440);
+        let cases = [
+            ((0.0, 0.0), (0, 0)),
+            ((2744.0, 720.0), (32768, 32768)),
+            // 5487.9 * 65536 / 5488 = 65534.8; the last fraction stays in range.
+            ((5487.9, 1439.99), (65535, 65535)),
+            ((3600.16, 1425.454), (42992, 64874)),
+            ((-1.0, f64::NAN), (0, 0)),
+            ((1e12, f64::INFINITY), (65535, 65535)),
+        ];
+        for ((x, y), (to_x, to_y)) in cases {
+            let expected = AbsolutePosition { x: to_x, y: to_y };
+            assert_eq!(layout.absolute_at(x, y, whole_box), expected, "{x},{y}");
+        }
+        // A whole position maps as `absolute` maps it.
+        for (x, y) in [(1, 1), (2047, 1279), (5487, 1439)] {
+            let whole = layout.absolute(Point { x, y });
+            let at = layout.absolute_at(f64::from(x), f64::from(y), whole_box);
+            assert_eq!(at, whole);
+        }
+    }
+
+    #[test]
+    fn a_position_is_kept_on_its_screen_where_rounding_would_cross() {
+        // Two 1920-wide screens: 1919.99 rounds to 32768, which lands at
+        // 1920, on the right screen.
+        let layout = Layout::new(vec![output(0, 0, 1920, 1080), output(1920, 0, 1920, 1080)]);
+        let layout = layout.unwrap();
+        let left = rect(0, 0, 1920, 1080);
+        let right = rect(1920, 0, 1920, 1080);
+        let lands = |v: u16| f64::from(v) * 3840.0 / 65_536.0;
+        let cases = [
+            (1_919.992_187_5, left),
+            (1919.5, left),
+            (1920.0, right),
+            (1920.001, right),
+            (0.0, left),
+            (3839.999, right),
+        ];
+        for (x, on) in cases {
+            let landed = lands(layout.absolute_at(x, 10.0, on).x);
+            // A 64th of a pixel inside, which `f32` cannot round across.
+            assert!(
+                on.holds(landed + 1.0 / 64.0, 10.0),
+                "{x} landed at {landed}"
+            );
+            assert!((landed - x).abs() < 0.06, "{x} landed at {landed}");
+        }
+    }
+
+    #[test]
+    fn a_position_stays_on_its_screen_through_f32() {
+        // 1024 + 1707: the last value short of 1024 lands within 0.00002 px
+        // of it, which `f32` rounds to 1024, on the right screen.
+        let layout = Layout::new(vec![output(0, 0, 1024, 768), output(1024, 0, 1707, 960)]);
+        let left = rect(0, 0, 1024, 768);
+        let v = layout.unwrap().absolute_at(1023.99, 10.0, left).x;
+        #[allow(clippy::cast_possible_truncation)]
+        let landed = (f64::from(v) * 2731.0 / 65_536.0) as f32;
+        assert!(landed < 1024.0, "{v} lands at {landed}");
+    }
+
+    #[test]
+    fn a_rectangle_holds_positions_short_of_its_far_edges() {
+        let dp1 = rect(2048, 0, 3440, 1440);
+        let cases = [
+            ((2048.0, 0.0), true),
+            ((5487.99, 1439.99), true),
+            ((5488.0, 0.0), false),
+            ((2047.99, 10.0), false),
+            ((3000.0, 1440.0), false),
+            ((f64::NAN, 10.0), false),
+        ];
+        for ((x, y), inside) in cases {
+            assert_eq!(dp1.holds(x, y), inside, "{x},{y}");
         }
     }
 

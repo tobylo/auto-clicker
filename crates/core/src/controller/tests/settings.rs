@@ -583,6 +583,19 @@ async fn moving_the_hotkeys_to_the_desktop_still_keeps_them_off_the_clicker_key(
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_saved_route_applies_from_the_next_start_only() {
+    local(async {
+        let mut s = setup().await;
+        let portal = draft(|d| d.input.output = RouteName::Portal);
+        assert_eq!(s.window.save(&s.d, portal).await, Outcome::Saved);
+        let view = s.window.view();
+        assert_eq!(view.settings.input.output, RouteName::Portal);
+        assert_eq!(view.running, Draft::from(&Config::default()).input);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn where_the_desktop_delivers_hotkeys_they_stay_and_the_rest_saves() {
     local(async {
         let shared = Shared::default();

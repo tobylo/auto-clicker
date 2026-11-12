@@ -1,0 +1,49 @@
+// The overlay that picks the clicker's fixed point: one per screen, made
+// full-screen on its screen by the window's code. The next left click
+// picks; Esc cancels.
+
+export component PickWindow inherits Window {
+    title: @tr("Pick the point");
+    no-frame: true;
+    // Light enough to see what lies under it, dark enough to tell it is up.
+    background: #10204060;
+
+    // Where the user clicked, in logical pixels from this screen's corner.
+    callback picked(length, length);
+    callback cancelled();
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.cancelled();
+                return accept;
+            }
+            return reject;
+        }
+        TouchArea {
+            mouse-cursor: crosshair;
+            pointer-event(event) => {
+                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                    root.picked(self.mouse-x, self.mouse-y);
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        y: 48px;
+        width: hint.preferred-width + 32px;
+        height: hint.preferred-height + 16px;
+        border-radius: 8px;
+        background: #000000c0;
+        hint := Text {
+            text: @tr("Click where the clicker should click. Esc cancels.");
+            color: white;
+            font-size: 18px;
+        }
+    }
+
+    init => {
+        keys.focus();
+    }
+}
