@@ -67,6 +67,15 @@ pub fn monitors(window: &slint::Window) -> Option<Vec<Monitor<MonitorHandle>>> {
     })
 }
 
+/// Whether `window` was made full-screen and is not any more: the user
+/// took an overlay out of full screen, so its corner is no longer the
+/// screen's. Not for a window that is not a winit window.
+pub fn left_full_screen(window: &slint::Window) -> bool {
+    window
+        .with_winit_window(|winit| winit.fullscreen().is_none())
+        .unwrap_or(false)
+}
+
 /// The logical top-left corner of the monitor `window` is on now; `None`
 /// when that is not known, as before the compositor said, or the window is
 /// not a winit window.

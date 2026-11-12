@@ -57,6 +57,7 @@ impl App {
         match Pick::open(targets, pick::place, PICK_TIME, ended) {
             Ok(opened) => {
                 self.pick = Some((opened, since));
+                self.state.set_picking(true);
                 self.note(&Note::Picking);
             }
             Err(why) => self.note(&Note::PickFailed(why)),
@@ -84,6 +85,7 @@ impl App {
     /// Closes the overlays, if they are up; what the pick was checked
     /// against, if one was.
     pub(super) fn close_pick(&mut self) -> Option<Since> {
+        self.state.set_picking(false);
         self.window.set_picking(false);
         self.pick.take().map(|(_, since)| since)
     }
