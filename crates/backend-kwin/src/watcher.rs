@@ -258,7 +258,6 @@ impl<S: Scripting + 'static> Watcher<S> {
             self.job = None;
         }
         self.position_token = None;
-        self.taken_on = None;
         self.position = if self.feed.recording() {
             Next::Load
         } else if self.position_loaded {
@@ -292,7 +291,6 @@ impl<S: Scripting + 'static> Watcher<S> {
         self.owner = owner;
         self.session.owner.replace(self.owner.clone());
         self.position_token = None;
-        self.taken_on = None;
         let running = self.owner.is_some();
         self.sweep_due = false;
         self.failures = 0;
@@ -476,6 +474,9 @@ impl<S: Scripting + 'static> Watcher<S> {
     fn load(&mut self, owner: String) -> Job {
         let token = Token::new(&mut self.rng);
         self.position_token = Some(token.clone());
+        // Every load starts with no layout: positions before its own
+        // report are judged by none, never by an earlier load's.
+        self.taken_on = None;
         self.first_layout_read = false;
         self.position_loaded = true;
         self.publish_trust();

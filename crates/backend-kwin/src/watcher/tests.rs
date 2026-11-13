@@ -903,6 +903,33 @@ async fn a_load_a_new_kwin_does_not_answer_is_tried_again_while_it_records() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_load_tried_again_judges_no_position_by_the_failed_loads_layout() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        h.calls();
+        // The script runs and reports its layout and the pointer, but KWin
+        // never answers `start`: the load fails at its deadline.
+        h.kwin.with(|s| s.hanging_start = true);
+        h.record().await;
+        after(crate::scripting::CALL_TIMEOUT).await;
+        h.kwin.with(|s| {
+            s.hanging_start = false;
+            s.screens = None;
+        });
+        h.calls();
+        // The load tried again reports no layout.
+        after(BACK_OFF[0]).await;
+        assert_eq!(h.calls(), LOAD_POSITION);
+        h.moved(&h.newest_token(POSITION), 700);
+        settle().await;
+        let xs: Vec<u32> = h.stop().await.iter().map(|point| point.x).collect();
+        assert_eq!(xs, [100], "judged by the failed load's layout");
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_failed_load_is_not_tried_again_once_its_recording_stops() {
     local(async {
         let (h, inbox) = Harness::new(true, &[]);
