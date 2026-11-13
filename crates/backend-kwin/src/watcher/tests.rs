@@ -406,13 +406,15 @@ async fn settle() {
 
 /// Runs `watcher` as [`Watcher::run`] does, until it waits.
 async fn drive(watcher: &mut Watcher<FakeKwin>, owners: &mut Owners, inbox: &mut Inbox) {
-    loop {
+    // A watcher that never runs out of wakes spins: fail rather than hang.
+    for _ in 0..100 {
         watcher.next_job();
         let Ok(wake) = timeout(Duration::ZERO, watcher.next_wake(owners, inbox)).await else {
             return;
         };
         watcher.handle(wake);
     }
+    panic!("the watcher never went quiet");
 }
 
 /// Lets the paused clock run `wait` on, and every task until it waits.
@@ -453,7 +455,9 @@ async fn the_start_unloads_every_name_and_removes_their_files_an_older_layout_sc
         h.start(inbox).await;
         assert_eq!(h.calls(), SWEEP);
         assert_eq!(h.runtime.files(), ["notes.txt"]);
-        assert!(!h.told().await, "the KWin it started with is no restart");
+        // The display's connection may be to a KWin gone since, or may
+        // have timed out: the first KWin seen has it connect again.
+        assert!(h.told().await, "the first KWin seen was not told");
         after(HOUR).await;
         assert_eq!(h.calls(), [], "loaded without a recording");
     })
@@ -544,6 +548,31 @@ async fn a_recording_on_other_screens_than_the_scripts_keeps_no_position() {
         h.moved(&token, 300);
         settle().await;
         assert!(h.stop().await.is_empty());
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_position_is_judged_by_the_layout_an_earlier_load_reported() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        h.record().await;
+        assert_eq!(h.stop().await, [Point { x: 100, y: 200 }]);
+        // The next load's layout report never comes.
+        h.kwin.with(|s| s.screens = None);
+        h.record().await;
+        h.moved(&h.newest_token(POSITION), 300);
+        settle().await;
+        assert!(h.stop().await.is_empty(), "judged by the last recording's");
+        // Nor across a new KWin while one records.
+        h.kwin.with(|s| s.screens = Some(SCREENS));
+        h.record().await;
+        h.kwin.with(|s| s.screens = None);
+        h.new_owner(Some(":1.9")).await;
+        h.moved(&h.newest_token(POSITION), 300);
+        settle().await;
+        assert_eq!(h.stop().await, [Point { x: 100, y: 200 }]);
     })
     .await;
 }
@@ -656,6 +685,27 @@ async fn a_lost_layout_report_drops_what_follows_and_loads_the_script_again() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_layout_report_lost_as_the_recording_stops_reloads_nothing() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        h.record().await;
+        let token = h.newest_token(POSITION);
+        h.calls();
+        let full = u32::try_from(QUEUE).unwrap();
+        for x in 1..=full {
+            h.moved(&token, x);
+        }
+        h.screens(&token, ONE_SCREEN);
+        // The recording stops before the watcher hears of the loss.
+        drop(h.slot.take());
+        settle().await;
+        assert_eq!(h.calls(), [Unload(POSITION)]);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_failed_unload_is_tried_again_before_the_next_load_and_at_exit() {
     local(async {
         let (h, inbox) = Harness::new(true, &[]);
@@ -695,6 +745,7 @@ async fn a_new_kwin_is_told_and_gets_the_position_script_again() {
     local(async {
         let (h, inbox) = Harness::new(true, &[]);
         h.start(inbox).await;
+        assert!(h.told().await);
         h.record().await;
         let old = h.newest_token(POSITION);
         h.calls();

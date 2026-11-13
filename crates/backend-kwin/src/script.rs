@@ -82,5 +82,9 @@ mod tests {
         let layout = source.find("screensChanged.connect").unwrap();
         let pointer = source.find("cursorPosChanged.connect").unwrap();
         assert!(layout < pointer);
+        // And at load, so the first position has its layout.
+        let layout = source.find("\nreportLayout();").unwrap();
+        let pointer = source.find("\nreportPosition();").unwrap();
+        assert!(layout < pointer);
     }
 }

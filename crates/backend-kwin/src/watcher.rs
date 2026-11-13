@@ -96,8 +96,9 @@ enum Next {
 pub(crate) struct Watcher<S> {
     session: Rc<Session<S>>,
     feed: RecordingFeed,
-    /// Fired when a KWin of the display owns `org.kde.KWin` after the one
-    /// the watcher started with.
+    /// Fired each time a KWin of the display comes to own `org.kde.KWin`,
+    /// the first one seen included: the display's connection may be to one
+    /// that went before, or may have failed while it started.
     restarted: LayoutSignal,
     rng: fastrand::Rng,
     owner: Option<String>,
@@ -182,7 +183,7 @@ impl<S: Scripting + 'static> Watcher<S> {
                     Some(newer) = owners.next() => newer,
                     owner = display::checked(&self.session, owner) => owner,
                 };
-                self.owner_changed(owner);
+                self.new_owner(owner);
                 self.sweep_due = self.owner.is_some();
                 owners
             }
@@ -256,9 +257,10 @@ impl<S: Scripting + 'static> Watcher<S> {
         self.publish_trust();
     }
 
-    /// A new owner after the first: once it is a KWin of the display, the
-    /// daemon is told it came back, so the layout's connection to the
-    /// display is made again (W5).
+    /// A new owner: once it is a KWin of the display, the daemon is told,
+    /// so the layout's connection to the display is made again (W5). The
+    /// first one counts too: the connection the daemon made before it
+    /// followed KWin may be to a KWin gone since, or may have timed out.
     fn new_owner(&mut self, owner: Option<String>) {
         let came = owner.is_some() && owner != self.owner;
         self.owner_changed(owner);

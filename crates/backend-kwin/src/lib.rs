@@ -111,8 +111,9 @@ impl Kwin {
     /// The watcher, to be polled on the daemon's thread: it loads the
     /// position script while `feed` records, feeds the recording its
     /// positions, and fires `restarted` each time a KWin of the display
-    /// owns `org.kde.KWin` after the one it started with. Only the first
-    /// call gets it; any later one, like one without KWin, watches nothing.
+    /// comes to own `org.kde.KWin`, the first one seen included. Only the
+    /// first call gets it; any later one, like one without KWin, watches
+    /// nothing.
     pub fn watch(&self, feed: RecordingFeed, restarted: LayoutSignal) -> LayoutWatch {
         let started = self.0.as_ref().and_then(|shared| {
             let inbox = shared.inbox.borrow_mut().take()?;

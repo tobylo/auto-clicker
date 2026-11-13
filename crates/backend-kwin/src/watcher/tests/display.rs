@@ -79,6 +79,7 @@ async fn each_new_owner_is_checked_before_anything_is_loaded() {
     local(async {
         let (h, inbox) = kwin_as(OURS);
         h.start(inbox).await;
+        assert!(h.told().await, "the first KWin seen was not told");
         h.record().await;
         h.calls();
         // KWin restarts under the same wrapper: counted, told and loaded
@@ -154,6 +155,7 @@ async fn a_new_owner_drops_the_check_of_the_one_before() {
     local(async {
         let (h, inbox) = kwin_as(OURS);
         h.start(inbox).await;
+        assert!(h.told().await, "the first KWin seen was not told");
         h.record().await;
         h.calls();
         // An owner whose lookup fails, so its check backs off, then a
@@ -179,6 +181,7 @@ async fn a_new_owner_during_the_first_check_is_checked_at_once() {
         let (h, inbox) = Harness::on_display(true, &[], display());
         h.start(inbox).await;
         assert!(!h.counted());
+        assert!(!h.told().await, "told of a KWin not yet checked");
         h.kwin.with(|s| s.processes.push((":1.30", RESTARTED)));
         h.new_owner(Some(":1.30")).await;
         assert!(h.counted());
@@ -213,6 +216,7 @@ async fn a_new_owner_reads_as_none_while_it_is_checked() {
         h.start(inbox).await;
         h.calls();
         assert!(h.counted());
+        assert!(h.told().await);
         // Its lookup fails, so its check backs off: calls from the old KWin
         // are no longer heard meanwhile, and none came back.
         h.new_owner(Some(":1.40")).await;
