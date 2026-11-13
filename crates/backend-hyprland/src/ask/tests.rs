@@ -129,6 +129,50 @@ async fn an_ask_that_is_never_answered_ends_at_its_deadline() {
 }
 
 #[test]
+fn an_answer_read_only_after_the_daemon_was_busy_past_its_deadline_is_late() {
+    // The request went out and Hyprland answered while the daemon's thread
+    // was blocked past the deadline, before it read the answer: the answer
+    // would be stamped that much late.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = TempDir::new("late");
+    let listener = std::os::unix::net::UnixListener::bind(dir.socket()).unwrap();
+    let (asked, heard) = std::sync::mpsc::channel();
+    let (blocked, block) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 9];
+        stream.read_exact(&mut request).unwrap();
+        asked.send(()).unwrap();
+        block.recv().unwrap();
+        stream.write_all(b"640, 400").unwrap();
+    });
+    let socket = dir.socket();
+    let answer = runtime.block_on(async {
+        let mut asking = Box::pin(ask(&socket, ours));
+        // Poll until the request went out.
+        loop {
+            let polled =
+                std::future::poll_fn(|cx| std::task::Poll::Ready(asking.as_mut().poll(cx))).await;
+            assert!(polled.is_pending(), "answered before it was asked");
+            if heard.try_recv().is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        // Hyprland answers while the thread is blocked.
+        blocked.send(()).unwrap();
+        std::thread::sleep(DEADLINE + Duration::from_millis(30));
+        asking.await
+    });
+    server.join().unwrap();
+    assert_eq!(answer, Err(Failure::NoAnswer));
+}
+
+#[test]
 fn an_answer_that_came_while_the_daemon_was_busy_is_not_late() {
     // The daemon's one thread blocks past the deadline right after the ask
     // began, as it does opening the mice when a recording starts (78 ms

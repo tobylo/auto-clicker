@@ -6,7 +6,8 @@
 //! A deadline per step, not one for the whole ask, so a moment the daemon's
 //! own thread was busy before the connect was seen through (opening the
 //! mice when a recording starts: 78 ms measured) is not taken for a late
-//! answer. At most [`LIMIT`] bytes are read. The connection's peer is
+//! answer; an answer read only after its deadline is late, however early
+//! it came. At most [`LIMIT`] bytes are read. The connection's peer is
 //! checked before anything is written: its process must be the one the
 //! socket was found to belong to, so nothing is ever asked of another
 //! display's Hyprland. A failure or a late answer is no position; dropping
@@ -18,7 +19,7 @@ use std::time::Duration;
 use auto_clicker_core::message::NoPointer;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout, timeout_at};
 
 use crate::reply::{Global, parse};
 
@@ -61,9 +62,13 @@ pub(crate) async fn ask(path: &Path, belongs: impl FnOnce(u32) -> bool) -> Resul
         Ok(Ok(stream)) => stream,
         Ok(Err(_)) | Err(_) => return Err(Failure::NoAnswer),
     };
-    match timeout(DEADLINE, exchange(stream, belongs)).await {
-        Ok(answer) => answer,
-        Err(_) => Err(Failure::NoAnswer),
+    // Checked again once the answer is read: one read only after the
+    // daemon's thread was busy past the deadline is late, though it came
+    // in time, since it is stamped when read.
+    let deadline = Instant::now() + DEADLINE;
+    match timeout_at(deadline, exchange(stream, belongs)).await {
+        Ok(answer) if Instant::now() <= deadline => answer,
+        Ok(_) | Err(_) => Err(Failure::NoAnswer),
     }
 }
 
