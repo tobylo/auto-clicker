@@ -146,14 +146,20 @@ impl<P: Platform> Controller<P> {
 
     /// Why a recording would keep movement only, while one can be made at
     /// all: the screens are not known, or nothing reports the pointer. A
-    /// recording begun without screens keeps its reason to its end, since
-    /// it takes no positions even once they are known.
+    /// running recording is judged by the screens it began on: begun
+    /// without them, it keeps its reason to its end, since it takes no
+    /// positions even once they are known; begun with them, it takes
+    /// positions while something reports the pointer, whatever the display
+    /// says meanwhile (the pointer's source reports its own layout).
     pub(super) fn no_positions(&self) -> Option<NoPositions> {
         if self.no_recording().is_some() {
             return None;
         }
-        if let State::Recording(_, Some(why)) = self.state {
-            return Some(NoPositions::Screens(why));
+        if let State::Recording(_, began_without) = self.state {
+            return match began_without {
+                Some(why) => Some(NoPositions::Screens(why)),
+                None => self.platform.pointer().err().map(NoPositions::Pointer),
+            };
         }
         match (self.platform.layout(), self.platform.pointer()) {
             (Err(why), _) => Some(NoPositions::Screens(why)),

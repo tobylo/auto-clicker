@@ -180,3 +180,29 @@ async fn a_recording_begun_without_screens_says_so_until_it_stops() {
     })
     .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_recording_begun_on_known_screens_says_only_why_the_pointer_is_missing() {
+    local(async {
+        let d = daemon_lacking(Some(two_screens()), None, None).await;
+        d.record_hotkey().await;
+        assert_eq!(d.activity(), Activity::Recording);
+        // The display is lost, but the pointer's source still reports
+        // positions with its own layout: this recording keeps them.
+        d.shared.with(|r| {
+            r.layout = None;
+            r.no_screens = Some(NoScreens::Lost);
+        });
+        d.source_changed().await;
+        assert_eq!(d.no_positions(), []);
+        // The pointer's source goes too: now it keeps movement only.
+        d.shared.with(|r| r.no_pointer = Some(NoPointer::NoSource));
+        d.source_changed().await;
+        let gone = [NoPositions::Pointer(NoPointer::NoSource)];
+        assert_eq!(d.no_positions(), gone);
+        // Stopped, the next recording would begin without screens.
+        d.record_hotkey().await;
+        assert_eq!(d.no_positions(), [NoPositions::Screens(NoScreens::Lost)]);
+    })
+    .await;
+}
