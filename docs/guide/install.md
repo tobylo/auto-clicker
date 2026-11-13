@@ -29,7 +29,7 @@ The icon then appears in the system tray. After **Quit**, start it again from "A
 
 ## On niri and Hyprland
 
-The package and the steps above are the same. Clicking, hotkeys, recording, playback and picking a point on the screen all work; recordings keep mouse movement only, without where the pointer was (see [Recording](recording.md)), and the tooltip says so.
+The package and the steps above are the same. Clicking, hotkeys, recording, playback and picking a point on the screen all work. On Hyprland, recordings also keep where the pointer was, once the service sees `HYPRLAND_INSTANCE_SIGNATURE` (below); on niri they keep mouse movement only, without where the pointer was (see [Recording](recording.md)), and the tooltip says so.
 
 - **Starting the service.** The service starts with the desktop's `graphical-session.target`, and needs `WAYLAND_DISPLAY` in the systemd user environment.
   - **niri:** logging in to niri from the display manager runs `niri-session`, which does both, and clears the environment when the session ends. Nothing more is needed.
@@ -47,7 +47,7 @@ The package and the steps above are the same. Clicking, hotkeys, recording, play
 
     With an older `hyprland.conf`, put the first command on an `exec-once =` line, and run the second when you log out.
 - **The tray.** niri and Hyprland have no tray of their own: run a bar with a StatusNotifierItem tray, such as waybar with its `tray` module or ironbar. Without one, the program runs and its hotkeys work, and the icon appears once a bar starts.
-- **Mouse acceleration.** Recordings here keep movement only, so set the acceleration profile to flat: then the movement played back no longer depends on how fast it was recorded or played (see [Playing a recording](playback.md)); these settings apply to every mouse, yours and the program's virtual one alike. niri: `input { mouse { accel-profile "flat"; } }` in `~/.config/niri/config.kdl`. Hyprland: `hl.config({ input = { accel_profile = "flat" } })` in `hyprland.lua`, or `accel_profile = flat` under `input` in `hyprland.conf`.
+- **Mouse acceleration.** Recordings on niri keep movement only, and so does movement on Hyprland while a game holds the pointer, so set the acceleration profile to flat: then the movement played back no longer depends on how fast it was recorded or played (see [Playing a recording](playback.md)); these settings apply to every mouse, yours and the program's virtual one alike. niri: `input { mouse { accel-profile "flat"; } }` in `~/.config/niri/config.kdl`. Hyprland: `hl.config({ input = { accel_profile = "flat" } })` in `hyprland.lua`, or `accel_profile = flat` under `input` in `hyprland.conf`.
 - **Picking a point on niri.** At a fractional scale where a screen's size in pixels divided by the scale is not whole, a picked point near the screen's right or bottom edge can land up to 1 pixel off: niri rounds that size one way for the program's virtual device and the other way for the screen it reports.
 - **A virtual device bound to one screen** in Hyprland's config is not supported: picking and playback assume the program's devices span every screen, as they do by default.
 
