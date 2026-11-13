@@ -13,7 +13,7 @@
 //! The last two tests observe and print: one measures how far replayed
 //! motion moves the pointer, the other what a window sees of a key held on a
 //! real keyboard while playback presses the same key. What they print goes
-//! in the README ("Playing a recording"). Neither needs the `input` group.
+//! in the user guide (docs/guide/playback.md). Neither needs the `input` group.
 
 // clippy.toml exempts `#[test]` functions only; this whole file is test code.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

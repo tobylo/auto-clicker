@@ -16,8 +16,8 @@ use crate::recording::{Layout, OutputSpec};
 const HEADER: &str = "\
 # auto-clicker settings, written by its Settings window.
 # The window writes the whole file anew when it saves, without comments, so
-# edit settings there. Each setting is described in the README, under
-# \"Configuration\".
+# edit settings there. Each setting is described in docs/guide/configuration.md
+# in the auto-clicker repository.
 ";
 
 /// The file's text for `config`, which [`Config::parse`] reads back to
