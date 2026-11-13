@@ -117,14 +117,80 @@ fn hyprlands_recordings_send_every_move_and_kwins_skip_the_covered() {
             (0, MOVE),
             (1_000, at(10, 10)),
             (1_000, MOVE),
+            (1_000, at(10, 10)),
             (10_000, MOVE),
             (11_000, at(20, 10)),
             press,
+            (12_000, at(20, 10)),
         ]
     );
     assert_eq!(
         planned_by(PointerSource::Kwin, &events),
         [(1_000, at(10, 10)), (11_000, at(20, 10)), press]
+    );
+}
+
+#[test]
+fn hyprlands_positions_follow_every_move_they_cover_and_go_before_each_click() {
+    let press = Change::Press(LEFT);
+    let release = Change::Release(LEFT);
+    // A move between the click and its position: the position goes before
+    // the press, and again after the move.
+    let events = [
+        (0, MOVE),
+        (1_000, press),
+        (1_500, MOVE),
+        (2_000, at(10, 10)),
+        (3_000, release),
+    ];
+    assert_eq!(
+        planned_by(PointerSource::Hyprland, &events),
+        [
+            (0, MOVE),
+            (1_000, at(10, 10)),
+            (1_000, press),
+            (1_500, MOVE),
+            (2_000, at(10, 10)),
+            (3_000, release),
+        ]
+    );
+    // Moves around a press and a release: before each of them.
+    let events = [
+        (0, MOVE),
+        (500, press),
+        (700, MOVE),
+        (900, release),
+        (1_500, at(10, 10)),
+    ];
+    assert_eq!(
+        planned_by(PointerSource::Hyprland, &events),
+        [
+            (0, MOVE),
+            (500, at(10, 10)),
+            (500, press),
+            (700, MOVE),
+            (900, at(10, 10)),
+            (900, release),
+            (1_500, at(10, 10)),
+        ]
+    );
+    // A move read after its position at one microsecond, with or without a
+    // press between them: the position again after the move.
+    let events = [
+        (0, MOVE),
+        (2_000, at(10, 10)),
+        (2_000, press),
+        (2_000, MOVE),
+    ];
+    assert_eq!(
+        planned_by(PointerSource::Hyprland, &events),
+        [
+            (0, MOVE),
+            (2_000, at(10, 10)),
+            (2_000, press),
+            (2_000, MOVE),
+            (2_000, at(10, 10)),
+        ]
     );
 }
 

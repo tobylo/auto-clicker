@@ -15,9 +15,14 @@
 //!   that position too: at one time the order of a move and its report
 //!   says nothing, since they come by different paths.
 //! - A recording whose positions Hyprland reported sends every move,
-//!   covered or not, since there a position may cover the moves of a game
-//!   holding the pointer ([`PointerSource::sends_every_move`]). Its
-//!   positions still go before a press, release or wheel turn as above.
+//!   covered or not, each followed by its position, since there a position
+//!   may cover the moves of a game holding the pointer
+//!   ([`PointerSource::sends_every_move`], W01 decision 15). A position
+//!   goes before each press, release or wheel turn that comes between it
+//!   and a move it covers, as above, and again at its own place, after the
+//!   moves it covers; one at the time of a move after it is sent again
+//!   after that move. So no click is played between a move and its
+//!   position.
 //!
 //! The plan holds only event indices: a recording's events are not copied.
 
@@ -34,10 +39,8 @@ pub const DELIVERY_DELAY_US: u64 = 2_000;
 /// A recording's positions, planned.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Plan {
-    /// The indices of the events to send, in the order to send them.
-    order: Vec<u32>,
-    /// The positions sent before an earlier event, ascending.
-    hoisted: Vec<u32>,
+    /// The events to send, in the order to send them.
+    order: Vec<Step>,
     /// Every output of the recording's layout a position lies on.
     used: Vec<Output>,
 }
@@ -50,28 +53,18 @@ impl Plan {
         let layout = recording.layout()?;
         let events = recording.events();
         let count = u32::try_from(events.len()).ok()?;
-        let (mut covered, hoists) = cover(events, count, covered_at_same_time(events));
-        if recording
+        let same_time = covered_at_same_time(events);
+        let every = recording
             .positions_from()
-            .is_some_and(PointerSource::sends_every_move)
-        {
-            covered.fill(false);
-        }
-        let mut hoisted: Vec<u32> = hoists.iter().map(|&(_, position)| position).collect();
-        hoisted.sort_unstable();
-        let mut hoists = hoists.into_iter().peekable();
-        let mut order = Vec::with_capacity(events.len());
-        for (index, &skip) in (0u32..).zip(&covered) {
-            while let Some((_, position)) = hoists.next_if(|&(before, _)| before == index) {
-                order.push(position);
-            }
-            if !skip && hoisted.binary_search(&index).is_err() {
-                order.push(index);
-            }
-        }
+            .is_some_and(PointerSource::sends_every_move);
+        let (covered, hoists) = cover(events, count, same_time.clone(), every);
+        let order = if every {
+            every_move(events, &same_time, hoists)
+        } else {
+            uncovered(&covered, hoists)
+        };
         Some(Plan {
             order,
-            hoisted,
             used: used_outputs(layout, events),
         })
     }
@@ -88,17 +81,88 @@ impl Plan {
         self.order
             .iter()
             .enumerate()
-            .filter_map(move |(step, &index)| {
+            .filter_map(move |(step, &Step { index, early })| {
                 let own = *event(index)?;
-                if self.hoisted.binary_search(&index).is_err() {
+                if !early {
                     return Some(own);
                 }
                 // A hoisted position goes at the time of the event after it.
-                let next = self.order.get(step.saturating_add(1)).copied();
-                let at = next.and_then(event).map_or(own.at, |after| after.at);
+                let next = self.order.get(step.saturating_add(1));
+                let at = next
+                    .and_then(|next| event(next.index))
+                    .map_or(own.at, |after| after.at);
                 Some(Event { at, ..own })
             })
     }
+}
+
+/// One event to send: its index, and whether it is a position sent before
+/// an earlier event, at that event's time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Step {
+    index: u32,
+    early: bool,
+}
+
+impl Step {
+    fn own(index: u32) -> Step {
+        Step {
+            index,
+            early: false,
+        }
+    }
+}
+
+/// The plan's order where covered moves are not sent: every event that is
+/// not `covered`, each hoisted position before its event and not at its own
+/// place. `hoists` is ascending by event.
+fn uncovered(covered: &[bool], hoists: Vec<(u32, u32)>) -> Vec<Step> {
+    let mut hoisted: Vec<u32> = hoists.iter().map(|&(_, position)| position).collect();
+    hoisted.sort_unstable();
+    let mut hoists = hoists.into_iter().peekable();
+    let mut order = Vec::with_capacity(covered.len());
+    for (index, &skip) in (0u32..).zip(covered) {
+        order.extend(early(&mut hoists, index));
+        if !skip && hoisted.binary_search(&index).is_err() {
+            order.push(Step::own(index));
+        }
+    }
+    order
+}
+
+/// The plan's order where every move is sent: every event, each hoisted
+/// position also before its event, and a position at the time of a move
+/// after it (`same_time`) again after that move.
+fn every_move(events: &[Event], same_time: &[bool], hoists: Vec<(u32, u32)>) -> Vec<Step> {
+    let mut hoists = hoists.into_iter().peekable();
+    let mut order = Vec::with_capacity(events.len());
+    let mut last_position = None;
+    for ((index, event), &again) in (0u32..).zip(events).zip(same_time) {
+        order.extend(early(&mut hoists, index));
+        order.push(Step::own(index));
+        if let Change::Position(_) = event.change {
+            last_position = Some(index);
+        }
+        if let Some(position) = last_position.filter(|_| again) {
+            order.push(Step::own(position));
+        }
+    }
+    order
+}
+
+/// The positions `hoists` sends before event `index`.
+fn early(
+    hoists: &mut std::iter::Peekable<std::vec::IntoIter<(u32, u32)>>,
+    index: u32,
+) -> Vec<Step> {
+    let mut steps = Vec::new();
+    while let Some((_, position)) = hoists.next_if(|&(before, _)| before == index) {
+        steps.push(Step {
+            index: position,
+            early: true,
+        });
+    }
+    steps
 }
 
 /// What becomes of one relative move.
@@ -135,8 +199,15 @@ fn cover_move(at: u64, position: Seen, first_event: Seen) -> Cover {
 
 /// Which moves are covered, and which positions go before which event
 /// (`(event, position)`, ascending by event), found walking back from the
-/// end. `count` is how many events there are.
-fn cover(events: &[Event], count: u32, mut covered: Vec<bool>) -> (Vec<bool>, Vec<(u32, u32)>) {
+/// end. `count` is how many events there are. A position goes before the
+/// earliest event that would come between it and a move it covers, or,
+/// when `every` move is sent, before each such event.
+fn cover(
+    events: &[Event],
+    count: u32,
+    mut covered: Vec<bool>,
+    every: bool,
+) -> (Vec<bool>, Vec<(u32, u32)>) {
     let mut hoists: Vec<(u32, u32)> = Vec::new();
     // The next position, and the first press, release or wheel turn before
     // it, after the event being looked at.
@@ -158,9 +229,10 @@ fn cover(events: &[Event], count: u32, mut covered: Vec<bool>) -> (Vec<bool>, Ve
                 Cover::Covered => *skip = true,
                 Cover::Hoisted { before, position } => {
                     *skip = true;
-                    // A position goes once, before the earliest event that
-                    // would come between it and a move it covers.
-                    if hoists.last().is_some_and(|&(_, last)| last == position) {
+                    let replaced = hoists.last().is_some_and(|&(after, last)| {
+                        last == position && (after == before || !every)
+                    });
+                    if replaced {
                         hoists.pop();
                     }
                     hoists.push((before, position));
