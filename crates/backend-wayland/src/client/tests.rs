@@ -1171,8 +1171,6 @@ async fn a_new_kwin_makes_the_layout_unknown_in_its_poll_whatever_the_budget() {
     use std::pin::pin;
     use std::task::{Context, Poll, Waker};
 
-    use tokio::task::coop::consume_budget;
-
     let (link, mut fake) = Fake::pair();
     let (started, ()) = timeout(BOUND, async {
         tokio::join!(Link::start(link), fake.start_with_two())
@@ -1189,19 +1187,18 @@ async fn a_new_kwin_makes_the_layout_unknown_in_its_poll_whatever_the_budget() {
     let (changed, again) = (LayoutSignal::default(), LayoutSignal::default());
     let mut watch = wayland.watch(changed.clone(), again.clone());
     // Polled here, in the test's own task, so the budget it spends counts.
-    for spend in [false, true] {
-        if spend {
-            again.changed();
-        }
-        poll_fn(|cx| {
-            if spend {
-                while pin!(consume_budget()).poll(cx).is_ready() {}
-            }
-            assert!(watch.as_mut().poll(cx).is_pending());
-            Poll::Ready(())
-        })
-        .await;
-    }
+    poll_fn(|cx| {
+        assert!(watch.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    again.changed();
+    poll_fn(|cx| {
+        spend_budget(cx);
+        assert!(watch.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
     let mut cx = Context::from_waker(Waker::noop());
     assert!(
         pin!(changed.fired()).poll(&mut cx).is_ready(),
@@ -1211,4 +1208,13 @@ async fn a_new_kwin_makes_the_layout_unknown_in_its_poll_whatever_the_budget() {
         (wayland.layout(), wayland.missing()),
         (None, Some(Missing::Lost))
     );
+}
+
+/// Spends the task's whole budget.
+fn spend_budget(cx: &mut std::task::Context<'_>) {
+    use std::future::Future;
+
+    use tokio::task::coop::consume_budget;
+
+    while std::pin::pin!(consume_budget()).poll(cx).is_ready() {}
 }
