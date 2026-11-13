@@ -382,11 +382,13 @@ mod tests {
     }
 
     #[test]
-    fn the_same_screens_compare_rectangles_and_not_scale() {
+    fn the_same_screens_compare_rectangles_and_not_scale_or_order() {
         let layout = two_screens();
+        // Listed the other way round, as one source may (KWin's script and
+        // xdg-output, W01b), with other scales.
         let rescaled = Layout::new(vec![
-            Output::new(rect(0, 0, 2048, 1280), 1250).unwrap(),
             Output::new(rect(2048, 0, 3440, 1440), 2000).unwrap(),
+            Output::new(rect(0, 0, 2048, 1280), 1250).unwrap(),
         ])
         .unwrap();
         assert!(layout.same_screens(&rescaled));
