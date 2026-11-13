@@ -8,7 +8,6 @@ use super::*;
 async fn the_running_compositor_gives_a_layout_and_its_listener() {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     let wayland = Wayland::connect(deadline).await;
-    assert_eq!(wayland.missing(), None);
     let layout = wayland.layout().expect("no whole layout");
     eprintln!("layout: {layout:?}; listener: {:?}", wayland.compositor());
     assert!(wayland.compositor().is_some());

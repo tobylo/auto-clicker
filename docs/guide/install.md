@@ -27,6 +27,30 @@ The package is called `tobylo-auto-clicker`. It installs the program, its tray i
 
 The icon then appears in the system tray. After **Quit**, start it again from "Auto Clicker" in the app menu, or log in again.
 
+## On niri and Hyprland
+
+The package and the steps above are the same. Clicking, hotkeys, recording, playback and picking a point on the screen all work; recordings keep mouse movement only, without where the pointer was (see [Recording](recording.md)), and the tooltip says so.
+
+- **Starting the service.** The service starts with the desktop's `graphical-session.target`, and needs `WAYLAND_DISPLAY` in the systemd user environment.
+  - **niri:** logging in to niri from the display manager runs `niri-session`, which does both, and clears the environment when the session ends. Nothing more is needed.
+  - **Hyprland with uwsm** (the "Hyprland (uwsm-managed)" login entry) does both as well.
+  - **Hyprland without uwsm** never starts `graphical-session.target`. Start the service from Hyprland's config instead, and clear what it imported when Hyprland exits, so a later session does not see a display that is gone. In the Lua config of Hyprland 0.57 and later (`~/.config/hypr/hyprland.lua`):
+
+    ```lua
+    hl.on("hyprland.start", function()
+        hl.exec_cmd("systemctl --user import-environment WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE && systemctl --user restart auto-clicker")
+    end)
+    hl.on("hyprland.shutdown", function()
+        hl.exec_cmd("systemctl --user stop auto-clicker; systemctl --user unset-environment WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE")
+    end)
+    ```
+
+    With an older `hyprland.conf`, put the first command on an `exec-once =` line, and run the second when you log out.
+- **The tray.** niri and Hyprland have no tray of their own: run a bar with a StatusNotifierItem tray, such as waybar with its `tray` module or ironbar. Without one, the program runs and its hotkeys work, and the icon appears once a bar starts.
+- **Mouse acceleration.** Recordings here keep movement only, so set the acceleration profile to flat: then the movement played back no longer depends on how fast it was recorded or played (see [Playing a recording](playback.md)); these settings apply to every mouse, yours and the program's virtual one alike. niri: `input { mouse { accel-profile "flat"; } }` in `~/.config/niri/config.kdl`. Hyprland: `hl.config({ input = { accel_profile = "flat" } })` in `hyprland.lua`, or `accel_profile = flat` under `input` in `hyprland.conf`.
+- **Picking a point on niri.** At a fractional scale where a screen's size in pixels divided by the scale is not whole, a picked point near the screen's right or bottom edge can land up to 1 pixel off: niri rounds that size one way for the program's virtual device and the other way for the screen it reports.
+- **A virtual device bound to one screen** in Hyprland's config is not supported: picking and playback assume the program's devices span every screen, as they do by default.
+
 ## What the permissions mean
 
 - **`/dev/uinput`** lets a program create a virtual mouse and keyboard, which is how auto-clicker clicks. The rule lets programs of the person logged in at the screen open it, any of their programs, not just this one. When someone else takes over the screen, no new program of the first person can open it, but one that already has it open keeps it. auto-clicker itself stops clicking and lets go of everything when the screen locks or another user's session comes to the front.

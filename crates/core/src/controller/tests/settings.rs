@@ -421,7 +421,8 @@ async fn a_file_invalid_at_start_is_replaced_only_once_the_user_agrees_and_its_e
         assert_eq!(fs::read_to_string(&s.path).unwrap(), "version = 2\n");
         let outcome = s.window.ask(&s.d, save(draft(hold_right), REPLACE)).await;
         assert_eq!(outcome, Outcome::Saved);
-        assert!(s.window.view().problems.is_empty());
+        assert_eq!(s.window.view().problems, s.d.view().problems);
+        assert!(s.d.problems().is_empty());
     })
     .await;
 }

@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use auto_clicker_core::hotkeys::Bindings;
+use auto_clicker_core::message::NoPointer;
 use auto_clicker_core::recording::{Change, Created, Ending, Point, Recorder, RecordingSlot};
 use futures_util::stream;
 use tokio::task::{LocalSet, yield_now};
@@ -241,6 +242,8 @@ struct Harness {
     session: Rc<Session<FakeKwin>>,
     receiver: Rc<Receiver>,
     restarted: LayoutSignal,
+    /// The controller's layout signal.
+    changed: LayoutSignal,
     runtime: Runtime,
 }
 
@@ -283,6 +286,7 @@ impl Harness {
             dir,
             trust,
             owner: RefCell::default(),
+            load_failed: Cell::default(),
             compositor,
         });
         let harness = Harness {
@@ -291,6 +295,7 @@ impl Harness {
             session,
             receiver,
             restarted: LayoutSignal::default(),
+            changed: LayoutSignal::default(),
             runtime,
         };
         let inbox = Inbox {
@@ -305,6 +310,7 @@ impl Harness {
             Rc::clone(&self.session),
             self.slot.feed(),
             self.restarted.clone(),
+            self.changed.clone(),
         )
         .with_rng(fastrand::Rng::with_seed(11))
     }
@@ -394,6 +400,11 @@ impl Harness {
         timeout(Duration::ZERO, self.restarted.fired())
             .await
             .is_ok()
+    }
+
+    /// Whether the controller's layout signal fired since last asked.
+    async fn signalled(&self) -> bool {
+        timeout(Duration::ZERO, self.changed.fired()).await.is_ok()
     }
 }
 
@@ -782,10 +793,16 @@ async fn a_runtime_directory_open_to_others_loads_nothing() {
             dir: ScriptDir::open(&runtime.0),
             trust: Arc::clone(&h.session.trust),
             owner: RefCell::default(),
+            load_failed: Cell::default(),
             compositor: None,
         };
         assert!(session.dir.is_err());
-        let watcher = Watcher::new(Rc::new(session), h.slot.feed(), h.restarted.clone());
+        let watcher = Watcher::new(
+            Rc::new(session),
+            h.slot.feed(),
+            h.restarted.clone(),
+            h.changed.clone(),
+        );
         tokio::task::spawn_local(watcher.run(inbox));
         settle().await;
         h.record().await;
@@ -925,6 +942,36 @@ async fn a_load_tried_again_judges_no_position_by_the_failed_loads_layout() {
         settle().await;
         let xs: Vec<u32> = h.stop().await.iter().map(|point| point.x).collect();
         assert_eq!(xs, [100], "judged by the failed load's layout");
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_load_reports_no_pointer_until_a_load_works_or_kwin_goes() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        assert!(h.signalled().await, "the first KWin counted was not told");
+        assert_eq!(h.session.pointer(), Ok(()));
+        h.kwin.with(|s| s.hanging_start = true);
+        h.record().await;
+        after(crate::scripting::CALL_TIMEOUT).await;
+        assert_eq!(h.session.pointer(), Err(NoPointer::Unusable));
+        assert!(h.signalled().await, "a failed load was not told");
+        // The load tried again works.
+        h.kwin.with(|s| s.hanging_start = false);
+        after(BACK_OFF[0]).await;
+        assert_eq!(h.session.pointer(), Ok(()));
+        assert!(h.signalled().await, "a load that worked was not told");
+        h.stop().await;
+        assert!(!h.signalled().await, "told with nothing changed");
+        // It fails again, and KWin goes: nothing reports the pointer.
+        h.kwin.with(|s| s.hanging_start = true);
+        h.record().await;
+        after(crate::scripting::CALL_TIMEOUT).await;
+        assert_eq!(h.session.pointer(), Err(NoPointer::Unusable));
+        h.new_owner(None).await;
+        assert_eq!(h.session.pointer(), Err(NoPointer::NoSource));
     })
     .await;
 }
@@ -1073,9 +1120,15 @@ async fn a_script_directory_that_failed_its_check_is_not_tried_again() {
             dir: Err("open to others".to_owned()),
             trust: Arc::clone(&h.session.trust),
             owner: RefCell::default(),
+            load_failed: Cell::default(),
             compositor: None,
         };
-        let mut watcher = Watcher::new(Rc::new(session), h.slot.feed(), h.restarted.clone());
+        let mut watcher = Watcher::new(
+            Rc::new(session),
+            h.slot.feed(),
+            h.restarted.clone(),
+            h.changed.clone(),
+        );
         let mut owners = watcher.follow_owner().await;
         drive(&mut watcher, &mut owners, &mut inbox).await;
         assert_eq!(h.calls(), SWEEP);
@@ -1083,6 +1136,8 @@ async fn a_script_directory_that_failed_its_check_is_not_tried_again() {
         drive(&mut watcher, &mut owners, &mut inbox).await;
         assert_eq!(h.calls(), [Unload(POSITION)], "a load was tried");
         assert_eq!(watcher.retry_at, None);
+        // KWin is counted, but reports nothing to recordings.
+        assert_eq!(watcher.session.pointer(), Err(NoPointer::Unusable));
     })
     .await;
 }

@@ -120,9 +120,9 @@ impl<P: Platform> Controller<P> {
             return;
         };
         let why = match self.platform.layout() {
-            Some(current) if current.same_screens(used) => return,
-            Some(_) => Stop::LayoutChanged,
-            None => Stop::LayoutUnknown,
+            Ok(current) if current.same_screens(used) => return,
+            Ok(_) => Stop::LayoutChanged,
+            Err(_) => Stop::LayoutUnknown,
         };
         self.stop(Some(why));
     }
@@ -134,7 +134,7 @@ impl<P: Platform> Controller<P> {
     pub(super) fn toggle_playback(&mut self) {
         match self.state {
             State::Idle => self.play_from_hotkey(),
-            State::RecordCountdown(_) | State::Recording(_) => {}
+            State::RecordCountdown(_) | State::Recording(..) => {}
             State::Countdown(..) | State::Release(..) | State::Opening(_) | State::Running(_) => {
                 self.notice = Some(Notice::Refused {
                     start: Start::Playback,

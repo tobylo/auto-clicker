@@ -1,10 +1,10 @@
 # User guide
 
-auto-clicker clicks, holds and repeats buttons and keys, and records and plays back macros, on KDE Plasma under Wayland. Start with [Install](install.md), then [Using it](using.md).
+auto-clicker clicks, holds and repeats buttons and keys, and records and plays back macros, on KDE Plasma under Wayland, and on niri and Hyprland. Start with [Install](install.md), then [Using it](using.md).
 
 | Page | What it covers |
 | --- | --- |
-| [Install, update and remove](install.md) | The package, the permissions it needs and why, updating, troubleshooting, uninstalling |
+| [Install, update and remove](install.md) | The package, setting it up on niri and Hyprland, the permissions it needs and why, updating, troubleshooting, uninstalling |
 | [Using it](using.md) | The tray menu, the clicking hotkey, when the program stops by itself, exit statuses |
 | [Recording](recording.md) | What a recording keeps and leaves out, where it is saved, pointer positions, the file format |
 | [Playing a recording](playback.md) | Which recording plays, starting and stopping, speed and repeats, timing, mouse movement |

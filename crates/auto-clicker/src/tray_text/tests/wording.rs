@@ -207,6 +207,64 @@ fn swedish_problems_read_as_written() {
 }
 
 #[test]
+fn every_reason_recordings_keep_movement_only_reads_as_written() {
+    use auto_clicker_core::message::{NoPointer, NoPositions, NoScreens};
+
+    let screens = |why| Problem::NoPositions(NoPositions::Screens(why));
+    let pointer = |why| Problem::NoPositions(NoPositions::Pointer(why));
+    let rows = [
+        (
+            screens(NoScreens::NoDisplay),
+            "the program started without a Wayland display (WAYLAND_DISPLAY); see the README",
+            "programmet startade utan en Wayland-display (WAYLAND_DISPLAY); se README",
+        ),
+        (
+            screens(NoScreens::CannotConnect),
+            "the program could not connect to the Wayland display",
+            "programmet kunde inte ansluta till Wayland-displayen",
+        ),
+        (
+            screens(NoScreens::NoXdgOutput),
+            "the desktop does not say where its screens are (no xdg-output)",
+            "skrivbordet berättar inte var skärmarna är (ingen xdg-output)",
+        ),
+        (
+            screens(NoScreens::Lost),
+            "the connection to the Wayland display ended",
+            "anslutningen till Wayland-displayen bröts",
+        ),
+        (
+            screens(NoScreens::ProtocolError),
+            "the Wayland display refused the program's requests",
+            "Wayland-displayen avvisade programmets förfrågningar",
+        ),
+        (
+            screens(NoScreens::NotWhole),
+            "the desktop has not described every screen",
+            "skrivbordet har inte beskrivit alla skärmar",
+        ),
+        (
+            pointer(NoPointer::NoSource),
+            "nothing on this desktop reports where the pointer is",
+            "inget på det här skrivbordet rapporterar var pekaren är",
+        ),
+        (
+            pointer(NoPointer::Unusable),
+            "KWin's pointer script cannot be used; see the log",
+            "KWins pekarskript kan inte användas; se loggen",
+        ),
+    ];
+    for (problem, english, swedish) in rows {
+        let english = format!("Recordings keep movement only: {english}");
+        let swedish = format!("Inspelningar sparar bara rörelser: {swedish}");
+        assert_eq!(
+            (problem.to_string(), problem::swedish(&problem)),
+            (english, swedish)
+        );
+    }
+}
+
+#[test]
 fn swedish_tooltip_lines_read_as_written() {
     use auto_clicker_core::clicker::{Interval, Jitter, Mode, Position, Repeat};
     use auto_clicker_core::controller::Hotkey;

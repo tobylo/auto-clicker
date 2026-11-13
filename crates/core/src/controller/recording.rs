@@ -12,7 +12,7 @@ use tokio::time::Instant;
 use super::view::NoRecording;
 use super::{Controller, InputReader, Platform, State};
 use crate::hotkeys::{Binding, HotkeyStatus, Unavailable};
-use crate::message::{Hindrance, Notice, Quoted, SaveFailure, Saving, Start, Stop};
+use crate::message::{Hindrance, NoPositions, Notice, Quoted, SaveFailure, Saving, Start, Stop};
 use crate::recording::{Created, Ending, MAX_DURATION, Recorder, Recording, save};
 
 /// How a recording was stopped, which decides how it is trimmed.
@@ -54,7 +54,7 @@ impl<P: Platform> Controller<P> {
                 }
             }
             State::RecordCountdown(_) => self.state = State::Idle,
-            State::Recording(_) => self.finish_recording(StoppedBy::Other, None),
+            State::Recording(..) => self.finish_recording(StoppedBy::Other, None),
             State::Countdown(..) | State::Release(..) | State::Opening(_) | State::Running(_) => {
                 self.notice = Some(not_recording(Hindrance::ClickingOn));
             }
@@ -79,7 +79,7 @@ impl<P: Platform> Controller<P> {
     pub(super) fn stop_recording_from_tray(&mut self) {
         match self.state {
             State::RecordCountdown(_) => self.state = State::Idle,
-            State::Recording(_) => self.finish_recording(StoppedBy::Tray, None),
+            State::Recording(..) => self.finish_recording(StoppedBy::Tray, None),
             _ => {}
         }
     }
@@ -93,7 +93,7 @@ impl<P: Platform> Controller<P> {
     /// Stops and saves a recording, saying why when `why` is given;
     /// anything else is left alone.
     pub(super) fn stop_recording(&mut self, why: Option<Stop>) {
-        if matches!(self.state, State::Recording(_)) {
+        if matches!(self.state, State::Recording(..)) {
             self.finish_recording(StoppedBy::Other, why);
         }
     }
@@ -106,7 +106,7 @@ impl<P: Platform> Controller<P> {
                 self.state = State::Idle;
                 self.notice = Some(not_recording(Hindrance::Hotkeys(why.clone())));
             }
-            State::Recording(_) => {
+            State::Recording(..) => {
                 self.finish_recording(StoppedBy::Other, Some(Stop::Hotkeys(why.clone())));
             }
             _ => {}
@@ -115,7 +115,7 @@ impl<P: Platform> Controller<P> {
 
     /// The recording filled up: it stops and saves what it holds.
     pub(super) fn recording_full(&mut self) {
-        if matches!(self.state, State::Recording(_)) && self.recording.is_full() {
+        if matches!(self.state, State::Recording(..)) && self.recording.is_full() {
             self.finish_recording(StoppedBy::Other, Some(Stop::Full));
         }
     }
@@ -144,6 +144,30 @@ impl<P: Platform> Controller<P> {
         no_recording(self.platform.input_reader(), self.hotkey_status.as_ref())
     }
 
+    /// Why a recording would keep movement only, while one can be made at
+    /// all: the screens are not known, or nothing reports the pointer. A
+    /// running recording is judged by the screens it began on: begun
+    /// without them, it keeps its reason to its end, since it takes no
+    /// positions even once they are known; begun with them, it takes
+    /// positions while something reports the pointer, whatever the display
+    /// says meanwhile (the pointer's source reports its own layout).
+    pub(super) fn no_positions(&self) -> Option<NoPositions> {
+        if self.no_recording().is_some() {
+            return None;
+        }
+        if let State::Recording(_, began_without) = self.state {
+            return match began_without {
+                Some(why) => Some(NoPositions::Screens(why)),
+                None => self.platform.pointer().err().map(NoPositions::Pointer),
+            };
+        }
+        match (self.platform.layout(), self.platform.pointer()) {
+            (Err(why), _) => Some(NoPositions::Screens(why)),
+            (Ok(_), Err(why)) => Some(NoPositions::Pointer(why)),
+            (Ok(_), Ok(())) => None,
+        }
+    }
+
     /// Starts recording now. `started_by` is the hotkey that started it,
     /// whose keys are still down.
     pub(super) fn begin_recording(&mut self, started_by: Option<Binding>) {
@@ -157,13 +181,17 @@ impl<P: Platform> Controller<P> {
         };
         let start = self.platform.event_clock();
         let mut recorder = Recorder::new(self.config.hotkeys, start, created, started_by);
-        if let Some(layout) = self.platform.layout() {
-            recorder = recorder.with_layout(layout);
-        }
+        let unknown = match self.platform.layout() {
+            Ok(layout) => {
+                recorder = recorder.with_layout(layout);
+                None
+            }
+            Err(why) => Some(why),
+        };
         self.recording.start(recorder);
         self.menu_opened = None;
         self.notice = None;
-        self.state = State::Recording(limit);
+        self.state = State::Recording(limit, unknown);
     }
 
     /// Takes the recording from the reader, finishes and saves it, and says

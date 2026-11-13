@@ -3,6 +3,7 @@
 
 use auto_clicker_core::controller::{Activity, LISTED_RECORDINGS, Message, View};
 use auto_clicker_core::locale::Language;
+use auto_clicker_core::message::Problem;
 use ksni::menu::{CheckmarkItem, StandardItem, SubMenu};
 use ksni::{MenuItem, ToolTip, TrayMethods};
 use tokio::sync::{mpsc, watch};
@@ -188,10 +189,16 @@ fn entries(view: &View, relisted: bool) -> [Entry; 8] {
     ]
 }
 
-/// The Record item: off, saying why, where no recording can start.
+/// The Record item: off, saying why, where no recording can start; on,
+/// saying so, where recordings keep movement only.
 fn record(view: &View) -> Entry {
+    let movement_only = view
+        .problems
+        .iter()
+        .any(|problem| matches!(problem, Problem::NoPositions(_)));
     let (label, possible) = match &view.no_recording {
         Some(no_recording) => (no_recording.label(), false),
+        None if movement_only => ("Record (movement only)", true),
         None => ("Record", true),
     };
     let idle = view.activity == Activity::Idle;
@@ -907,6 +914,32 @@ mod tests {
                 ("Stop recording", true, true)
             );
         }
+    }
+
+    #[test]
+    fn record_stays_on_and_says_movement_only_where_positions_are_missing() {
+        use auto_clicker_core::message::{NoPointer, NoPositions};
+        let missing = Problem::NoPositions(NoPositions::Pointer(NoPointer::NoSource));
+        let shown = View {
+            problems: vec![missing.clone()],
+            ..view(Activity::Idle)
+        };
+        let [_, _, record, ..] = entries(&shown, false);
+        assert_eq!(
+            (record.label.as_str(), record.enabled, record.visible),
+            ("Record (movement only)", true, true)
+        );
+        assert_eq!(
+            tray_text::label(&record.label, Language::Swedish),
+            "Spela in (bara rörelser)"
+        );
+        // Where no recording can start, what it needs is said instead.
+        let blocked = View {
+            no_recording: Some(NoRecording::DesktopHotkeys),
+            ..shown
+        };
+        let [_, _, record, ..] = entries(&blocked, false);
+        assert_eq!(record.label, NoRecording::DesktopHotkeys.label());
     }
 
     #[test]

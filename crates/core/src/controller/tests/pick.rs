@@ -42,7 +42,7 @@ fn with_layout(layout: Option<Layout>) -> Shared {
 async fn a_point_on_the_screens_shown_is_located_on_them() {
     local(async {
         let mut s = setup_with(None, with_layout(Some(two_screens()))).await;
-        assert_eq!(s.window.view().screens, Some(two_screens()));
+        assert_eq!(s.window.view().screens, Ok(two_screens()));
         // round(3768 * 65536 / 5488) = 44996; round(720 * 65536 / 1440) = 32768.
         let located = Outcome::Located(Located {
             x: 44996,
@@ -64,8 +64,8 @@ async fn the_view_follows_the_screens_and_a_pick_on_old_ones_is_refused() {
         let begun = s.window.view().since;
         s.d.shared.with(|r| r.layout = None);
         s.d.send(Message::LayoutChanged).await;
-        assert_eq!(s.window.view().screens, None);
-        let unknown = Outcome::Unavailable(Unavailability::ScreensUnknown);
+        assert_eq!(s.window.view().screens, Err(NoScreens::NoDisplay));
+        let unknown = Outcome::Unavailable(Unavailability::ScreensUnknown(NoScreens::NoDisplay));
         let now = s.window.view().since;
         assert_eq!(
             s.window.ask(&s.d, locate_since(3768, 720, now)).await,
@@ -79,7 +79,7 @@ async fn the_view_follows_the_screens_and_a_pick_on_old_ones_is_refused() {
         .unwrap();
         s.d.shared.with(|r| r.layout = Some(moved.clone()));
         s.d.send(Message::LayoutChanged).await;
-        assert_eq!(s.window.view().screens, Some(moved));
+        assert_eq!(s.window.view().screens, Ok(moved));
         let changed = Outcome::Unavailable(Unavailability::ScreensChanged);
         let now = s.window.view().since;
         assert_eq!(

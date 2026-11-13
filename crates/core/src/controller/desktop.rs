@@ -144,7 +144,7 @@ impl<P: Platform> Controller<P> {
                 Some(job.own_keys(&self.config))
             }
             State::Running(running) => Some(running.keys.clone()),
-            State::Idle | State::RecordCountdown(_) | State::Recording(_) => None,
+            State::Idle | State::RecordCountdown(_) | State::Recording(..) => None,
         }
     }
 

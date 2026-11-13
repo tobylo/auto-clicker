@@ -98,7 +98,11 @@ fn files() -> Vec<String> {
 async fn start(bus: &Connection, slot: &RecordingSlot) -> (Kwin, JoinHandle<()>) {
     let display = Wayland::connect(tokio::time::Instant::now() + WAIT).await;
     let kwin = Kwin::serve(bus, clock, display.compositor()).await;
-    let watcher = kwin.watch(slot.feed(), LayoutSignal::default());
+    let watcher = kwin.watch(
+        slot.feed(),
+        LayoutSignal::default(),
+        LayoutSignal::default(),
+    );
     let task = tokio::task::spawn_local(watcher);
     until_loaded(bus, (false, false)).await;
     sleep(Duration::from_millis(200)).await;

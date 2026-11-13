@@ -9,11 +9,13 @@
 //! The reasons inside these messages come from their own modules, each
 //! with its English text: [`Blocked`], [`Unavailable`](crate::hotkeys::Unavailable),
 //! [`Refusal`](crate::hotkeys::Refusal) (a key the desktop's hotkeys use),
-//! [`NoRecording`](crate::controller::NoRecording), and the settings'
+//! [`NoRecording`](crate::controller::NoRecording), [`NoScreens`],
+//! [`NoPointer`], and the settings'
 //! [`Reason`](crate::config::Reason).
 
 mod answer;
 mod input;
+mod missing;
 mod notice;
 mod quoted;
 mod titled;
@@ -24,6 +26,7 @@ use serde::{Deserialize, Serialize};
 
 pub use answer::{ChangeFailure, Failure, RecordingChange, Step, Unavailability};
 pub use input::InputFailure;
+pub use missing::{NoPointer, NoPositions, NoScreens};
 pub use notice::{
     Hindrance, Notice, PlayStart, PointScreens, SaveFailure, Saving, Start, Stop, Unplayable,
 };
@@ -54,6 +57,8 @@ pub enum Problem {
     /// The recording the playback hotkey plays could not be kept for the
     /// next start.
     CurrentUnkept(Quoted),
+    /// Recordings keep movement only: they get no positions.
+    NoPositions(NoPositions),
 }
 
 impl fmt::Display for Problem {
@@ -74,6 +79,7 @@ impl fmt::Display for Problem {
                 "The recording the playback hotkey plays could not be kept for the next start: \
                  {why}"
             ),
+            Problem::NoPositions(why) => write!(f, "Recordings keep movement only: {why}"),
         }
     }
 }

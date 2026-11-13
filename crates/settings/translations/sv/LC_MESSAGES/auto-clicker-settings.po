@@ -59,8 +59,8 @@ msgstr "Skärmen kunde inte täckas för att välja en punkt: {}"
 msgid "Pick on the screen…"
 msgstr "Välj på skärmen…"
 
-msgid "Picking a point needs the screen layout from KWin, which is not known now."
-msgstr "För att välja en punkt behövs skärmlayouten från KWin, och den är inte känd nu."
+msgid "Picking a point needs the screen layout, which is not known: {}"
+msgstr "För att välja en punkt behövs skärmlayouten, som inte är känd: {}"
 
 msgid "Pick the point"
 msgstr "Välj punkten"
@@ -399,8 +399,35 @@ msgstr "programmet läser tangentborden: välj snabbtangenterna i det här föns
 msgid "the desktop's shortcuts are not available"
 msgstr "skrivbordets genvägar är inte tillgängliga"
 
-msgid "the screen layout is not known"
-msgstr "skärmlayouten är inte känd"
+msgid "the screen layout is not known: {}"
+msgstr "skärmlayouten är inte känd: {}"
+
+msgid "Recordings keep movement only: {}"
+msgstr "Inspelningar sparar bara rörelser: {}"
+
+msgid "the program started without a Wayland display (WAYLAND_DISPLAY); see the README"
+msgstr "programmet startade utan en Wayland-display (WAYLAND_DISPLAY); se README"
+
+msgid "the program could not connect to the Wayland display"
+msgstr "programmet kunde inte ansluta till Wayland-displayen"
+
+msgid "the desktop does not say where its screens are (no xdg-output)"
+msgstr "skrivbordet berättar inte var skärmarna är (ingen xdg-output)"
+
+msgid "the connection to the Wayland display ended"
+msgstr "anslutningen till Wayland-displayen bröts"
+
+msgid "the Wayland display refused the program's requests"
+msgstr "Wayland-displayen avvisade programmets förfrågningar"
+
+msgid "the desktop has not described every screen"
+msgstr "skrivbordet har inte beskrivit alla skärmar"
+
+msgid "nothing on this desktop reports where the pointer is"
+msgstr "inget på det här skrivbordet rapporterar var pekaren är"
+
+msgid "KWin's pointer script cannot be used; see the log"
+msgstr "KWins pekarskript kan inte användas; se loggen"
 
 msgid "the screens changed while the point was picked: pick it again"
 msgstr "skärmarna ändrades medan punkten valdes: välj den igen"

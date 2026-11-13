@@ -72,7 +72,7 @@ fn view() -> WindowView {
             more: 3,
             current: Some(file("2026-11-02_18-04-05.123.json")),
         },
-        screens: Some(screens()),
+        screens: Ok(screens()),
         since: Since {
             runs: 3,
             layouts: u64::MAX,
@@ -138,7 +138,7 @@ fn every_answer_reads_back_as_sent() {
         )),
         Outcome::Recording(RecordingOutcome::NotPlaying(Some(Notice::NothingToPlay))),
         Outcome::Recording(RecordingOutcome::NotPlaying(None)),
-        Outcome::Unavailable(Unavailability::ScreensUnknown),
+        Outcome::Unavailable(Unavailability::ScreensUnknown(NoScreens::Lost)),
         Outcome::Unavailable(Unavailability::ScreensChanged),
         Outcome::Located(Located {
             x: 0,
@@ -255,8 +255,10 @@ fn a_picked_position_is_read_only_as_finite_numbers_on_the_screens() {
 #[test]
 fn shown_screens_are_read_only_as_a_valid_layout() {
     let mut value = serde_json::to_value(view()).unwrap();
-    value["screens"] = serde_json::Value::Null;
+    value["screens"] = serde_json::json!({"Err": "lost"});
     assert!(parse::<WindowView>(&serde_json::to_vec(&value).unwrap()).is_ok());
+    value["screens"] = serde_json::Value::Null;
+    assert!(parse::<WindowView>(&serde_json::to_vec(&value).unwrap()).is_err());
     let one = serde_json::json!({"x": 0, "y": 0, "width": 10, "height": 10, "scale_milli": 1000});
     let invalid = [
         serde_json::json!([]),
@@ -264,7 +266,7 @@ fn shown_screens_are_read_only_as_a_valid_layout() {
         serde_json::Value::Array(vec![one; MAX_OUTPUTS + 1]),
     ];
     for screens in invalid {
-        value["screens"] = screens.clone();
+        value["screens"] = serde_json::json!({ "Ok": screens });
         let bytes = serde_json::to_vec(&value).unwrap();
         assert!(parse::<WindowView>(&bytes).is_err(), "{screens}");
     }
@@ -329,7 +331,7 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
     };
     // The most screens, at the largest numbers.
     let far = Output::new(rect(0, 0, u32::MAX, u32::MAX), u32::MAX).unwrap();
-    widest.screens = Some(Layout::new(vec![far; MAX_OUTPUTS]).unwrap());
+    widest.screens = Ok(Layout::new(vec![far; MAX_OUTPUTS]).unwrap());
     widest.answer = Some(Answer {
         id: u64::MAX,
         outcome: Outcome::Refused(Refusal::new(

@@ -83,7 +83,16 @@ export global Texts {
     public pure function desktop-delivers() -> string { @tr("the desktop delivers the hotkeys: change them in System Settings, under Shortcuts") }
     public pure function reads-keyboards() -> string { @tr("the program reads the keyboards: set the hotkeys in this window") }
     public pure function no-shortcuts() -> string { @tr("the desktop's shortcuts are not available") }
-    public pure function screens-unknown() -> string { @tr("the screen layout is not known") }
+    public pure function screens-unknown(why: string) -> string { @tr("the screen layout is not known: {}", why) }
+    public pure function problem-no-positions(why: string) -> string { @tr("Recordings keep movement only: {}", why) }
+    public pure function no-screens-no-display() -> string { @tr("the program started without a Wayland display (WAYLAND_DISPLAY); see the README") }
+    public pure function no-screens-cannot-connect() -> string { @tr("the program could not connect to the Wayland display") }
+    public pure function no-screens-no-xdg-output() -> string { @tr("the desktop does not say where its screens are (no xdg-output)") }
+    public pure function no-screens-lost() -> string { @tr("the connection to the Wayland display ended") }
+    public pure function no-screens-protocol-error() -> string { @tr("the Wayland display refused the program's requests") }
+    public pure function no-screens-not-whole() -> string { @tr("the desktop has not described every screen") }
+    public pure function no-pointer-no-source() -> string { @tr("nothing on this desktop reports where the pointer is") }
+    public pure function no-pointer-unusable() -> string { @tr("KWin's pointer script cannot be used; see the log") }
     public pure function screens-changed() -> string { @tr("the screens changed while the point was picked: pick it again") }
     public pure function point-screens-changed() -> string { @tr("the screens changed since the fixed point was picked: pick it again in Settings") }
     public pure function point-screens-unknown() -> string { @tr("the screen layout is not known, so the picked point cannot be checked") }
@@ -204,6 +213,8 @@ export component SettingsWindow inherits Window {
     in property <bool> idle;
     // The screens are known, so a point can be picked on them.
     in property <bool> screens-known;
+    // Why the screens are not known, while they are not.
+    in property <string> screens-why;
     // The overlay to pick a point is up.
     in property <bool> picking;
     // The window may send a request: nothing waits on an answer, and no
@@ -305,7 +316,7 @@ export component SettingsWindow inherits Window {
                             }
                         }
                         if !root.screens-known: Text {
-                            text: @tr("Picking a point needs the screen layout from KWin, which is not known now.");
+                            text: @tr("Picking a point needs the screen layout, which is not known: {}", root.screens-why);
                             wrap: word-wrap;
                         }
                         if root.position-fixed: Row {

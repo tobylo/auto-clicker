@@ -26,7 +26,7 @@ mod session;
 mod token;
 mod watcher;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::future::pending;
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -34,6 +34,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use auto_clicker_core::controller::{LayoutSignal, LayoutWatch};
+use auto_clicker_core::message::NoPointer;
 use auto_clicker_core::recording::RecordingFeed;
 use tokio::sync::{Notify, mpsc};
 use zbus::Connection;
@@ -91,6 +92,7 @@ impl Kwin {
             dir,
             trust,
             owner: RefCell::default(),
+            load_failed: Cell::default(),
             compositor,
         };
         let inbox = Inbox {
@@ -108,16 +110,33 @@ impl Kwin {
         Kwin(None)
     }
 
+    /// Whether KWin reports the pointer to recordings now: a KWin of the
+    /// display is counted, and its script can be used. The watcher's
+    /// `changed` says when the KWin counted changes.
+    pub fn pointer(&self) -> Result<(), NoPointer> {
+        match &self.0 {
+            Some(shared) => shared.session.pointer(),
+            None => Err(NoPointer::Unusable),
+        }
+    }
+
     /// The watcher, to be polled on the daemon's thread: it loads the
     /// position script while `feed` records, feeds the recording its
-    /// positions, and fires `restarted` each time a KWin of the display
-    /// comes to own `org.kde.KWin`, the first one seen included. Only the
+    /// positions, fires `restarted` each time a KWin of the display comes
+    /// to own `org.kde.KWin`, the first one seen included, and `changed`
+    /// each time the KWin counted changes ([`Kwin::pointer`]). Only the
     /// first call gets it; any later one, like one without KWin, watches
     /// nothing.
-    pub fn watch(&self, feed: RecordingFeed, restarted: LayoutSignal) -> LayoutWatch {
+    pub fn watch(
+        &self,
+        feed: RecordingFeed,
+        restarted: LayoutSignal,
+        changed: LayoutSignal,
+    ) -> LayoutWatch {
         let started = self.0.as_ref().and_then(|shared| {
             let inbox = shared.inbox.borrow_mut().take()?;
-            let watcher = Watcher::new(Rc::clone(&shared.session), feed, restarted);
+            let session = Rc::clone(&shared.session);
+            let watcher = Watcher::new(session, feed, restarted, changed);
             Some(watcher.run(inbox))
         });
         match started {

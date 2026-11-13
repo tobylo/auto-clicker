@@ -3,6 +3,7 @@ use auto_clicker_core::config::RouteName;
 use auto_clicker_core::config::{Config, Refusal};
 use auto_clicker_core::controller::{Hotkey, Routes};
 use auto_clicker_core::hotkeys::Binding;
+use auto_clicker_core::message::NoScreens;
 use auto_clicker_core::recording::{Layout, Output};
 use auto_clicker_core::window::{Answer, ShownHotkeys, Since, Spot};
 
@@ -23,7 +24,7 @@ fn view(settings: Draft, answer: Option<Answer>) -> WindowView {
         no_recording: None,
         problems: Vec::new(),
         recordings: Default::default(),
-        screens: None,
+        screens: Err(NoScreens::NoDisplay),
         since: Since::default(),
         answer,
     }

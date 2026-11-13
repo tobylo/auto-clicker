@@ -8,8 +8,10 @@
 //! first, so a failure is never forgotten. A script's files stay until it is
 //! unloaded, and the start sweeps any a crash left.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
+
+use auto_clicker_core::message::NoPointer;
 
 use crate::dir::ScriptDir;
 use crate::display;
@@ -25,9 +27,27 @@ pub(crate) struct Session<S> {
     pub(crate) trust: SharedTrust,
     /// `org.kde.KWin`'s owner as the watcher last saw it.
     pub(crate) owner: RefCell<Option<String>>,
+    /// The position script's last load into that owner failed; a load that
+    /// works, or a new owner, clears it.
+    pub(crate) load_failed: Cell<bool>,
     /// The process listening on the daemon's Wayland display; KWin counts
     /// only as it or its child. `None`: nothing to check against.
     pub(crate) compositor: Option<NonZeroU32>,
+}
+
+impl<S> Session<S> {
+    /// Whether this session's KWin reports the pointer now: the watcher
+    /// counts an owner of `org.kde.KWin` (one of the display, checked), the
+    /// script directory passed its check, and the last load did not fail.
+    pub(crate) fn pointer(&self) -> Result<(), NoPointer> {
+        if self.dir.is_err() || self.load_failed.get() {
+            return Err(NoPointer::Unusable);
+        }
+        match *self.owner.borrow() {
+            Some(_) => Ok(()),
+            None => Err(NoPointer::NoSource),
+        }
+    }
 }
 
 impl<S: Scripting> Session<S> {

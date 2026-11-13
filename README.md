@@ -2,7 +2,7 @@
 
 # auto-clicker
 
-An auto clicker with macro record and playback for KDE Plasma on Wayland. It lives in the system tray, and its hotkeys work inside fullscreen games. Written in Rust to stay light while idle.
+An auto clicker with macro record and playback for KDE Plasma on Wayland. It lives in the system tray, and its hotkeys work inside fullscreen games. It also runs on niri and Hyprland ([setup](docs/guide/install.md#on-niri-and-hyprland)). Written in Rust to stay light while idle.
 
 - **Click** fast, hold a button, repeat a key or hold one, at the cursor or a fixed point.
 - **Record** what the mouse and keyboard do, and **play it back** with its timing, at any speed, as often as you like.

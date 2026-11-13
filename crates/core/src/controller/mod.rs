@@ -53,7 +53,8 @@ use crate::config::Config;
 use crate::hotkeys::{Action, Binding, Bindings, Capture, HotkeyEvent, HotkeyStatus, Unavailable};
 use crate::input::{Input, InputBackend, InputError};
 use crate::message::{
-    ConfigProblem, Hindrance, InputFailure, Notice, Problem, Start, Stop, Titled,
+    ConfigProblem, Hindrance, InputFailure, NoPointer, NoScreens, Notice, Problem, Start, Stop,
+    Titled,
 };
 use crate::recording::{FileName, Layout, LocalTime, RecordingFeed, RecordingSlot};
 use crate::run::{Ended, RunEnd, Signals};
@@ -220,17 +221,25 @@ pub trait Platform {
     /// Where recordings are saved; `None` when there is no data directory.
     fn recordings_dir(&self) -> Option<PathBuf>;
 
-    /// The screen layout now, without waiting; `None` while it is not known,
-    /// which is always unless the platform reports one. The layout watcher's
-    /// signal ([`Platform::watch_layout`]) or [`Message::LayoutChanged`] says
-    /// when it changes.
-    fn layout(&self) -> Option<Layout> {
-        None
+    /// The screen layout now, without waiting, or why it is not known. A
+    /// platform that reports none has no Wayland display. The layout
+    /// watcher's signal ([`Platform::watch_layout`]) or
+    /// [`Message::LayoutChanged`] says when it, or the reason, changes.
+    fn layout(&self) -> Result<Layout, NoScreens> {
+        Err(NoScreens::NoDisplay)
+    }
+
+    /// Whether something reports the pointer's position to recordings now,
+    /// or why nothing does; the layout watcher's signal says when that
+    /// changes. A platform that reports none has no source.
+    fn pointer(&self) -> Result<(), NoPointer> {
+        Err(NoPointer::NoSource)
     }
 
     /// Starts watching the screen layout; called once, when the controller
     /// starts. The watcher fires `changed` whenever [`Platform::layout`]
-    /// changes or becomes unknown, and while a recording runs in `feed`'s
+    /// changes, becomes unknown or is unknown for another reason, and
+    /// whenever [`Platform::pointer`] changes, and while a recording runs in `feed`'s
     /// slot it hands the recorder where the pointer is. It starts and stops
     /// nothing. The controller polls it beside everything else and drops it
     /// when it ends. The default watches nothing.
@@ -312,8 +321,10 @@ enum State<B: InputBackend> {
     Running(Running<B>),
     /// A recording from the tray starts at this deadline.
     RecordCountdown(Instant),
-    /// Recording; it stops at its time limit, this deadline.
-    Recording(Instant),
+    /// Recording; it stops at its time limit, this deadline. Begun while
+    /// the screens were not known, it keeps no positions to its end, for
+    /// this reason.
+    Recording(Instant, Option<NoScreens>),
 }
 
 /// A run as the controller polls it.
@@ -661,7 +672,7 @@ impl<P: Platform> Controller<P> {
                 job.playing()
             }
             State::Running(running) => running.playing.as_ref(),
-            State::Idle | State::RecordCountdown(_) | State::Recording(_) => None,
+            State::Idle | State::RecordCountdown(_) | State::Recording(..) => None,
         }
     }
 
@@ -747,7 +758,7 @@ impl<P: Platform> Controller<P> {
             State::Countdown(..) | State::Release(..) | State::Opening(_) => self.cancel_start(),
             State::Running(running) => running.stop(),
             // Other hotkeys do nothing while recording.
-            State::RecordCountdown(_) | State::Recording(_) => {}
+            State::RecordCountdown(_) | State::Recording(..) => {}
         }
     }
 
@@ -789,7 +800,7 @@ impl<P: Platform> Controller<P> {
             State::Countdown(..) | State::Release(..) | State::Opening(_) => self.cancel_start(),
             State::RecordCountdown(_) => self.state = State::Idle,
             State::Running(running) => running.stop(),
-            State::Recording(_) => return self.stop_recording(why),
+            State::Recording(..) => return self.stop_recording(why),
         }
         if let Some(why) = why {
             self.notice = Some(Notice::Stopped(why));
@@ -852,7 +863,7 @@ impl<P: Platform> Controller<P> {
             // The settings window's deadlines wake the controller too.
             State::Release(deadline, _) if now >= deadline => self.release_expired(),
             State::RecordCountdown(deadline) if now >= deadline => self.begin_recording(None),
-            State::Recording(limit) if now >= limit => self.recording_limit_reached(),
+            State::Recording(limit, _) if now >= limit => self.recording_limit_reached(),
             // A second of a countdown passed; the view shows it.
             _ => {}
         }
@@ -865,7 +876,7 @@ impl<P: Platform> Controller<P> {
             State::Countdown(deadline, _) | State::RecordCountdown(deadline) => {
                 Some(next_second(deadline, Instant::now()))
             }
-            State::Release(deadline, _) | State::Recording(deadline) => Some(deadline),
+            State::Release(deadline, _) | State::Recording(deadline, _) => Some(deadline),
             State::Idle | State::Opening(_) | State::Running(_) => None,
         };
         // What the settings window waits on ends by its own deadline,
@@ -896,7 +907,7 @@ impl<P: Platform> Controller<P> {
             stop: signal(stop_signal),
             shutdown: signal(shutdown_signal),
         };
-        let layout = self.platform.layout();
+        let layout = self.platform.layout().ok();
         self.notice = match &job {
             Job::Click => None,
             Job::Play(playing) => playing.start_notice(layout.as_ref()),
@@ -1097,7 +1108,7 @@ impl<P: Platform> Controller<P> {
             State::RecordCountdown(deadline) => Activity::RecordingIn(whole_seconds(
                 deadline.saturating_duration_since(Instant::now()),
             )),
-            State::Recording(_) => Activity::Recording,
+            State::Recording(..) => Activity::Recording,
         }
     }
 
@@ -1113,6 +1124,7 @@ impl<P: Platform> Controller<P> {
             self.input_error.clone().map(Problem::Input),
             self.shelf.error.clone().map(Problem::Unlisted),
             self.shelf.current_error.clone(),
+            self.no_positions().map(Problem::NoPositions),
         ]
         .into_iter()
         .flatten()

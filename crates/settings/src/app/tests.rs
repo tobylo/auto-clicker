@@ -9,9 +9,9 @@ use auto_clicker_core::hotkeys::Refusal;
 use auto_clicker_core::hotkeys::Unavailable;
 use auto_clicker_core::locale::Language;
 use auto_clicker_core::message::{
-    ChangeFailure, ConfigProblem, Failure, Hindrance, InputFailure, Notice, PlayStart,
-    PointScreens, Problem, Quoted, RecordingChange, SaveFailure, Saving, Start, Step, Stop, Titled,
-    Unavailability, Unplayable,
+    ChangeFailure, ConfigProblem, Failure, Hindrance, InputFailure, NoPointer, NoPositions,
+    NoScreens, Notice, PlayStart, PointScreens, Problem, Quoted, RecordingChange, SaveFailure,
+    Saving, Start, Step, Stop, Titled, Unavailability, Unplayable,
 };
 use auto_clicker_core::playback::Fallback;
 use auto_clicker_core::recording::FileName;
@@ -48,6 +48,7 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
     };
     refusals_and_failures(&said);
     problems(&said);
+    no_positions(&said);
     recordings(&said);
     point_screens(&said);
     titles(&said);
@@ -118,8 +119,11 @@ fn point_screens(said: &Said<'_>) {
         "Inte tillgängligt: skärmarna ändrades medan punkten valdes: välj den igen"
     );
     assert_eq!(
-        note(Note::Unavailable(Unavailability::ScreensUnknown)),
-        "Inte tillgängligt: skärmlayouten är inte känd"
+        note(Note::Unavailable(Unavailability::ScreensUnknown(
+            NoScreens::Lost
+        ))),
+        "Inte tillgängligt: skärmlayouten är inte känd: anslutningen till Wayland-displayen \
+         bröts"
     );
 }
 
@@ -159,6 +163,50 @@ fn problems(said: &Said<'_>) {
         note(Note::SavedUnsynced(Quoted::new("EIO"))),
         "Sparat, men det kanske inte klarar ett strömavbrott: EIO"
     );
+}
+
+/// Why recordings keep movement only, each reason in Swedish.
+fn no_positions(said: &Said<'_>) {
+    let reasons = [
+        (
+            NoPositions::Screens(NoScreens::NoDisplay),
+            "programmet startade utan en Wayland-display (WAYLAND_DISPLAY); se README",
+        ),
+        (
+            NoPositions::Screens(NoScreens::CannotConnect),
+            "programmet kunde inte ansluta till Wayland-displayen",
+        ),
+        (
+            NoPositions::Screens(NoScreens::NoXdgOutput),
+            "skrivbordet berättar inte var skärmarna är (ingen xdg-output)",
+        ),
+        (
+            NoPositions::Screens(NoScreens::Lost),
+            "anslutningen till Wayland-displayen bröts",
+        ),
+        (
+            NoPositions::Screens(NoScreens::ProtocolError),
+            "Wayland-displayen avvisade programmets förfrågningar",
+        ),
+        (
+            NoPositions::Screens(NoScreens::NotWhole),
+            "skrivbordet har inte beskrivit alla skärmar",
+        ),
+        (
+            NoPositions::Pointer(NoPointer::NoSource),
+            "inget på det här skrivbordet rapporterar var pekaren är",
+        ),
+        (
+            NoPositions::Pointer(NoPointer::Unusable),
+            "KWins pekarskript kan inte användas; se loggen",
+        ),
+    ];
+    for (why, swedish) in reasons {
+        assert_eq!(
+            said.problem(&Problem::NoPositions(why)),
+            format!("Inspelningar sparar bara rörelser: {swedish}")
+        );
+    }
 }
 
 /// What Play, Rename and Delete answer.
