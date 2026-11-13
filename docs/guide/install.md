@@ -47,7 +47,7 @@ The program does not update itself. To install a newer version, from the account
 
 Then restart the computer, or, for each person, `systemctl --user restart auto-clicker`. Always use `-f`: without it, makepkg would reinstall the package it built last time.
 
-The build refuses to run if the downloaded copy has been changed by hand (`git status` shows changes), so what gets installed is always a version from this repository.
+The build refuses to run if the downloaded copy has changes that are not committed (`git status` shows them), so it always builds a commit. It builds whatever commit is checked out, though: the steps above keep that to commits from this repository.
 
 ## If it does not start
 
@@ -67,3 +67,5 @@ The build refuses to run if the downloaded copy has been changed by hand (`git s
    `sudo pacman -Rns rust`
 5. Optionally, as each person, delete their settings:
    `rm -rf ~/.config/auto-clicker`
+6. Optionally, as each person, delete their recordings, which can hold the keys they typed while recording, and the program's remembered state (the current recording and Plasma's portal token):
+   `rm -rf ~/.local/share/auto-clicker ~/.local/state/auto-clicker`

@@ -17,13 +17,18 @@ An auto clicker with macro record and playback for KDE Plasma on Wayland. It liv
 
 ## Install
 
-On CachyOS or Arch Linux with Plasma, one line at a time in Konsole (`NAME` is the login name of whoever uses it):
+On CachyOS or Arch Linux with Plasma, one line at a time in Konsole:
 
 ```fish
 sudo pacman -Syu
 sudo pacman -S --needed base-devel git
 git clone https://github.com/tobylo/auto-clicker.git ~/auto-clicker
 cd ~/auto-clicker/packaging/arch && makepkg -sif
+```
+
+To record macros, and to have the hotkeys read from the keyboards rather than Plasma's shortcuts, the person who uses it also needs the `input` group. It lets every program of theirs read every keyboard and mouse, not just this one, so read [what the permissions mean](docs/guide/install.md#what-the-permissions-mean) first. Clicking and Plasma's shortcuts work without it. To add it (`NAME` is their login name):
+
+```fish
 sudo usermod -aG input NAME
 ```
 
@@ -33,7 +38,7 @@ Restart the computer, then, logged in as that person:
 systemctl --user enable --now auto-clicker
 ```
 
-The icon appears in the tray. The `input` group is only needed for recording and for reading hotkeys from the keyboards directly; read [what the permissions mean](docs/guide/install.md#what-the-permissions-mean) before adding it.
+The icon appears in the tray.
 
 ## Documentation
 
