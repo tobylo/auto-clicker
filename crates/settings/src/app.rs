@@ -119,11 +119,17 @@ impl App {
         self.last = Some(view.clone());
         let w = &self.window;
         w.set_idle(state::idle(view));
-        w.set_screens_known(view.screens.is_some());
+        w.set_screens_known(view.screens.is_ok());
         w.set_desktop_hotkeys(state::desktop_hotkeys(view));
         w.set_routes_pending(state::routes_pending(view));
         let texts = w.global::<Texts>();
         let said = self.said(&texts);
+        let screens_why = view.screens.as_ref().err();
+        w.set_screens_why(
+            screens_why
+                .map(|why| said.no_screens(*why))
+                .unwrap_or_default(),
+        );
         w.set_no_recording(
             view.no_recording
                 .as_ref()

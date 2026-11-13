@@ -51,11 +51,32 @@ async fn a_kwin_of_another_display_is_ignored_and_called_for_nothing() {
         after(HOUR).await;
         assert_eq!(h.calls(), []);
         assert!(!h.told().await);
+        assert_eq!(h.session.pointer(), Err(NoPointer::NoSource));
         assert!(h.stop().await.is_empty(), "a position from the other KWin");
         assert_eq!(h.session.trust.lock().unwrap().owner, None);
         // Nor is anything unloaded from it at exit.
         h.session.exit().await;
         assert_eq!(h.calls(), []);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_kwin_of_the_display_that_comes_or_goes_reports_the_pointer_or_not_and_says_so() {
+    local(async {
+        let (h, inbox) = kwin_as(OURS);
+        assert_eq!(h.session.pointer(), Err(NoPointer::NoSource));
+        h.start(inbox).await;
+        assert_eq!(h.session.pointer(), Ok(()));
+        assert!(h.signalled().await, "the first KWin counted was not told");
+        h.new_owner(None).await;
+        assert_eq!(h.session.pointer(), Err(NoPointer::NoSource));
+        assert!(h.signalled().await, "a KWin gone was not told");
+        h.kwin.with(|s| s.processes.push((":1.30", RESTARTED)));
+        h.new_owner(Some(":1.30")).await;
+        assert_eq!(h.session.pointer(), Ok(()));
+        assert!(h.signalled().await, "a KWin come back was not told");
+        assert!(!h.signalled().await, "told twice");
     })
     .await;
 }

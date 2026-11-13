@@ -30,9 +30,9 @@ impl<P: Platform> Controller<P> {
             clicker.pressed_key().is_none() && matches!(clicker.position, Position::Fixed(_));
         let picked = self.config.fixed_screens.as_ref().filter(|_| moves)?;
         match self.platform.layout() {
-            Some(now) if now.same_screens(picked) => None,
-            Some(_) => Some(PointScreens::Changed),
-            None => Some(PointScreens::Unknown),
+            Ok(now) if now.same_screens(picked) => None,
+            Ok(_) => Some(PointScreens::Changed),
+            Err(_) => Some(PointScreens::Unknown),
         }
     }
 
@@ -71,11 +71,11 @@ impl<P: Platform> Controller<P> {
             return Outcome::Busy;
         }
         match self.platform.layout() {
-            None => Outcome::Unavailable(Unavailability::ScreensUnknown),
-            Some(_) if since.layouts != self.since.layouts => {
+            Err(why) => Outcome::Unavailable(Unavailability::ScreensUnknown(why)),
+            Ok(_) if since.layouts != self.since.layouts => {
                 Outcome::Unavailable(Unavailability::ScreensChanged)
             }
-            Some(screens) => located(screens, at, on),
+            Ok(screens) => located(screens, at, on),
         }
     }
 }

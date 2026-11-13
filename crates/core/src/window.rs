@@ -21,7 +21,7 @@ use crate::config::{Draft, InputDraft, Refusal, Stale};
 use crate::controller::{Activity, Hotkey, Listed, NoRecording, Routes};
 use crate::hotkeys::{Action, Binding, Capture};
 use crate::message::{
-    ChangeFailure, Failure, Notice, Problem, Quoted, RecordingChange, Unavailability,
+    ChangeFailure, Failure, NoScreens, Notice, Problem, Quoted, RecordingChange, Unavailability,
 };
 use crate::recording::{FileName, Layout, Rect};
 
@@ -201,8 +201,8 @@ pub struct WindowView {
     pub problems: Vec<Problem>,
     pub recordings: RecordingsView,
     /// The screens as the compositor has them now, which a point is picked
-    /// on; `None` when they are not known.
-    pub screens: Option<Layout>,
+    /// on, or why they are not known.
+    pub screens: Result<Layout, NoScreens>,
     /// What a pick begun now is checked against.
     pub since: Since,
     /// The answer to the window's last request, once there is one.

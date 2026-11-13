@@ -20,9 +20,9 @@ use wayland_client::{Connection, Dispatch, DispatchError, EventQueue, Proxy, Que
 use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_manager_v1::ZxdgOutputManagerV1;
 use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_v1::{self, ZxdgOutputV1};
 
-use crate::Missing;
 use crate::gather::{Gather, Heard, Settled};
 use crate::socket::{self, Waiting};
+use auto_clicker_core::message::NoScreens;
 
 /// The newest versions the client knows: `wl_output` 4 (name and
 /// description, which it ignores), xdg-output 3 (`done` on `wl_output`).
@@ -120,8 +120,8 @@ impl Client {
         &mut self,
         registry: &WlRegistry,
         queue: &QueueHandle<Client>,
-    ) -> Result<(), Missing> {
-        let manager = self.manager_offered.ok_or(Missing::NoXdgOutput)?;
+    ) -> Result<(), NoScreens> {
+        let manager = self.manager_offered.ok_or(NoScreens::NoXdgOutput)?;
         let version = manager.version.min(XDG_OUTPUT_VERSION);
         self.manager = Some(registry.bind(manager.name, version, queue, ()));
         for output in std::mem::take(&mut self.offered) {
@@ -278,7 +278,7 @@ pub(crate) struct Link {
 impl Link {
     /// Connects over `stream`, binds the outputs and reads the first
     /// layout; `None` while it is not a whole layout.
-    pub(crate) async fn start(stream: UnixStream) -> Result<(Link, Option<Layout>), Missing> {
+    pub(crate) async fn start(stream: UnixStream) -> Result<(Link, Option<Layout>), NoScreens> {
         let mut link = Link::over(stream)?;
         let queue = link.queue.handle();
         let registry = link.connection.display().get_registry(&queue, ());
@@ -295,17 +295,17 @@ impl Link {
     }
 
     /// A connection over `stream`, nothing sent yet.
-    pub(crate) fn over(stream: UnixStream) -> Result<Link, Missing> {
+    pub(crate) fn over(stream: UnixStream) -> Result<Link, NoScreens> {
         let cannot = |err: std::io::Error| {
             eprintln!("auto-clicker: cannot use the Wayland display's socket: {err}");
-            Missing::CannotConnect
+            NoScreens::CannotConnect
         };
         stream.set_nonblocking(true).map_err(cannot)?;
         let watched = stream.try_clone().map_err(cannot)?;
         let socket = tokio::net::UnixStream::from_std(watched).map_err(cannot)?;
         let connection = Connection::from_socket(stream).map_err(|err| {
             eprintln!("auto-clicker: cannot use the Wayland display: {err}");
-            Missing::CannotConnect
+            NoScreens::CannotConnect
         })?;
         let queue = connection.new_event_queue();
         Ok(Link {
@@ -317,7 +317,7 @@ impl Link {
     }
 
     /// Runs until `done` holds after a dispatch.
-    async fn until(&mut self, done: impl Fn(&Client) -> bool) -> Result<(), Missing> {
+    async fn until(&mut self, done: impl Fn(&Client) -> bool) -> Result<(), NoScreens> {
         loop {
             self.dispatch()?;
             if done(&self.client) {
@@ -329,7 +329,7 @@ impl Link {
 
     /// Handles what has arrived, and asks for the round trip [`Gather`]
     /// wants.
-    pub(crate) fn dispatch(&mut self) -> Result<(), Missing> {
+    pub(crate) fn dispatch(&mut self) -> Result<(), NoScreens> {
         self.queue
             .dispatch_pending(&mut self.client)
             .map_err(dispatch_error)?;
@@ -344,7 +344,7 @@ impl Link {
 
     /// Sends what is queued, then waits until something arrives and reads
     /// it.
-    pub(crate) async fn wait(&mut self) -> Result<(), Missing> {
+    pub(crate) async fn wait(&mut self) -> Result<(), NoScreens> {
         self.flush().await?;
         let Some(read) = self.queue.prepare_read() else {
             // Events already arrived: the next dispatch handles them.
@@ -364,7 +364,7 @@ impl Link {
         }
     }
 
-    async fn flush(&mut self) -> Result<(), Missing> {
+    async fn flush(&mut self) -> Result<(), NoScreens> {
         loop {
             self.socket
                 .writable()
@@ -387,7 +387,7 @@ impl Link {
 impl Link {
     /// Why the connection ended with `err`: libwayland reports a protocol
     /// error as a failed read or write, and keeps the error itself.
-    fn failed(&self, err: std::io::Error) -> Missing {
+    fn failed(&self, err: std::io::Error) -> NoScreens {
         match self.connection.protocol_error() {
             Some(protocol) => wayland_error(WaylandError::Protocol(protocol)),
             None => lost(err),
@@ -422,22 +422,22 @@ fn io_only<T>(result: Result<T, WaylandError>) -> std::io::Result<Result<T, Wayl
     }
 }
 
-fn lost(err: std::io::Error) -> Missing {
+fn lost(err: std::io::Error) -> NoScreens {
     eprintln!("auto-clicker: lost the Wayland display: {err}");
-    Missing::Lost
+    NoScreens::Lost
 }
 
-fn wayland_error(err: WaylandError) -> Missing {
+fn wayland_error(err: WaylandError) -> NoScreens {
     match err {
         WaylandError::Io(err) => lost(err),
         WaylandError::Protocol(err) => {
             eprintln!("auto-clicker: the Wayland display refused the connection: {err}");
-            Missing::ProtocolError
+            NoScreens::ProtocolError
         }
     }
 }
 
-fn dispatch_error(err: DispatchError) -> Missing {
+fn dispatch_error(err: DispatchError) -> NoScreens {
     match err {
         DispatchError::Backend(err) => wayland_error(err),
         DispatchError::BadMessage {
@@ -446,7 +446,7 @@ fn dispatch_error(err: DispatchError) -> Missing {
             eprintln!(
                 "auto-clicker: the Wayland display sent a malformed {interface} event ({opcode})"
             );
-            Missing::ProtocolError
+            NoScreens::ProtocolError
         }
     }
 }

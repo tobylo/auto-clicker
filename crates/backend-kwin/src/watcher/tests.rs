@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use auto_clicker_core::hotkeys::Bindings;
+use auto_clicker_core::message::NoPointer;
 use auto_clicker_core::recording::{Change, Created, Ending, Point, Recorder, RecordingSlot};
 use futures_util::stream;
 use tokio::task::{LocalSet, yield_now};
@@ -241,6 +242,8 @@ struct Harness {
     session: Rc<Session<FakeKwin>>,
     receiver: Rc<Receiver>,
     restarted: LayoutSignal,
+    /// The controller's layout signal.
+    changed: LayoutSignal,
     runtime: Runtime,
 }
 
@@ -291,6 +294,7 @@ impl Harness {
             session,
             receiver,
             restarted: LayoutSignal::default(),
+            changed: LayoutSignal::default(),
             runtime,
         };
         let inbox = Inbox {
@@ -305,6 +309,7 @@ impl Harness {
             Rc::clone(&self.session),
             self.slot.feed(),
             self.restarted.clone(),
+            self.changed.clone(),
         )
         .with_rng(fastrand::Rng::with_seed(11))
     }
@@ -394,6 +399,11 @@ impl Harness {
         timeout(Duration::ZERO, self.restarted.fired())
             .await
             .is_ok()
+    }
+
+    /// Whether the controller's layout signal fired since last asked.
+    async fn signalled(&self) -> bool {
+        timeout(Duration::ZERO, self.changed.fired()).await.is_ok()
     }
 }
 
@@ -785,7 +795,12 @@ async fn a_runtime_directory_open_to_others_loads_nothing() {
             compositor: None,
         };
         assert!(session.dir.is_err());
-        let watcher = Watcher::new(Rc::new(session), h.slot.feed(), h.restarted.clone());
+        let watcher = Watcher::new(
+            Rc::new(session),
+            h.slot.feed(),
+            h.restarted.clone(),
+            h.changed.clone(),
+        );
         tokio::task::spawn_local(watcher.run(inbox));
         settle().await;
         h.record().await;
@@ -1075,7 +1090,12 @@ async fn a_script_directory_that_failed_its_check_is_not_tried_again() {
             owner: RefCell::default(),
             compositor: None,
         };
-        let mut watcher = Watcher::new(Rc::new(session), h.slot.feed(), h.restarted.clone());
+        let mut watcher = Watcher::new(
+            Rc::new(session),
+            h.slot.feed(),
+            h.restarted.clone(),
+            h.changed.clone(),
+        );
         let mut owners = watcher.follow_owner().await;
         drive(&mut watcher, &mut owners, &mut inbox).await;
         assert_eq!(h.calls(), SWEEP);
@@ -1083,6 +1103,8 @@ async fn a_script_directory_that_failed_its_check_is_not_tried_again() {
         drive(&mut watcher, &mut owners, &mut inbox).await;
         assert_eq!(h.calls(), [Unload(POSITION)], "a load was tried");
         assert_eq!(watcher.retry_at, None);
+        // KWin is counted, but reports nothing to recordings.
+        assert_eq!(watcher.session.pointer(), Err(NoPointer::Unusable));
     })
     .await;
 }

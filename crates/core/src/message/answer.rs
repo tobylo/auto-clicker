@@ -4,7 +4,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Quoted, Unplayable};
+use super::{NoScreens, Quoted, Unplayable};
 use crate::controller::Blocked;
 use crate::hotkeys::Unavailable;
 
@@ -56,9 +56,9 @@ pub enum Unavailability {
     NoShortcuts,
     /// Hotkeys cannot be read.
     Hotkeys(Unavailable),
-    /// The screen layout is not known (another desktop, or KWin starting
-    /// again), so no point can be picked.
-    ScreensUnknown,
+    /// The screen layout is not known, for this reason, so no point can be
+    /// picked.
+    ScreensUnknown(NoScreens),
     /// The screens changed since the point was picked: pick it again.
     ScreensChanged,
 }
@@ -75,7 +75,9 @@ impl fmt::Display for Unavailability {
             }
             Unavailability::NoShortcuts => f.write_str("the desktop's shortcuts are not available"),
             Unavailability::Hotkeys(why) => why.fmt(f),
-            Unavailability::ScreensUnknown => f.write_str("the screen layout is not known"),
+            Unavailability::ScreensUnknown(why) => {
+                write!(f, "the screen layout is not known: {why}")
+            }
             Unavailability::ScreensChanged => {
                 f.write_str("the screens changed while the point was picked: pick it again")
             }

@@ -3,7 +3,9 @@
 
 use auto_clicker_core::controller::{Blocked, NoRecording};
 use auto_clicker_core::hotkeys::{Refusal, Unavailable};
-use auto_clicker_core::message::{ConfigProblem, InputFailure, Problem};
+use auto_clicker_core::message::{
+    ConfigProblem, InputFailure, NoPointer, NoPositions, NoScreens, Problem,
+};
 
 use super::lines::key_name;
 
@@ -22,6 +24,37 @@ pub(super) fn swedish(problem: &Problem) -> String {
             "Inspelningen som snabbtangenten för uppspelning spelar kunde inte sparas till \
              nästa start: {why}"
         ),
+        Problem::NoPositions(why) => {
+            format!("Inspelningar sparar bara rörelser: {}", no_positions(*why))
+        }
+    }
+}
+
+fn no_positions(why: NoPositions) -> &'static str {
+    match why {
+        NoPositions::Screens(why) => no_screens(why),
+        NoPositions::Pointer(why) => no_pointer(why),
+    }
+}
+
+/// Why the screen layout is not known, in Swedish.
+pub(super) fn no_screens(why: NoScreens) -> &'static str {
+    match why {
+        NoScreens::NoDisplay => {
+            "programmet startade utan en Wayland-display (WAYLAND_DISPLAY); se README"
+        }
+        NoScreens::CannotConnect => "programmet kunde inte ansluta till Wayland-displayen",
+        NoScreens::NoXdgOutput => "skrivbordet berättar inte var skärmarna är (ingen xdg-output)",
+        NoScreens::Lost => "anslutningen till Wayland-displayen bröts",
+        NoScreens::ProtocolError => "Wayland-displayen avvisade programmets förfrågningar",
+        NoScreens::NotWhole => "skrivbordet har inte beskrivit alla skärmar",
+    }
+}
+
+fn no_pointer(why: NoPointer) -> &'static str {
+    match why {
+        NoPointer::NoSource => "inget på det här skrivbordet rapporterar var pekaren är",
+        NoPointer::Unusable => "KWins pekarskript kan inte användas; se loggen",
     }
 }
 

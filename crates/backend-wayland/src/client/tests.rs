@@ -370,14 +370,14 @@ async fn watched_at(local: &LocalSet, fake: &mut Fake, link: UnixStream, at: At)
 
 /// Waits until the layout is unknown, for a reason.
 async fn until_missing(wayland: &Wayland) {
-    while wayland.missing().is_none() {
+    while wayland.layout().err().is_none() {
         settle().await;
     }
 }
 
 /// Waits until the layout is known.
 async fn until_known(wayland: &Wayland) {
-    while wayland.layout().is_none() {
+    while wayland.layout().is_err() {
         settle().await;
     }
 }
@@ -489,7 +489,7 @@ async fn an_output_too_old_to_say_when_it_changed_leaves_the_layout_unknown() {
             })
             .await
             .unwrap();
-            assert_eq!(wayland.layout(), layout(&[LEFT, BELOW]));
+            assert_eq!(wayland.layout().ok(), layout(&[LEFT, BELOW]));
         })
         .await;
 }
@@ -505,7 +505,7 @@ async fn a_display_without_xdg_output_gives_no_layout_and_says_why() {
     let (started, ()) = timeout(BOUND, async { tokio::join!(Link::start(link), serve) })
         .await
         .unwrap();
-    assert_eq!(started.err(), Some(Missing::NoXdgOutput));
+    assert_eq!(started.err(), Some(NoScreens::NoXdgOutput));
 }
 
 #[tokio::test]
@@ -543,7 +543,7 @@ async fn globals_withdrawn_before_they_were_bound_are_never_bound() {
     let (started, ()) = timeout(BOUND, async { tokio::join!(Link::start(link), serve) })
         .await
         .unwrap();
-    assert_eq!(started.err(), Some(Missing::NoXdgOutput));
+    assert_eq!(started.err(), Some(NoScreens::NoXdgOutput));
 }
 
 #[tokio::test]
@@ -591,7 +591,7 @@ async fn the_mode_turn_and_scale_reach_the_layout_and_fire_nothing() {
             assert_eq!(watched.fired.get(), 1, "a new scale alone fired");
             let turned = Output::new(LEFT.output().rect(), 1250).unwrap();
             assert_eq!(
-                watched.wayland.layout(),
+                watched.wayland.layout().ok(),
                 Some(Layout::new(vec![turned]).unwrap())
             );
         })
@@ -622,7 +622,7 @@ async fn an_update_to_two_outputs_interleaved_publishes_once_whole() {
                 // with the old layout still published.
                 let again = fake.until_sync().await;
                 settle().await;
-                let published = watched.wayland.layout();
+                let published = watched.wayland.layout().ok();
                 assert_eq!(
                     published,
                     layout(&[LEFT, RIGHT]),
@@ -634,10 +634,10 @@ async fn an_update_to_two_outputs_interleaved_publishes_once_whole() {
             })
             .await
             .unwrap();
-            assert_eq!(watched.wayland.layout(), layout(&[left, right]));
+            assert_eq!(watched.wayland.layout().ok(), layout(&[left, right]));
             settle().await;
             assert_eq!(watched.fired.get(), 1);
-            assert_eq!(watched.wayland.missing(), None);
+            assert_eq!(watched.wayland.layout().err(), None);
         })
         .await;
 }
@@ -686,7 +686,7 @@ async fn an_update_behind_the_answer_is_waited_for() {
                 let again = fake.until_sync().await;
                 settle().await;
                 assert_eq!(
-                    watched.wayland.layout(),
+                    watched.wayland.layout().ok(),
                     layout(&[LEFT, RIGHT]),
                     "read A's update without B's behind the answer"
                 );
@@ -695,7 +695,7 @@ async fn an_update_behind_the_answer_is_waited_for() {
             })
             .await
             .unwrap();
-            assert_eq!(watched.wayland.layout(), layout(&[left, right]));
+            assert_eq!(watched.wayland.layout().ok(), layout(&[left, right]));
         })
         .await;
 }
@@ -722,7 +722,7 @@ async fn a_move_undone_before_the_answer_still_fires() {
             .unwrap();
             settle().await;
             assert_eq!(watched.fired.get(), 1);
-            assert_eq!(watched.wayland.layout(), layout(&[LEFT, RIGHT]));
+            assert_eq!(watched.wayland.layout().ok(), layout(&[LEFT, RIGHT]));
         })
         .await;
 }
@@ -749,7 +749,7 @@ async fn an_update_that_moves_nothing_fires_nothing() {
             .unwrap();
             settle().await;
             assert_eq!(watched.fired.get(), 1, "the refresh rate fired too");
-            assert_eq!(watched.wayland.layout(), layout(&[LEFT]));
+            assert_eq!(watched.wayland.layout().ok(), layout(&[LEFT]));
             // B's objects were released: its xdg-output destroyed, its
             // output (version 3 and later) released.
             let Ids { output, xdg } = fake.ids(B);
@@ -764,7 +764,7 @@ async fn an_update_that_moves_nothing_fires_nothing() {
 /// watcher runs on, waiting to be asked to connect again.
 async fn ended_by(
     end: impl AsyncFnOnce(Fake) + 'static,
-) -> (Option<Layout>, Option<Missing>, usize) {
+) -> (Option<Layout>, Option<NoScreens>, usize) {
     let local = LocalSet::new();
     local
         .run_until(async {
@@ -777,7 +777,7 @@ async fn ended_by(
             settle().await;
             assert!(!watched.watch.is_finished(), "the watcher ended");
             let Watched { wayland, fired, .. } = watched;
-            (wayland.layout(), wayland.missing(), fired.get())
+            (wayland.layout().ok(), wayland.layout().err(), fired.get())
         })
         .await
 }
@@ -785,7 +785,7 @@ async fn ended_by(
 #[tokio::test]
 async fn a_lost_connection_makes_the_layout_unknown() {
     let (layout, missing, fired) = ended_by(async |fake| drop(fake)).await;
-    assert_eq!((layout, missing, fired), (None, Some(Missing::Lost), 1));
+    assert_eq!((layout, missing, fired), (None, Some(NoScreens::Lost), 1));
 }
 
 #[tokio::test]
@@ -804,7 +804,7 @@ async fn a_connection_that_refuses_a_request_is_lost() {
         std::future::pending::<()>().await;
     })
     .await;
-    assert_eq!((layout, missing, fired), (None, Some(Missing::Lost), 1));
+    assert_eq!((layout, missing, fired), (None, Some(NoScreens::Lost), 1));
 }
 
 #[tokio::test]
@@ -826,7 +826,7 @@ async fn an_output_plugged_in_later_joins_the_layout() {
             })
             .await
             .unwrap();
-            assert_eq!(watched.wayland.layout(), layout(&[LEFT, RIGHT, below]));
+            assert_eq!(watched.wayland.layout().ok(), layout(&[LEFT, RIGHT, below]));
         })
         .await;
 }
@@ -851,7 +851,7 @@ async fn a_protocol_error_makes_the_layout_unknown() {
     .await;
     assert_eq!(
         (layout, missing, fired),
-        (None, Some(Missing::ProtocolError), 1)
+        (None, Some(NoScreens::ProtocolError), 1)
     );
 }
 
@@ -864,17 +864,17 @@ fn an_event_the_client_cannot_read_is_a_protocol_error() {
         interface: "wl_output",
         opcode: 9,
     };
-    assert_eq!(dispatch_error(malformed), Missing::ProtocolError);
+    assert_eq!(dispatch_error(malformed), NoScreens::ProtocolError);
     let closed = DispatchError::Backend(WaylandError::Io(ErrorKind::BrokenPipe.into()));
-    assert_eq!(dispatch_error(closed), Missing::Lost);
+    assert_eq!(dispatch_error(closed), NoScreens::Lost);
 }
 
 #[test]
 fn a_handle_without_a_display_watches_nothing() {
-    let none = Wayland::none(Missing::NoDisplay);
+    let none = Wayland::none(NoScreens::NoDisplay);
     assert_eq!(
-        (none.layout(), none.missing(), none.compositor()),
-        (None, Some(Missing::NoDisplay), None)
+        (none.layout(), none.compositor()),
+        (Err(NoScreens::NoDisplay), None)
     );
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -891,10 +891,33 @@ fn a_handle_without_a_display_watches_nothing() {
         assert!(quiet.is_err(), "a watch without a connection ended");
     });
     // A new KWin changed nothing: there is still no display.
-    assert_eq!(
-        (none.layout(), none.missing()),
-        (None, Some(Missing::NoDisplay))
-    );
+    assert_eq!(none.layout(), Err(NoScreens::NoDisplay));
+}
+
+#[test]
+fn a_new_reason_fires_while_the_layout_stays_unknown() {
+    use std::future::Future;
+    use std::task::{Context, Waker};
+
+    let wayland = Wayland::none(NoScreens::Lost);
+    let changed = LayoutSignal::default();
+    let fired = |changed: &LayoutSignal| {
+        let mut cx = Context::from_waker(Waker::noop());
+        std::pin::pin!(changed.fired()).poll(&mut cx).is_ready()
+    };
+    wayland.0.end(NoScreens::Lost, &changed);
+    assert!(!fired(&changed), "the same reason fired");
+    wayland.0.end(NoScreens::CannotConnect, &changed);
+    assert!(fired(&changed), "a new reason did not fire");
+    assert_eq!(wayland.layout(), Err(NoScreens::CannotConnect));
+    // A connection that gives no whole layout is a reason of its own.
+    let half = Settled {
+        layout: None,
+        moved: false,
+    };
+    wayland.0.publish(half, &changed);
+    assert!(fired(&changed));
+    assert_eq!(wayland.layout(), Err(NoScreens::NotWhole));
 }
 
 #[tokio::test]
@@ -905,8 +928,8 @@ async fn a_display_that_does_not_answer_in_time_keeps_its_listener() {
     let wayland = timeout(BOUND, Wayland::over(link, deadline, path))
         .await
         .unwrap();
-    assert_eq!(wayland.missing(), Some(Missing::CannotConnect));
-    assert_eq!(wayland.layout(), None);
+    assert_eq!(wayland.layout().err(), Some(NoScreens::CannotConnect));
+    assert_eq!(wayland.layout().ok(), None);
     assert_eq!(
         wayland.compositor().map(NonZeroU32::get),
         Some(std::process::id())
@@ -968,7 +991,7 @@ async fn a_new_kwin_connects_again_and_the_layout_comes_back() {
             timeout(BOUND, until_missing(&watched.wayland))
                 .await
                 .unwrap();
-            assert_eq!(watched.wayland.layout(), None);
+            assert_eq!(watched.wayland.layout().ok(), None);
             watched.again.changed();
             let _fake = timeout(BOUND, async {
                 let mut fake = display.accept().await;
@@ -979,8 +1002,8 @@ async fn a_new_kwin_connects_again_and_the_layout_comes_back() {
             .await
             .unwrap();
             settle().await;
-            assert_eq!(watched.wayland.layout(), layout(&[LEFT, RIGHT]));
-            assert_eq!(watched.wayland.missing(), None);
+            assert_eq!(watched.wayland.layout().ok(), layout(&[LEFT, RIGHT]));
+            assert_eq!(watched.wayland.layout().err(), None);
             assert_eq!(watched.fired.get(), 2, "unknown, then known again");
         })
         .await;
@@ -997,7 +1020,7 @@ async fn a_new_kwin_replaces_a_connection_still_open() {
             let _fake = timeout(BOUND, async {
                 let mut fake = display.accept().await;
                 assert!(old.closed().await, "the old connection stayed open");
-                assert_eq!(watched.wayland.layout(), None);
+                assert_eq!(watched.wayland.layout().ok(), None);
                 fake.start_with_two().await;
                 until_known(&watched.wayland).await;
                 fake
@@ -1005,7 +1028,7 @@ async fn a_new_kwin_replaces_a_connection_still_open() {
             .await
             .unwrap();
             settle().await;
-            assert_eq!(watched.wayland.layout(), layout(&[LEFT, RIGHT]));
+            assert_eq!(watched.wayland.layout().ok(), layout(&[LEFT, RIGHT]));
         })
         .await;
 }
@@ -1033,7 +1056,7 @@ async fn a_newer_kwin_during_a_reconnect_starts_it_over() {
             .await
             .unwrap();
             settle().await;
-            assert_eq!(watched.wayland.missing(), None);
+            assert_eq!(watched.wayland.layout().err(), None);
         })
         .await;
 }
@@ -1056,13 +1079,13 @@ async fn a_display_another_process_listens_on_now_gives_no_layout() {
             timeout(BOUND, async {
                 let mut fake = display.accept().await;
                 assert!(fake.closed().await, "the connection stayed open");
-                while watched.wayland.missing() != Some(Missing::CannotConnect) {
+                while watched.wayland.layout().err() != Some(NoScreens::CannotConnect) {
                     settle().await;
                 }
             })
             .await
             .unwrap();
-            assert_eq!(watched.wayland.layout(), None);
+            assert_eq!(watched.wayland.layout().ok(), None);
             assert!(!watched.watch.is_finished());
         })
         .await;
@@ -1081,7 +1104,7 @@ async fn without_a_new_kwin_nothing_connects_again() {
                 .unwrap();
             let quiet = timeout(Duration::from_millis(200), display.accept()).await;
             assert!(quiet.is_err(), "connected again unasked");
-            assert_eq!(watched.wayland.missing(), Some(Missing::Lost));
+            assert_eq!(watched.wayland.layout().err(), Some(NoScreens::Lost));
         })
         .await;
 }
@@ -1118,8 +1141,8 @@ async fn comes_back(watched: &Watched, display: &Display) {
     })
     .await
     .unwrap();
-    assert_eq!(watched.wayland.layout(), layout(&[LEFT, RIGHT]));
-    assert_eq!(watched.wayland.missing(), None);
+    assert_eq!(watched.wayland.layout().ok(), layout(&[LEFT, RIGHT]));
+    assert_eq!(watched.wayland.layout().err(), None);
 }
 
 #[tokio::test]
@@ -1132,7 +1155,7 @@ async fn a_display_that_failed_at_start_connects_at_the_next_kwin() {
                 NonZeroU32::new(std::process::id()),
                 Some(display.path.clone()),
                 None,
-                Err(Missing::CannotConnect),
+                Err(NoScreens::CannotConnect),
             );
             let again = LayoutSignal::default();
             let watch = local.spawn_local(wayland.watch(LayoutSignal::default(), again.clone()));
@@ -1205,8 +1228,8 @@ async fn a_new_kwin_makes_the_layout_unknown_in_its_poll_whatever_the_budget() {
         "the restart waited for a budget"
     );
     assert_eq!(
-        (wayland.layout(), wayland.missing()),
-        (None, Some(Missing::Lost))
+        (wayland.layout().ok(), wayland.layout().err()),
+        (None, Some(NoScreens::Lost))
     );
 }
 

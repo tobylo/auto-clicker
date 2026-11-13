@@ -12,7 +12,7 @@ use tokio::time::Instant;
 use super::view::NoRecording;
 use super::{Controller, InputReader, Platform, State};
 use crate::hotkeys::{Binding, HotkeyStatus, Unavailable};
-use crate::message::{Hindrance, Notice, Quoted, SaveFailure, Saving, Start, Stop};
+use crate::message::{Hindrance, NoPositions, Notice, Quoted, SaveFailure, Saving, Start, Stop};
 use crate::recording::{Created, Ending, MAX_DURATION, Recorder, Recording, save};
 
 /// How a recording was stopped, which decides how it is trimmed.
@@ -144,6 +144,19 @@ impl<P: Platform> Controller<P> {
         no_recording(self.platform.input_reader(), self.hotkey_status.as_ref())
     }
 
+    /// Why a recording would keep movement only, while one can be made at
+    /// all: the screens are not known, or nothing reports the pointer.
+    pub(super) fn no_positions(&self) -> Option<NoPositions> {
+        if self.no_recording().is_some() {
+            return None;
+        }
+        match (self.platform.layout(), self.platform.pointer()) {
+            (Err(why), _) => Some(NoPositions::Screens(why)),
+            (Ok(_), Err(why)) => Some(NoPositions::Pointer(why)),
+            (Ok(_), Ok(())) => None,
+        }
+    }
+
     /// Starts recording now. `started_by` is the hotkey that started it,
     /// whose keys are still down.
     pub(super) fn begin_recording(&mut self, started_by: Option<Binding>) {
@@ -157,7 +170,7 @@ impl<P: Platform> Controller<P> {
         };
         let start = self.platform.event_clock();
         let mut recorder = Recorder::new(self.config.hotkeys, start, created, started_by);
-        if let Some(layout) = self.platform.layout() {
+        if let Ok(layout) = self.platform.layout() {
             recorder = recorder.with_layout(layout);
         }
         self.recording.start(recorder);

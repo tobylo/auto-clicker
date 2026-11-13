@@ -11,6 +11,8 @@
 use std::cell::RefCell;
 use std::num::NonZeroU32;
 
+use auto_clicker_core::message::NoPointer;
+
 use crate::dir::ScriptDir;
 use crate::display;
 use crate::receiver::SharedTrust;
@@ -28,6 +30,21 @@ pub(crate) struct Session<S> {
     /// The process listening on the daemon's Wayland display; KWin counts
     /// only as it or its child. `None`: nothing to check against.
     pub(crate) compositor: Option<NonZeroU32>,
+}
+
+impl<S> Session<S> {
+    /// Whether this session's KWin reports the pointer now: the watcher
+    /// counts an owner of `org.kde.KWin` (one of the display, checked), and
+    /// the script directory passed its check.
+    pub(crate) fn pointer(&self) -> Result<(), NoPointer> {
+        if self.dir.is_err() {
+            return Err(NoPointer::Unusable);
+        }
+        match *self.owner.borrow() {
+            Some(_) => Ok(()),
+            None => Err(NoPointer::NoSource),
+        }
+    }
 }
 
 impl<S: Scripting> Session<S> {

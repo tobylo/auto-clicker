@@ -80,7 +80,7 @@ fn view() -> WindowView {
         no_recording: None,
         problems: Vec::new(),
         recordings: Default::default(),
-        screens: None,
+        screens: Err(auto_clicker_core::message::NoScreens::NoDisplay),
         since: Default::default(),
         answer: None,
     }

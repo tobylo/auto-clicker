@@ -4,8 +4,8 @@ use auto_clicker_core::controller::{Blocked, NoRecording};
 use auto_clicker_core::hotkeys::{Binding, Refusal, Unavailable};
 use auto_clicker_core::input::Key;
 use auto_clicker_core::message::{
-    ConfigProblem, Hindrance, InputFailure, Notice, PlayStart, PointScreens, Problem, Quoted,
-    SaveFailure, Saving, Start, Stop, Titled, Unplayable,
+    ConfigProblem, Hindrance, InputFailure, NoPointer, NoPositions, NoScreens, Notice, PlayStart,
+    PointScreens, Problem, Quoted, SaveFailure, Saving, Start, Stop, Titled, Unplayable,
 };
 use auto_clicker_core::playback::Fallback;
 use auto_clicker_core::recording::FileName;
@@ -96,7 +96,27 @@ pub(super) fn problems() -> Vec<Problem> {
     all.extend(unavailables().into_iter().map(Problem::Hotkeys));
     all.extend(blocked().into_iter().map(Problem::Blocked));
     all.extend(inputs().into_iter().map(Problem::Input));
+    let screens = no_screens().into_iter().map(NoPositions::Screens);
+    let pointers = no_pointers().into_iter().map(NoPositions::Pointer);
+    all.extend(screens.chain(pointers).map(Problem::NoPositions));
     all
+}
+
+/// Every reason the screen layout is not known.
+pub(super) fn no_screens() -> Vec<NoScreens> {
+    vec![
+        NoScreens::NoDisplay,
+        NoScreens::CannotConnect,
+        NoScreens::NoXdgOutput,
+        NoScreens::Lost,
+        NoScreens::ProtocolError,
+        NoScreens::NotWhole,
+    ]
+}
+
+/// Every reason nothing reports the pointer.
+pub(super) fn no_pointers() -> Vec<NoPointer> {
+    vec![NoPointer::NoSource, NoPointer::Unusable]
 }
 
 pub(super) fn hindrances() -> Vec<Hindrance> {

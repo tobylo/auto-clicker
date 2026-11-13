@@ -22,7 +22,7 @@ use crate::clicker::{ClickerSettings, Mode, Repeat};
 use crate::hotkeys::Unavailable;
 use crate::input::fake::{Call, FakeBackend, FakeLog};
 use crate::input::{AbsolutePosition, Button, Key, PressState};
-use crate::message::Quoted;
+use crate::message::{NoPointer, NoScreens, Quoted};
 use crate::recording::{LocalTime, Recorder, RecordingFeed};
 use crate::test_support::TempDir;
 
@@ -86,8 +86,13 @@ struct Record {
     /// Opens wait until the test releases them through `open_gate`.
     hold_opens: bool,
     open_gate: Option<tokio::sync::oneshot::Sender<()>>,
-    /// The screen layout the platform reports; unknown when `None`.
+    /// The screen layout the platform reports; unknown when `None`, for
+    /// `no_screens`.
     layout: Option<Layout>,
+    /// Why the layout is unknown while it is; no display when `None`.
+    no_screens: Option<NoScreens>,
+    /// Why nothing reports the pointer; something does when `None`.
+    no_pointer: Option<NoPointer>,
     /// What each layout watcher was given: its feed and its signal.
     watches: Vec<(RecordingFeed, LayoutSignal)>,
     /// How often the layout watchers were polled.
@@ -322,8 +327,15 @@ impl Platform for FakePlatform {
             .with(|r| r.recordings.as_ref().map(|dir| dir.path().to_path_buf()))
     }
 
-    fn layout(&self) -> Option<Layout> {
-        self.0.with(|r| r.layout.clone())
+    fn layout(&self) -> Result<Layout, NoScreens> {
+        self.0.with(|r| {
+            let why = r.no_screens.unwrap_or(NoScreens::NoDisplay);
+            r.layout.clone().ok_or(why)
+        })
+    }
+
+    fn pointer(&self) -> Result<(), NoPointer> {
+        self.0.with(|r| r.no_pointer.map_or(Ok(()), Err))
     }
 
     fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
@@ -520,11 +532,14 @@ impl Daemon {
             .unwrap_or_default()
     }
 
-    /// The problems, in English.
+    /// The problems, in English, but the line on recordings without
+    /// positions, which the fakes give unless a test sets a layout and only
+    /// the tests of it look at.
     fn problems(&self) -> Vec<String> {
         self.view()
             .problems
             .iter()
+            .filter(|problem| !matches!(problem, Problem::NoPositions(_)))
             .map(ToString::to_string)
             .collect()
     }
@@ -1270,6 +1285,7 @@ fn the_countdown_wakes_on_each_whole_second_and_then_the_deadline() {
 
 mod capture;
 mod desktop;
+mod missing;
 mod per_run;
 mod pick;
 mod playback;

@@ -112,6 +112,9 @@ pub(crate) struct Watcher<S> {
     /// the first one seen included: the display's connection may be to one
     /// that went before, or may have failed while it started.
     restarted: LayoutSignal,
+    /// The controller's layout signal, fired whenever the counted owner
+    /// changes: whether something reports the pointer changed with it.
+    changed: LayoutSignal,
     rng: fastrand::Rng,
     owner: Option<String>,
     position_token: Option<Token>,
@@ -143,11 +146,13 @@ impl<S: Scripting + 'static> Watcher<S> {
         session: Rc<Session<S>>,
         feed: RecordingFeed,
         restarted: LayoutSignal,
+        changed: LayoutSignal,
     ) -> Self {
         Watcher {
             session,
             feed,
             restarted,
+            changed,
             rng: fastrand::Rng::new(),
             owner: None,
             position_token: None,
@@ -282,11 +287,12 @@ impl<S: Scripting + 'static> Watcher<S> {
 
     /// A new owner of `org.kde.KWin` (or none) has none of the scripts: the
     /// call in flight went to the old one, and the position script's token
-    /// ends.
+    /// ends. The controller is told, since what reports the pointer changed.
     fn owner_changed(&mut self, owner: Option<String>) {
         if owner == self.owner {
             return;
         }
+        self.changed.changed();
         self.job = None;
         self.owner = owner;
         self.session.owner.replace(self.owner.clone());

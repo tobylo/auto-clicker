@@ -4,7 +4,7 @@
 //! The daemon connects to its Wayland display at start ([`Wayland::connect`]),
 //! after it holds its name, within a deadline. The source is picked by what
 //! answers: a display offering `zxdg_output_manager_v1` gives the layout,
-//! any other gives none, with the reason kept ([`Missing`]). Nothing outside
+//! any other gives none, with the reason kept ([`NoScreens`]). Nothing outside
 //! this crate talks to the display. A lost connection or a protocol error
 //! makes the layout unknown and never ends the daemon (brief W5).
 //!
@@ -33,36 +33,20 @@ use std::rc::Rc;
 use std::task::Poll;
 
 use auto_clicker_core::controller::{LayoutSignal, LayoutWatch};
+use auto_clicker_core::message::NoScreens;
 use auto_clicker_core::recording::Layout;
 use tokio::time::{Instant, timeout_at};
 
 use client::Link;
 use gather::Settled;
 
-/// Why the layout does not come from xdg-output, as W01e will word it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Missing {
-    /// The daemon was started without `WAYLAND_DISPLAY`.
-    NoDisplay,
-    /// The display did not answer, or not in time, or another process than
-    /// the one found at start listens on it now.
-    CannotConnect,
-    /// The compositor offers no xdg-output.
-    NoXdgOutput,
-    /// The connection closed or failed.
-    Lost,
-    /// The compositor or the client refused what the other sent.
-    ProtocolError,
-}
-
 /// The Wayland display as the daemon uses it. Clones share one connection.
 #[derive(Clone)]
 pub struct Wayland(Rc<Shared>);
 
 struct Shared {
-    /// The last whole layout; `None` while it is not known.
-    layout: RefCell<Option<Layout>>,
-    missing: Cell<Option<Missing>>,
+    /// The last whole layout, or why it is not known.
+    layout: RefCell<Result<Layout, NoScreens>>,
     compositor: Option<NonZeroU32>,
     /// The display's socket, as found at start: where a connection is made
     /// again. `None` without a display.
@@ -80,7 +64,7 @@ impl Wayland {
     pub async fn connect(deadline: Instant) -> Wayland {
         let Some(path) = socket::environment_path() else {
             eprintln!("auto-clicker: no Wayland display, so the screens are unknown");
-            return Wayland::none(Missing::NoDisplay);
+            return Wayland::none(NoScreens::NoDisplay);
         };
         let opened = match timeout_at(deadline, socket::open(&path)).await {
             Ok(opened) => opened,
@@ -107,24 +91,23 @@ impl Wayland {
         }
     }
 
-    /// No display: the layout is never known, for `missing`.
-    pub fn none(missing: Missing) -> Wayland {
-        Wayland::of(None, None, None, Err(missing))
+    /// No display: the layout is never known, for `why`.
+    pub fn none(why: NoScreens) -> Wayland {
+        Wayland::of(None, None, None, Err(why))
     }
 
     fn of(
         compositor: Option<NonZeroU32>,
         path: Option<PathBuf>,
         layout: Option<Layout>,
-        link: Result<Link, Missing>,
+        link: Result<Link, NoScreens>,
     ) -> Wayland {
-        let (link, missing) = match link {
-            Ok(link) => (Some(link), None),
-            Err(missing) => (None, Some(missing)),
+        let (link, layout) = match link {
+            Ok(link) => (Some(link), layout.ok_or(NoScreens::NotWhole)),
+            Err(why) => (None, Err(why)),
         };
         Wayland(Rc::new(Shared {
             layout: RefCell::new(layout),
-            missing: Cell::new(missing),
             compositor,
             path,
             link: RefCell::new(link),
@@ -132,16 +115,10 @@ impl Wayland {
         }))
     }
 
-    /// The current layout, moved to start at (0, 0); `None` while it is not
+    /// The current layout, moved to start at (0, 0), or why it is not
     /// known.
-    pub fn layout(&self) -> Option<Layout> {
+    pub fn layout(&self) -> Result<Layout, NoScreens> {
         self.0.layout.borrow().clone()
-    }
-
-    /// Why there is no layout from xdg-output now; `None` while a
-    /// connection runs.
-    pub fn missing(&self) -> Option<Missing> {
-        self.0.missing.get()
     }
 
     /// The process listening on the display's socket; `None` without a
@@ -151,10 +128,11 @@ impl Wayland {
     }
 
     /// The watcher, to be polled on the daemon's thread: it reads the
-    /// connection and fires `changed` when the layout changes or becomes
-    /// unknown. Each time `again` fires (a new KWin of the display), it
-    /// drops the connection, makes a new one to the same listener and reads
-    /// its first layout, with no deadline; a later fire starts that over.
+    /// connection and fires `changed` when the layout changes, becomes
+    /// unknown, or is unknown for another reason. Each time `again` fires
+    /// (a new KWin of the display), it drops the connection, makes a new
+    /// one to the same listener and reads its first layout, with no
+    /// deadline; a later fire starts that over.
     /// Only the first call gets it; any later one watches nothing. Without
     /// a display it never connects, and the layout stays unknown.
     pub fn watch(&self, changed: LayoutSignal, again: LayoutSignal) -> LayoutWatch {
@@ -166,14 +144,14 @@ impl Wayland {
     }
 }
 
-fn too_late() -> Missing {
+fn too_late() -> NoScreens {
     eprintln!("auto-clicker: the Wayland display did not answer, so the screens are unknown");
-    Missing::CannotConnect
+    NoScreens::CannotConnect
 }
 
 /// `missing`, logged when it is the desktop's lack of xdg-output.
-fn said(missing: Missing) -> Missing {
-    if missing == Missing::NoXdgOutput {
+fn said(missing: NoScreens) -> NoScreens {
+    if missing == NoScreens::NoXdgOutput {
         eprintln!("auto-clicker: the desktop offers no xdg-output, so the screens are unknown");
     }
     missing
@@ -212,7 +190,7 @@ async fn read_until_restart(
     link: Link,
     changed: &LayoutSignal,
     again: &LayoutSignal,
-) -> Option<Missing> {
+) -> Option<NoScreens> {
     let mut restart = pin!(again.fired());
     let mut reading = pin!(read(shared, link, changed));
     poll_fn(|cx| {
@@ -225,7 +203,7 @@ async fn read_until_restart(
 }
 
 /// Reads `link` until it fails; why it did.
-async fn read(shared: &Shared, mut link: Link, changed: &LayoutSignal) -> Missing {
+async fn read(shared: &Shared, mut link: Link, changed: &LayoutSignal) -> NoScreens {
     loop {
         if let Err(missing) = link.dispatch() {
             return missing;
@@ -241,13 +219,8 @@ async fn read(shared: &Shared, mut link: Link, changed: &LayoutSignal) -> Missin
 
 impl Shared {
     /// The layout is unknown, for `missing`.
-    fn end(&self, missing: Missing, changed: &LayoutSignal) {
-        self.missing.set(Some(missing));
-        let gone = Settled {
-            layout: None,
-            moved: false,
-        };
-        self.publish(gone, changed);
+    fn end(&self, missing: NoScreens, changed: &LayoutSignal) {
+        self.set(Err(missing), false, changed);
     }
 
     /// A new connection to the display, its first layout published; `None`
@@ -255,14 +228,13 @@ impl Shared {
     /// it over: a newer KWin is what answers now.
     async fn connect_again(&self, changed: &LayoutSignal, again: &LayoutSignal) -> Option<Link> {
         loop {
-            self.end(Missing::Lost, changed);
+            self.end(NoScreens::Lost, changed);
             tokio::select! {
                 biased;
                 () = again.fired() => {}
                 started = self.start_again() => {
                     return match started {
                         Ok((link, layout)) => {
-                            self.missing.set(None);
                             let first = Settled { layout, moved: false };
                             self.publish(first, changed);
                             Some(link)
@@ -279,8 +251,8 @@ impl Shared {
 
     /// Connects to the display's socket, checks the listener is still the
     /// one found at start, and reads the first layout.
-    async fn start_again(&self) -> Result<(Link, Option<Layout>), Missing> {
-        let path = self.path.as_ref().ok_or(Missing::NoDisplay)?;
+    async fn start_again(&self) -> Result<(Link, Option<Layout>), NoScreens> {
+        let path = self.path.as_ref().ok_or(NoScreens::NoDisplay)?;
         let stream = socket::open(path).await?;
         let listener = socket::listener(&stream);
         if self.compositor.is_some() && listener != self.compositor {
@@ -288,19 +260,30 @@ impl Shared {
                 "auto-clicker: another process listens on the Wayland display now, so the \
                  screens are unknown"
             );
-            return Err(Missing::CannotConnect);
+            return Err(NoScreens::CannotConnect);
         }
         Link::start(stream).await
     }
 
-    /// Makes `settled`'s layout the current one, and tells the controller
-    /// when a screen came, went, moved or changed size since the last, or
-    /// the layout became known or unknown. A new scale alone is kept,
-    /// untold: stored, never compared (R03 decision 6).
+    /// Makes `settled`'s layout the current one; a connection that gives
+    /// none has not described every screen.
     fn publish(&self, settled: Settled, changed: &LayoutSignal) {
         let Settled { layout, moved } = settled;
-        let was_known = self.layout.replace(layout).is_some();
-        if moved || was_known != self.layout.borrow().is_some() {
+        self.set(layout.ok_or(NoScreens::NotWhole), moved, changed);
+    }
+
+    /// Makes `layout` the current one, and tells the controller when a
+    /// screen came, went, moved or changed size since the last (`moved`),
+    /// the layout became known or unknown, or it is unknown for another
+    /// reason. A new scale alone is kept, untold: stored, never compared
+    /// (R03 decision 6).
+    fn set(&self, layout: Result<Layout, NoScreens>, moved: bool, changed: &LayoutSignal) {
+        let was = self.layout.replace(layout);
+        let told = match (&was, &*self.layout.borrow()) {
+            (Ok(_), Ok(_)) => moved,
+            (was, now) => was != now,
+        };
+        if told {
             changed.changed();
         }
     }

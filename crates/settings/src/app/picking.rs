@@ -116,7 +116,11 @@ impl App {
 fn pickable(last: Option<&WindowView>, may_ask: bool, picking: bool) -> Option<(Layout, Since)> {
     let view = last?;
     let free = may_ask && !picking;
-    let screens = view.screens.clone().filter(|_| free && state::idle(view))?;
+    let screens = view
+        .screens
+        .clone()
+        .ok()
+        .filter(|_| free && state::idle(view))?;
     Some((screens, view.since))
 }
 

@@ -5,7 +5,10 @@
 use auto_clicker_core::config::Reason;
 use auto_clicker_core::controller::{Blocked, NoRecording};
 use auto_clicker_core::hotkeys::Unavailable;
-use auto_clicker_core::message::{ConfigProblem, Failure, InputFailure, Problem, Unavailability};
+use auto_clicker_core::message::{
+    ConfigProblem, Failure, InputFailure, NoPointer, NoPositions, NoScreens, Problem,
+    Unavailability,
+};
 use auto_clicker_core::playback::Speed;
 use slint::SharedString;
 
@@ -35,6 +38,35 @@ impl Said<'_> {
             Problem::Unlisted(why) => t.invoke_problem_unlisted(s(why)),
             Problem::CurrentUnread(why) => t.invoke_problem_current_unread(s(why)),
             Problem::CurrentUnkept(why) => t.invoke_problem_current_unkept(s(why)),
+            Problem::NoPositions(why) => t.invoke_problem_no_positions(self.no_positions(*why)),
+        }
+    }
+
+    fn no_positions(&self, why: NoPositions) -> SharedString {
+        match why {
+            NoPositions::Screens(why) => self.no_screens(why),
+            NoPositions::Pointer(why) => self.no_pointer(why),
+        }
+    }
+
+    /// Why the screen layout is not known.
+    pub fn no_screens(&self, why: NoScreens) -> SharedString {
+        let t = self.texts;
+        match why {
+            NoScreens::NoDisplay => t.invoke_no_screens_no_display(),
+            NoScreens::CannotConnect => t.invoke_no_screens_cannot_connect(),
+            NoScreens::NoXdgOutput => t.invoke_no_screens_no_xdg_output(),
+            NoScreens::Lost => t.invoke_no_screens_lost(),
+            NoScreens::ProtocolError => t.invoke_no_screens_protocol_error(),
+            NoScreens::NotWhole => t.invoke_no_screens_not_whole(),
+        }
+    }
+
+    fn no_pointer(&self, why: NoPointer) -> SharedString {
+        let t = self.texts;
+        match why {
+            NoPointer::NoSource => t.invoke_no_pointer_no_source(),
+            NoPointer::Unusable => t.invoke_no_pointer_unusable(),
         }
     }
 
@@ -119,7 +151,7 @@ impl Said<'_> {
             Unavailability::ReadsKeyboards => t.invoke_reads_keyboards(),
             Unavailability::NoShortcuts => t.invoke_no_shortcuts(),
             Unavailability::Hotkeys(why) => self.unavailable(why),
-            Unavailability::ScreensUnknown => t.invoke_screens_unknown(),
+            Unavailability::ScreensUnknown(why) => t.invoke_screens_unknown(self.no_screens(*why)),
             Unavailability::ScreensChanged => t.invoke_screens_changed(),
         }
     }

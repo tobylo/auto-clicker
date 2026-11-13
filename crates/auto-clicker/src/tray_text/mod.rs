@@ -32,6 +32,7 @@ const SWEDISH: &[(&str, &str)] = &[
         "Spela in (kräver gruppen input)",
     ),
     ("Record (needs a restart)", "Spela in (kräver en omstart)"),
+    ("Record (movement only)", "Spela in (bara rörelser)"),
 ];
 
 /// How a recording's label starts, and its Swedish form.

@@ -18,6 +18,7 @@ use auto_clicker_core::controller::{
     Platform, ReadInput, Route,
 };
 use auto_clicker_core::input::Input;
+use auto_clicker_core::message::{NoPointer, NoScreens};
 use auto_clicker_core::recording::{Layout, LocalTime, RecordingFeed, recordings_dir};
 
 /// Where hotkeys come from, on either output: the reader detection picked.
@@ -95,8 +96,12 @@ impl Platform for Kernel {
         self.hotkeys.reader
     }
 
-    fn layout(&self) -> Option<Layout> {
+    fn layout(&self) -> Result<Layout, NoScreens> {
         self.wayland.layout()
+    }
+
+    fn pointer(&self) -> Result<(), NoPointer> {
+        self.kwin.pointer()
     }
 
     fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
@@ -153,8 +158,12 @@ impl Platform for Portal {
         self.hotkeys.read(Vec::new(), reading)
     }
 
-    fn layout(&self) -> Option<Layout> {
+    fn layout(&self) -> Result<Layout, NoScreens> {
         self.wayland.layout()
+    }
+
+    fn pointer(&self) -> Result<(), NoPointer> {
+        self.kwin.pointer()
     }
 
     fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
@@ -163,18 +172,19 @@ impl Platform for Portal {
 }
 
 /// The one watch of the layout and the positions: the display's watcher
-/// fires `changed` when the layout changes, KWin's feeds `feed`'s
-/// recordings their positions, and each KWin of the display it sees come,
-/// the first included, has the display's watcher connect again (W01 brief,
-/// W5).
+/// fires `changed` when the layout or why it is unknown changes, KWin's
+/// fires it when the KWin counted changes and feeds `feed`'s recordings
+/// their positions, and each KWin of the display it sees come, the first
+/// included, has the display's watcher connect again (W01 brief, W5).
 fn watch_layout(
     wayland: &Wayland,
     kwin: &Kwin,
     feed: RecordingFeed,
     changed: LayoutSignal,
 ) -> LayoutWatch {
+    let pointer = changed.clone();
     joined(
-        |restarted| kwin.watch(feed, restarted),
+        |restarted| kwin.watch(feed, restarted, pointer),
         |again| wayland.watch(changed, again),
     )
 }
@@ -230,13 +240,12 @@ mod tests {
     use std::future::Future;
     use std::task::{Context, Poll, Waker};
 
-    use auto_clicker_backend_wayland::Missing;
     use tokio::time::timeout;
 
     use super::*;
 
     fn no_display() -> Wayland {
-        Wayland::none(Missing::NoDisplay)
+        Wayland::none(NoScreens::NoDisplay)
     }
 
     fn hotkeys(reader: InputReader) -> Hotkeys {
@@ -244,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn the_picked_reader_is_the_readers_on_either_output() {
+    fn the_picked_reader_and_what_is_missing_are_the_sources_on_either_output() {
         for reader in [InputReader::Devices, InputReader::Desktop] {
             let kernel = Kernel {
                 hotkeys: hotkeys(reader),
@@ -259,6 +268,10 @@ mod tests {
             };
             assert_eq!(kernel.input_reader(), reader);
             assert_eq!(portal.input_reader(), reader);
+            // Without a display or KWin, each says why.
+            let missing = (Err(NoScreens::NoDisplay), Err(NoPointer::Unusable));
+            assert_eq!((kernel.layout(), kernel.pointer()), missing);
+            assert_eq!((portal.layout(), portal.pointer()), missing);
         }
         assert_eq!(Kernel::OUTPUT, Route::Kernel);
         assert_eq!(Portal::OUTPUT, Route::Portal);

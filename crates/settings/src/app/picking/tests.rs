@@ -1,5 +1,6 @@
 use auto_clicker_core::config::{Config, Draft};
 use auto_clicker_core::controller::{Activity, Hotkey, Routes};
+use auto_clicker_core::message::NoScreens;
 use auto_clicker_core::recording::{Output, Rect};
 use auto_clicker_core::window::ShownHotkeys;
 
@@ -15,7 +16,7 @@ fn screens(width: u32) -> Layout {
     Layout::new(vec![Output::new(rect, 1250).unwrap()]).unwrap()
 }
 
-fn view(activity: Activity, screens: Option<Layout>) -> WindowView {
+fn view(activity: Activity, screens: Result<Layout, NoScreens>) -> WindowView {
     let config = Config::default();
     let settings = Draft::from(&config);
     let shown = |binding| Hotkey::Bound(binding);
@@ -43,7 +44,7 @@ fn view(activity: Activity, screens: Option<Layout>) -> WindowView {
 
 #[test]
 fn a_pick_begins_only_idle_on_known_screens_with_nothing_else_asked() {
-    let idle = view(Activity::Idle, Some(screens(2048)));
+    let idle = view(Activity::Idle, Ok(screens(2048)));
     let since = Since {
         runs: 1,
         layouts: 1,
@@ -52,8 +53,8 @@ fn a_pick_begins_only_idle_on_known_screens_with_nothing_else_asked() {
         pickable(Some(&idle), true, false),
         Some((screens(2048), since))
     );
-    let unknown = view(Activity::Idle, None);
-    let clicking = view(Activity::Clicking, Some(screens(2048)));
+    let unknown = view(Activity::Idle, Err(NoScreens::Lost));
+    let clicking = view(Activity::Clicking, Ok(screens(2048)));
     let cases = [
         (None, true, false),
         (Some(&unknown), true, false),
@@ -79,7 +80,7 @@ fn a_pick_ends_when_the_program_leaves_idle_a_run_begins_or_the_screens_change()
         layouts: 1,
     };
     let with = |activity, runs, layouts| {
-        let mut shown = view(activity, Some(screens(2048)));
+        let mut shown = view(activity, Ok(screens(2048)));
         shown.since = Since { runs, layouts };
         shown
     };
@@ -92,7 +93,7 @@ fn a_pick_ends_when_the_program_leaves_idle_a_run_begins_or_the_screens_change()
         (with(Activity::Idle, 2, 1), Some(Note::Busy)),
         // Screens that changed, even back to the same layout.
         (with(Activity::Idle, 1, 2), changed.clone()),
-        (view(Activity::Idle, None), None),
+        (view(Activity::Idle, Err(NoScreens::Lost)), None),
     ];
     for (now, ends) in cases {
         assert_eq!(ends_pick(begun, &now), ends, "{now:?}");

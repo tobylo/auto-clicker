@@ -120,9 +120,9 @@ impl<P: Platform> Controller<P> {
             return;
         };
         let why = match self.platform.layout() {
-            Some(current) if current.same_screens(used) => return,
-            Some(_) => Stop::LayoutChanged,
-            None => Stop::LayoutUnknown,
+            Ok(current) if current.same_screens(used) => return,
+            Ok(_) => Stop::LayoutChanged,
+            Err(_) => Stop::LayoutUnknown,
         };
         self.stop(Some(why));
     }

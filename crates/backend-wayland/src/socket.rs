@@ -14,7 +14,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
-use crate::Missing;
+use auto_clicker_core::message::NoScreens;
 
 /// Where the display's socket is: `display` as is when it is a path from
 /// the root, else under `runtime`. `None` without a display, or with a
@@ -41,17 +41,17 @@ pub(crate) fn environment_path() -> Option<PathBuf> {
 }
 
 /// Connects to the socket at `path`, without blocking the daemon's thread.
-pub(crate) async fn open(path: &Path) -> Result<UnixStream, Missing> {
+pub(crate) async fn open(path: &Path) -> Result<UnixStream, NoScreens> {
     let stream = tokio::net::UnixStream::connect(path).await.map_err(|err| {
         eprintln!(
             "auto-clicker: cannot connect to the Wayland display {}: {err}",
             shown(path.as_os_str())
         );
-        Missing::CannotConnect
+        NoScreens::CannotConnect
     })?;
     stream.into_std().map_err(|err| {
         eprintln!("auto-clicker: cannot use the Wayland display's socket: {err}");
-        Missing::CannotConnect
+        NoScreens::CannotConnect
     })
 }
 
@@ -187,6 +187,6 @@ mod tests {
     async fn a_display_nobody_listens_on_cannot_be_connected() {
         let path =
             std::env::temp_dir().join(format!("auto-clicker-no-display-{}", std::process::id()));
-        assert_eq!(open(&path).await.err(), Some(Missing::CannotConnect));
+        assert_eq!(open(&path).await.err(), Some(NoScreens::CannotConnect));
     }
 }
