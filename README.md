@@ -17,7 +17,7 @@ An auto clicker with macro record and playback for KDE Plasma on Wayland. It liv
 
 ## Install
 
-On CachyOS or Arch Linux with Plasma, one line at a time in Konsole:
+On CachyOS or Arch Linux, with Plasma, niri or Hyprland, one line at a time in a terminal:
 
 ```fish
 sudo pacman -Syu
@@ -26,7 +26,7 @@ git clone https://github.com/tobylo/auto-clicker.git ~/auto-clicker
 cd ~/auto-clicker/packaging/arch && makepkg -sif
 ```
 
-To record macros, and to have the hotkeys read from the keyboards rather than Plasma's shortcuts, the person who uses it also needs the `input` group. It lets every program of theirs read every keyboard and mouse, not just this one, so read [what the permissions mean](docs/guide/install.md#what-the-permissions-mean) first. Clicking and Plasma's shortcuts work without it. To add it (`NAME` is their login name):
+To record macros, and to have the hotkeys read from the keyboards rather than Plasma's shortcuts, the person who uses it also needs the `input` group. It lets every program of theirs read every keyboard and mouse, not just this one, so read [what the permissions mean](docs/guide/install.md#what-the-permissions-mean) first. On Plasma, clicking and Plasma's shortcuts work without it; on niri and Hyprland, give them the group, since the hotkeys are read from the keyboards there. To add it (`NAME` is their login name):
 
 ```fish
 sudo usermod -aG input NAME
@@ -38,7 +38,7 @@ Restart the computer, then, logged in as that person:
 systemctl --user enable --now auto-clicker
 ```
 
-The icon appears in the tray.
+The icon appears in the tray. niri and Hyprland need a bar with a tray, and on Hyprland without uwsm a line in its config: see [On niri and Hyprland](docs/guide/install.md#on-niri-and-hyprland).
 
 ## Documentation
 

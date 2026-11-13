@@ -305,7 +305,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "auto-clicker"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "auto-clicker-backend-hyprland",
  "auto-clicker-backend-kernel",
@@ -322,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "auto-clicker-backend-hyprland"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "auto-clicker-backend-wayland",
  "auto-clicker-core",
@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "auto-clicker-backend-kernel"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "auto-clicker-core",
  "evdev",
@@ -343,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "auto-clicker-backend-kwin"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "auto-clicker-backend-wayland",
  "auto-clicker-core",
@@ -356,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "auto-clicker-backend-portal"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "ashpd",
  "auto-clicker-core",
@@ -371,7 +371,7 @@ dependencies = [
 
 [[package]]
 name = "auto-clicker-backend-wayland"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "auto-clicker-core",
  "libc",
@@ -382,7 +382,7 @@ dependencies = [
 
 [[package]]
 name = "auto-clicker-core"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "fastrand",
  "libc",
@@ -395,7 +395,7 @@ dependencies = [
 
 [[package]]
 name = "auto-clicker-settings"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "auto-clicker-core",
  "i-slint-backend-winit",
