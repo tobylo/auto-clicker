@@ -296,6 +296,7 @@ impl<S: Scripting + 'static> Watcher<S> {
         self.job = None;
         self.owner = owner;
         self.session.owner.replace(self.owner.clone());
+        self.session.load_failed.set(false);
         self.position_token = None;
         let running = self.owner.is_some();
         self.sweep_due = false;
@@ -358,9 +359,13 @@ impl<S: Scripting + 'static> Watcher<S> {
 
     fn done(&mut self, done: Done) {
         match done {
-            Done::Loaded(Ok(())) => self.succeeded(),
+            Done::Loaded(Ok(())) => {
+                self.load_failed(false);
+                self.succeeded();
+            }
             Done::Loaded(Err(err)) => {
                 log_failure("load", Script::Position, &err);
+                self.load_failed(true);
                 self.position_token = None;
                 // Its recording runs: a stop drops a load in flight. A
                 // script directory that failed its check stays failed.
@@ -382,6 +387,14 @@ impl<S: Scripting + 'static> Watcher<S> {
                     self.position = Next::UnloadAfterBackOff;
                 }
             }
+        }
+    }
+
+    /// Whether the last load failed; the controller is told when that
+    /// changes, since whether KWin reports the pointer changed with it.
+    fn load_failed(&self, failed: bool) {
+        if self.session.load_failed.replace(failed) != failed {
+            self.changed.changed();
         }
     }
 

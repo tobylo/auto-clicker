@@ -134,7 +134,7 @@ impl<P: Platform> Controller<P> {
     pub(super) fn toggle_playback(&mut self) {
         match self.state {
             State::Idle => self.play_from_hotkey(),
-            State::RecordCountdown(_) | State::Recording(_) => {}
+            State::RecordCountdown(_) | State::Recording(..) => {}
             State::Countdown(..) | State::Release(..) | State::Opening(_) | State::Running(_) => {
                 self.notice = Some(Notice::Refused {
                     start: Start::Playback,

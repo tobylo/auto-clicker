@@ -479,6 +479,7 @@ async fn an_output_too_old_to_say_when_it_changed_leaves_the_layout_unknown() {
             assert_eq!(first, None, "a layout without the old output");
             // It goes: the layout is known.
             let wayland = Wayland::of(None, Some(PathBuf::from("/nowhere")), first, Ok(link));
+            assert_eq!(wayland.layout(), Err(NoScreens::NotWhole));
             let changed = LayoutSignal::default();
             local.spawn_local(wayland.watch(changed.clone(), LayoutSignal::default()));
             timeout(BOUND, async {

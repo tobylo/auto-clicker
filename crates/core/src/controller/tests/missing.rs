@@ -159,3 +159,24 @@ async fn without_a_pointer_a_recording_keeps_movement_and_saves_as_version_1() {
     })
     .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_recording_begun_without_screens_says_so_until_it_stops() {
+    local(async {
+        let d = daemon_lacking(None, Some(NoScreens::Lost), None).await;
+        d.record_hotkey().await;
+        assert_eq!(d.activity(), Activity::Recording);
+        let lost = [NoPositions::Screens(NoScreens::Lost)];
+        assert_eq!(d.no_positions(), lost);
+        // The display connects again and KWin is counted: this recording
+        // still takes no positions, so the line stays.
+        d.shared.with(|r| r.layout = Some(two_screens()));
+        d.source_changed().await;
+        assert_eq!(d.no_positions(), lost);
+        // Once it stops, the next recording would get positions.
+        d.record_hotkey().await;
+        assert_eq!(d.activity(), Activity::Idle);
+        assert_eq!(d.no_positions(), []);
+    })
+    .await;
+}

@@ -72,6 +72,9 @@ async fn a_kwin_of_the_display_that_comes_or_goes_reports_the_pointer_or_not_and
         h.new_owner(None).await;
         assert_eq!(h.session.pointer(), Err(NoPointer::NoSource));
         assert!(h.signalled().await, "a KWin gone was not told");
+        // Still none: nothing changed, nothing is told.
+        h.new_owner(None).await;
+        assert!(!h.signalled().await, "no KWin was told again");
         h.kwin.with(|s| s.processes.push((":1.30", RESTARTED)));
         h.new_owner(Some(":1.30")).await;
         assert_eq!(h.session.pointer(), Ok(()));

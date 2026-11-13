@@ -286,6 +286,7 @@ impl Harness {
             dir,
             trust,
             owner: RefCell::default(),
+            load_failed: Cell::default(),
             compositor,
         });
         let harness = Harness {
@@ -792,6 +793,7 @@ async fn a_runtime_directory_open_to_others_loads_nothing() {
             dir: ScriptDir::open(&runtime.0),
             trust: Arc::clone(&h.session.trust),
             owner: RefCell::default(),
+            load_failed: Cell::default(),
             compositor: None,
         };
         assert!(session.dir.is_err());
@@ -945,6 +947,36 @@ async fn a_load_tried_again_judges_no_position_by_the_failed_loads_layout() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_failed_load_reports_no_pointer_until_a_load_works_or_kwin_goes() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        assert!(h.signalled().await, "the first KWin counted was not told");
+        assert_eq!(h.session.pointer(), Ok(()));
+        h.kwin.with(|s| s.hanging_start = true);
+        h.record().await;
+        after(crate::scripting::CALL_TIMEOUT).await;
+        assert_eq!(h.session.pointer(), Err(NoPointer::Unusable));
+        assert!(h.signalled().await, "a failed load was not told");
+        // The load tried again works.
+        h.kwin.with(|s| s.hanging_start = false);
+        after(BACK_OFF[0]).await;
+        assert_eq!(h.session.pointer(), Ok(()));
+        assert!(h.signalled().await, "a load that worked was not told");
+        h.stop().await;
+        assert!(!h.signalled().await, "told with nothing changed");
+        // It fails again, and KWin goes: nothing reports the pointer.
+        h.kwin.with(|s| s.hanging_start = true);
+        h.record().await;
+        after(crate::scripting::CALL_TIMEOUT).await;
+        assert_eq!(h.session.pointer(), Err(NoPointer::Unusable));
+        h.new_owner(None).await;
+        assert_eq!(h.session.pointer(), Err(NoPointer::NoSource));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_failed_load_is_not_tried_again_once_its_recording_stops() {
     local(async {
         let (h, inbox) = Harness::new(true, &[]);
@@ -1088,6 +1120,7 @@ async fn a_script_directory_that_failed_its_check_is_not_tried_again() {
             dir: Err("open to others".to_owned()),
             trust: Arc::clone(&h.session.trust),
             owner: RefCell::default(),
+            load_failed: Cell::default(),
             compositor: None,
         };
         let mut watcher = Watcher::new(

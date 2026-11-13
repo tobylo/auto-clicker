@@ -52,7 +52,7 @@ pub enum NoPointer {
     /// display's, or its check not done yet).
     NoSource,
     /// KWin's script cannot be used: the program could not receive from
-    /// it, or has no folder for it. The log says why.
+    /// it, has no folder for it, or its last load failed. The log says why.
     Unusable,
 }
 

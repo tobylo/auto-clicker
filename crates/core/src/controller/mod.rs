@@ -321,8 +321,10 @@ enum State<B: InputBackend> {
     Running(Running<B>),
     /// A recording from the tray starts at this deadline.
     RecordCountdown(Instant),
-    /// Recording; it stops at its time limit, this deadline.
-    Recording(Instant),
+    /// Recording; it stops at its time limit, this deadline. Begun while
+    /// the screens were not known, it keeps no positions to its end, for
+    /// this reason.
+    Recording(Instant, Option<NoScreens>),
 }
 
 /// A run as the controller polls it.
@@ -670,7 +672,7 @@ impl<P: Platform> Controller<P> {
                 job.playing()
             }
             State::Running(running) => running.playing.as_ref(),
-            State::Idle | State::RecordCountdown(_) | State::Recording(_) => None,
+            State::Idle | State::RecordCountdown(_) | State::Recording(..) => None,
         }
     }
 
@@ -756,7 +758,7 @@ impl<P: Platform> Controller<P> {
             State::Countdown(..) | State::Release(..) | State::Opening(_) => self.cancel_start(),
             State::Running(running) => running.stop(),
             // Other hotkeys do nothing while recording.
-            State::RecordCountdown(_) | State::Recording(_) => {}
+            State::RecordCountdown(_) | State::Recording(..) => {}
         }
     }
 
@@ -798,7 +800,7 @@ impl<P: Platform> Controller<P> {
             State::Countdown(..) | State::Release(..) | State::Opening(_) => self.cancel_start(),
             State::RecordCountdown(_) => self.state = State::Idle,
             State::Running(running) => running.stop(),
-            State::Recording(_) => return self.stop_recording(why),
+            State::Recording(..) => return self.stop_recording(why),
         }
         if let Some(why) = why {
             self.notice = Some(Notice::Stopped(why));
@@ -861,7 +863,7 @@ impl<P: Platform> Controller<P> {
             // The settings window's deadlines wake the controller too.
             State::Release(deadline, _) if now >= deadline => self.release_expired(),
             State::RecordCountdown(deadline) if now >= deadline => self.begin_recording(None),
-            State::Recording(limit) if now >= limit => self.recording_limit_reached(),
+            State::Recording(limit, _) if now >= limit => self.recording_limit_reached(),
             // A second of a countdown passed; the view shows it.
             _ => {}
         }
@@ -874,7 +876,7 @@ impl<P: Platform> Controller<P> {
             State::Countdown(deadline, _) | State::RecordCountdown(deadline) => {
                 Some(next_second(deadline, Instant::now()))
             }
-            State::Release(deadline, _) | State::Recording(deadline) => Some(deadline),
+            State::Release(deadline, _) | State::Recording(deadline, _) => Some(deadline),
             State::Idle | State::Opening(_) | State::Running(_) => None,
         };
         // What the settings window waits on ends by its own deadline,
@@ -1106,7 +1108,7 @@ impl<P: Platform> Controller<P> {
             State::RecordCountdown(deadline) => Activity::RecordingIn(whole_seconds(
                 deadline.saturating_duration_since(Instant::now()),
             )),
-            State::Recording(_) => Activity::Recording,
+            State::Recording(..) => Activity::Recording,
         }
     }
 

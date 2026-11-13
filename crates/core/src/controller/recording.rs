@@ -54,7 +54,7 @@ impl<P: Platform> Controller<P> {
                 }
             }
             State::RecordCountdown(_) => self.state = State::Idle,
-            State::Recording(_) => self.finish_recording(StoppedBy::Other, None),
+            State::Recording(..) => self.finish_recording(StoppedBy::Other, None),
             State::Countdown(..) | State::Release(..) | State::Opening(_) | State::Running(_) => {
                 self.notice = Some(not_recording(Hindrance::ClickingOn));
             }
@@ -79,7 +79,7 @@ impl<P: Platform> Controller<P> {
     pub(super) fn stop_recording_from_tray(&mut self) {
         match self.state {
             State::RecordCountdown(_) => self.state = State::Idle,
-            State::Recording(_) => self.finish_recording(StoppedBy::Tray, None),
+            State::Recording(..) => self.finish_recording(StoppedBy::Tray, None),
             _ => {}
         }
     }
@@ -93,7 +93,7 @@ impl<P: Platform> Controller<P> {
     /// Stops and saves a recording, saying why when `why` is given;
     /// anything else is left alone.
     pub(super) fn stop_recording(&mut self, why: Option<Stop>) {
-        if matches!(self.state, State::Recording(_)) {
+        if matches!(self.state, State::Recording(..)) {
             self.finish_recording(StoppedBy::Other, why);
         }
     }
@@ -106,7 +106,7 @@ impl<P: Platform> Controller<P> {
                 self.state = State::Idle;
                 self.notice = Some(not_recording(Hindrance::Hotkeys(why.clone())));
             }
-            State::Recording(_) => {
+            State::Recording(..) => {
                 self.finish_recording(StoppedBy::Other, Some(Stop::Hotkeys(why.clone())));
             }
             _ => {}
@@ -115,7 +115,7 @@ impl<P: Platform> Controller<P> {
 
     /// The recording filled up: it stops and saves what it holds.
     pub(super) fn recording_full(&mut self) {
-        if matches!(self.state, State::Recording(_)) && self.recording.is_full() {
+        if matches!(self.state, State::Recording(..)) && self.recording.is_full() {
             self.finish_recording(StoppedBy::Other, Some(Stop::Full));
         }
     }
@@ -145,10 +145,15 @@ impl<P: Platform> Controller<P> {
     }
 
     /// Why a recording would keep movement only, while one can be made at
-    /// all: the screens are not known, or nothing reports the pointer.
+    /// all: the screens are not known, or nothing reports the pointer. A
+    /// recording begun without screens keeps its reason to its end, since
+    /// it takes no positions even once they are known.
     pub(super) fn no_positions(&self) -> Option<NoPositions> {
         if self.no_recording().is_some() {
             return None;
+        }
+        if let State::Recording(_, Some(why)) = self.state {
+            return Some(NoPositions::Screens(why));
         }
         match (self.platform.layout(), self.platform.pointer()) {
             (Err(why), _) => Some(NoPositions::Screens(why)),
@@ -170,13 +175,17 @@ impl<P: Platform> Controller<P> {
         };
         let start = self.platform.event_clock();
         let mut recorder = Recorder::new(self.config.hotkeys, start, created, started_by);
-        if let Ok(layout) = self.platform.layout() {
-            recorder = recorder.with_layout(layout);
-        }
+        let unknown = match self.platform.layout() {
+            Ok(layout) => {
+                recorder = recorder.with_layout(layout);
+                None
+            }
+            Err(why) => Some(why),
+        };
         self.recording.start(recorder);
         self.menu_opened = None;
         self.notice = None;
-        self.state = State::Recording(limit);
+        self.state = State::Recording(limit, unknown);
     }
 
     /// Takes the recording from the reader, finishes and saves it, and says

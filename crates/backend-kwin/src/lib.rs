@@ -26,7 +26,7 @@ mod session;
 mod token;
 mod watcher;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::future::pending;
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -92,6 +92,7 @@ impl Kwin {
             dir,
             trust,
             owner: RefCell::default(),
+            load_failed: Cell::default(),
             compositor,
         };
         let inbox = Inbox {

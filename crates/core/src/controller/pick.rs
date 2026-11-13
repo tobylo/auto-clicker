@@ -57,7 +57,7 @@ impl<P: Platform> Controller<P> {
             State::Countdown(_, job) | State::Release(_, job) | State::Opening(job) => {
                 matches!(job, Job::Click)
             }
-            State::Idle | State::RecordCountdown(_) | State::Recording(_) => false,
+            State::Idle | State::RecordCountdown(_) | State::Recording(..) => false,
         };
         if let Some(why) = self.point_screens().filter(|_| clicking) {
             self.stop(Some(Stop::Screens(why)));
