@@ -335,6 +335,7 @@ dependencies = [
 name = "auto-clicker-backend-kwin"
 version = "0.7.0"
 dependencies = [
+ "auto-clicker-backend-wayland",
  "auto-clicker-core",
  "fastrand",
  "futures-util",

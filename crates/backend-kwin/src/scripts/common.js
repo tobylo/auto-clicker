@@ -1,4 +1,4 @@
-// Shared by both scripts. The daemon puts `const TOKEN = "<hex>";` before
+// The calls and the layout report. The daemon puts `const TOKEN = "<hex>";` before
 // this: every call carries it, and the daemon accepts only the token of a
 // load it made. Values travel as text, which the daemon parses once.
 
@@ -13,7 +13,14 @@ function describeOutput(output) {
 }
 
 // Every output, ";"-separated.
+function currentLayout() {
+    return workspace.screens.map(describeOutput).join(";");
+}
+
+// The layout this load last reported.
+let reportedLayout = null;
+
 function reportLayout() {
-    const outputs = workspace.screens.map(describeOutput).join(";");
-    callDBus(SERVICE, PATH, INTERFACE, "Layout", TOKEN, outputs);
+    reportedLayout = currentLayout();
+    callDBus(SERVICE, PATH, INTERFACE, "Layout", TOKEN, reportedLayout);
 }

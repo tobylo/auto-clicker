@@ -4,7 +4,9 @@
 
 use std::cell::Cell;
 use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use auto_clicker_core::controller::LayoutSignal;
@@ -141,12 +143,23 @@ impl Fake {
     fn pair() -> (UnixStream, Fake) {
         let (ours, theirs) = UnixStream::pair().unwrap();
         theirs.set_nonblocking(true).unwrap();
-        let fake = Fake {
-            stream: tokio::net::UnixStream::from_std(theirs).unwrap(),
+        let fake = Fake::over(tokio::net::UnixStream::from_std(theirs).unwrap());
+        (ours, fake)
+    }
+
+    /// The fake on its end of `stream`.
+    fn over(stream: tokio::net::UnixStream) -> Fake {
+        Fake {
+            stream,
             outputs: Vec::new(),
             seen: Vec::new(),
-        };
-        (ours, fake)
+        }
+    }
+
+    /// Whether the client closed its end: nothing more to read.
+    async fn closed(&mut self) -> bool {
+        let mut rest = Vec::new();
+        self.stream.read_to_end(&mut rest).await.is_ok()
     }
 
     async fn send(&mut self, messages: Vec<Message>) {
@@ -301,23 +314,40 @@ fn layout(places: &[Place]) -> Option<Layout> {
     Some(Layout::new(outputs).unwrap())
 }
 
-/// A started connection's handle, watched on `local`, and how often it
-/// fired; the watcher's task.
+/// A started connection's handle, watched on `local`, how often it fired,
+/// and the signal of a new KWin; the watcher's task.
 struct Watched {
     wayland: Wayland,
     fired: Rc<Cell<usize>>,
+    again: LayoutSignal,
     watch: tokio::task::JoinHandle<()>,
 }
 
 /// Starts a connection on two outputs and watches it on `local`.
 async fn watched(local: &LocalSet, fake: &mut Fake, link: UnixStream) -> Watched {
+    let at = At {
+        path: Some(PathBuf::from("/nowhere")),
+        compositor: NonZeroU32::new(std::process::id()),
+    };
+    watched_at(local, fake, link, at).await
+}
+
+/// Where the display is: its socket, and the process found listening on it.
+struct At {
+    path: Option<PathBuf>,
+    compositor: Option<NonZeroU32>,
+}
+
+/// The same, on the display `at`.
+async fn watched_at(local: &LocalSet, fake: &mut Fake, link: UnixStream, at: At) -> Watched {
+    let At { path, compositor } = at;
     let (started, ()) = timeout(BOUND, async {
         tokio::join!(Link::start(link), fake.start_with_two())
     })
     .await
     .unwrap();
     let (link, first) = started.unwrap();
-    let wayland = Wayland::of(NonZeroU32::new(std::process::id()), first, Ok(link));
+    let wayland = Wayland::of(compositor, path, first, Ok(link));
     let changed = LayoutSignal::default();
     let fired = Rc::new(Cell::new(0));
     let seen = Rc::clone(&fired);
@@ -328,11 +358,27 @@ async fn watched(local: &LocalSet, fake: &mut Fake, link: UnixStream) -> Watched
             seen.set(seen.get() + 1);
         }
     });
-    let watch = local.spawn_local(wayland.watch(changed));
+    let again = LayoutSignal::default();
+    let watch = local.spawn_local(wayland.watch(changed, again.clone()));
     Watched {
         wayland,
         fired,
+        again,
         watch,
+    }
+}
+
+/// Waits until the layout is unknown, for a reason.
+async fn until_missing(wayland: &Wayland) {
+    while wayland.missing().is_none() {
+        settle().await;
+    }
+}
+
+/// Waits until the layout is known.
+async fn until_known(wayland: &Wayland) {
+    while wayland.layout().is_none() {
+        settle().await;
     }
 }
 
@@ -432,9 +478,9 @@ async fn an_output_too_old_to_say_when_it_changed_leaves_the_layout_unknown() {
             let (link, first) = started.unwrap();
             assert_eq!(first, None, "a layout without the old output");
             // It goes: the layout is known.
-            let wayland = Wayland::of(None, first, Ok(link));
+            let wayland = Wayland::of(None, Some(PathBuf::from("/nowhere")), first, Ok(link));
             let changed = LayoutSignal::default();
-            local.spawn_local(wayland.watch(changed.clone()));
+            local.spawn_local(wayland.watch(changed.clone(), LayoutSignal::default()));
             timeout(BOUND, async {
                 fake.send(vec![removed(B)]).await;
                 let callback = fake.until_sync().await;
@@ -714,7 +760,8 @@ async fn an_update_that_moves_nothing_fires_nothing() {
 }
 
 /// Starts with two outputs, watches, lets `end` end the connection from
-/// the fake's side, and returns the handle and how often it fired.
+/// the fake's side, and returns the handle and how often it fired. The
+/// watcher runs on, waiting to be asked to connect again.
 async fn ended_by(
     end: impl AsyncFnOnce(Fake) + 'static,
 ) -> (Option<Layout>, Option<Missing>, usize) {
@@ -724,8 +771,11 @@ async fn ended_by(
             let (link, mut fake) = Fake::pair();
             let watched = watched(&local, &mut fake, link).await;
             local.spawn_local(async move { end(fake).await });
-            timeout(BOUND, watched.watch).await.unwrap().unwrap();
+            timeout(BOUND, until_missing(&watched.wayland))
+                .await
+                .unwrap();
             settle().await;
+            assert!(!watched.watch.is_finished(), "the watcher ended");
             let Watched { wayland, fired, .. } = watched;
             (wayland.layout(), wayland.missing(), fired.get())
         })
@@ -733,7 +783,7 @@ async fn ended_by(
 }
 
 #[tokio::test]
-async fn a_lost_connection_makes_the_layout_unknown_for_good() {
+async fn a_lost_connection_makes_the_layout_unknown() {
     let (layout, missing, fired) = ended_by(async |fake| drop(fake)).await;
     assert_eq!((layout, missing, fired), (None, Some(Missing::Lost), 1));
 }
@@ -782,7 +832,7 @@ async fn an_output_plugged_in_later_joins_the_layout() {
 }
 
 #[tokio::test]
-async fn a_protocol_error_makes_the_layout_unknown_for_good() {
+async fn a_protocol_error_makes_the_layout_unknown() {
     let (layout, missing, fired) = ended_by(async |mut fake| {
         // wl_display.error about A's output: the object, a code, a message.
         let words = [fake.ids(A).output, 0]
@@ -820,7 +870,7 @@ fn an_event_the_client_cannot_read_is_a_protocol_error() {
 }
 
 #[test]
-fn a_second_watch_and_a_handle_without_a_display_watch_nothing() {
+fn a_handle_without_a_display_watches_nothing() {
     let none = Wayland::none(Missing::NoDisplay);
     assert_eq!(
         (none.layout(), none.missing(), none.compositor()),
@@ -831,24 +881,340 @@ fn a_second_watch_and_a_handle_without_a_display_watch_nothing() {
         .build()
         .unwrap();
     runtime.block_on(async {
+        let again = LayoutSignal::default();
+        again.changed();
         let quiet = timeout(
             Duration::from_millis(50),
-            none.watch(LayoutSignal::default()),
+            none.watch(LayoutSignal::default(), again),
         )
         .await;
         assert!(quiet.is_err(), "a watch without a connection ended");
     });
+    // A new KWin changed nothing: there is still no display.
+    assert_eq!(
+        (none.layout(), none.missing()),
+        (None, Some(Missing::NoDisplay))
+    );
 }
 
 #[tokio::test]
 async fn a_display_that_does_not_answer_in_time_keeps_its_listener() {
     let (link, _fake) = Fake::pair();
     let deadline = tokio::time::Instant::now() + Duration::from_millis(100);
-    let wayland = timeout(BOUND, Wayland::over(link, deadline)).await.unwrap();
+    let path = PathBuf::from("/nowhere");
+    let wayland = timeout(BOUND, Wayland::over(link, deadline, path))
+        .await
+        .unwrap();
     assert_eq!(wayland.missing(), Some(Missing::CannotConnect));
     assert_eq!(wayland.layout(), None);
     assert_eq!(
         wayland.compositor().map(NonZeroU32::get),
         Some(std::process::id())
     );
+}
+
+/// A listening socket standing in for the display, at a path of its own.
+struct Display {
+    listener: tokio::net::UnixListener,
+    path: PathBuf,
+}
+
+impl Display {
+    fn new() -> Display {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let name = format!(
+            "auto-clicker-display-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let path = std::env::temp_dir().join(name);
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        Display { listener, path }
+    }
+
+    /// The fake on the next connection made to the display.
+    async fn accept(&self) -> Fake {
+        let (stream, _) = self.listener.accept().await.unwrap();
+        Fake::over(stream)
+    }
+}
+
+impl Drop for Display {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// A watched connection on two outputs to a display at its own path,
+/// listened on by this process.
+async fn watched_display(local: &LocalSet, display: &Display) -> (Watched, Fake) {
+    let (link, mut fake) = Fake::pair();
+    let at = At {
+        path: Some(display.path.clone()),
+        compositor: NonZeroU32::new(std::process::id()),
+    };
+    let watched = watched_at(local, &mut fake, link, at).await;
+    (watched, fake)
+}
+
+#[tokio::test]
+async fn a_new_kwin_connects_again_and_the_layout_comes_back() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let display = Display::new();
+            let (watched, fake) = watched_display(&local, &display).await;
+            drop(fake);
+            timeout(BOUND, until_missing(&watched.wayland))
+                .await
+                .unwrap();
+            assert_eq!(watched.wayland.layout(), None);
+            watched.again.changed();
+            let _fake = timeout(BOUND, async {
+                let mut fake = display.accept().await;
+                fake.start_with_two().await;
+                until_known(&watched.wayland).await;
+                fake
+            })
+            .await
+            .unwrap();
+            settle().await;
+            assert_eq!(watched.wayland.layout(), layout(&[LEFT, RIGHT]));
+            assert_eq!(watched.wayland.missing(), None);
+            assert_eq!(watched.fired.get(), 2, "unknown, then known again");
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_new_kwin_replaces_a_connection_still_open() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let display = Display::new();
+            let (watched, mut old) = watched_display(&local, &display).await;
+            watched.again.changed();
+            let _fake = timeout(BOUND, async {
+                let mut fake = display.accept().await;
+                assert!(old.closed().await, "the old connection stayed open");
+                assert_eq!(watched.wayland.layout(), None);
+                fake.start_with_two().await;
+                until_known(&watched.wayland).await;
+                fake
+            })
+            .await
+            .unwrap();
+            settle().await;
+            assert_eq!(watched.wayland.layout(), layout(&[LEFT, RIGHT]));
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_newer_kwin_during_a_reconnect_starts_it_over() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let display = Display::new();
+            let (watched, fake) = watched_display(&local, &display).await;
+            drop(fake);
+            watched.again.changed();
+            let _second = timeout(BOUND, async {
+                // The first new connection is never answered; a newer KWin
+                // comes meanwhile.
+                let mut first = display.accept().await;
+                watched.again.changed();
+                let mut second = display.accept().await;
+                assert!(first.closed().await, "the first try stayed open");
+                second.start_with_two().await;
+                until_known(&watched.wayland).await;
+                second
+            })
+            .await
+            .unwrap();
+            settle().await;
+            assert_eq!(watched.wayland.missing(), None);
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_display_another_process_listens_on_now_gives_no_layout() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let display = Display::new();
+            let (link, mut fake) = Fake::pair();
+            // At start, the display's listener was another process.
+            let at = At {
+                path: Some(display.path.clone()),
+                compositor: NonZeroU32::new(1),
+            };
+            let watched = watched_at(&local, &mut fake, link, at).await;
+            drop(fake);
+            watched.again.changed();
+            timeout(BOUND, async {
+                let mut fake = display.accept().await;
+                assert!(fake.closed().await, "the connection stayed open");
+                while watched.wayland.missing() != Some(Missing::CannotConnect) {
+                    settle().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(watched.wayland.layout(), None);
+            assert!(!watched.watch.is_finished());
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn without_a_new_kwin_nothing_connects_again() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let display = Display::new();
+            let (watched, fake) = watched_display(&local, &display).await;
+            drop(fake);
+            timeout(BOUND, until_missing(&watched.wayland))
+                .await
+                .unwrap();
+            let quiet = timeout(Duration::from_millis(200), display.accept()).await;
+            assert!(quiet.is_err(), "connected again unasked");
+            assert_eq!(watched.wayland.missing(), Some(Missing::Lost));
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_second_watch_watches_nothing() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let display = Display::new();
+            let (watched, _fake) = watched_display(&local, &display).await;
+            // A signal of its own: the first watch never takes its fire.
+            let again = LayoutSignal::default();
+            local.spawn_local(
+                watched
+                    .wayland
+                    .watch(LayoutSignal::default(), again.clone()),
+            );
+            again.changed();
+            let quiet = timeout(Duration::from_millis(200), display.accept()).await;
+            assert!(quiet.is_err(), "a second watch connected");
+        })
+        .await;
+}
+
+/// Connects again after a new KWin, and reads the layout back.
+async fn comes_back(watched: &Watched, display: &Display) {
+    watched.again.changed();
+    let _fake = timeout(BOUND, async {
+        let mut fake = display.accept().await;
+        fake.start_with_two().await;
+        until_known(&watched.wayland).await;
+        fake
+    })
+    .await
+    .unwrap();
+    assert_eq!(watched.wayland.layout(), layout(&[LEFT, RIGHT]));
+    assert_eq!(watched.wayland.missing(), None);
+}
+
+#[tokio::test]
+async fn a_display_that_failed_at_start_connects_at_the_next_kwin() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let display = Display::new();
+            let wayland = Wayland::of(
+                NonZeroU32::new(std::process::id()),
+                Some(display.path.clone()),
+                None,
+                Err(Missing::CannotConnect),
+            );
+            let again = LayoutSignal::default();
+            let watch = local.spawn_local(wayland.watch(LayoutSignal::default(), again.clone()));
+            let watched = Watched {
+                wayland,
+                fired: Rc::default(),
+                again,
+                watch,
+            };
+            comes_back(&watched, &display).await;
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_listener_unknown_at_start_takes_whoever_listens_now() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let display = Display::new();
+            let (link, mut fake) = Fake::pair();
+            let at = At {
+                path: Some(display.path.clone()),
+                compositor: None,
+            };
+            let watched = watched_at(&local, &mut fake, link, at).await;
+            drop(fake);
+            comes_back(&watched, &display).await;
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_new_kwin_makes_the_layout_unknown_in_its_poll_whatever_the_budget() {
+    use std::future::{Future, poll_fn};
+    use std::pin::pin;
+    use std::task::{Context, Poll, Waker};
+
+    let (link, mut fake) = Fake::pair();
+    let (started, ()) = timeout(BOUND, async {
+        tokio::join!(Link::start(link), fake.start_with_two())
+    })
+    .await
+    .unwrap();
+    let (link, first) = started.unwrap();
+    let wayland = Wayland::of(
+        NonZeroU32::new(std::process::id()),
+        Some(PathBuf::from("/nowhere")),
+        first,
+        Ok(link),
+    );
+    let (changed, again) = (LayoutSignal::default(), LayoutSignal::default());
+    let mut watch = wayland.watch(changed.clone(), again.clone());
+    // Polled here, in the test's own task, so the budget it spends counts.
+    poll_fn(|cx| {
+        assert!(watch.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    again.changed();
+    poll_fn(|cx| {
+        spend_budget(cx);
+        assert!(watch.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(
+        pin!(changed.fired()).poll(&mut cx).is_ready(),
+        "the restart waited for a budget"
+    );
+    assert_eq!(
+        (wayland.layout(), wayland.missing()),
+        (None, Some(Missing::Lost))
+    );
+}
+
+/// Spends the task's whole budget.
+fn spend_budget(cx: &mut std::task::Context<'_>) {
+    use std::future::Future;
+
+    use tokio::task::coop::consume_budget;
+
+    while std::pin::pin!(consume_budget()).poll(cx).is_ready() {}
 }

@@ -1,13 +1,13 @@
-//! The screen layout and the pointer's position from KWin (R03, decision
-//! 0001 and the R03 brief).
+//! The pointer's position from KWin (R03, decision 0001 and the R03 brief),
+//! and word of a KWin that restarted (W01 brief, W5).
 //!
-//! Two KWin scripts, embedded here, call the daemon over D-Bus: the layout
-//! script, loaded for the daemon's lifetime, reports every output's
-//! rectangle and scale; the position script, loaded only while a recording
-//! runs, reports the layout once and the pointer on every move. Nothing
-//! outside this crate talks to KWin. The daemon sees the current layout
-//! through [`Kwin::layout`], and the positions reach the recorder through
-//! the watcher [`Kwin::watch`] starts, which the controller polls.
+//! A KWin script, embedded here, calls the daemon over D-Bus while a
+//! recording runs: it reports the layout at load and on every change of the
+//! screens, and the pointer on every move. Nothing outside this crate talks
+//! to KWin. The positions reach the recorder through the watcher
+//! [`Kwin::watch`] starts, which the controller polls, each with the layout
+//! the script reported before it. The screen layout itself comes from the
+//! Wayland display (W01b).
 //!
 //! Calls are accepted only from the current owner of `org.kde.KWin`, with
 //! the token of a load this daemon made. That keeps stale scripts and stray
@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use auto_clicker_core::controller::{LayoutSignal, LayoutWatch};
-use auto_clicker_core::recording::{Layout, RecordingFeed};
+use auto_clicker_core::recording::RecordingFeed;
 use tokio::sync::{Notify, mpsc};
 use zbus::Connection;
 
@@ -90,7 +90,6 @@ impl Kwin {
             scripting: Bus(bus.clone()),
             dir,
             trust,
-            layout: RefCell::default(),
             owner: RefCell::default(),
             compositor,
         };
@@ -104,24 +103,21 @@ impl Kwin {
         })))
     }
 
-    /// No KWin: the layout is never known, and nothing is loaded.
+    /// No KWin: nothing is loaded, and recordings get no positions.
     pub fn none() -> Kwin {
         Kwin(None)
     }
 
-    /// The current layout; `None` while it is not known.
-    pub fn layout(&self) -> Option<Layout> {
-        self.0.as_ref()?.session.layout.borrow().clone()
-    }
-
     /// The watcher, to be polled on the daemon's thread: it loads the
-    /// scripts, feeds `feed`'s recordings their positions and fires
-    /// `changed` when the layout changes. Only the first call gets it; any
-    /// later one, like one without KWin, watches nothing.
-    pub fn watch(&self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
+    /// position script while `feed` records, feeds the recording its
+    /// positions, and fires `restarted` each time a KWin of the display
+    /// comes to own `org.kde.KWin`, the first one seen included. Only the
+    /// first call gets it; any later one, like one without KWin, watches
+    /// nothing.
+    pub fn watch(&self, feed: RecordingFeed, restarted: LayoutSignal) -> LayoutWatch {
         let started = self.0.as_ref().and_then(|shared| {
             let inbox = shared.inbox.borrow_mut().take()?;
-            let watcher = Watcher::new(Rc::clone(&shared.session), feed, changed);
+            let watcher = Watcher::new(Rc::clone(&shared.session), feed, restarted);
             Some(watcher.run(inbox))
         });
         match started {
@@ -130,8 +126,8 @@ impl Kwin {
         }
     }
 
-    /// At exit, however the daemon ends once it holds its name: unloads both
-    /// scripts and removes their files, within two calls' deadlines (asking
+    /// At exit, however the daemon ends once it holds its name: unloads
+    /// every script name and removes their files, within two calls' deadlines (asking
     /// who runs KWin, then unloading) and a little more. What fails is
     /// logged; the next start cleans it up.
     pub async fn exit(&self) {

@@ -55,7 +55,7 @@ Each run is 10 s of relative moves at the given rate. Figures are % of one core,
 | 1000 Hz | 13.7 / 16.7 | 20.2 / 24.1 | 2.1–2.6 | 6.1–6.3 | 19.3 / 22.5 |
 | 2000 Hz | 19.1 / 19.4 | 29.5 / 34.4 | 4.9–5.2 | 11.4–11.8 | 29.8 / 35.0 |
 
-- **Idle.** A loaded script costs nothing while the pointer is still. The daemon still loads it only while recording. (The layout script R03's refinement added stays loaded while the daemon runs; it is never called on pointer motion.)
+- **Idle.** A loaded script costs nothing while the pointer is still. The daemon still loads it only while recording. (The layout script R03's refinement added stayed loaded while the daemon ran; W01b removed it, and the layout comes from xdg-output.)
 - **While moving.** The script adds about 7% of a core to KWin at 1000 Hz and 10–15% at 2000 Hz.
 - **Delivery.** In the CPU runs, 9999 of 10000 moves at 1000 Hz and 19992 and 19972 of 20000 at 2000 Hz produced a delivered call. Within each run the script's callback counter had no gaps, so no call was lost in between; the harness cannot tell a call lost at the very start or end of a run from a move that left the pointer where it was, which fires no `Cursor::posChanged` (`src/cursor.cpp:191`). The latency runs, which match each move to its call, delivered every one.
 - **A dead receiver costs as much as a live one.** With the script loaded and nobody owning the name, every call still leaves KWin and fails at the bus.

@@ -8,8 +8,8 @@
 //! it to the watcher through a bounded queue without blocking. When the
 //! queue is full (the daemon's thread did not get to it) the report is
 //! dropped: a recording then has a gap in its positions and carries on. A
-//! dropped layout report also tells the watcher, which then counts the
-//! layout as unknown and loads the layout script again.
+//! dropped layout report also tells the watcher, which then judges no
+//! position by an older layout and loads the position script again.
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;

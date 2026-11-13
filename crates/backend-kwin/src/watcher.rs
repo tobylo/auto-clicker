@@ -1,6 +1,9 @@
 //! The watcher: polled on the daemon's thread beside the controller, it
-//! keeps KWin's scripts as the brief's "KWin scripts" says, hands the
-//! reports to the recorder, and keeps the current layout (brief I4).
+//! loads the position script while a recording runs and hands its reports
+//! to the recorder, each position with the layout the script reported last
+//! before it (W01 brief, W4). It tells the daemon when a KWin of its display
+//! comes back after a restart (W5); the layout itself comes from the
+//! Wayland display.
 //!
 //! It reacts to a recording starting or stopping, a new owner of
 //! `org.kde.KWin`, a report, and the end of its one call to KWin in flight.
@@ -8,11 +11,11 @@
 //! holds up the reports behind it: they reach the recorder within the 20 ms
 //! it waits for late ones.
 //!
-//! Its one timer is the back-off after a failed layout load or position
-//! unload, which tries the call again a few times while the daemon is idle
-//! ([`BACK_OFF`]). It exists only while such a call waits to be tried
-//! again: with nothing failed, and once the tries are spent, the watcher
-//! sets none.
+//! Its one timer is the back-off after a failed call, which tries it again
+//! a few times ([`BACK_OFF`]): an unload while the daemon is idle, a load
+//! while its recording runs (a KWin that just restarted does not answer
+//! for a moment). It exists only while a call waits to be tried again: with
+//! nothing failed, and once the tries are spent, the watcher sets none.
 //!
 //! Every load gets a new token, made current before the load is sent (the
 //! script reports as soon as it runs, before KWin answers), and a report
@@ -44,10 +47,11 @@ use crate::scripting::{CallError, Owners, Scripting, bounded};
 use crate::session::{Session, log_failure};
 use crate::token::Token;
 
-/// How long the watcher waits before each try again of a failed layout
-/// load or position unload, counted from the failure before it. A failure
-/// after the last is logged, and the call waits for another call to KWin
-/// to succeed, a new owner of KWin, the next recording or the exit.
+/// How long the watcher waits before each try again of a failed unload or
+/// load, counted from the failure before it. A failure after the last is
+/// logged; an unload then waits for another call to KWin to succeed, a new
+/// owner of KWin, the next recording or the exit, and a load for a new
+/// owner or the next recording.
 pub(crate) const BACK_OFF: [Duration; 3] = [
     Duration::from_secs(2),
     Duration::from_secs(4),
@@ -57,7 +61,8 @@ pub(crate) const BACK_OFF: [Duration; 3] = [
 /// What the watcher hears from the receiver.
 pub(crate) struct Inbox {
     pub(crate) reports: mpsc::Receiver<Report>,
-    /// A layout report did not fit in the queue.
+    /// A layout report did not fit in the queue: the positions after it
+    /// cannot be judged.
     pub(crate) layout_dropped: Arc<Notify>,
 }
 
@@ -66,7 +71,7 @@ type Job = Pin<Box<dyn Future<Output = Done>>>;
 
 /// How a call to KWin ended.
 enum Done {
-    Loaded(Script, Result<(), CallError>),
+    Loaded(Result<(), CallError>),
     Unloaded(Result<(), CallError>),
 }
 
@@ -80,15 +85,6 @@ enum Wake {
     BackedOff,
 }
 
-/// Whether the layout script is to be loaded.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Due {
-    No,
-    Now,
-    /// Once the back-off ends: its last load failed.
-    AfterBackOff,
-}
-
 /// What the position script needs next.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Next {
@@ -97,51 +93,69 @@ enum Next {
     Unload,
     /// Unload once the back-off ends: the last unload failed.
     UnloadAfterBackOff,
+    /// Load once the back-off ends: the last load failed while its
+    /// recording runs, as when a KWin just restarted does not answer yet.
+    LoadAfterBackOff,
+}
+
+impl Next {
+    /// A call waits for the back-off.
+    fn waits(self) -> bool {
+        matches!(self, Next::UnloadAfterBackOff | Next::LoadAfterBackOff)
+    }
 }
 
 pub(crate) struct Watcher<S> {
     session: Rc<Session<S>>,
     feed: RecordingFeed,
-    changed: LayoutSignal,
+    /// Fired each time a KWin of the display comes to own `org.kde.KWin`,
+    /// the first one seen included: the display's connection may be to one
+    /// that went before, or may have failed while it started.
+    restarted: LayoutSignal,
     rng: fastrand::Rng,
     owner: Option<String>,
-    layout_token: Option<Token>,
     position_token: Option<Token>,
-    /// Both names are unloaded first: what a crashed daemon left.
+    /// The layout the current load reported last, which the positions after
+    /// it were taken on; `None` until it reports one, and after a report
+    /// that was no layout or was lost.
+    taken_on: Option<Layout>,
+    /// The current load's first layout report was read.
+    first_layout_read: bool,
+    /// Every name is unloaded first: what a crashed daemon left, of this
+    /// version or an older one.
     sweep_due: bool,
-    layout_due: Due,
     position: Next,
     /// The position script may be loaded: a load was sent, or a crashed
     /// daemon's may still run, and no unload has succeeded since.
     position_loaded: bool,
-    /// The position script's layout report still counts: no layout report
-    /// was lost since it was loaded, so it is not older than one that was.
-    layout_from_position: bool,
     job: Option<Job>,
     /// The call in flight loads the position script.
     job_loads_position: bool,
-    /// When the back-off ends; set exactly while a call waits for it.
+    /// When the back-off ends; set exactly while an unload waits for it.
     retry_at: Option<Instant>,
-    /// Layout loads and position unloads that failed in a row, since a call
-    /// succeeded or KWin got a new owner.
+    /// Unloads that failed in a row, since a call succeeded or KWin got a
+    /// new owner.
     failures: usize,
 }
 
 impl<S: Scripting + 'static> Watcher<S> {
-    pub(crate) fn new(session: Rc<Session<S>>, feed: RecordingFeed, changed: LayoutSignal) -> Self {
+    pub(crate) fn new(
+        session: Rc<Session<S>>,
+        feed: RecordingFeed,
+        restarted: LayoutSignal,
+    ) -> Self {
         Watcher {
             session,
             feed,
-            changed,
+            restarted,
             rng: fastrand::Rng::new(),
             owner: None,
-            layout_token: None,
             position_token: None,
+            taken_on: None,
+            first_layout_read: false,
             sweep_due: false,
-            layout_due: Due::No,
             position: Next::Nothing,
             position_loaded: false,
-            layout_from_position: false,
             job: None,
             job_loads_position: false,
             retry_at: None,
@@ -181,7 +195,7 @@ impl<S: Scripting + 'static> Watcher<S> {
                     Some(newer) = owners.next() => newer,
                     owner = display::checked(&self.session, owner) => owner,
                 };
-                self.owner_changed(owner);
+                self.new_owner(owner);
                 self.sweep_due = self.owner.is_some();
                 owners
             }
@@ -226,7 +240,7 @@ impl<S: Scripting + 'static> Watcher<S> {
     fn handle(&mut self, wake: Wake) {
         match wake {
             Wake::Recording => self.recording_changed(),
-            Wake::Owner(owner) => self.owner_changed(owner),
+            Wake::Owner(owner) => self.new_owner(owner),
             Wake::LayoutDropped => self.layout_dropped(),
             Wake::Report(report) => self.report(report),
             Wake::Done(done) => self.done(done),
@@ -244,9 +258,6 @@ impl<S: Scripting + 'static> Watcher<S> {
             self.job = None;
         }
         self.position_token = None;
-        if self.feed.recording() && self.layout_given_up() {
-            self.layout_due = Due::Now;
-        }
         self.position = if self.feed.recording() {
             Next::Load
         } else if self.position_loaded {
@@ -257,9 +268,21 @@ impl<S: Scripting + 'static> Watcher<S> {
         self.publish_trust();
     }
 
+    /// A new owner: once it is a KWin of the display, the daemon is told,
+    /// so the layout's connection to the display is made again (W5). The
+    /// first one counts too: the connection the daemon made before it
+    /// followed KWin may be to a KWin gone since, or may have timed out.
+    fn new_owner(&mut self, owner: Option<String>) {
+        let came = owner.is_some() && owner != self.owner;
+        self.owner_changed(owner);
+        if came {
+            self.restarted.changed();
+        }
+    }
+
     /// A new owner of `org.kde.KWin` (or none) has none of the scripts: the
-    /// call in flight went to the old one, every token ends and the layout
-    /// is unknown until the new layout script reports.
+    /// call in flight went to the old one, and the position script's token
+    /// ends.
     fn owner_changed(&mut self, owner: Option<String>) {
         if owner == self.owner {
             return;
@@ -267,12 +290,9 @@ impl<S: Scripting + 'static> Watcher<S> {
         self.job = None;
         self.owner = owner;
         self.session.owner.replace(self.owner.clone());
-        self.layout_token = None;
         self.position_token = None;
-        self.set_layout(None);
         let running = self.owner.is_some();
         self.sweep_due = false;
-        self.layout_due = if running { Due::Now } else { Due::No };
         self.failures = 0;
         self.position = if running && self.feed.recording() {
             Next::Load
@@ -284,50 +304,63 @@ impl<S: Scripting + 'static> Watcher<S> {
         self.publish_trust();
     }
 
-    /// A layout report was lost: the layout is unknown until the layout
-    /// script, loaded again, reports it. The old load's token ends at once,
-    /// so what it queued before the loss cannot bring an older layout back
-    /// while a call to KWin holds up the new load.
+    /// A layout report was lost: the positions after it cannot be judged.
+    /// The load's token ends at once, so nothing it queued is taken, and a
+    /// recording's position script is loaded again, reporting the layout
+    /// first.
     fn layout_dropped(&mut self) {
-        self.layout_token = None;
-        self.layout_from_position = false;
-        self.set_layout(None);
-        if self.owner.is_some() {
-            self.layout_due = Due::Now;
+        if self.position_token.is_none() {
+            return;
         }
-        self.publish_trust();
+        self.recording_changed();
     }
 
     fn report(&mut self, report: Report) {
         let Report { time, token, body } = report;
+        if Some(&token) != self.position_token.as_ref() {
+            return;
+        }
         match body {
-            Body::Position(point) if Some(&token) == self.position_token.as_ref() => {
-                let current = self.session.layout.borrow();
+            Body::Position(point) => {
+                let taken_on = self.taken_on.as_ref();
                 self.feed
-                    .with(|recorder| recorder.position(time, point, current.as_ref()));
+                    .with(|recorder| recorder.position(time, point, taken_on));
             }
-            Body::Layout(layout) if self.takes_layout_from(&token) => self.set_layout(layout),
-            Body::Position(_) | Body::Layout(_) => {}
+            Body::Layout(layout) => {
+                if !mem::replace(&mut self.first_layout_read, true) {
+                    self.check_first(layout.as_ref());
+                }
+                self.taken_on = layout;
+            }
+        }
+    }
+
+    /// Says so when the screens KWin reported at the load are not the
+    /// recording's, which the display gave: its positions are left out.
+    fn check_first(&self, layout: Option<&Layout>) {
+        let mut differs = false;
+        self.feed.with(|recorder| {
+            differs = !layout.is_some_and(|layout| recorder.takes_positions_on(layout));
+        });
+        if differs {
+            eprintln!(
+                "auto-clicker: KWin reports other screens than the Wayland display, so this \
+                 recording keeps no positions while it does: {layout:?}"
+            );
         }
     }
 
     fn done(&mut self, done: Done) {
         match done {
-            Done::Loaded(_, Ok(())) => self.succeeded(),
-            Done::Loaded(script, Err(err)) => {
-                log_failure("load", script, &err);
-                match script {
-                    Script::Layout => {
-                        self.layout_token = None;
-                        self.set_layout(None);
-                        // A script directory that failed its check stays
-                        // failed: no load is tried until the next start. The
-                        // failure decides, over a reload a lost report asked
-                        // for while this load was in flight.
-                        let retried = self.session.dir.is_ok() && self.back_off();
-                        self.layout_due = if retried { Due::AfterBackOff } else { Due::No };
-                    }
-                    Script::Position => self.position_token = None,
+            Done::Loaded(Ok(())) => self.succeeded(),
+            Done::Loaded(Err(err)) => {
+                log_failure("load", Script::Position, &err);
+                self.position_token = None;
+                // Its recording runs: a stop drops a load in flight. A
+                // script directory that failed its check stays failed.
+                let retried = self.session.dir.is_ok() && self.back_off();
+                if retried {
+                    self.position = Next::LoadAfterBackOff;
                 }
                 self.publish_trust();
             }
@@ -346,13 +379,10 @@ impl<S: Scripting + 'static> Watcher<S> {
         }
     }
 
-    /// KWin answered: the count starts afresh, and a call given up on is
-    /// due again, since the other's failures may have spent its tries.
+    /// KWin answered: the count starts afresh, and an unload given up on is
+    /// due again.
     fn succeeded(&mut self) {
         self.failures = 0;
-        if self.layout_given_up() {
-            self.layout_due = Due::Now;
-        }
         let unload_given_up =
             self.position_loaded && !self.feed.recording() && self.position == Next::Nothing;
         if unload_given_up {
@@ -374,50 +404,30 @@ impl<S: Scripting + 'static> Watcher<S> {
             }
             return false;
         };
-        // The earlier deadline wins: a call waiting already is never put
-        // off by another's failure, only tried sooner.
-        let Some(at) = Instant::now().checked_add(*wait) else {
-            return false;
-        };
-        self.retry_at = Some(self.retry_at.map_or(at, |old| old.min(at)));
-        true
+        self.retry_at = Instant::now().checked_add(*wait);
+        self.retry_at.is_some()
     }
 
-    /// The layout load failed after its last back-off: KWin runs, no layout
-    /// script is loaded or being loaded, and none is due. The script
-    /// directory is fine, or no load could succeed.
-    fn layout_given_up(&self) -> bool {
-        self.owner.is_some()
-            && self.layout_token.is_none()
-            && self.layout_due == Due::No
-            && self.session.dir.is_ok()
-    }
-
-    /// The back-off ended: what waited for it is due now.
+    /// The back-off ended: the unload that waited for it is due now.
     fn backed_off(&mut self) {
         self.retry_at = None;
-        if self.layout_due == Due::AfterBackOff {
-            self.layout_due = Due::Now;
-        }
-        if self.position == Next::UnloadAfterBackOff {
-            self.position = Next::Unload;
-        }
+        self.position = match self.position {
+            Next::UnloadAfterBackOff => Next::Unload,
+            Next::LoadAfterBackOff => Next::Load,
+            next => next,
+        };
     }
 
-    /// Ends the back-off once nothing waits for it: a new owner, a lost
-    /// layout report or a recording made the call due at once, or
-    /// replaced it.
+    /// Ends the back-off once nothing waits for it: a new owner or a
+    /// recording's start or stop replaced the call.
     fn drop_unneeded_back_off(&mut self) {
-        let waits =
-            self.layout_due == Due::AfterBackOff || self.position == Next::UnloadAfterBackOff;
-        if !waits {
+        if !self.position.waits() {
             self.retry_at = None;
         }
     }
 
     /// Starts the next call to KWin, when none is in flight and KWin runs:
-    /// the sweep, then the layout script, then what the position script
-    /// needs.
+    /// the sweep, then what the position script needs.
     fn next_job(&mut self) {
         if self.job.is_some() {
             return;
@@ -434,20 +444,17 @@ impl<S: Scripting + 'static> Watcher<S> {
             self.position_loaded = true;
             Box::pin(async move {
                 let (_, position) = tokio::join!(
-                    session.unload_logged(&owner, Script::Layout),
+                    session.unload_logged(&owner, Script::OldLayout),
                     session.unload(&owner, Script::Position)
                 );
                 Done::Unloaded(position)
             })
-        } else if self.layout_due == Due::Now {
-            self.layout_due = Due::No;
-            self.load(Script::Layout, owner)
         } else {
             match self.position {
                 Next::Load => {
                     self.position = Next::Nothing;
                     loads_position = true;
-                    self.load(Script::Position, owner)
+                    self.load(owner)
                 }
                 Next::Unload => {
                     self.position = Next::Nothing;
@@ -455,66 +462,35 @@ impl<S: Scripting + 'static> Watcher<S> {
                         Done::Unloaded(session.unload(&owner, Script::Position).await)
                     })
                 }
-                Next::Nothing | Next::UnloadAfterBackOff => return,
+                Next::Nothing | Next::UnloadAfterBackOff | Next::LoadAfterBackOff => return,
             }
         };
         self.job = Some(job);
         self.job_loads_position = loads_position;
     }
 
-    /// A load of `script` with a new token, current from now on.
-    fn load(&mut self, script: Script, owner: String) -> Job {
+    /// A load of the position script with a new token, current from now
+    /// on.
+    fn load(&mut self, owner: String) -> Job {
         let token = Token::new(&mut self.rng);
-        match script {
-            Script::Layout => self.layout_token = Some(token.clone()),
-            Script::Position => {
-                self.position_token = Some(token.clone());
-                self.position_loaded = true;
-                // A layout script that was loaded: one only being loaded
-                // after a back-off may never run to see a change.
-                self.layout_from_position = self.layout_token.is_some();
-            }
-        }
+        self.position_token = Some(token.clone());
+        // Every load starts with no layout: positions before its own
+        // report are judged by none, never by an earlier load's.
+        self.taken_on = None;
+        self.first_layout_read = false;
+        self.position_loaded = true;
         self.publish_trust();
         let session = Rc::clone(&self.session);
-        Box::pin(async move { Done::Loaded(script, session.load(&owner, script, &token).await) })
-    }
-
-    /// Whether a layout report with `token` is taken: from the layout
-    /// script, or from the position script while a layout script runs and
-    /// no layout report was lost since the position script was loaded. A
-    /// layout only the position script reported would stay after the
-    /// recording with nothing to see it change; and one it queued before a
-    /// lost report is older than what was lost.
-    fn takes_layout_from(&self, token: &Token) -> bool {
-        let Some(layout) = &self.layout_token else {
-            return false;
-        };
-        let from_position =
-            self.layout_from_position && self.position_token.as_ref() == Some(token);
-        token == layout || from_position
+        Box::pin(async move { Done::Loaded(session.load(&owner, &token).await) })
     }
 
     /// Tells the receiver whom to accept calls from now.
     fn publish_trust(&self) {
-        let tokens = [&self.layout_token, &self.position_token]
-            .into_iter()
-            .flatten()
-            .cloned()
-            .collect();
+        let tokens = self.position_token.iter().cloned().collect();
         with_trust(&self.session.trust, |trust| {
             trust.owner = self.owner.clone();
             trust.tokens = tokens;
         });
-    }
-
-    /// Makes `layout` the current one, and tells the controller when that
-    /// changed it.
-    fn set_layout(&self, layout: Option<Layout>) {
-        let old = self.session.layout.replace(layout);
-        if *self.session.layout.borrow() != old {
-            self.changed.changed();
-        }
     }
 }
 

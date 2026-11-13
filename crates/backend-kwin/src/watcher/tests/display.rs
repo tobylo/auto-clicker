@@ -1,4 +1,5 @@
-//! KWin counted only when it runs the daemon's Wayland display (brief W1).
+//! KWin counted only when it runs the daemon's Wayland display (brief W1),
+//! and told as come back only then (W5).
 
 use super::*;
 use crate::display::Parent;
@@ -28,13 +29,15 @@ fn kwin_as(process: Process) -> (Harness, Inbox) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_kwin_of_the_display_gives_its_layout() {
+async fn the_kwin_of_the_display_is_swept_and_records_positions() {
     local(async {
         let (h, inbox) = kwin_as(OURS);
         h.start(inbox).await;
-        let swept = [Unload(LAYOUT), Unload(POSITION)];
-        assert_eq!(h.calls(), [swept.as_slice(), &LOAD_LAYOUT].concat());
-        assert_eq!(h.layout(), two_screens());
+        assert_eq!(h.calls(), SWEEP);
+        assert!(h.counted());
+        h.record().await;
+        assert_eq!(h.calls(), LOAD_POSITION);
+        assert_eq!(h.stop().await, [Point { x: 100, y: 200 }]);
     })
     .await;
 }
@@ -47,7 +50,7 @@ async fn a_kwin_of_another_display_is_ignored_and_called_for_nothing() {
         h.record().await;
         after(HOUR).await;
         assert_eq!(h.calls(), []);
-        assert_eq!(h.layout(), None);
+        assert!(!h.told().await);
         assert!(h.stop().await.is_empty(), "a position from the other KWin");
         assert_eq!(h.session.trust.lock().unwrap().owner, None);
         // Nor is anything unloaded from it at exit.
@@ -76,8 +79,11 @@ async fn each_new_owner_is_checked_before_anything_is_loaded() {
     local(async {
         let (h, inbox) = kwin_as(OURS);
         h.start(inbox).await;
+        assert!(h.told().await, "the first KWin seen was not told");
+        h.record().await;
         h.calls();
-        // KWin restarts under the same wrapper: counted, and loaded again.
+        // KWin restarts under the same wrapper: counted, told and loaded
+        // again.
         h.kwin.with(|s| {
             s.processes.push((
                 ":1.30",
@@ -88,15 +94,15 @@ async fn each_new_owner_is_checked_before_anything_is_loaded() {
             ));
         });
         h.new_owner(Some(":1.30")).await;
-        assert_eq!(h.calls(), LOAD_LAYOUT);
-        assert_eq!(h.layout(), two_screens());
-        // Another session's KWin takes the name: the layout goes, and
-        // nothing is loaded into it.
+        assert_eq!(h.calls(), LOAD_POSITION);
+        assert!(h.told().await);
+        // Another session's KWin takes the name: it is not counted, nothing
+        // is loaded into it, and no KWin of the display came back.
         h.kwin.with(|s| s.processes.push((":1.40", OTHER)));
         h.new_owner(Some(":1.40")).await;
         assert_eq!(h.calls(), []);
-        assert_eq!(h.layout(), None);
-        assert!(h.told().await);
+        assert!(!h.counted());
+        assert!(!h.told().await);
     })
     .await;
 }
@@ -118,11 +124,11 @@ async fn a_lookup_that_fails_is_tried_again_and_then_trusted() {
         h.kwin.with(|s| s.failing_lookups = usize::MAX);
         h.start(inbox).await;
         for wait in BACK_OFF {
-            assert_eq!(h.layout(), None);
+            assert!(!h.counted());
             after(wait).await;
         }
         assert_eq!(h.kwin.with(|s| s.lookups), 1 + BACK_OFF.len());
-        assert_eq!(h.layout(), two_screens());
+        assert!(h.counted());
     })
     .await;
 }
@@ -132,7 +138,7 @@ async fn without_a_display_to_check_against_kwin_counts_unasked() {
     local(async {
         let (h, inbox) = Harness::new(true, &[]);
         h.start(inbox).await;
-        assert_eq!(h.layout(), two_screens());
+        assert!(h.counted());
         assert_eq!(h.kwin.with(|s| s.lookups), 0);
     })
     .await;
@@ -149,18 +155,21 @@ async fn a_new_owner_drops_the_check_of_the_one_before() {
     local(async {
         let (h, inbox) = kwin_as(OURS);
         h.start(inbox).await;
+        assert!(h.told().await, "the first KWin seen was not told");
+        h.record().await;
         h.calls();
         // An owner whose lookup fails, so its check backs off, then a
         // newer one: the newer is checked and loaded at once.
         h.new_owner(Some(":1.20")).await;
         h.kwin.with(|s| s.processes.push((":1.30", RESTARTED)));
         h.new_owner(Some(":1.30")).await;
-        assert_eq!(h.calls(), LOAD_LAYOUT);
-        assert_eq!(h.layout(), two_screens());
+        assert_eq!(h.calls(), LOAD_POSITION);
+        assert!(h.told().await);
         // The dropped check never comes back to count `:1.20`.
         after(HOUR).await;
         assert_eq!(h.calls(), []);
-        assert_eq!(h.layout(), two_screens());
+        assert!(h.counted());
+        assert!(!h.told().await);
     })
     .await;
 }
@@ -171,10 +180,12 @@ async fn a_new_owner_during_the_first_check_is_checked_at_once() {
         // The first owner's lookup fails: its check backs off.
         let (h, inbox) = Harness::on_display(true, &[], display());
         h.start(inbox).await;
+        assert!(!h.counted());
+        assert!(!h.told().await, "told of a KWin not yet checked");
         h.kwin.with(|s| s.processes.push((":1.30", RESTARTED)));
         h.new_owner(Some(":1.30")).await;
-        assert_eq!(h.calls(), LOAD_LAYOUT);
-        assert_eq!(h.layout(), two_screens());
+        assert!(h.counted());
+        assert!(h.told().await);
     })
     .await;
 }
@@ -193,7 +204,7 @@ async fn a_kwin_whose_parent_cannot_be_read_is_tried_again() {
         h.kwin.with(|s| s.processes = vec![(KWIN, OURS)]);
         after(BACK_OFF[0]).await;
         assert_eq!(h.kwin.with(|s| s.lookups), 2);
-        assert_eq!(h.layout(), two_screens());
+        assert!(h.counted());
     })
     .await;
 }
@@ -204,12 +215,13 @@ async fn a_new_owner_reads_as_none_while_it_is_checked() {
         let (h, inbox) = kwin_as(OURS);
         h.start(inbox).await;
         h.calls();
+        assert!(h.counted());
         assert!(h.told().await);
-        // Its lookup fails, so its check backs off: the old KWin's layout
-        // is gone meanwhile.
+        // Its lookup fails, so its check backs off: calls from the old KWin
+        // are no longer heard meanwhile, and none came back.
         h.new_owner(Some(":1.40")).await;
-        assert_eq!(h.layout(), None);
-        assert!(h.told().await);
+        assert!(!h.counted());
+        assert!(!h.told().await);
         assert_eq!(h.calls(), []);
     })
     .await;

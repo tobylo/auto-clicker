@@ -167,7 +167,7 @@ mod tests {
         let dir = ScriptDir::open(&runtime.0).unwrap();
         assert_eq!(mode(&runtime.ours()), 0o700);
         let token = Token::new(&mut fastrand::Rng::with_seed(3));
-        let name = Script::Layout.file_name(&token);
+        let name = Script::Position.file_name(&token);
         let path = dir.write(&name, "workspace;").unwrap();
         assert_eq!(path, runtime.ours().join(&name));
         assert_eq!(fs::read_to_string(&path).unwrap(), "workspace;");
@@ -214,11 +214,11 @@ mod tests {
     }
 
     #[test]
-    fn a_sweep_removes_the_scripts_files_and_nothing_else() {
+    fn a_sweep_removes_the_scripts_files_an_older_layout_scripts_included_and_nothing_else() {
         let runtime = Runtime::new();
         let dir = ScriptDir::open(&runtime.0).unwrap();
         let mut rng = fastrand::Rng::with_seed(5);
-        let layout = Script::Layout.file_name(&Token::new(&mut rng));
+        let layout = Script::OldLayout.file_name(&Token::new(&mut rng));
         let position = Script::Position.file_name(&Token::new(&mut rng));
         for name in [&layout, &position, "notes.txt", "auto-clicker-layoutx.js"] {
             fs::write(runtime.ours().join(name), "").unwrap();

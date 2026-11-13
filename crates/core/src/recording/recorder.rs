@@ -207,18 +207,27 @@ impl Recorder {
         self.timeline.is_full()
     }
 
-    /// The pointer at `point`, reported at `time` while the layout was
-    /// `current` (`None` when unknown). It is kept only when `current` has
-    /// the recording's screens ([`Layout::same_screens`]) and the point lies
-    /// on it.
-    pub fn position(&mut self, time: Duration, point: Point, current: Option<&Layout>) {
+    /// Whether positions taken on `layout` would be kept: it has the
+    /// screens the recording's positions lie on.
+    pub fn takes_positions_on(&self, layout: &Layout) -> bool {
+        self.layout
+            .as_ref()
+            .is_some_and(|ours| ours.same_screens(layout))
+    }
+
+    /// The pointer at `point`, reported at `time` and taken on `taken_on`
+    /// (`None` when unknown): the layout its source reported last before it
+    /// (W01 brief, W4). It is kept only when `taken_on` has the recording's
+    /// screens ([`Layout::same_screens`]) and the point lies on it.
+    pub fn position(&mut self, time: Duration, point: Point, taken_on: Option<&Layout>) {
         let Some(at) = self.offset(time) else {
             return;
         };
         let Some(layout) = &self.layout else {
             return;
         };
-        if current.is_some_and(|current| current.same_screens(layout)) && layout.holds(point) {
+        if taken_on.is_some_and(|taken_on| self.takes_positions_on(taken_on)) && layout.holds(point)
+        {
             self.timeline.position(at, point);
         }
     }
