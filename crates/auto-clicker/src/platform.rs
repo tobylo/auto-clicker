@@ -183,7 +183,8 @@ fn watch_layout(
 /// of a restart reaching the second. KWin's is polled first, every time, so
 /// the display hears of a restart in the same poll and fires the
 /// controller's signal there, before a playback using positions takes its
-/// next event; the word is a `Notify`, which spends no budget.
+/// next event, however much budget KWin's spent (the display's watcher
+/// reads the word outside it).
 fn joined(
     kwin: impl FnOnce(LayoutSignal) -> LayoutWatch,
     display: impl FnOnce(LayoutSignal) -> LayoutWatch,
@@ -230,7 +231,6 @@ mod tests {
     use std::task::{Context, Poll, Waker};
 
     use auto_clicker_backend_wayland::Missing;
-    use tokio::task::coop::consume_budget;
     use tokio::time::timeout;
 
     use super::*;
@@ -321,18 +321,12 @@ mod tests {
     }
 
     /// KWin's watcher, telling of a restart each time `staged` is set
-    /// when it is polled, and then spending the task's budget if `spends`.
-    fn kwin_restarting(
-        staged: Rc<Cell<bool>>,
-        spends: bool,
-    ) -> impl FnOnce(LayoutSignal) -> LayoutWatch {
+    /// when it is polled.
+    fn kwin_restarting(staged: Rc<Cell<bool>>) -> impl FnOnce(LayoutSignal) -> LayoutWatch {
         move |restarted| {
-            Box::pin(std::future::poll_fn(move |cx| {
+            Box::pin(std::future::poll_fn(move |_| {
                 if staged.replace(false) {
                     restarted.changed();
-                    if spends {
-                        while std::pin::pin!(consume_budget()).poll(cx).is_ready() {}
-                    }
                 }
                 Poll::Pending
             }))
@@ -362,7 +356,7 @@ mod tests {
         let staged = Rc::new(Cell::new(false));
         let changed = LayoutSignal::default();
         let mut watch = joined(
-            kwin_restarting(Rc::clone(&staged), false),
+            kwin_restarting(Rc::clone(&staged)),
             display_firing(changed.clone()),
         );
         let mut cx = Context::from_waker(Waker::noop());
@@ -373,23 +367,6 @@ mod tests {
             assert!(watch.as_mut().poll(&mut cx).is_pending());
             assert!(fired_now(&changed), "restart {poll} waited a poll");
         }
-    }
-
-    #[tokio::test]
-    async fn a_restart_reaches_the_controller_in_its_poll_after_kwin_spent_the_budget() {
-        let staged = Rc::new(Cell::new(true));
-        let changed = LayoutSignal::default();
-        let mut watch = joined(
-            kwin_restarting(staged, true),
-            display_firing(changed.clone()),
-        );
-        // One poll, inside the runtime's task, where the budget counts.
-        std::future::poll_fn(|cx| {
-            assert!(watch.as_mut().poll(cx).is_pending());
-            Poll::Ready(())
-        })
-        .await;
-        assert!(fired_now(&changed), "the restart waited for a budget");
     }
 
     #[tokio::test]

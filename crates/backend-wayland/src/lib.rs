@@ -24,11 +24,13 @@ mod gather;
 mod socket;
 
 use std::cell::{Cell, RefCell};
-use std::future::pending;
+use std::future::{Future, pending, poll_fn};
 use std::num::NonZeroU32;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::pin::pin;
 use std::rc::Rc;
+use std::task::Poll;
 
 use auto_clicker_core::controller::{LayoutSignal, LayoutWatch};
 use auto_clicker_core::recording::Layout;
@@ -188,19 +190,38 @@ async fn watch(
 ) {
     loop {
         if let Some(running) = link.take() {
-            tokio::select! {
-                biased;
-                () = again.fired() => {}
-                ended = read(&shared, running, &changed) => {
-                    shared.end(ended, &changed);
-                    again.fired().await;
-                }
+            if let Some(ended) = read_until_restart(&shared, running, &changed, &again).await {
+                shared.end(ended, &changed);
+                again.fired().await;
             }
         } else {
             again.fired().await;
         }
         link = shared.connect_again(&changed, &again).await;
     }
+}
+
+/// Reads `link` until it fails, and why; `None` once `again` fires first.
+/// `again` is polled first, every time, and not through `select!`, which
+/// returns at once when the task's budget is spent: a new KWin is heard,
+/// and the layout made unknown, in the poll that told of it, whatever was
+/// read before (`Notify` spends no budget). Both waits end with it: a wait
+/// for `again` left behind would take the next fire.
+async fn read_until_restart(
+    shared: &Shared,
+    link: Link,
+    changed: &LayoutSignal,
+    again: &LayoutSignal,
+) -> Option<Missing> {
+    let mut restart = pin!(again.fired());
+    let mut reading = pin!(read(shared, link, changed));
+    poll_fn(|cx| {
+        if restart.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(None);
+        }
+        reading.as_mut().poll(cx).map(Some)
+    })
+    .await
 }
 
 /// Reads `link` until it fails; why it did.
