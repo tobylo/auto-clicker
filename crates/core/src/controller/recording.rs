@@ -150,7 +150,10 @@ impl<P: Platform> Controller<P> {
     /// without them, it keeps its reason to its end, since it takes no
     /// positions even once they are known; begun with them, it takes
     /// positions while something reports the pointer, whatever the display
-    /// says meanwhile (the pointer's source reports its own layout).
+    /// says meanwhile. KWin reports its own layout, so its positions go on;
+    /// Hyprland's are judged by the display's, so while the display has
+    /// none a Hyprland recording keeps movement only, unsaid, as a
+    /// recording on either desktop does once its screens changed.
     pub(super) fn no_positions(&self) -> Option<NoPositions> {
         if self.no_recording().is_some() {
             return None;

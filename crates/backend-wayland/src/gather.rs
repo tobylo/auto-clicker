@@ -162,6 +162,11 @@ impl Gather {
         self.changed = true;
     }
 
+    /// Whether something was heard that no round trip has settled yet.
+    pub(crate) fn unsettled(&self) -> bool {
+        self.changed
+    }
+
     /// Whether to ask for a round trip now: something was heard and none
     /// is on its way.
     pub(crate) fn wants_sync(&mut self) -> bool {

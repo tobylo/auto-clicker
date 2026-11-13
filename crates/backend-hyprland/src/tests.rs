@@ -57,6 +57,23 @@ fn clock() -> Duration {
     Duration::ZERO
 }
 
+#[tokio::test]
+async fn the_daemons_asks_go_only_to_the_process_found_at_start() {
+    let runtime = Runtime::new("socket");
+    runtime.answering(b"640, 400");
+    let path = runtime.0.join("hypr").join(SIGNATURE).join(".socket.sock");
+    let found = Socket {
+        path: path.clone(),
+        pid: std::process::id(),
+    };
+    assert!(found.ask().await.is_ok());
+    let other = Socket {
+        path,
+        pid: std::process::id().wrapping_add(1),
+    };
+    assert_eq!(other.ask().await, Err(ask::Failure::OtherProcess));
+}
+
 async fn find(signature: Option<&str>, runtime: &Runtime, listener: Option<NonZeroU32>) -> Found {
     let signature = signature.map(OsString::from);
     Hyprland::find_at(signature, runtime.os(), listener, clock)

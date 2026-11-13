@@ -73,6 +73,20 @@ async fn an_answer_in_another_form_or_too_long_is_unreadable() {
 }
 
 #[tokio::test]
+async fn an_answer_that_never_ends_is_read_only_to_the_limit() {
+    let dir = TempDir::new("endless");
+    let listener = UnixListener::bind(dir.socket()).unwrap();
+    let _served = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        while stream.write_all(&[b'1'; 16]).await.is_ok() {}
+    });
+    // Unreadable as soon as the limit is passed, well before the deadline
+    // ends an ask that reads on.
+    let asked = timeout(DEADLINE / 2, ask(&dir.socket(), ours)).await;
+    assert_eq!(asked, Ok(Err(Failure::Unreadable)));
+}
+
+#[tokio::test]
 async fn a_socket_of_another_process_is_asked_nothing() {
     let dir = TempDir::new("other");
     let listener = UnixListener::bind(dir.socket()).unwrap();

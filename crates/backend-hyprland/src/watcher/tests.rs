@@ -50,33 +50,41 @@ fn screens(width: u32) -> Layout {
     Layout::new(vec![Output::new(rect, 1000).unwrap()]).unwrap()
 }
 
-/// The display's layout, which a test changes.
+/// The display's layout, which a test changes, and its change count.
 #[derive(Clone)]
-struct FakeScreens(Rc<RefCell<Snapshot>>);
+struct FakeScreens(Rc<RefCell<(Snapshot, u64)>>);
 
 impl FakeScreens {
     fn new(corner: Corner) -> FakeScreens {
-        FakeScreens(Rc::new(RefCell::new(Snapshot {
+        let now = Snapshot {
             layout: Ok(screens(1920)),
             corner,
-            changes: 0,
-        })))
+            changes: Some(0),
+        };
+        FakeScreens(Rc::new(RefCell::new((now, 0))))
     }
 
+    /// A layout settles: the count moves.
     fn change(&self, layout: Result<Layout, NoScreens>) {
-        let mut now = self.0.borrow_mut();
+        let (now, count) = &mut *self.0.borrow_mut();
+        *count += 1;
         now.layout = layout;
-        now.changes += 1;
+        now.changes = Some(*count);
+    }
+
+    /// The display tells of a change no layout settled yet.
+    fn hear(&self) {
+        self.0.borrow_mut().0.changes = None;
     }
 }
 
 impl Screens for FakeScreens {
     fn snapshot(&self) -> Snapshot {
-        self.0.borrow().clone()
+        self.0.borrow().0.clone()
     }
 
-    fn changes(&self) -> u64 {
-        self.0.borrow().changes
+    fn changes(&self) -> Option<u64> {
+        self.0.borrow().0.changes
     }
 }
 
@@ -281,6 +289,25 @@ async fn asks_follow_motion_once_per_ms_once_at_the_start_and_after_the_last_hel
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_move_rung_just_before_a_stop_asks_nothing_after_it() {
+    run(async |local| {
+        let h = Harness::new(local, Corner::default());
+        h.record().await;
+        advance(ms(5)).await;
+        settle().await;
+        assert_eq!(h.asker.asked().len(), 1);
+        // The watcher hears the stop first, then the move left over.
+        h.feed.motion_read(clock(), 1, 0);
+        drop(h.slot.take());
+        settle().await;
+        advance(ms(5)).await;
+        settle().await;
+        assert_eq!(h.asker.asked().len(), 1, "asked after the stop");
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_move_during_an_ask_is_asked_for_once_it_is_answered() {
     run(async |local| {
         let h = Harness::new(local, Corner::default());
@@ -348,6 +375,29 @@ async fn an_answer_the_layout_changes_under_is_dropped() {
         advance(ms(30)).await;
         settle().await;
         assert_eq!(h.stop().await, []);
+
+        // Held past its hold while a change was heard and not yet settled,
+        // as when the daemon was busy: the display reads the change in the
+        // same poll in which the hold ends.
+        let h = Harness::new(local, Corner::default());
+        h.record().await;
+        advance(ms(9)).await;
+        h.screens.hear();
+        advance(ms(20)).await;
+        settle().await;
+        assert_eq!(h.stop().await, [], "fed while a change was unsettled");
+
+        // Asked while a change was unsettled, answered once it settled
+        // back on the same screens.
+        let h = Harness::new(local, Corner::default());
+        h.screens.hear();
+        h.asker.then(Reply::After(ms(3), Ok(HERE)));
+        h.record().await;
+        advance(ms(1)).await;
+        h.screens.change(Ok(screens(1920)));
+        advance(ms(30)).await;
+        settle().await;
+        assert_eq!(h.stop().await, [], "asked while a change was unsettled");
     })
     .await;
 }
@@ -367,6 +417,12 @@ async fn an_answer_on_an_unknown_layout_or_outside_its_box_is_dropped() {
         advance(ms(20)).await;
         settle().await;
         assert_eq!(h.stop().await, [], "above the box");
+
+        let h = Harness::new(local, Corner { x: 200, y: 0 });
+        h.record().await;
+        advance(ms(20)).await;
+        settle().await;
+        assert_eq!(h.stop().await, [], "left of the box");
     })
     .await;
 }

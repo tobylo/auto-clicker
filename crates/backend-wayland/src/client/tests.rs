@@ -729,6 +729,35 @@ async fn a_move_undone_before_the_answer_still_fires() {
 }
 
 #[tokio::test]
+async fn a_change_heard_is_unsettled_until_its_layout_is_published() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let (link, mut fake) = Fake::pair();
+            let watched = watched(&local, &mut fake, link).await;
+            settle().await;
+            let before = watched.wayland.changes();
+            assert!(before.is_some());
+            let away = Place { y: 1440, ..LEFT };
+            timeout(BOUND, async {
+                fake.screen(A, away).await;
+                let callback = fake.until_sync().await;
+                settle().await;
+                assert_eq!(watched.wayland.changes(), None, "heard, yet settled");
+                assert_eq!(watched.wayland.snapshot().changes, None);
+                fake.answer(callback).await;
+                fired(&watched).await;
+            })
+            .await
+            .unwrap();
+            let after = watched.wayland.changes();
+            assert_eq!(after, before.map(|count| count + 1));
+            assert_eq!(watched.wayland.snapshot().changes, after);
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn an_update_that_moves_nothing_fires_nothing() {
     let local = LocalSet::new();
     local
@@ -908,10 +937,10 @@ fn a_new_reason_fires_while_the_layout_stays_unknown() {
     };
     wayland.0.end(NoScreens::Lost, &changed);
     assert!(!fired(&changed), "the same reason fired");
-    assert_eq!(wayland.changes(), 0);
+    assert_eq!(wayland.changes(), Some(0));
     wayland.0.end(NoScreens::CannotConnect, &changed);
     assert!(fired(&changed), "a new reason did not fire");
-    assert_eq!(wayland.changes(), 1, "each fire counts as a change");
+    assert_eq!(wayland.changes(), Some(1), "each fire counts as a change");
     assert_eq!(wayland.layout(), Err(NoScreens::CannotConnect));
     // A connection that gives no whole layout is a reason of its own.
     let half = Settled::default();
@@ -929,7 +958,7 @@ fn a_new_reason_fires_while_the_layout_stays_unknown() {
     let expected = Snapshot {
         layout: Ok(layout(&[LEFT]).unwrap()),
         corner,
-        changes: 3,
+        changes: Some(3),
     };
     assert_eq!(wayland.snapshot(), expected);
 }

@@ -85,14 +85,13 @@ async fn exchange(
         .map_err(|_| Failure::NoAnswer)?;
     let mut answer = Vec::with_capacity(LIMIT);
     let limit = u64::try_from(LIMIT).unwrap_or(u64::MAX);
+    // One byte past the limit is enough to tell an answer too long: no
+    // answer that long parses.
     (&mut stream)
         .take(limit.saturating_add(1))
         .read_to_end(&mut answer)
         .await
         .map_err(|_| Failure::NoAnswer)?;
-    if answer.len() > LIMIT {
-        return Err(Failure::Unreadable);
-    }
     parse(&answer).ok_or(Failure::Unreadable)
 }
 

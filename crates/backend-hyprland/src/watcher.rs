@@ -17,7 +17,9 @@
 //!   and otherwise held [`HOLD`] before it is fed, and dropped when the
 //!   layout changes meanwhile: Hyprland's answer on new screens can come
 //!   up to 3.12 ms before the display says the screens changed (decision
-//!   0004). It is fed with the layout it was asked on, moved by that
+//!   0004). From the moment the display tells of a change until a layout
+//!   settles it, the layout counts as changed: an ask sent then, and an
+//!   answer held then, are dropped, however long the daemon was busy. It is fed with the layout it was asked on, moved by that
 //!   layout's corner.
 //! - **The reason.** An ask that fails sets why, and one answered clears
 //!   it; a recording's stop clears what its own asks set (W01 brief,
@@ -51,7 +53,7 @@ pub(crate) const HOLD: Duration = Duration::from_millis(10);
 /// [`Wayland`]: auto_clicker_backend_wayland::Wayland
 pub(crate) trait Screens {
     fn snapshot(&self) -> Snapshot;
-    fn changes(&self) -> u64;
+    fn changes(&self) -> Option<u64>;
 }
 
 impl Screens for auto_clicker_backend_wayland::Wayland {
@@ -59,7 +61,7 @@ impl Screens for auto_clicker_backend_wayland::Wayland {
         auto_clicker_backend_wayland::Wayland::snapshot(self)
     }
 
-    fn changes(&self) -> u64 {
+    fn changes(&self) -> Option<u64> {
         auto_clicker_backend_wayland::Wayland::changes(self)
     }
 }
@@ -189,9 +191,10 @@ impl<S: Screens, A: Asker> Watcher<S, A> {
 
     /// `global`, answered at `stamp` to an ask sent on `asked`, as a
     /// position on that layout; `None` when the layout changed since, was
-    /// unknown, or the point lies outside its box.
+    /// unknown or unsettled, or the point lies outside its box.
     fn place(&self, global: Global, asked: Snapshot, stamp: Duration) -> Option<Held> {
-        if self.screens.changes() != asked.changes {
+        let changes = asked.changes?;
+        if self.screens.changes() != Some(changes) {
             return None;
         }
         let layout = asked.layout.ok()?;
@@ -206,7 +209,7 @@ impl<S: Screens, A: Asker> Watcher<S, A> {
             stamp,
             point,
             layout,
-            changes: asked.changes,
+            changes,
         })
     }
 
@@ -214,7 +217,7 @@ impl<S: Screens, A: Asker> Watcher<S, A> {
         let Some(held) = round.held.pop_front() else {
             return;
         };
-        if self.screens.changes() == held.changes {
+        if self.screens.changes() == Some(held.changes) {
             self.feed.with(|recorder| {
                 let on = Some(&held.layout);
                 recorder.position(

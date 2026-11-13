@@ -54,6 +54,9 @@ struct Shared {
     /// How many times the layout changed, became unknown or is unknown for
     /// another reason: each time the controller's signal fires.
     changes: Cell<u64>,
+    /// A change was heard that no layout has settled yet: the screens may
+    /// differ from the layout already (brief W4).
+    unsettled: Cell<bool>,
     compositor: Option<NonZeroU32>,
     /// The display's socket, as found at start: where a connection is made
     /// again. `None` without a display.
@@ -117,6 +120,7 @@ impl Wayland {
             layout: RefCell::new(layout),
             corner: Cell::new(first.corner),
             changes: Cell::new(0),
+            unsettled: Cell::new(false),
             compositor,
             path,
             link: RefCell::new(link),
@@ -131,8 +135,9 @@ impl Wayland {
     }
 
     /// The current layout, where it was moved from, and how many times it
-    /// changed since the start: one value, so a position is never moved by
-    /// one layout's corner and judged by another's (brief W4).
+    /// changed since the start ([`Wayland::changes`]): one value, so a
+    /// position is never moved by one layout's corner and judged by
+    /// another's (brief W4).
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             layout: self.layout(),
@@ -142,10 +147,12 @@ impl Wayland {
     }
 
     /// How many times the layout changed, became unknown or is unknown for
-    /// another reason since the start; the same count [`Wayland::snapshot`]
-    /// gives.
-    pub fn changes(&self) -> u64 {
-        self.0.changes.get()
+    /// another reason since the start, each time the controller's signal
+    /// fires; `None` from the moment the display tells of a change until a
+    /// layout settles it, since the screens may differ from the layout
+    /// then. The same count [`Wayland::snapshot`] gives.
+    pub fn changes(&self) -> Option<u64> {
+        (!self.0.unsettled.get()).then(|| self.0.changes.get())
     }
 
     /// The process listening on the display's socket; `None` without a
@@ -177,8 +184,9 @@ pub struct Snapshot {
     pub layout: Result<Layout, NoScreens>,
     /// Where the layout was moved from; meaningless while it is unknown.
     pub corner: Corner,
-    /// The change count at that moment ([`Wayland::changes`]).
-    pub changes: u64,
+    /// The change count at that moment, `None` while a change is unsettled
+    /// ([`Wayland::changes`]).
+    pub changes: Option<u64>,
 }
 
 fn too_late() -> NoScreens {
@@ -242,8 +250,9 @@ async fn read_until_restart(
 /// Reads `link` until it fails; why it did.
 async fn read(shared: &Shared, mut link: Link, changed: &LayoutSignal) -> NoScreens {
     loop {
-        if let Err(missing) = link.dispatch() {
-            return missing;
+        match link.dispatch() {
+            Ok(heard) => shared.unsettled.set(shared.unsettled.get() || heard),
+            Err(missing) => return missing,
         }
         if let Some(settled) = link.client.settled.take() {
             shared.publish(settled, changed);
@@ -317,8 +326,9 @@ impl Shared {
     /// screen came, went, moved or changed size since the last (`moved`),
     /// the layout became known or unknown, or it is unknown for another
     /// reason. A new scale alone is kept, untold: stored, never compared
-    /// (R03 decision 6).
+    /// (R03 decision 6). Whatever was heard is settled now.
     fn set(&self, layout: Result<Layout, NoScreens>, moved: bool, changed: &LayoutSignal) {
+        self.unsettled.set(false);
         let was = self.layout.replace(layout);
         let told = match (&was, &*self.layout.borrow()) {
             (Ok(_), Ok(_)) => moved,

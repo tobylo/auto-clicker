@@ -329,18 +329,19 @@ impl Link {
     }
 
     /// Handles what has arrived, and asks for the round trip [`Gather`]
-    /// wants.
-    pub(crate) fn dispatch(&mut self) -> Result<(), NoScreens> {
+    /// wants; whether a change was heard that no layout settled yet.
+    pub(crate) fn dispatch(&mut self) -> Result<bool, NoScreens> {
         self.queue
             .dispatch_pending(&mut self.client)
             .map_err(dispatch_error)?;
         self.client.read_layout();
+        let heard = self.client.gather.unsettled();
         if self.client.gather.wants_sync() {
             self.connection
                 .display()
                 .sync(&self.queue.handle(), Mark::Layout);
         }
-        Ok(())
+        Ok(heard)
     }
 
     /// Sends what is queued, then waits until something arrives and reads
