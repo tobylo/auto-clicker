@@ -879,6 +879,47 @@ async fn a_stop_ends_a_position_load_still_in_flight() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_load_a_new_kwin_does_not_answer_is_tried_again_while_it_records() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        h.record().await;
+        h.calls();
+        // A KWin that just restarted does not answer yet: the load's first
+        // call fails.
+        h.kwin.with(|s| s.failing_unloads = 1);
+        h.new_owner(Some(":1.9")).await;
+        assert_eq!(h.calls(), [Unload(POSITION)]);
+        after(BACK_OFF[0] - Duration::from_millis(1)).await;
+        assert_eq!(h.calls(), []);
+        after(Duration::from_millis(1)).await;
+        assert_eq!(h.calls(), LOAD_POSITION);
+        h.moved(&h.newest_token(POSITION), 700);
+        settle().await;
+        let xs: Vec<u32> = h.stop().await.iter().map(|point| point.x).collect();
+        assert_eq!(xs.last(), Some(&700), "no positions after the restart");
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_load_is_not_tried_again_once_its_recording_stops() {
+    local(async {
+        let (h, inbox) = Harness::new(true, &[]);
+        h.start(inbox).await;
+        h.calls();
+        h.kwin.with(|s| s.failing_unloads = 1);
+        h.record().await;
+        assert_eq!(h.calls(), [Unload(POSITION)]);
+        h.stop().await;
+        assert_eq!(h.calls(), [Unload(POSITION)]);
+        after(HOUR).await;
+        assert_eq!(h.calls(), [], "loaded with no recording");
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_position_unload_that_fails_once_is_tried_again_after_its_back_off() {
     local(async {
         let (h, inbox) = Harness::new(true, &[]);

@@ -11,10 +11,11 @@
 //! holds up the reports behind it: they reach the recorder within the 20 ms
 //! it waits for late ones.
 //!
-//! Its one timer is the back-off after a failed unload, which tries it
-//! again a few times while the daemon is idle ([`BACK_OFF`]). It exists only
-//! while an unload waits to be tried again: with nothing failed, and once
-//! the tries are spent, the watcher sets none.
+//! Its one timer is the back-off after a failed call, which tries it again
+//! a few times ([`BACK_OFF`]): an unload while the daemon is idle, a load
+//! while its recording runs (a KWin that just restarted does not answer
+//! for a moment). It exists only while a call waits to be tried again: with
+//! nothing failed, and once the tries are spent, the watcher sets none.
 //!
 //! Every load gets a new token, made current before the load is sent (the
 //! script reports as soon as it runs, before KWin answers), and a report
@@ -46,10 +47,11 @@ use crate::scripting::{CallError, Owners, Scripting, bounded};
 use crate::session::{Session, log_failure};
 use crate::token::Token;
 
-/// How long the watcher waits before each try again of a failed unload,
-/// counted from the failure before it. A failure after the last is logged,
-/// and the unload waits for another call to KWin to succeed, a new owner of
-/// KWin, the next recording or the exit.
+/// How long the watcher waits before each try again of a failed unload or
+/// load, counted from the failure before it. A failure after the last is
+/// logged; an unload then waits for another call to KWin to succeed, a new
+/// owner of KWin, the next recording or the exit, and a load for a new
+/// owner or the next recording.
 pub(crate) const BACK_OFF: [Duration; 3] = [
     Duration::from_secs(2),
     Duration::from_secs(4),
@@ -91,6 +93,16 @@ enum Next {
     Unload,
     /// Unload once the back-off ends: the last unload failed.
     UnloadAfterBackOff,
+    /// Load once the back-off ends: the last load failed while its
+    /// recording runs, as when a KWin just restarted does not answer yet.
+    LoadAfterBackOff,
+}
+
+impl Next {
+    /// A call waits for the back-off.
+    fn waits(self) -> bool {
+        matches!(self, Next::UnloadAfterBackOff | Next::LoadAfterBackOff)
+    }
 }
 
 pub(crate) struct Watcher<S> {
@@ -346,6 +358,12 @@ impl<S: Scripting + 'static> Watcher<S> {
             Done::Loaded(Err(err)) => {
                 log_failure("load", Script::Position, &err);
                 self.position_token = None;
+                // Its recording runs: a stop drops a load in flight. A
+                // script directory that failed its check stays failed.
+                let retried = self.session.dir.is_ok() && self.back_off();
+                if retried {
+                    self.position = Next::LoadAfterBackOff;
+                }
                 self.publish_trust();
             }
             Done::Unloaded(Ok(())) => {
@@ -395,15 +413,17 @@ impl<S: Scripting + 'static> Watcher<S> {
     /// The back-off ended: the unload that waited for it is due now.
     fn backed_off(&mut self) {
         self.retry_at = None;
-        if self.position == Next::UnloadAfterBackOff {
-            self.position = Next::Unload;
-        }
+        self.position = match self.position {
+            Next::UnloadAfterBackOff => Next::Unload,
+            Next::LoadAfterBackOff => Next::Load,
+            next => next,
+        };
     }
 
     /// Ends the back-off once nothing waits for it: a new owner or a
-    /// recording replaced the unload.
+    /// recording's start or stop replaced the call.
     fn drop_unneeded_back_off(&mut self) {
-        if self.position != Next::UnloadAfterBackOff {
+        if !self.position.waits() {
             self.retry_at = None;
         }
     }
@@ -444,7 +464,7 @@ impl<S: Scripting + 'static> Watcher<S> {
                         Done::Unloaded(session.unload(&owner, Script::Position).await)
                     })
                 }
-                Next::Nothing | Next::UnloadAfterBackOff => return,
+                Next::Nothing | Next::UnloadAfterBackOff | Next::LoadAfterBackOff => return,
             }
         };
         self.job = Some(job);
