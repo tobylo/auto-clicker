@@ -208,10 +208,9 @@ fn swedish_problems_read_as_written() {
 
 #[test]
 fn every_reason_recordings_keep_movement_only_reads_as_written() {
-    use auto_clicker_core::message::{NoPointer, NoPositions, NoScreens};
+    use auto_clicker_core::message::{NoPositions, NoScreens};
 
     let screens = |why| Problem::NoPositions(NoPositions::Screens(why));
-    let pointer = |why| Problem::NoPositions(NoPositions::Pointer(why));
     let rows = [
         (
             screens(NoScreens::NoDisplay),
@@ -243,6 +242,23 @@ fn every_reason_recordings_keep_movement_only_reads_as_written() {
             "the desktop has not described every screen",
             "skrivbordet har inte beskrivit alla skärmar",
         ),
+    ];
+    for (problem, english, swedish) in rows {
+        let english = format!("Recordings keep movement only: {english}");
+        let swedish = format!("Inspelningar sparar bara rörelser: {swedish}");
+        assert_eq!(
+            (problem.to_string(), problem::swedish(&problem)),
+            (english, swedish)
+        );
+    }
+}
+
+#[test]
+fn every_reason_nothing_reports_the_pointer_reads_as_written() {
+    use auto_clicker_core::message::{NoPointer, NoPositions};
+
+    let pointer = |why| Problem::NoPositions(NoPositions::Pointer(why));
+    let rows = [
         (
             pointer(NoPointer::NoSource),
             "nothing on this desktop reports where the pointer is",
@@ -252,6 +268,21 @@ fn every_reason_recordings_keep_movement_only_reads_as_written() {
             pointer(NoPointer::Unusable),
             "KWin's pointer script cannot be used; see the log",
             "KWins pekarskript kan inte användas; se loggen",
+        ),
+        (
+            pointer(NoPointer::HyprlandNoAnswer),
+            "Hyprland's socket did not answer",
+            "Hyprlands socket svarade inte",
+        ),
+        (
+            pointer(NoPointer::HyprlandUnreadable),
+            "Hyprland answered in a form this program does not read",
+            "Hyprland svarade i en form som programmet inte kan läsa",
+        ),
+        (
+            pointer(NoPointer::HyprlandOtherDisplay),
+            "Hyprland's socket belongs to another display",
+            "Hyprlands socket hör till en annan Wayland-display",
         ),
     ];
     for (problem, english, swedish) in rows {

@@ -11,12 +11,19 @@
 //! the devices a recording reads (mice) only while one runs, and reads what
 //! every device holds when one starts.
 //!
+//! The reader also rings a motion notice after each move it feeds a running
+//! recording ([`RecordingFeed::motion_read`]), which a position source that must
+//! ask for the pointer waits on ([`RecordingFeed::motion`]): it asks on
+//! motion, with no timer (W01 brief, W7). Moves between two waits count as
+//! one.
+//!
 //! A recorder that fills up ([`Recorder::is_full`]) takes nothing more; the
 //! feed that filled it wakes the controller ([`RecordingSlot::filled`]),
 //! which stops and saves the recording, as at its time limit.
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use tokio::sync::{Notify, watch};
 
@@ -29,6 +36,7 @@ pub struct RecordingSlot {
     recorder: Shared,
     changes: watch::Sender<u64>,
     full: Rc<Notify>,
+    moved: Rc<Notify>,
 }
 
 /// The input reader's side: what it feeds while a recording runs.
@@ -37,6 +45,7 @@ pub struct RecordingFeed {
     recorder: Shared,
     changes: watch::Receiver<u64>,
     full: Rc<Notify>,
+    moved: Rc<Notify>,
 }
 
 impl Default for RecordingSlot {
@@ -52,6 +61,7 @@ impl RecordingSlot {
             recorder: Rc::default(),
             changes: watch::Sender::new(0),
             full: Rc::default(),
+            moved: Rc::default(),
         }
     }
 
@@ -61,6 +71,7 @@ impl RecordingSlot {
             recorder: Rc::clone(&self.recorder),
             changes: self.changes.subscribe(),
             full: Rc::clone(&self.full),
+            moved: Rc::clone(&self.moved),
         }
     }
 
@@ -116,6 +127,27 @@ impl RecordingFeed {
         }
     }
 
+    /// Hands relative motion at `time` to the recorder, if a recording
+    /// runs, and rings the motion notice when it moved the pointer.
+    pub fn motion_read(&self, time: Duration, dx: i32, dy: i32) {
+        let mut fed = false;
+        self.with(|recorder| {
+            recorder.motion(time, dx, dy);
+            fed = true;
+        });
+        let moved = dx != 0 || dy != 0;
+        if fed && moved {
+            self.moved.notify_one();
+        }
+    }
+
+    /// Waits until the pointer moved while a recording ran, since this was
+    /// last called. A move rung before a recording stopped can still wake
+    /// it once after: check [`RecordingFeed::recording`].
+    pub async fn motion(&self) {
+        self.moved.notified().await;
+    }
+
     /// Waits until a recording started or stopped since this was last
     /// called (or since the feed was made). Never resolves once the slot is
     /// gone.
@@ -134,6 +166,7 @@ mod tests {
 
     use super::*;
     use crate::hotkeys::Bindings;
+    use crate::recording::Ending;
     use crate::recording::tests::created;
 
     fn recorder() -> Recorder {
@@ -181,6 +214,35 @@ mod tests {
         assert!(slot.is_full());
         drop(slot.take());
         assert!(!slot.is_full());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn motion_rings_only_while_recording_and_moves_count_as_one() {
+        let slot = RecordingSlot::new();
+        let feed = slot.feed();
+        let source = slot.feed();
+        let at = Duration::from_millis(1);
+        feed.motion_read(at, 1, 0);
+        let idle = timeout(Duration::from_secs(1), source.motion()).await;
+        assert!(idle.is_err(), "rang while idle");
+        slot.start(recorder());
+        feed.motion_read(at, 0, 0);
+        let still = timeout(Duration::from_secs(1), source.motion()).await;
+        assert!(still.is_err(), "rang for a move by nothing");
+        feed.motion_read(at, 1, 0);
+        feed.motion_read(at, 0, -1);
+        timeout(Duration::from_secs(1), source.motion())
+            .await
+            .unwrap();
+        let again = timeout(Duration::from_secs(1), source.motion()).await;
+        assert!(again.is_err(), "two moves woke it twice");
+        let recording = slot.take().unwrap();
+        assert!(
+            recording
+                .finish(Ending::At(Duration::from_millis(5)))
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test(start_paused = true)]

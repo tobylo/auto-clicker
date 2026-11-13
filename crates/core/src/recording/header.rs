@@ -2,7 +2,7 @@
 //! it without reading the whole file.
 //!
 //! Only the header this program writes is read: the file starts with
-//! `{"version":1,"name":` (or version 2), then the name as a JSON string,
+//! `{"version":1,"name":` (or version 2 or 3), then the name as a JSON string,
 //! which must pass the same check a whole recording's name does. Anything
 //! else has no name to show; a load still reads the whole file as before.
 
@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::Read;
 
 use super::library::{FileName, open_in};
-use super::{VERSION, VERSION_POSITIONS, check_name};
+use super::{VERSION, VERSION_HYPRLAND, VERSION_POSITIONS, check_name};
 
 /// How much of a file is read for its name. The name is at most 200
 /// characters; written as `\u` escapes of surrogate pairs, the longest
@@ -32,7 +32,7 @@ pub(super) fn name(folder: &File, file: &FileName) -> Option<String> {
 
 /// The name in `start`, the first bytes of a recording file.
 fn parse(start: &[u8]) -> Option<String> {
-    let rest = [VERSION, VERSION_POSITIONS]
+    let rest = [VERSION, VERSION_POSITIONS, VERSION_HYPRLAND]
         .into_iter()
         .find_map(|version| {
             let prefix = format!("{{\"version\":{version},\"name\":");
@@ -69,6 +69,7 @@ mod tests {
                 r#"{"version":2,"name":"Farm \"loop\"","#,
                 Some("Farm \"loop\""),
             ),
+            (r#"{"version":3,"name":"Farm","#, Some("Farm")),
             (r#"{"version":1,"name":"åker","#, Some("åker")),
             // A name cut short has none; what follows a whole one is never
             // read.
@@ -76,7 +77,7 @@ mod tests {
             (r#"{"version":1,"name":"Farm",]]"#, Some("Farm")),
             // Another layout, version or spelling has no name to show.
             (r#"{"name":"Farm","version":1,"#, None),
-            (r#"{"version":3,"name":"Farm","#, None),
+            (r#"{"version":4,"name":"Farm","#, None),
             (r#"{ "version":1,"name":"Farm","#, None),
             (r#"{"version":1,"name":7,"#, None),
             // A name a recording may not have.

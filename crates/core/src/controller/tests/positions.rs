@@ -6,12 +6,12 @@ use std::fs;
 use super::*;
 use crate::input::AbsolutePosition;
 use crate::playback::Fallback;
-use crate::recording::Track;
 use crate::recording::tests::positions::screen;
 use crate::recording::tests::positions::{at, two_screens};
 use crate::recording::{
     Change, Created, Event, FileName, Layout, Point, Recording, recordable, save,
 };
+use crate::recording::{PointerSource, Taken, Track};
 
 const W: u16 = 17;
 const HELD_FOR: Duration = Duration::from_millis(500);
@@ -74,6 +74,7 @@ fn store_with(shared: &Shared, with_positions: bool, extra: &[Event]) -> FileNam
             1_000_000,
             Track {
                 layout: two_screens(),
+                source: PointerSource::Kwin,
                 events,
             },
         )
@@ -370,8 +371,16 @@ async fn a_recording_gets_the_layout_current_at_its_start() {
         sleep(ms(10)).await;
         let now = d.shared.clock();
         let layout = two_screens();
-        d.shared
-            .feed(|recorder| recorder.position(now, Point { x: 5, y: 6 }, Some(&layout)));
+        d.shared.feed(|recorder| {
+            recorder.position(
+                now,
+                Point { x: 5, y: 6 },
+                Taken {
+                    by: PointerSource::Kwin,
+                    on: Some(&layout),
+                },
+            )
+        });
         sleep(ms(10)).await;
         d.key(super::recording::KEYBOARD, W, true);
         d.key(super::recording::KEYBOARD, W, false);

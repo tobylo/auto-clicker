@@ -429,6 +429,15 @@ msgstr "inget på det här skrivbordet rapporterar var pekaren är"
 msgid "KWin's pointer script cannot be used; see the log"
 msgstr "KWins pekarskript kan inte användas; se loggen"
 
+msgid "Hyprland's socket did not answer"
+msgstr "Hyprlands socket svarade inte"
+
+msgid "Hyprland answered in a form this program does not read"
+msgstr "Hyprland svarade i en form som programmet inte kan läsa"
+
+msgid "Hyprland's socket belongs to another display"
+msgstr "Hyprlands socket hör till en annan Wayland-display"
+
 msgid "the screens changed while the point was picked: pick it again"
 msgstr "skärmarna ändrades medan punkten valdes: välj den igen"
 

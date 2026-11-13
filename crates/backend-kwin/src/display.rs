@@ -22,6 +22,9 @@ use std::task::{Context, Poll};
 
 use futures_util::Stream;
 
+use auto_clicker_backend_wayland::process::listener_or_child;
+pub(crate) use auto_clicker_backend_wayland::process::{Parent, parent_of};
+
 use crate::scripting::{Owners, Scripting, bounded};
 use crate::session::Session;
 use crate::watcher::BACK_OFF;
@@ -31,16 +34,6 @@ use crate::watcher::BACK_OFF;
 pub(crate) struct Process {
     pub(crate) pid: u32,
     pub(crate) parent: Parent,
-}
-
-/// A process's parent, as `/proc` tells it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Parent {
-    Of(u32),
-    /// The process is gone: it runs no display.
-    Gone,
-    /// Its status could not be read or parsed: not told.
-    Unknown,
 }
 
 /// `owner` when its KWin counts, else `None`.
@@ -175,13 +168,7 @@ async fn on_display<S: Scripting>(scripting: &S, owner: &str, compositor: NonZer
 /// `None` when it cannot be told: the process is not the listener and its
 /// parent is unknown.
 fn counts(process: Process, compositor: NonZeroU32) -> Option<bool> {
-    let compositor = compositor.get();
-    let ours = process.pid == compositor
-        || match process.parent {
-            Parent::Of(parent) => parent == compositor,
-            Parent::Gone => false,
-            Parent::Unknown => return None,
-        };
+    let ours = listener_or_child(process.pid, process.parent, compositor)?;
     if !ours {
         eprintln!(
             "auto-clicker: KWin runs another display than this daemon's, so its layout and \
@@ -189,20 +176,6 @@ fn counts(process: Process, compositor: NonZeroU32) -> Option<bool> {
         );
     }
     Some(ours)
-}
-
-/// The parent of process `pid`, from `/proc/<pid>/status`.
-pub(crate) fn parent_of(pid: u32) -> Parent {
-    match std::fs::read_to_string(format!("/proc/{pid}/status")) {
-        Ok(status) => parse_parent(&status).map_or(Parent::Unknown, Parent::Of),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Parent::Gone,
-        Err(_) => Parent::Unknown,
-    }
-}
-
-fn parse_parent(status: &str) -> Option<u32> {
-    let line = status.lines().find_map(|line| line.strip_prefix("PPid:"))?;
-    line.trim().parse().ok()
 }
 
 #[cfg(test)]
@@ -286,19 +259,5 @@ mod tests {
                 "{process:?}"
             );
         }
-    }
-
-    #[test]
-    fn the_parent_is_read_from_the_status_file() {
-        let status = "Name:\tkwin_wayland\nState:\tS (sleeping)\nPid:\t1491\nPPid:\t1487\n";
-        assert_eq!(parse_parent(status), Some(1487));
-        assert_eq!(parse_parent("Name:\tx\nPPid:\tx\n"), None);
-        assert_eq!(parse_parent("Name:\tx\n"), None);
-        assert_eq!(
-            parent_of(std::process::id()),
-            Parent::Of(std::os::unix::process::parent_id())
-        );
-        // Past the kernel's largest pid: no such process.
-        assert_eq!(parent_of(u32::MAX), Parent::Gone);
     }
 }

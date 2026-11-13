@@ -70,7 +70,13 @@ async fn each_reason_reaches_the_view_as_its_reason() {
             let d = daemon_lacking(None, Some(why), Some(NoPointer::NoSource)).await;
             assert_eq!(d.no_positions(), [NoPositions::Screens(why)]);
         }
-        for why in [NoPointer::NoSource, NoPointer::Unusable] {
+        for why in [
+            NoPointer::NoSource,
+            NoPointer::Unusable,
+            NoPointer::HyprlandNoAnswer,
+            NoPointer::HyprlandUnreadable,
+            NoPointer::HyprlandOtherDisplay,
+        ] {
             let d = daemon_lacking(Some(two_screens()), None, Some(why)).await;
             assert_eq!(d.no_positions(), [NoPositions::Pointer(why)]);
             assert_eq!(

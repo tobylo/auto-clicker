@@ -84,11 +84,22 @@ impl Screen {
     }
 }
 
+/// Where the layout's (0, 0) lies in the compositor's own coordinates: the
+/// corner of the outputs' bounding box, by which the layout was moved
+/// (brief W3). A global position less it is a position on the layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Corner {
+    pub x: i64,
+    pub y: i64,
+}
+
 /// What a round trip settled on.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Settled {
     /// The layout; `None` when it is not whole or not valid: unknown.
     pub(crate) layout: Option<Layout>,
+    /// Where the layout was moved from; (0, 0) without one.
+    pub(crate) corner: Corner,
     /// An output came, went, moved or changed size since the last one, even
     /// if it is back where it was: every such change refuses a pick begun
     /// before it.
@@ -151,6 +162,11 @@ impl Gather {
         self.changed = true;
     }
 
+    /// Whether something was heard that no round trip has settled yet.
+    pub(crate) fn unsettled(&self) -> bool {
+        self.changed
+    }
+
     /// Whether to ask for a round trip now: something was heard and none
     /// is on its way.
     pub(crate) fn wants_sync(&mut self) -> bool {
@@ -169,16 +185,26 @@ impl Gather {
     pub(crate) fn synced(&mut self) -> Option<Settled> {
         self.syncing = false;
         let updating = self.screens.values().any(Screen::updating);
-        (!self.changed && !updating).then(|| Settled {
-            layout: self.layout(),
+        if self.changed || updating {
+            return None;
+        }
+        let (layout, corner) = self
+            .layout()
+            .map_or((None, Corner::default()), |(layout, corner)| {
+                (Some(layout), corner)
+            });
+        Some(Settled {
+            layout,
+            corner,
             moved: std::mem::take(&mut self.moved),
         })
     }
 
     /// The outputs as one layout, moved so its bounding box starts at
-    /// (0, 0); `None` when an output's place or size is still missing, or
-    /// they make no layout ([`Layout::new`]).
-    fn layout(&self) -> Option<Layout> {
+    /// (0, 0), and the corner it was moved from; `None` when an output's
+    /// place or size is still missing, or they make no layout
+    /// ([`Layout::new`]).
+    fn layout(&self) -> Option<(Layout, Corner)> {
         if !self.refused.is_empty() {
             return None;
         }
@@ -193,7 +219,8 @@ impl Gather {
             .iter()
             .map(|screen| screen.output(left, top))
             .collect::<Option<_>>()?;
-        Layout::new(outputs).ok()
+        let corner = Corner { x: left, y: top };
+        Layout::new(outputs).ok().map(|layout| (layout, corner))
     }
 }
 

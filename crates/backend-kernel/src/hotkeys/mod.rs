@@ -369,9 +369,9 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
         };
         match events::step(&mut device.dropped, &event) {
             Step::Key(key, change) => self.key(from, key, change),
-            Step::Motion { dx, dy } => self.record(from, |recorder, time| {
-                recorder.motion(time, dx, dy);
-            }),
+            Step::Motion { dx, dy } if from.role.record => {
+                self.feed.motion_read(from.time, dx, dy);
+            }
             Step::Wheel(notches) => self.record(from, |recorder, time| {
                 recorder.wheel(time, notches);
             }),
@@ -380,7 +380,7 @@ impl<S: FnMut(HotkeyEvent)> Reader<S> {
                 self.send_reaction(reaction);
             }
             Step::Resync => self.read_state(id),
-            Step::Lost | Step::Nothing => {}
+            Step::Motion { .. } | Step::Lost | Step::Nothing => {}
         }
     }
 

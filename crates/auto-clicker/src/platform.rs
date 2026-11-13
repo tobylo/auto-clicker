@@ -1,12 +1,14 @@
 //! The controller's platforms: uinput devices or the desktop's portal for
 //! output, and on either the hotkeys from the keyboards or from the
 //! desktop's shortcuts, the screen layout from the Wayland display and the
-//! pointer from KWin, and the clocks and directory recordings need.
+//! pointer from KWin or Hyprland, and the clocks and directory recordings
+//! need.
 
 use std::future::pending;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use auto_clicker_backend_hyprland::{Found, Hyprland};
 use auto_clicker_backend_kernel::{
     DeviceIdentity, InputSources, KernelBackend, local_time, monotonic_now, read_input,
 };
@@ -52,10 +54,62 @@ impl Hotkeys {
     }
 }
 
-pub struct Kernel {
-    pub hotkeys: Hotkeys,
+/// What the desktop gives besides input: the layout from the Wayland
+/// display, the pointer from KWin or Hyprland, whichever counts.
+pub struct Desktop {
     pub wayland: Wayland,
     pub kwin: Kwin,
+    pub hyprland: Hyprland,
+}
+
+impl Desktop {
+    fn layout(&self) -> Result<Layout, NoScreens> {
+        self.wayland.layout()
+    }
+
+    /// Whether KWin or Hyprland reports the pointer, or why neither does:
+    /// KWin when it does, else a picked Hyprland's reason, else why KWin's
+    /// script is unusable, else why Hyprland was refused, else nothing
+    /// reports it. So a stale `HYPRLAND_INSTANCE_SIGNATURE` on Plasma never
+    /// hides KWin's own reason.
+    fn pointer(&self) -> Result<(), NoPointer> {
+        pointer(self.kwin.pointer(), self.hyprland.found())
+    }
+
+    /// The one watch of the layout and the positions: the display's
+    /// watcher fires `changed` when the layout or why it is unknown changes,
+    /// KWin's fires it when the KWin counted changes and feeds `feed`'s
+    /// recordings their positions, and each KWin of the display it sees
+    /// come, the first included, has the display's watcher connect again
+    /// (W01 brief, W5). Hyprland's feeds positions on Hyprland and fires it
+    /// when why it gives none changes.
+    fn watch(&self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
+        let hyprland = self
+            .hyprland
+            .watch(self.wayland.clone(), feed.clone(), changed.clone());
+        let pointer = changed.clone();
+        joined(
+            |restarted| self.kwin.watch(feed, restarted, pointer),
+            |again| self.wayland.watch(changed, again),
+            hyprland,
+        )
+    }
+}
+
+/// What [`Desktop::pointer`] says, from what KWin says and what was found
+/// of Hyprland.
+fn pointer(kwin: Result<(), NoPointer>, hyprland: Found) -> Result<(), NoPointer> {
+    match (kwin, hyprland) {
+        (Ok(()), _) => Ok(()),
+        (_, Found::Picked(reason)) => reason,
+        (Err(NoPointer::NoSource), Found::Refused(why)) => Err(why),
+        (kwin, _) => kwin,
+    }
+}
+
+pub struct Kernel {
+    pub hotkeys: Hotkeys,
+    pub desktop: Desktop,
 }
 
 impl Platform for Kernel {
@@ -97,15 +151,15 @@ impl Platform for Kernel {
     }
 
     fn layout(&self) -> Result<Layout, NoScreens> {
-        self.wayland.layout()
+        self.desktop.layout()
     }
 
     fn pointer(&self) -> Result<(), NoPointer> {
-        self.kwin.pointer()
+        self.desktop.pointer()
     }
 
     fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
-        watch_layout(&self.wayland, &self.kwin, feed, changed)
+        self.desktop.watch(feed, changed)
     }
 }
 
@@ -113,8 +167,7 @@ impl Platform for Kernel {
 pub struct Portal {
     pub output: PortalOutput,
     pub hotkeys: Hotkeys,
-    pub wayland: Wayland,
-    pub kwin: Kwin,
+    pub desktop: Desktop,
 }
 
 impl Platform for Portal {
@@ -159,34 +212,16 @@ impl Platform for Portal {
     }
 
     fn layout(&self) -> Result<Layout, NoScreens> {
-        self.wayland.layout()
+        self.desktop.layout()
     }
 
     fn pointer(&self) -> Result<(), NoPointer> {
-        self.kwin.pointer()
+        self.desktop.pointer()
     }
 
     fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
-        watch_layout(&self.wayland, &self.kwin, feed, changed)
+        self.desktop.watch(feed, changed)
     }
-}
-
-/// The one watch of the layout and the positions: the display's watcher
-/// fires `changed` when the layout or why it is unknown changes, KWin's
-/// fires it when the KWin counted changes and feeds `feed`'s recordings
-/// their positions, and each KWin of the display it sees come, the first
-/// included, has the display's watcher connect again (W01 brief, W5).
-fn watch_layout(
-    wayland: &Wayland,
-    kwin: &Kwin,
-    feed: RecordingFeed,
-    changed: LayoutSignal,
-) -> LayoutWatch {
-    let pointer = changed.clone();
-    joined(
-        |restarted| kwin.watch(feed, restarted, pointer),
-        |again| wayland.watch(changed, again),
-    )
 }
 
 /// KWin's watcher and the display's, polled together, the first one's word
@@ -194,16 +229,19 @@ fn watch_layout(
 /// the display hears of a restart in the same poll and fires the
 /// controller's signal there, before a playback using positions takes its
 /// next event, however much budget KWin's spent (the display's watcher
-/// reads the word outside it).
+/// reads the word outside it). Hyprland's is polled last, so a layout the
+/// display reads in a poll is published before Hyprland's watcher, in the
+/// same poll, judges a position by it.
 fn joined(
     kwin: impl FnOnce(LayoutSignal) -> LayoutWatch,
     display: impl FnOnce(LayoutSignal) -> LayoutWatch,
+    hyprland: LayoutWatch,
 ) -> LayoutWatch {
     let restarted = LayoutSignal::default();
     let kwin = kwin(restarted.clone());
     let display = display(restarted);
     Box::pin(async move {
-        tokio::join!(biased; kwin, display);
+        tokio::join!(biased; kwin, display, hyprland);
     })
 }
 
@@ -252,19 +290,55 @@ mod tests {
         Hotkeys { reader }
     }
 
+    fn desktop() -> Desktop {
+        Desktop {
+            wayland: no_display(),
+            kwin: Kwin::none(),
+            hyprland: Hyprland::none(),
+        }
+    }
+
+    #[test]
+    fn kwin_or_a_picked_hyprland_says_where_the_pointer_is_or_why_not() {
+        use NoPointer::{HyprlandNoAnswer, HyprlandOtherDisplay, NoSource, Unusable};
+        let refused = Found::Refused(HyprlandOtherDisplay);
+        let cases = [
+            (Ok(()), Found::Absent, Ok(())),
+            (Ok(()), refused, Ok(())),
+            (Ok(()), Found::Picked(Err(HyprlandNoAnswer)), Ok(())),
+            (Err(NoSource), Found::Picked(Ok(())), Ok(())),
+            (
+                Err(NoSource),
+                Found::Picked(Err(HyprlandNoAnswer)),
+                Err(HyprlandNoAnswer),
+            ),
+            (
+                Err(Unusable),
+                Found::Picked(Err(HyprlandNoAnswer)),
+                Err(HyprlandNoAnswer),
+            ),
+            // A stale signature on Plasma never hides KWin's own reason.
+            (Err(Unusable), refused, Err(Unusable)),
+            (Err(NoSource), refused, Err(HyprlandOtherDisplay)),
+            (Err(NoSource), Found::Absent, Err(NoSource)),
+            (Err(Unusable), Found::Absent, Err(Unusable)),
+        ];
+        for (kwin, hyprland, said) in cases {
+            assert_eq!(pointer(kwin, hyprland), said, "{kwin:?} {hyprland:?}");
+        }
+    }
+
     #[test]
     fn the_picked_reader_and_what_is_missing_are_the_sources_on_either_output() {
         for reader in [InputReader::Devices, InputReader::Desktop] {
             let kernel = Kernel {
                 hotkeys: hotkeys(reader),
-                wayland: no_display(),
-                kwin: Kwin::none(),
+                desktop: desktop(),
             };
             let portal = Portal {
                 output: PortalOutput::new(None),
                 hotkeys: hotkeys(reader),
-                wayland: no_display(),
-                kwin: Kwin::none(),
+                desktop: desktop(),
             };
             assert_eq!(kernel.input_reader(), reader);
             assert_eq!(portal.input_reader(), reader);
@@ -281,14 +355,12 @@ mod tests {
     fn the_clocks_and_directory_are_the_backends_and_cores() {
         let kernel = Kernel {
             hotkeys: hotkeys(InputReader::Devices),
-            wayland: no_display(),
-            kwin: Kwin::none(),
+            desktop: desktop(),
         };
         let portal = Portal {
             output: PortalOutput::new(None),
             hotkeys: hotkeys(InputReader::Desktop),
-            wayland: no_display(),
-            kwin: Kwin::none(),
+            desktop: desktop(),
         };
         for (clock, local, dir) in [
             (
@@ -327,6 +399,7 @@ mod tests {
                     pending::<()>().await;
                 })
             },
+            Box::pin(pending()),
         );
         let ran = timeout(Duration::from_secs(1), watch).await;
         assert!(ran.is_err(), "the watch ended");
@@ -371,6 +444,7 @@ mod tests {
         let mut watch = joined(
             kwin_restarting(Rc::clone(&staged)),
             display_firing(changed.clone()),
+            Box::pin(pending()),
         );
         let mut cx = Context::from_waker(Waker::noop());
         // More polls than branches: each would have its turn to go first in
@@ -394,9 +468,34 @@ mod tests {
                     std::task::Poll::Pending
                 }))
             },
+            Box::pin(pending()),
         );
         let ran = timeout(Duration::from_millis(50), watch).await;
         assert!(ran.is_err(), "the watch ended with one watcher");
         assert!(polled.get() > 0);
+    }
+
+    #[test]
+    fn hyprlands_watcher_is_polled_after_the_display_in_each_poll() {
+        let order = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let polled = |name: &'static str| {
+            let order = Rc::clone(&order);
+            std::future::poll_fn(move |_| {
+                order.borrow_mut().push(name);
+                Poll::<()>::Pending
+            })
+        };
+        let (kwin, display) = (polled("kwin"), polled("display"));
+        let mut watch = joined(
+            move |_| Box::pin(kwin),
+            move |_| Box::pin(display),
+            Box::pin(polled("hyprland")),
+        );
+        let mut cx = Context::from_waker(Waker::noop());
+        for _ in 0..3 {
+            assert!(watch.as_mut().poll(&mut cx).is_pending());
+        }
+        let once = ["kwin", "display", "hyprland"];
+        assert_eq!(*order.borrow(), once.repeat(3));
     }
 }

@@ -10,7 +10,8 @@
 //!
 //! A recording may also hold where the pointer was ([`Change::Position`])
 //! and the screen layout those positions lie on ([`Layout`]): both or
-//! neither.
+//! neither. Its positions say what reported them ([`PointerSource`]), which
+//! decides how they are played.
 //!
 //! Key data stays inside a recording: [`Recording`]'s `Debug` shows how many
 //! events it holds, not which, and no error here names a key.
@@ -24,6 +25,7 @@ mod layout;
 mod library;
 mod manage;
 mod recorder;
+mod source;
 mod store;
 mod tap;
 mod timeline;
@@ -40,7 +42,8 @@ pub use json::event_bytes;
 pub use layout::{Layout, MAX_OUTPUTS, Output, OutputSpec, Point, Rect};
 pub use library::{FileName, Found, Listing, LoadError, MAX_FILE_BYTES, list, load};
 pub use manage::{ChangeError, Changed, delete, rename};
-pub use recorder::{Ending, KeyInput, Recorder};
+pub use recorder::{Ending, KeyInput, Recorder, Taken};
+pub use source::PointerSource;
 pub use store::{recordings_dir, save};
 pub use tap::{RecordingFeed, RecordingSlot};
 
@@ -52,6 +55,10 @@ pub const VERSION: u64 = 1;
 
 /// The format version of a recording with positions and their layout.
 pub const VERSION_POSITIONS: u64 = 2;
+
+/// The format version of a recording whose positions Hyprland reported:
+/// version 2 with a `positions_from` field (W01 brief, "Settled by W01d").
+pub const VERSION_HYPRLAND: u64 = 3;
 
 /// The longest recording: a recording stops and saves when it reaches this.
 pub const MAX_DURATION: Duration = Duration::from_secs(60 * 60);
@@ -90,6 +97,8 @@ pub struct Event {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Track {
     pub layout: Layout,
+    /// What reported the positions.
+    pub source: PointerSource,
     pub events: Vec<Event>,
 }
 
@@ -101,6 +110,8 @@ pub struct Recording {
     duration_us: u64,
     /// The screens the positions lie on; `None` when there are none.
     layout: Option<Layout>,
+    /// What reported the positions; [`PointerSource::Kwin`] without any.
+    source: PointerSource,
     events: Vec<Event>,
 }
 
@@ -158,7 +169,11 @@ impl Recording {
         duration_us: u64,
         track: Track,
     ) -> Result<Recording, InvalidRecording> {
-        let Track { layout, events } = track;
+        let Track {
+            layout,
+            source,
+            events,
+        } = track;
         check_positions(&events, Some(&layout))?;
         let positioned = events
             .iter()
@@ -171,6 +186,7 @@ impl Recording {
         let recording = Recording::build(name, created, duration_us, events)?;
         Ok(Recording {
             layout: Some(layout),
+            source,
             ..recording
         })
     }
@@ -195,6 +211,7 @@ impl Recording {
             created,
             duration_us,
             layout: None,
+            source: PointerSource::Kwin,
             events,
         })
     }
@@ -236,6 +253,11 @@ impl Recording {
     pub fn layout(&self) -> Option<&Layout> {
         self.layout.as_ref()
     }
+
+    /// What reported the positions; `None` for a recording without them.
+    pub fn positions_from(&self) -> Option<PointerSource> {
+        self.layout.as_ref().map(|_| self.source)
+    }
 }
 
 impl fmt::Debug for Recording {
@@ -246,6 +268,7 @@ impl fmt::Debug for Recording {
             .field("created", &self.created)
             .field("duration_us", &self.duration_us)
             .field("layout", &self.layout)
+            .field("source", &self.source)
             .field("events", &self.events.len())
             .finish()
     }

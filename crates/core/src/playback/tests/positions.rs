@@ -3,14 +3,18 @@
 
 use super::*;
 use crate::input::AbsolutePosition;
-use crate::recording::Track;
 use crate::recording::tests::positions::screen;
 use crate::recording::tests::positions::{at, two_screens};
 use crate::recording::{Layout, Output, Point};
+use crate::recording::{PointerSource, Track};
 
 const MOVE: Change = Change::Move { dx: 5, dy: 0 };
 
 fn positioned(duration_us: u64, events: &[(u64, Change)]) -> Recording {
+    positioned_by(PointerSource::Kwin, duration_us, events)
+}
+
+fn positioned_by(source: PointerSource, duration_us: u64, events: &[(u64, Change)]) -> Recording {
     let events = events
         .iter()
         .map(|&(at, change)| Event { at, change })
@@ -21,6 +25,7 @@ fn positioned(duration_us: u64, events: &[(u64, Change)]) -> Recording {
         duration_us,
         Track {
             layout: two_screens(),
+            source,
             events,
         },
     )
@@ -38,6 +43,11 @@ const LAST_RELEASE: (u64, Change) = (90_000, Change::Release(LEFT));
 /// fixture that leaves the button down gets [`LAST_RELEASE`], which is left
 /// out of what this returns.
 fn planned(events: &[(u64, Change)]) -> Vec<(u64, Change)> {
+    planned_by(PointerSource::Kwin, events)
+}
+
+/// The same for a recording whose positions `source` reported.
+fn planned_by(source: PointerSource, events: &[(u64, Change)]) -> Vec<(u64, Change)> {
     let presses = events
         .iter()
         .filter(|(_, c)| *c == Change::Press(LEFT))
@@ -50,7 +60,7 @@ fn planned(events: &[(u64, Change)]) -> Vec<(u64, Change)> {
     if presses > releases {
         events.push(LAST_RELEASE);
     }
-    let playback = once(positioned(100_000, &events));
+    let playback = once(positioned_by(source, 100_000, &events));
     let motion = Motion::Positions(two_screens());
     playback
         .steps(&motion)
@@ -86,6 +96,100 @@ fn a_move_a_position_follows_within_5_ms_is_covered_and_not_sent() {
             (30_000, MOVE),
             (35_001, at(30, 10)),
             (50_000, MOVE),
+        ]
+    );
+}
+
+#[test]
+fn hyprlands_recordings_send_every_move_and_kwins_skip_the_covered() {
+    let events = [
+        (0, MOVE),
+        (1_000, at(10, 10)),
+        (1_000, MOVE),
+        (10_000, MOVE),
+        (11_000, Change::Press(LEFT)),
+        (12_000, at(20, 10)),
+    ];
+    let press = (11_000, Change::Press(LEFT));
+    assert_eq!(
+        planned_by(PointerSource::Hyprland, &events),
+        [
+            (0, MOVE),
+            (1_000, at(10, 10)),
+            (1_000, MOVE),
+            (1_000, at(10, 10)),
+            (10_000, MOVE),
+            (11_000, at(20, 10)),
+            press,
+            (12_000, at(20, 10)),
+        ]
+    );
+    assert_eq!(
+        planned_by(PointerSource::Kwin, &events),
+        [(1_000, at(10, 10)), (11_000, at(20, 10)), press]
+    );
+}
+
+#[test]
+fn hyprlands_positions_follow_every_move_they_cover_and_go_before_each_click() {
+    let press = Change::Press(LEFT);
+    let release = Change::Release(LEFT);
+    // A move between the click and its position: the position goes before
+    // the press, and again after the move.
+    let events = [
+        (0, MOVE),
+        (1_000, press),
+        (1_500, MOVE),
+        (2_000, at(10, 10)),
+        (3_000, release),
+    ];
+    assert_eq!(
+        planned_by(PointerSource::Hyprland, &events),
+        [
+            (0, MOVE),
+            (1_000, at(10, 10)),
+            (1_000, press),
+            (1_500, MOVE),
+            (2_000, at(10, 10)),
+            (3_000, release),
+        ]
+    );
+    // Moves around a press and a release: before each of them.
+    let events = [
+        (0, MOVE),
+        (500, press),
+        (700, MOVE),
+        (900, release),
+        (1_500, at(10, 10)),
+    ];
+    assert_eq!(
+        planned_by(PointerSource::Hyprland, &events),
+        [
+            (0, MOVE),
+            (500, at(10, 10)),
+            (500, press),
+            (700, MOVE),
+            (900, at(10, 10)),
+            (900, release),
+            (1_500, at(10, 10)),
+        ]
+    );
+    // A move read after its position at one microsecond, with or without a
+    // press between them: the position again after the move.
+    let events = [
+        (0, MOVE),
+        (2_000, at(10, 10)),
+        (2_000, press),
+        (2_000, MOVE),
+    ];
+    assert_eq!(
+        planned_by(PointerSource::Hyprland, &events),
+        [
+            (0, MOVE),
+            (2_000, at(10, 10)),
+            (2_000, press),
+            (2_000, MOVE),
+            (2_000, at(10, 10)),
         ]
     );
 }
@@ -355,6 +459,29 @@ async fn a_run_sends_positions_as_absolute_moves_at_their_times() {
     );
     let late = calls[0].0.checked_sub(ms(1)).unwrap();
     assert!(late <= TIMER, "{late:?} after {start:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_sends_hyprlands_positions_from_the_middle_of_their_pixel() {
+    let point = Point { x: 2_744, y: 720 };
+    let playback = once(positioned_by(
+        PointerSource::Hyprland,
+        10_000,
+        &[(1_000, Change::Position(point))],
+    ));
+    let (input, calls, _) = timed_input();
+    let motion = Motion::Positions(two_screens());
+    let end = play(input, &playback, &motion, never()).await;
+    assert_eq!(end.result.unwrap(), Ended::Finished);
+    let sent: Vec<Call> = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, call)| *call)
+        .collect();
+    let middle = two_screens().absolute_at(2_744.5, 720.5, output(2048, 0, 3440, 1440).rect());
+    assert_ne!(middle, two_screens().absolute(point));
+    assert_eq!(sent, [Call::MoveAbsolute(middle)]);
 }
 
 #[test]

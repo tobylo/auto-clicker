@@ -71,6 +71,7 @@ fn a_layout_is_read_only_after_a_round_trip_with_nothing_new() {
     ]);
     let first = Settled {
         layout: Some(expected),
+        corner: Corner::default(),
         moved: true,
     };
     assert_eq!(gather.synced(), Some(first));
@@ -183,7 +184,10 @@ fn outputs_at_negative_positions_are_moved_to_start_at_the_corner() {
         (rect(0, 0, 1920, 1080), 1000),
         (rect(1920, 400, 2560, 1440), 1000),
     ]);
-    assert_eq!(settled(&mut gather), Some(expected));
+    assert!(gather.wants_sync());
+    let settled = gather.synced().unwrap();
+    assert_eq!(settled.layout, Some(expected));
+    assert_eq!(settled.corner, Corner { x: -500, y: -300 });
 }
 
 #[test]
@@ -346,8 +350,8 @@ fn an_output_too_old_to_bind_leaves_the_layout_unknown_while_it_is_there() {
     gather.refused(11);
     let refused = gather.wants_sync().then(|| gather.synced()).flatten();
     let unknown = Settled {
-        layout: None,
         moved: true,
+        ..Settled::default()
     };
     assert_eq!(refused, Some(unknown));
     gather.removed(11);

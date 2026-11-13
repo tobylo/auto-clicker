@@ -180,7 +180,11 @@ where
             Change::Move { dx, dy } => self.input.move_relative(dx, dy),
             Change::Wheel(notches) => self.input.scroll(notches),
             Change::Position(point) => match self.motion {
-                Motion::Positions(layout) => self.input.move_absolute(layout.absolute(point)),
+                Motion::Positions(layout) => {
+                    let source = self.playback.recording().positions_from();
+                    let at = source.unwrap_or_default().absolute(layout, point);
+                    self.input.move_absolute(at)
+                }
                 Motion::Relative => Ok(()),
             },
         }

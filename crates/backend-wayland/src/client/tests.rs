@@ -10,13 +10,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use auto_clicker_core::controller::LayoutSignal;
-use auto_clicker_core::recording::{Output, Rect};
+use auto_clicker_core::recording::{Layout, Output, Rect};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::LocalSet;
 use tokio::time::timeout;
 
 use super::*;
-use crate::Wayland;
+use crate::{Corner, Snapshot, Wayland};
 
 /// Longer than any step of a test takes; a test that waits it out fails.
 const BOUND: Duration = Duration::from_secs(5);
@@ -405,7 +405,7 @@ async fn two_outputs_give_one_whole_layout_at_start() {
     .await
     .unwrap();
     let (_, first) = started.unwrap();
-    assert_eq!(first, layout(&[LEFT, RIGHT]));
+    assert_eq!(first.layout, layout(&[LEFT, RIGHT]));
 }
 
 #[tokio::test]
@@ -443,7 +443,7 @@ async fn with_xdg_output_2_the_layout_waits_for_the_xdg_outputs_done() {
     let (started, ()) = timeout(BOUND, async { tokio::join!(Link::start(link), serve) })
         .await
         .unwrap();
-    assert_eq!(started.unwrap().1, layout(&[LEFT]));
+    assert_eq!(started.unwrap().1.layout, layout(&[LEFT]));
 }
 
 #[tokio::test]
@@ -476,7 +476,7 @@ async fn an_output_too_old_to_say_when_it_changed_leaves_the_layout_unknown() {
                 .await
                 .unwrap();
             let (link, first) = started.unwrap();
-            assert_eq!(first, None, "a layout without the old output");
+            assert_eq!(first.layout, None, "a layout without the old output");
             // It goes: the layout is known.
             let wayland = Wayland::of(None, Some(PathBuf::from("/nowhere")), first, Ok(link));
             assert_eq!(wayland.layout(), Err(NoScreens::NotWhole));
@@ -530,7 +530,7 @@ async fn globals_withdrawn_before_they_were_bound_are_never_bound() {
     let (started, ()) = timeout(BOUND, async { tokio::join!(Link::start(link), serve) })
         .await
         .unwrap();
-    assert_eq!(started.unwrap().1, layout(&[LEFT]));
+    assert_eq!(started.unwrap().1.layout, layout(&[LEFT]));
 
     // The manager withdrawn before it was bound: no xdg-output.
     let (link, mut fake) = Fake::pair();
@@ -729,6 +729,35 @@ async fn a_move_undone_before_the_answer_still_fires() {
 }
 
 #[tokio::test]
+async fn a_change_heard_is_unsettled_until_its_layout_is_published() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let (link, mut fake) = Fake::pair();
+            let watched = watched(&local, &mut fake, link).await;
+            settle().await;
+            let before = watched.wayland.changes();
+            assert!(before.is_some());
+            let away = Place { y: 1440, ..LEFT };
+            timeout(BOUND, async {
+                fake.screen(A, away).await;
+                let callback = fake.until_sync().await;
+                settle().await;
+                assert_eq!(watched.wayland.changes(), None, "heard, yet settled");
+                assert_eq!(watched.wayland.snapshot().changes, None);
+                fake.answer(callback).await;
+                fired(&watched).await;
+            })
+            .await
+            .unwrap();
+            let after = watched.wayland.changes();
+            assert_eq!(after, before.map(|count| count + 1));
+            assert_eq!(watched.wayland.snapshot().changes, after);
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn an_update_that_moves_nothing_fires_nothing() {
     let local = LocalSet::new();
     local
@@ -908,17 +937,30 @@ fn a_new_reason_fires_while_the_layout_stays_unknown() {
     };
     wayland.0.end(NoScreens::Lost, &changed);
     assert!(!fired(&changed), "the same reason fired");
+    assert_eq!(wayland.changes(), Some(0));
     wayland.0.end(NoScreens::CannotConnect, &changed);
     assert!(fired(&changed), "a new reason did not fire");
+    assert_eq!(wayland.changes(), Some(1), "each fire counts as a change");
     assert_eq!(wayland.layout(), Err(NoScreens::CannotConnect));
     // A connection that gives no whole layout is a reason of its own.
-    let half = Settled {
-        layout: None,
-        moved: false,
-    };
+    let half = Settled::default();
     wayland.0.publish(half, &changed);
     assert!(fired(&changed));
     assert_eq!(wayland.layout(), Err(NoScreens::NotWhole));
+    // A whole layout comes with the corner it was moved from, as one value.
+    let corner = Corner { x: -500, y: -300 };
+    let whole = Settled {
+        layout: layout(&[LEFT]),
+        corner,
+        moved: true,
+    };
+    wayland.0.publish(whole, &changed);
+    let expected = Snapshot {
+        layout: Ok(layout(&[LEFT]).unwrap()),
+        corner,
+        changes: Some(3),
+    };
+    assert_eq!(wayland.snapshot(), expected);
 }
 
 #[tokio::test]
@@ -1155,7 +1197,7 @@ async fn a_display_that_failed_at_start_connects_at_the_next_kwin() {
             let wayland = Wayland::of(
                 NonZeroU32::new(std::process::id()),
                 Some(display.path.clone()),
-                None,
+                Settled::default(),
                 Err(NoScreens::CannotConnect),
             );
             let again = LayoutSignal::default();

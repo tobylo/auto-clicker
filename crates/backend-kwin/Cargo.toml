@@ -9,6 +9,9 @@ publish.workspace = true
 
 [dependencies]
 auto-clicker-core = { path = "../core" }
+# Whether KWin's process is the display's listener or its child, the rule
+# Hyprland's backend shares.
+auto-clicker-backend-wayland = { path = "../backend-wayland" }
 # The tokens baked into each load; already a dependency of the daemon.
 fastrand = "2.5.0"
 # `StreamExt` for the stream of KWin's owner changes; already in the tree.
@@ -24,9 +27,6 @@ workspace = true
 
 [dev-dependencies]
 auto-clicker-core = { path = "../core", features = ["fake"] }
-# The Plasma tests start a recording on the display's layout, as the daemon
-# does, so a position kept shows KWin's layout and xdg-output's agree.
-auto-clicker-backend-wayland = { path = "../backend-wayland" }
 tokio = { version = "1.54.1", features = ["rt", "time", "sync", "macros", "test-util", "net"] }
 # A peer-to-peer connection stands in for the session bus in the receiver's
 # tests; `p2p` adds only `uuid/v4`, and uuid is already in the tree.

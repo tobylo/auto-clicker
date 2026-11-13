@@ -116,7 +116,13 @@ pub(super) fn no_screens() -> Vec<NoScreens> {
 
 /// Every reason nothing reports the pointer.
 pub(super) fn no_pointers() -> Vec<NoPointer> {
-    vec![NoPointer::NoSource, NoPointer::Unusable]
+    vec![
+        NoPointer::NoSource,
+        NoPointer::Unusable,
+        NoPointer::HyprlandNoAnswer,
+        NoPointer::HyprlandUnreadable,
+        NoPointer::HyprlandOtherDisplay,
+    ]
 }
 
 pub(super) fn hindrances() -> Vec<Hindrance> {
