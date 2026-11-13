@@ -200,6 +200,18 @@ fn no_positions(said: &Said<'_>) {
             NoPositions::Pointer(NoPointer::Unusable),
             "KWins pekarskript kan inte användas; se loggen",
         ),
+        (
+            NoPositions::Pointer(NoPointer::HyprlandNoAnswer),
+            "Hyprlands socket svarade inte",
+        ),
+        (
+            NoPositions::Pointer(NoPointer::HyprlandUnreadable),
+            "Hyprland svarade i en form som programmet inte kan läsa",
+        ),
+        (
+            NoPositions::Pointer(NoPointer::HyprlandOtherDisplay),
+            "Hyprlands socket hör till en annan Wayland-display",
+        ),
     ];
     for (why, swedish) in reasons {
         assert_eq!(

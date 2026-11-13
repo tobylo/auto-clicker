@@ -55,6 +55,9 @@ fn no_pointer(why: NoPointer) -> &'static str {
     match why {
         NoPointer::NoSource => "inget på det här skrivbordet rapporterar var pekaren är",
         NoPointer::Unusable => "KWins pekarskript kan inte användas; se loggen",
+        NoPointer::HyprlandNoAnswer => "Hyprlands socket svarade inte",
+        NoPointer::HyprlandUnreadable => "Hyprland svarade i en form som programmet inte kan läsa",
+        NoPointer::HyprlandOtherDisplay => "Hyprlands socket hör till en annan Wayland-display",
     }
 }
 

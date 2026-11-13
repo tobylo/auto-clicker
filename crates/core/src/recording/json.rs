@@ -22,6 +22,10 @@
 //! ]}
 //! ```
 //!
+//! A recording whose positions Hyprland reported is version 3: version 2
+//! with `"positions_from":"hyprland"` after `duration_us`. Its positions
+//! are floored, and every move it holds is played ([`PointerSource`]).
+//!
 //! Times are microseconds since the start. Keys and buttons go by their
 //! kernel names ([`super::codes`]). A file is parsed whole, then checked by
 //! [`Recording::new`] like any recording; errors give a place in the file,
@@ -35,19 +39,24 @@ use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
 use serde_json::error::Category;
 
 use super::{
-    Change, Created, Event, InvalidRecording, Layout, MAX_DURATION_US, Output, Point, Recording,
-    Rect, Track, VERSION, VERSION_POSITIONS, codes,
+    Change, Created, Event, InvalidRecording, Layout, MAX_DURATION_US, Output, Point,
+    PointerSource, Recording, Rect, Track, VERSION, VERSION_HYPRLAND, VERSION_POSITIONS, codes,
 };
 
+/// The `positions_from` of a version 3 file: the one value it may hold.
+const FROM_HYPRLAND: &str = "hyprland";
+
 impl Recording {
-    /// Writes the recording, one event per line: as version 2 when it has
-    /// positions, as version 1 otherwise.
+    /// Writes the recording, one event per line: as version 3 when Hyprland
+    /// reported its positions, version 2 when KWin did, version 1 without
+    /// positions.
     ///
     /// # Errors
     /// Only what `out` returns.
     pub fn write_json(&self, out: &mut dyn Write) -> io::Result<()> {
-        let version = match self.layout {
-            Some(_) => VERSION_POSITIONS,
+        let version = match self.positions_from() {
+            Some(PointerSource::Hyprland) => VERSION_HYPRLAND,
+            Some(PointerSource::Kwin) => VERSION_POSITIONS,
             None => VERSION,
         };
         write!(out, "{{\"version\":{version},\"name\":")?;
@@ -57,6 +66,9 @@ impl Recording {
             ",\"created\":\"{}\",\"duration_us\":{}",
             self.created, self.duration_us
         )?;
+        if version == VERSION_HYPRLAND {
+            write!(out, ",\"positions_from\":\"{FROM_HYPRLAND}\"")?;
+        }
         if let Some(layout) = &self.layout {
             write_layout(out, layout)?;
         }
@@ -73,19 +85,22 @@ impl Recording {
     ///
     /// # Errors
     /// The file is not JSON, does not have a recording's layout, has a
-    /// version other than 1 or 2, is a version 1 file with a layout or a
-    /// position, a version 2 file without a layout, or holds a recording
+    /// version other than 1, 2 or 3, is a version 1 file with a layout or a
+    /// position, a version 2 or 3 file without a layout, a version 3 file
+    /// whose positions are not from Hyprland, a version 1 or 2 file that says
+    /// where its positions came from, or holds a recording
     /// [`Recording::new`] or [`Recording::with_positions`] refuses.
     pub fn from_json(bytes: &[u8]) -> Result<Recording, InvalidRecording> {
         let header: Header = serde_json::from_slice(bytes).map_err(malformed)?;
-        if header.version != VERSION && header.version != VERSION_POSITIONS {
+        if ![VERSION, VERSION_POSITIONS, VERSION_HYPRLAND].contains(&header.version) {
             return Err(InvalidRecording::new(format!(
                 "the file is a version {} recording; this program reads versions \
-                 {VERSION} and {VERSION_POSITIONS}",
+                 {VERSION} to {VERSION_HYPRLAND}",
                 header.version
             )));
         }
         let file: File = serde_json::from_slice(bytes).map_err(malformed)?;
+        let source = file_source(header.version, file.positions_from.as_deref())?;
         let layout = file_layout(header.version, file.layout)?;
         let created = Created::parse(&file.created)
             .ok_or_else(|| InvalidRecording::new("the recording's creation time is malformed"))?;
@@ -107,7 +122,11 @@ impl Recording {
             .collect::<Result<Vec<_>, _>>()?;
         match layout {
             Some(layout) => {
-                let track = Track { layout, events };
+                let track = Track {
+                    layout,
+                    source,
+                    events,
+                };
                 Recording::with_positions(file.name, created, file.duration_us, track)
             }
             None => {
@@ -157,8 +176,23 @@ impl Write for Counter {
     }
 }
 
+/// What reported the positions of a version `version` file whose
+/// `positions_from` is `from`: only version 3 says, and only Hyprland.
+fn file_source(version: u64, from: Option<&str>) -> Result<PointerSource, InvalidRecording> {
+    match (version, from) {
+        (VERSION_HYPRLAND, Some(FROM_HYPRLAND)) => Ok(PointerSource::Hyprland),
+        (VERSION_HYPRLAND, _) => Err(InvalidRecording::new(format!(
+            "a version {VERSION_HYPRLAND} recording's positions are from \"{FROM_HYPRLAND}\""
+        ))),
+        (_, None) => Ok(PointerSource::Kwin),
+        (_, Some(_)) => Err(InvalidRecording::new(format!(
+            "only a version {VERSION_HYPRLAND} recording says where its positions came from"
+        ))),
+    }
+}
+
 /// The layout version `version` asks for: none in version 1, one in
-/// version 2.
+/// versions 2 and 3.
 fn file_layout(
     version: u64,
     outputs: Option<Vec<RawOutput>>,
@@ -169,7 +203,7 @@ fn file_layout(
             "a version {VERSION} recording has no layout"
         ))),
         (_, None) => Err(InvalidRecording::new(format!(
-            "a version {VERSION_POSITIONS} recording needs a layout"
+            "a version {version} recording needs a layout"
         ))),
         (_, Some(outputs)) => {
             let outputs = outputs
@@ -258,6 +292,8 @@ struct File {
     name: String,
     created: String,
     duration_us: u64,
+    #[serde(default, deserialize_with = "present_text")]
+    positions_from: Option<String>,
     #[serde(default, deserialize_with = "present")]
     layout: Option<Vec<RawOutput>>,
     events: Vec<RawEvent>,
@@ -268,6 +304,13 @@ fn present<'de, D: de::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Vec<RawOutput>>, D::Error> {
     Vec::deserialize(deserializer).map(Some)
+}
+
+/// A field that is there holds its text: `null` is not a source.
+fn present_text<'de, D: de::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
 }
 
 /// One screen as the file has it, checked by [`Output::new`].

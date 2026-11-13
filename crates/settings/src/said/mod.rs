@@ -67,6 +67,9 @@ impl Said<'_> {
         match why {
             NoPointer::NoSource => t.invoke_no_pointer_no_source(),
             NoPointer::Unusable => t.invoke_no_pointer_unusable(),
+            NoPointer::HyprlandNoAnswer => t.invoke_no_pointer_hyprland_no_answer(),
+            NoPointer::HyprlandUnreadable => t.invoke_no_pointer_hyprland_unreadable(),
+            NoPointer::HyprlandOtherDisplay => t.invoke_no_pointer_hyprland_other_display(),
         }
     }
 

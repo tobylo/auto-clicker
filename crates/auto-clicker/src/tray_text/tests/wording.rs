@@ -253,6 +253,21 @@ fn every_reason_recordings_keep_movement_only_reads_as_written() {
             "KWin's pointer script cannot be used; see the log",
             "KWins pekarskript kan inte användas; se loggen",
         ),
+        (
+            pointer(NoPointer::HyprlandNoAnswer),
+            "Hyprland's socket did not answer",
+            "Hyprlands socket svarade inte",
+        ),
+        (
+            pointer(NoPointer::HyprlandUnreadable),
+            "Hyprland answered in a form this program does not read",
+            "Hyprland svarade i en form som programmet inte kan läsa",
+        ),
+        (
+            pointer(NoPointer::HyprlandOtherDisplay),
+            "Hyprland's socket belongs to another display",
+            "Hyprlands socket hör till en annan Wayland-display",
+        ),
     ];
     for (problem, english, swedish) in rows {
         let english = format!("Recordings keep movement only: {english}");

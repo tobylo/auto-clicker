@@ -14,10 +14,14 @@
 //! - A move at the same microsecond as a position before it is covered by
 //!   that position too: at one time the order of a move and its report
 //!   says nothing, since they come by different paths.
+//! - A recording whose positions Hyprland reported sends every move,
+//!   covered or not, since there a position may cover the moves of a game
+//!   holding the pointer ([`PointerSource::sends_every_move`]). Its
+//!   positions still go before a press, release or wheel turn as above.
 //!
 //! The plan holds only event indices: a recording's events are not copied.
 
-use crate::recording::{Change, Event, Layout, Output, Recording};
+use crate::recording::{Change, Event, Layout, Output, PointerSource, Recording};
 
 /// How soon after a relative move a position must follow to cover it.
 pub const COVER_US: u64 = 5_000;
@@ -46,7 +50,13 @@ impl Plan {
         let layout = recording.layout()?;
         let events = recording.events();
         let count = u32::try_from(events.len()).ok()?;
-        let (covered, hoists) = cover(events, count, covered_at_same_time(events));
+        let (mut covered, hoists) = cover(events, count, covered_at_same_time(events));
+        if recording
+            .positions_from()
+            .is_some_and(PointerSource::sends_every_move)
+        {
+            covered.fill(false);
+        }
         let mut hoisted: Vec<u32> = hoists.iter().map(|&(_, position)| position).collect();
         hoisted.sort_unstable();
         let mut hoists = hoists.into_iter().peekable();

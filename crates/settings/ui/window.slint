@@ -93,6 +93,9 @@ export global Texts {
     public pure function no-screens-not-whole() -> string { @tr("the desktop has not described every screen") }
     public pure function no-pointer-no-source() -> string { @tr("nothing on this desktop reports where the pointer is") }
     public pure function no-pointer-unusable() -> string { @tr("KWin's pointer script cannot be used; see the log") }
+    public pure function no-pointer-hyprland-no-answer() -> string { @tr("Hyprland's socket did not answer") }
+    public pure function no-pointer-hyprland-unreadable() -> string { @tr("Hyprland answered in a form this program does not read") }
+    public pure function no-pointer-hyprland-other-display() -> string { @tr("Hyprland's socket belongs to another display") }
     public pure function screens-changed() -> string { @tr("the screens changed while the point was picked: pick it again") }
     public pure function point-screens-changed() -> string { @tr("the screens changed since the fixed point was picked: pick it again in Settings") }
     public pure function point-screens-unknown() -> string { @tr("the screen layout is not known, so the picked point cannot be checked") }

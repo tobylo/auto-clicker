@@ -40,6 +40,7 @@ fn positioned() -> Recording {
         52_000,
         Track {
             layout: two_screens(),
+            source: PointerSource::Kwin,
             events,
         },
     )
@@ -93,6 +94,7 @@ fn a_layout_without_positions_or_a_position_without_a_layout_is_refused() {
         0,
         Track {
             layout: two_screens(),
+            source: PointerSource::Kwin,
             events: moves,
         },
     );

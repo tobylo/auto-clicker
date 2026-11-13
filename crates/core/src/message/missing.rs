@@ -54,6 +54,15 @@ pub enum NoPointer {
     /// KWin's script cannot be used: the program could not receive from
     /// it, has no folder for it, or its last load failed. The log says why.
     Unusable,
+    /// Hyprland's socket did not answer an ask: it could not be reached, or
+    /// not before the ask's deadline (W01 brief, "Settled by W01d").
+    HyprlandNoAnswer,
+    /// Hyprland answered in a form the program does not parse, as a newer
+    /// Hyprland might.
+    HyprlandUnreadable,
+    /// The socket `HYPRLAND_INSTANCE_SIGNATURE` names is not this display's
+    /// compositor's, or the signature names no socket of one.
+    HyprlandOtherDisplay,
 }
 
 impl fmt::Display for NoPointer {
@@ -61,6 +70,11 @@ impl fmt::Display for NoPointer {
         f.write_str(match self {
             NoPointer::NoSource => "nothing on this desktop reports where the pointer is",
             NoPointer::Unusable => "KWin's pointer script cannot be used; see the log",
+            NoPointer::HyprlandNoAnswer => "Hyprland's socket did not answer",
+            NoPointer::HyprlandUnreadable => {
+                "Hyprland answered in a form this program does not read"
+            }
+            NoPointer::HyprlandOtherDisplay => "Hyprland's socket belongs to another display",
         })
     }
 }

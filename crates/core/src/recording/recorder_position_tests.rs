@@ -3,10 +3,10 @@
 
 use super::*;
 use crate::input::Key;
-use crate::recording::Track;
 use crate::recording::tests::positions::screen;
 use crate::recording::tests::positions::{at, two_screens};
 use crate::recording::{Layout, MAX_OUTPUTS, Point, event_bytes};
+use crate::recording::{PointerSource, Track};
 
 fn positioned() -> Recorder {
     recorder().with_layout(two_screens())
@@ -15,7 +15,7 @@ fn positioned() -> Recorder {
 /// A position report at `us`, made while the layout was the recording's.
 fn report(recorder: &mut Recorder, us: u64, x: u32, y: u32) {
     let layout = two_screens();
-    recorder.position(t(us), Point { x, y }, Some(&layout));
+    recorder.position(PointerSource::Kwin, t(us), Point { x, y }, Some(&layout));
 }
 
 fn click(recorder: &mut Recorder, [down, up]: [u64; 2]) {
@@ -40,6 +40,44 @@ fn positions_are_written_in_version_2_with_the_layout_at_the_start() {
         [
             (100, moved(3, 0)),
             (900, at(10, 20)),
+            (5_000, press(LEFT)),
+            (6_000, release(LEFT)),
+        ]
+    );
+}
+
+#[test]
+fn a_recording_keeps_the_source_of_its_first_position_and_drops_the_others() {
+    let layout = two_screens();
+    let mut recorder = positioned();
+    recorder.position(PointerSource::Kwin, t(500), Point { x: 9, y: 9 }, None);
+    recorder.position(
+        PointerSource::Hyprland,
+        t(900),
+        Point { x: 10, y: 20 },
+        Some(&layout),
+    );
+    recorder.position(
+        PointerSource::Kwin,
+        t(2_000),
+        Point { x: 11, y: 20 },
+        Some(&layout),
+    );
+    recorder.position(
+        PointerSource::Hyprland,
+        t(3_000),
+        Point { x: 12, y: 20 },
+        Some(&layout),
+    );
+    click(&mut recorder, [5_000, 6_000]);
+    let recording = finish_at(recorder, t(7_000));
+    assert_eq!(recording.positions_from(), Some(PointerSource::Hyprland));
+    assert_eq!(
+        changes(&recording),
+        [
+            // The first position, with no motion before it, goes first.
+            (0, at(10, 20)),
+            (3_000, at(12, 20)),
             (5_000, press(LEFT)),
             (6_000, release(LEFT)),
         ]
@@ -272,7 +310,12 @@ fn a_layout_differing_only_in_scale_keeps_positions() {
         screen([2048, 0, 3440, 1440], 1500),
     ])
     .unwrap();
-    recorder.position(t(1_000), Point { x: 1, y: 0 }, Some(&rescaled));
+    recorder.position(
+        PointerSource::Kwin,
+        t(1_000),
+        Point { x: 1, y: 0 },
+        Some(&rescaled),
+    );
     click(&mut recorder, [2_000, 3_000]);
     let recording = finish_at(recorder, t(4_000));
     assert_eq!(recording.layout(), Some(&two_screens()));
@@ -318,10 +361,25 @@ fn positions_are_kept_only_while_the_layout_is_the_recordings() {
     recorder.motion(t(0), 1, 0);
     let same = two_screens();
     let other = other_layout();
-    recorder.position(t(1_000), Point { x: 1, y: 0 }, Some(&same));
-    recorder.position(t(3_000), Point { x: 2, y: 0 }, None);
-    recorder.position(t(5_000), Point { x: 3, y: 0 }, Some(&other));
-    recorder.position(t(7_000), Point { x: 4, y: 0 }, Some(&same));
+    recorder.position(
+        PointerSource::Kwin,
+        t(1_000),
+        Point { x: 1, y: 0 },
+        Some(&same),
+    );
+    recorder.position(PointerSource::Kwin, t(3_000), Point { x: 2, y: 0 }, None);
+    recorder.position(
+        PointerSource::Kwin,
+        t(5_000),
+        Point { x: 3, y: 0 },
+        Some(&other),
+    );
+    recorder.position(
+        PointerSource::Kwin,
+        t(7_000),
+        Point { x: 4, y: 0 },
+        Some(&same),
+    );
     click(&mut recorder, [8_000, 9_000]);
     assert_eq!(
         events_at(recorder, t(10_000)),
@@ -474,9 +532,17 @@ fn the_reserve_holds_the_largest_header_layout_and_release_at_the_end() {
         change: release(held),
     }));
     let name = "\u{10FFFF}".repeat(200);
-    let recording =
-        Recording::with_positions(name, created(), MAX_DURATION_US, Track { layout, events })
-            .unwrap();
+    let recording = Recording::with_positions(
+        name,
+        created(),
+        MAX_DURATION_US,
+        Track {
+            layout,
+            source: PointerSource::Kwin,
+            events,
+        },
+    )
+    .unwrap();
     let mut file = Vec::new();
     recording.write_json(&mut file).unwrap();
     let counted: u64 = recording
@@ -518,7 +584,7 @@ fn random_input_and_positions_always_make_a_valid_recording() {
                         x: rng.u32(0..6_000),
                         y: rng.u32(0..1_500),
                     };
-                    recorder.position(t(now), point, layout);
+                    recorder.position(PointerSource::Kwin, t(now), point, layout);
                 }
             }
         }

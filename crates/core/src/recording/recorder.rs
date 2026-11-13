@@ -34,7 +34,7 @@ use super::timeline::Timeline;
 use super::trim::tray_cut;
 use super::{
     Change, Created, Event, InvalidRecording, Layout, MAX_DURATION_US, MAX_FILE_BYTES, Point,
-    Recording, Track, codes,
+    PointerSource, Recording, Track, codes,
 };
 use crate::hotkeys::{Action, Binding, Bindings, DeviceId, Modifier};
 use crate::input::{Button, Held, Key};
@@ -149,6 +149,9 @@ pub struct Recorder {
     stopped_at: Option<u64>,
     /// The layout positions lie on: the current one at the start, if known.
     layout: Option<Layout>,
+    /// What reported the first position kept; positions from anything else
+    /// are dropped.
+    source: Option<PointerSource>,
     timeline: Timeline,
     bucket: Option<Bucket>,
     /// What each device holds.
@@ -175,6 +178,7 @@ impl Recorder {
             excluded: BTreeSet::new(),
             stopped_at: None,
             layout: None,
+            source: None,
             timeline: Timeline::new(EVENT_BUDGET),
             bucket: None,
             devices: BTreeMap::new(),
@@ -215,19 +219,28 @@ impl Recorder {
             .is_some_and(|ours| ours.same_screens(layout))
     }
 
-    /// The pointer at `point`, reported at `time` and taken on `taken_on`
-    /// (`None` when unknown): the layout its source reported last before it
-    /// (W01 brief, W4). It is kept only when `taken_on` has the recording's
-    /// screens ([`Layout::same_screens`]) and the point lies on it.
-    pub fn position(&mut self, time: Duration, point: Point, taken_on: Option<&Layout>) {
+    /// The pointer at `point`, reported by `source` at `time` and taken on
+    /// `taken_on` (`None` when unknown): the layout its source reported or
+    /// read last before it (W01 brief, W4). It is kept only when `taken_on`
+    /// has the recording's screens ([`Layout::same_screens`]), the point lies
+    /// on it, and `source` reported every position kept before it.
+    pub fn position(
+        &mut self,
+        source: PointerSource,
+        time: Duration,
+        point: Point,
+        taken_on: Option<&Layout>,
+    ) {
         let Some(at) = self.offset(time) else {
             return;
         };
         let Some(layout) = &self.layout else {
             return;
         };
-        if taken_on.is_some_and(|taken_on| self.takes_positions_on(taken_on)) && layout.holds(point)
-        {
+        let ours = self.source.is_none_or(|first| first == source);
+        let taken = taken_on.is_some_and(|taken_on| self.takes_positions_on(taken_on));
+        if ours && taken && layout.holds(point) {
+            self.source = Some(source);
             self.timeline.position(at, point);
         }
     }
@@ -389,7 +402,11 @@ impl Recorder {
         let name = self.created.default_name();
         match self.layout.filter(|_| events.iter().any(is_position)) {
             Some(layout) => {
-                let track = Track { layout, events };
+                let track = Track {
+                    layout,
+                    source: self.source.unwrap_or_default(),
+                    events,
+                };
                 Recording::with_positions(name, self.created, end, track)
             }
             None => Recording::new(name, self.created, end, events),
