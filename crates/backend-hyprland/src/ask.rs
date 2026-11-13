@@ -1,8 +1,12 @@
 //! One ask over Hyprland's socket: a new connection, `cursorpos`, the
 //! answer read to its end (W01 brief, W6).
 //!
-//! Each ask has its own deadline ([`DEADLINE`]) from the connect to the
-//! answer's end, and reads at most [`LIMIT`] bytes. The connection's peer is
+//! Each step has its own deadline ([`DEADLINE`]): the connect, then the
+//! request and its answer to the end, so an ask takes at most twice that.
+//! A deadline per step, not one for the whole ask, so a moment the daemon's
+//! own thread was busy before the connect was seen through (opening the
+//! mice when a recording starts: 78 ms measured) is not taken for a late
+//! answer. At most [`LIMIT`] bytes are read. The connection's peer is
 //! checked before anything is written: its process must be the one the
 //! socket was found to belong to, so nothing is ever asked of another
 //! display's Hyprland. A failure or a late answer is no position; dropping
@@ -18,9 +22,10 @@ use tokio::time::timeout;
 
 use crate::reply::{Global, parse};
 
-/// How long one ask may take, connect to answer: well past the longest
-/// measured (3.1 ms under a game's load, decision 0004), well inside a
-/// modeset, during which Hyprland holds its answers for seconds.
+/// How long each step of an ask may take, the connect and then the answer:
+/// well past the longest ask measured (3.1 ms under a game's load, decision
+/// 0004), well inside a modeset, during which Hyprland holds its answers for
+/// seconds.
 pub(crate) const DEADLINE: Duration = Duration::from_millis(50);
 
 /// The most an answer may hold. The longest Hyprland gives is 24 bytes.
@@ -49,18 +54,23 @@ impl Failure {
 }
 
 /// Asks the socket at `path` where the pointer is, once its peer's process
-/// passes `belongs`, within [`DEADLINE`].
+/// passes `belongs`: the connect within [`DEADLINE`], then the answer
+/// within [`DEADLINE`] of the request.
 pub(crate) async fn ask(path: &Path, belongs: impl FnOnce(u32) -> bool) -> Result<Global, Failure> {
-    match timeout(DEADLINE, exchange(path, belongs)).await {
+    let stream = match timeout(DEADLINE, UnixStream::connect(path)).await {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(_)) | Err(_) => return Err(Failure::NoAnswer),
+    };
+    match timeout(DEADLINE, exchange(stream, belongs)).await {
         Ok(answer) => answer,
         Err(_) => Err(Failure::NoAnswer),
     }
 }
 
-async fn exchange(path: &Path, belongs: impl FnOnce(u32) -> bool) -> Result<Global, Failure> {
-    let mut stream = UnixStream::connect(path)
-        .await
-        .map_err(|_| Failure::NoAnswer)?;
+async fn exchange(
+    mut stream: UnixStream,
+    belongs: impl FnOnce(u32) -> bool,
+) -> Result<Global, Failure> {
     let peer = stream
         .peer_cred()
         .ok()

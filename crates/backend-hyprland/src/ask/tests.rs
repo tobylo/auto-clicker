@@ -113,3 +113,38 @@ async fn an_ask_that_is_never_answered_ends_at_its_deadline() {
         started.elapsed()
     );
 }
+
+#[test]
+fn an_answer_that_came_while_the_daemon_was_busy_is_not_late() {
+    // The daemon's one thread blocks past the deadline right after the ask
+    // began, as it does opening the mice when a recording starts (78 ms
+    // measured on the laptop); Hyprland is ready all along, on its own
+    // thread here.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = TempDir::new("busy");
+    let listener = std::os::unix::net::UnixListener::bind(dir.socket()).unwrap();
+    let server = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 9];
+        stream.read_exact(&mut request).unwrap();
+        stream.write_all(b"640, 400").unwrap();
+    });
+    let socket = dir.socket();
+    let answer = runtime.block_on(async {
+        let mut asking = Box::pin(ask(&socket, ours));
+        // One poll starts the connect; the runtime has not seen it done.
+        std::future::poll_fn(|cx| {
+            assert!(asking.as_mut().poll(cx).is_pending(), "answered at once");
+            std::task::Poll::Ready(())
+        })
+        .await;
+        std::thread::sleep(DEADLINE + Duration::from_millis(30));
+        asking.await
+    });
+    server.join().unwrap();
+    assert_eq!(answer, Ok(Global { x: 640, y: 400 }));
+}
