@@ -135,7 +135,8 @@ impl RecordingFeed {
             recorder.motion(time, dx, dy);
             fed = true;
         });
-        if fed && (dx != 0 || dy != 0) {
+        let moved = dx != 0 || dy != 0;
+        if fed && moved {
             self.moved.notify_one();
         }
     }

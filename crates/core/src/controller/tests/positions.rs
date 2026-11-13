@@ -11,7 +11,7 @@ use crate::recording::tests::positions::{at, two_screens};
 use crate::recording::{
     Change, Created, Event, FileName, Layout, Point, Recording, recordable, save,
 };
-use crate::recording::{PointerSource, Track};
+use crate::recording::{PointerSource, Taken, Track};
 
 const W: u16 = 17;
 const HELD_FOR: Duration = Duration::from_millis(500);
@@ -373,10 +373,12 @@ async fn a_recording_gets_the_layout_current_at_its_start() {
         let layout = two_screens();
         d.shared.feed(|recorder| {
             recorder.position(
-                PointerSource::Kwin,
                 now,
                 Point { x: 5, y: 6 },
-                Some(&layout),
+                Taken {
+                    by: PointerSource::Kwin,
+                    on: Some(&layout),
+                },
             )
         });
         sleep(ms(10)).await;

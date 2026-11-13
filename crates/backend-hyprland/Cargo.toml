@@ -1,0 +1,23 @@
+[package]
+name = "auto-clicker-backend-hyprland"
+description = "Hyprland backend of auto-clicker: the pointer's position from Hyprland's socket while recording"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+auto-clicker-core = { path = "../core" }
+# The layout each position is taken on, and the display's listener the
+# socket must belong to (W01 brief, W1 and W4).
+auto-clicker-backend-wayland = { path = "../backend-wayland" }
+# `net` for the socket and its peer's credentials, without `unsafe`.
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time", "io-util", "macros"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+auto-clicker-core = { path = "../core", features = ["fake"] }
+tokio = { version = "1.54.1", features = ["rt", "net", "time", "io-util", "macros", "test-util"] }

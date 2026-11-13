@@ -307,6 +307,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 name = "auto-clicker"
 version = "0.7.0"
 dependencies = [
+ "auto-clicker-backend-hyprland",
  "auto-clicker-backend-kernel",
  "auto-clicker-backend-kwin",
  "auto-clicker-backend-portal",
@@ -317,6 +318,15 @@ dependencies = [
  "ksni",
  "tokio",
  "zbus",
+]
+
+[[package]]
+name = "auto-clicker-backend-hyprland"
+version = "0.7.0"
+dependencies = [
+ "auto-clicker-backend-wayland",
+ "auto-clicker-core",
+ "tokio",
 ]
 
 [[package]]

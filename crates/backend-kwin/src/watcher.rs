@@ -33,7 +33,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use auto_clicker_core::controller::LayoutSignal;
-use auto_clicker_core::recording::{Layout, PointerSource, RecordingFeed};
+use auto_clicker_core::recording::{Layout, PointerSource, RecordingFeed, Taken};
 use futures_util::StreamExt;
 use futures_util::stream;
 use tokio::sync::{Notify, mpsc};
@@ -330,8 +330,16 @@ impl<S: Scripting + 'static> Watcher<S> {
         match body {
             Body::Position(point) => {
                 let taken_on = self.taken_on.as_ref();
-                self.feed
-                    .with(|recorder| recorder.position(PointerSource::Kwin, time, point, taken_on));
+                self.feed.with(|recorder| {
+                    recorder.position(
+                        time,
+                        point,
+                        Taken {
+                            by: PointerSource::Kwin,
+                            on: taken_on,
+                        },
+                    )
+                });
             }
             Body::Layout(layout) => {
                 if !mem::replace(&mut self.first_layout_read, true) {

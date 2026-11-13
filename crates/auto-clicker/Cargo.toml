@@ -13,6 +13,7 @@ auto-clicker-backend-kernel = { path = "../backend-kernel" }
 auto-clicker-backend-portal = { path = "../backend-portal" }
 auto-clicker-backend-kwin = { path = "../backend-kwin" }
 auto-clicker-backend-wayland = { path = "../backend-wayland" }
+auto-clicker-backend-hyprland = { path = "../backend-hyprland" }
 fastrand = "2.5.0"
 # The tray icon (StatusNotifierItem), on tokio.
 ksni = { version = "0.3.7", default-features = false, features = ["tokio"] }

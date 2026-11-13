@@ -6,7 +6,7 @@ use crate::input::Key;
 use crate::recording::tests::positions::screen;
 use crate::recording::tests::positions::{at, two_screens};
 use crate::recording::{Layout, MAX_OUTPUTS, Point, event_bytes};
-use crate::recording::{PointerSource, Track};
+use crate::recording::{PointerSource, Taken, Track};
 
 fn positioned() -> Recorder {
     recorder().with_layout(two_screens())
@@ -15,7 +15,14 @@ fn positioned() -> Recorder {
 /// A position report at `us`, made while the layout was the recording's.
 fn report(recorder: &mut Recorder, us: u64, x: u32, y: u32) {
     let layout = two_screens();
-    recorder.position(PointerSource::Kwin, t(us), Point { x, y }, Some(&layout));
+    recorder.position(
+        t(us),
+        Point { x, y },
+        Taken {
+            by: PointerSource::Kwin,
+            on: Some(&layout),
+        },
+    );
 }
 
 fn click(recorder: &mut Recorder, [down, up]: [u64; 2]) {
@@ -50,24 +57,37 @@ fn positions_are_written_in_version_2_with_the_layout_at_the_start() {
 fn a_recording_keeps_the_source_of_its_first_position_and_drops_the_others() {
     let layout = two_screens();
     let mut recorder = positioned();
-    recorder.position(PointerSource::Kwin, t(500), Point { x: 9, y: 9 }, None);
     recorder.position(
-        PointerSource::Hyprland,
+        t(500),
+        Point { x: 9, y: 9 },
+        Taken {
+            by: PointerSource::Kwin,
+            on: None,
+        },
+    );
+    recorder.position(
         t(900),
         Point { x: 10, y: 20 },
-        Some(&layout),
+        Taken {
+            by: PointerSource::Hyprland,
+            on: Some(&layout),
+        },
     );
     recorder.position(
-        PointerSource::Kwin,
         t(2_000),
         Point { x: 11, y: 20 },
-        Some(&layout),
+        Taken {
+            by: PointerSource::Kwin,
+            on: Some(&layout),
+        },
     );
     recorder.position(
-        PointerSource::Hyprland,
         t(3_000),
         Point { x: 12, y: 20 },
-        Some(&layout),
+        Taken {
+            by: PointerSource::Hyprland,
+            on: Some(&layout),
+        },
     );
     click(&mut recorder, [5_000, 6_000]);
     let recording = finish_at(recorder, t(7_000));
@@ -311,10 +331,12 @@ fn a_layout_differing_only_in_scale_keeps_positions() {
     ])
     .unwrap();
     recorder.position(
-        PointerSource::Kwin,
         t(1_000),
         Point { x: 1, y: 0 },
-        Some(&rescaled),
+        Taken {
+            by: PointerSource::Kwin,
+            on: Some(&rescaled),
+        },
     );
     click(&mut recorder, [2_000, 3_000]);
     let recording = finish_at(recorder, t(4_000));
@@ -362,23 +384,36 @@ fn positions_are_kept_only_while_the_layout_is_the_recordings() {
     let same = two_screens();
     let other = other_layout();
     recorder.position(
-        PointerSource::Kwin,
         t(1_000),
         Point { x: 1, y: 0 },
-        Some(&same),
+        Taken {
+            by: PointerSource::Kwin,
+            on: Some(&same),
+        },
     );
-    recorder.position(PointerSource::Kwin, t(3_000), Point { x: 2, y: 0 }, None);
     recorder.position(
-        PointerSource::Kwin,
+        t(3_000),
+        Point { x: 2, y: 0 },
+        Taken {
+            by: PointerSource::Kwin,
+            on: None,
+        },
+    );
+    recorder.position(
         t(5_000),
         Point { x: 3, y: 0 },
-        Some(&other),
+        Taken {
+            by: PointerSource::Kwin,
+            on: Some(&other),
+        },
     );
     recorder.position(
-        PointerSource::Kwin,
         t(7_000),
         Point { x: 4, y: 0 },
-        Some(&same),
+        Taken {
+            by: PointerSource::Kwin,
+            on: Some(&same),
+        },
     );
     click(&mut recorder, [8_000, 9_000]);
     assert_eq!(
@@ -584,7 +619,14 @@ fn random_input_and_positions_always_make_a_valid_recording() {
                         x: rng.u32(0..6_000),
                         y: rng.u32(0..1_500),
                     };
-                    recorder.position(PointerSource::Kwin, t(now), point, layout);
+                    recorder.position(
+                        t(now),
+                        point,
+                        Taken {
+                            by: PointerSource::Kwin,
+                            on: layout,
+                        },
+                    );
                 }
             }
         }

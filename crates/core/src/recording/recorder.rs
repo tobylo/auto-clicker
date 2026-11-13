@@ -105,6 +105,15 @@ impl KeyInput {
     }
 }
 
+/// How a position was taken: by which source, on which layout (`None`
+/// when unknown): the layout its source reported, or the display gave,
+/// when it was taken.
+#[derive(Clone, Copy, Debug)]
+pub struct Taken<'a> {
+    pub by: PointerSource,
+    pub on: Option<&'a Layout>,
+}
+
 /// Motion and wheel summed since `at`.
 #[derive(Clone, Copy, Debug)]
 struct Bucket {
@@ -219,30 +228,28 @@ impl Recorder {
             .is_some_and(|ours| ours.same_screens(layout))
     }
 
-    /// The pointer at `point`, reported by `source` at `time` and taken on
-    /// `taken_on` (`None` when unknown): the layout its source reported or
-    /// read last before it (W01 brief, W4). It is kept only when `taken_on`
-    /// has the recording's screens ([`Layout::same_screens`]), the point lies
-    /// on it, and `source` reported every position kept before it.
-    pub fn position(
-        &mut self,
-        source: PointerSource,
-        time: Duration,
-        point: Point,
-        taken_on: Option<&Layout>,
-    ) {
+    /// The pointer at `point`, reported at `time` as `taken` says: by which
+    /// source, on which layout (W01 brief, W4). It is kept only when that
+    /// layout has the recording's screens ([`Layout::same_screens`]), the
+    /// point lies on it, and the source reported every position kept
+    /// before it.
+    pub fn position(&mut self, time: Duration, point: Point, taken: Taken<'_>) {
         let Some(at) = self.offset(time) else {
             return;
         };
-        let Some(layout) = &self.layout else {
-            return;
-        };
-        let ours = self.source.is_none_or(|first| first == source);
-        let taken = taken_on.is_some_and(|taken_on| self.takes_positions_on(taken_on));
-        if ours && taken && layout.holds(point) {
-            self.source = Some(source);
+        if self.keeps(point, taken) {
+            self.source = Some(taken.by);
             self.timeline.position(at, point);
         }
+    }
+
+    fn keeps(&self, point: Point, taken: Taken<'_>) -> bool {
+        let Some(layout) = &self.layout else {
+            return false;
+        };
+        let ours = self.source.is_none_or(|first| first == taken.by);
+        let on_ours = taken.on.is_some_and(|on| self.takes_positions_on(on));
+        ours && on_ours && layout.holds(point)
     }
 
     /// A key or button event from `device` at `time`.

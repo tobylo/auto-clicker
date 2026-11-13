@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::os::unix::net::UnixStream;
 
-use auto_clicker_core::recording::Layout;
 use tokio::io::Interest;
 use wayland_client::backend::{ReadEventsGuard, WaylandError};
 use wayland_client::protocol::wl_callback::{self, WlCallback};
@@ -277,8 +276,8 @@ pub(crate) struct Link {
 
 impl Link {
     /// Connects over `stream`, binds the outputs and reads the first
-    /// layout; `None` while it is not a whole layout.
-    pub(crate) async fn start(stream: UnixStream) -> Result<(Link, Option<Layout>), NoScreens> {
+    /// layout, which is `None` while it is not whole.
+    pub(crate) async fn start(stream: UnixStream) -> Result<(Link, Settled), NoScreens> {
         let mut link = Link::over(stream)?;
         let queue = link.queue.handle();
         let registry = link.connection.display().get_registry(&queue, ());
@@ -286,12 +285,14 @@ impl Link {
         link.until(|client| client.globals_known).await?;
         link.client.bind_offered(&registry, &queue)?;
         link.until(|client| client.settled.is_some()).await?;
-        let first = link
-            .client
-            .settled
-            .take()
-            .and_then(|settled| settled.layout);
-        Ok((link, first))
+        let first = link.client.settled.take().unwrap_or_default();
+        Ok((
+            link,
+            Settled {
+                moved: false,
+                ..first
+            },
+        ))
     }
 
     /// A connection over `stream`, nothing sent yet.

@@ -42,7 +42,7 @@ pub use json::event_bytes;
 pub use layout::{Layout, MAX_OUTPUTS, Output, OutputSpec, Point, Rect};
 pub use library::{FileName, Found, Listing, LoadError, MAX_FILE_BYTES, list, load};
 pub use manage::{ChangeError, Changed, delete, rename};
-pub use recorder::{Ending, KeyInput, Recorder};
+pub use recorder::{Ending, KeyInput, Recorder, Taken};
 pub use source::PointerSource;
 pub use store::{recordings_dir, save};
 pub use tap::{RecordingFeed, RecordingSlot};

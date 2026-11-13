@@ -13,6 +13,7 @@ mod window;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use auto_clicker_backend_hyprland::Hyprland;
 use auto_clicker_backend_kernel::monotonic_now;
 use auto_clicker_backend_kwin::Kwin;
 use auto_clicker_backend_portal::{PortalOutput, token_path};
@@ -28,7 +29,7 @@ use tokio::time::timeout;
 
 use detect::{Detected, Output, detect};
 use instance::ClaimError;
-use platform::{Hotkeys, Kernel, Portal};
+use platform::{Desktop, Hotkeys, Kernel, Portal};
 
 /// Another daemon is running in this session. The user service does not
 /// restart on it.
@@ -58,19 +59,25 @@ async fn daemon() -> ExitCode {
         Ok(name) => name,
         Err(status) => return status,
     };
-    // The layout's sources are picked once, with the name claimed. Only now
-    // may anything clean up after an earlier daemon: a second one never
-    // touches its scripts. However this one ends from here on, it unloads
-    // them.
+    // The layout's and the pointer's sources are picked once, with the name
+    // claimed. Only now may anything clean up after an earlier daemon: a
+    // second one never touches its scripts. However this one ends from here
+    // on, it unloads them.
     let wayland = connect_wayland().await;
     let kwin = serve_kwin(&name, &wayland).await;
-    let status = run(name, wayland, kwin.clone()).await;
+    let hyprland = Hyprland::find(&wayland, monotonic_now).await;
+    let desktop = Desktop {
+        wayland,
+        kwin: kwin.clone(),
+        hyprland,
+    };
+    let status = run(name, desktop).await;
     kwin.exit().await;
     status
 }
 
 /// Picks the routes and runs the controller on them until it ends.
-async fn run(name: instance::Claim, wayland: Wayland, kwin: Kwin) -> ExitCode {
+async fn run(name: instance::Claim, desktop: Desktop) -> ExitCode {
     let (config, config_error, file) = load_config();
     let portal = PortalOutput::new(token_path());
     // Whatever detection finds, the daemon runs: a job without a route says
@@ -92,8 +99,7 @@ async fn run(name: instance::Claim, wayland: Wayland, kwin: Kwin) -> ExitCode {
                 Portal {
                     output: portal,
                     hotkeys,
-                    wayland,
-                    kwin,
+                    desktop,
                 },
                 start,
                 name,
@@ -108,11 +114,7 @@ async fn run(name: instance::Claim, wayland: Wayland, kwin: Kwin) -> ExitCode {
         config_error,
         file,
     };
-    let kernel = Kernel {
-        hotkeys,
-        wayland,
-        kwin,
-    };
+    let kernel = Kernel { hotkeys, desktop };
     serve(kernel, start, name).await
 }
 

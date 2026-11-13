@@ -21,6 +21,7 @@ mod client;
 #[cfg(test)]
 mod compositor_tests;
 mod gather;
+pub mod process;
 mod socket;
 
 use std::cell::{Cell, RefCell};
@@ -38,6 +39,7 @@ use auto_clicker_core::recording::Layout;
 use tokio::time::{Instant, timeout_at};
 
 use client::Link;
+pub use gather::Corner;
 use gather::Settled;
 
 /// The Wayland display as the daemon uses it. Clones share one connection.
@@ -47,6 +49,11 @@ pub struct Wayland(Rc<Shared>);
 struct Shared {
     /// The last whole layout, or why it is not known.
     layout: RefCell<Result<Layout, NoScreens>>,
+    /// Where the last whole layout was moved from.
+    corner: Cell<Corner>,
+    /// How many times the layout changed, became unknown or is unknown for
+    /// another reason: each time the controller's signal fires.
+    changes: Cell<u64>,
     compositor: Option<NonZeroU32>,
     /// The display's socket, as found at start: where a connection is made
     /// again. `None` without a display.
@@ -72,7 +79,7 @@ impl Wayland {
         };
         match opened {
             Ok(stream) => Wayland::over(stream, deadline, path).await,
-            Err(missing) => Wayland::of(None, Some(path), None, Err(missing)),
+            Err(missing) => Wayland::of(None, Some(path), Settled::default(), Err(missing)),
         }
     }
 
@@ -86,28 +93,30 @@ impl Wayland {
         };
         let path = Some(path);
         match started {
-            Ok((link, layout)) => Wayland::of(compositor, path, layout, Ok(link)),
-            Err(missing) => Wayland::of(compositor, path, None, Err(said(missing))),
+            Ok((link, first)) => Wayland::of(compositor, path, first, Ok(link)),
+            Err(missing) => Wayland::of(compositor, path, Settled::default(), Err(said(missing))),
         }
     }
 
     /// No display: the layout is never known, for `why`.
     pub fn none(why: NoScreens) -> Wayland {
-        Wayland::of(None, None, None, Err(why))
+        Wayland::of(None, None, Settled::default(), Err(why))
     }
 
     fn of(
         compositor: Option<NonZeroU32>,
         path: Option<PathBuf>,
-        layout: Option<Layout>,
+        first: Settled,
         link: Result<Link, NoScreens>,
     ) -> Wayland {
         let (link, layout) = match link {
-            Ok(link) => (Some(link), layout.ok_or(NoScreens::NotWhole)),
+            Ok(link) => (Some(link), first.layout.ok_or(NoScreens::NotWhole)),
             Err(why) => (None, Err(why)),
         };
         Wayland(Rc::new(Shared {
             layout: RefCell::new(layout),
+            corner: Cell::new(first.corner),
+            changes: Cell::new(0),
             compositor,
             path,
             link: RefCell::new(link),
@@ -119,6 +128,24 @@ impl Wayland {
     /// known.
     pub fn layout(&self) -> Result<Layout, NoScreens> {
         self.0.layout.borrow().clone()
+    }
+
+    /// The current layout, where it was moved from, and how many times it
+    /// changed since the start: one value, so a position is never moved by
+    /// one layout's corner and judged by another's (brief W4).
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            layout: self.layout(),
+            corner: self.0.corner.get(),
+            changes: self.changes(),
+        }
+    }
+
+    /// How many times the layout changed, became unknown or is unknown for
+    /// another reason since the start; the same count [`Wayland::snapshot`]
+    /// gives.
+    pub fn changes(&self) -> u64 {
+        self.0.changes.get()
     }
 
     /// The process listening on the display's socket; `None` without a
@@ -142,6 +169,16 @@ impl Wayland {
         let link = self.0.link.borrow_mut().take();
         Box::pin(watch(Rc::clone(&self.0), link, changed, again))
     }
+}
+
+/// The layout at one moment ([`Wayland::snapshot`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Snapshot {
+    pub layout: Result<Layout, NoScreens>,
+    /// Where the layout was moved from; meaningless while it is unknown.
+    pub corner: Corner,
+    /// The change count at that moment ([`Wayland::changes`]).
+    pub changes: u64,
 }
 
 fn too_late() -> NoScreens {
@@ -234,8 +271,7 @@ impl Shared {
                 () = again.fired() => {}
                 started = self.start_again() => {
                     return match started {
-                        Ok((link, layout)) => {
-                            let first = Settled { layout, moved: false };
+                        Ok((link, first)) => {
                             self.publish(first, changed);
                             Some(link)
                         }
@@ -251,7 +287,7 @@ impl Shared {
 
     /// Connects to the display's socket, checks the listener is still the
     /// one found at start, and reads the first layout.
-    async fn start_again(&self) -> Result<(Link, Option<Layout>), NoScreens> {
+    async fn start_again(&self) -> Result<(Link, Settled), NoScreens> {
         let path = self.path.as_ref().ok_or(NoScreens::NoDisplay)?;
         let stream = socket::open(path).await?;
         let listener = socket::listener(&stream);
@@ -268,7 +304,12 @@ impl Shared {
     /// Makes `settled`'s layout the current one; a connection that gives
     /// none has not described every screen.
     fn publish(&self, settled: Settled, changed: &LayoutSignal) {
-        let Settled { layout, moved } = settled;
+        let Settled {
+            layout,
+            corner,
+            moved,
+        } = settled;
+        self.corner.set(corner);
         self.set(layout.ok_or(NoScreens::NotWhole), moved, changed);
     }
 
@@ -284,6 +325,7 @@ impl Shared {
             (was, now) => was != now,
         };
         if told {
+            self.changes.set(self.changes.get().wrapping_add(1));
             changed.changed();
         }
     }
