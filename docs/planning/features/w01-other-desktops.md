@@ -110,6 +110,7 @@ W01d (Route A, decision 15):
 - The socket path built only from a `HYPRLAND_INSTANCE_SIGNATURE` that is one path component; the reply's exact grammar (`x, y`: signed whole logical px, floored, global, read to EOF; negative and in-no-output positions occur); the cap, the first ask and the last ask. Hyprland holds an answer during a modeset (2.66 s measured for DP-1), so the per-request deadline decides what a recording loses then.
 - Playback on Hyprland sends every relative move and then its position (decision 15): how the platform tells playback which rule applies, and the test that a covered move is still sent there and still skipped on Plasma.
 - W4: positions stamped when the answer is read, dropped within 10 ms before a layout change.
+- A recording made on Hyprland and played on Plasma: its positions taken while a game held the pointer would cover moves that Plasma's skip rule drops, and format 2 does not say where a recording was made. Either the recording carries where it was made (a format change, beside R03 decision 7's version 3) or the send-every-move rule applies on every compositor; the owner decides in W01d.
 - Replaying a floored `cursorpos` from the middle of its pixel needs the recording to say how its positions were rounded: a format version 3 (R03 decision 7), or accepting floor's error within criterion 6's scale.
 
 W01e: the exact wording of each reason, in English and Swedish.
