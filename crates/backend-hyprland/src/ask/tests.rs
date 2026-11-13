@@ -102,6 +102,17 @@ async fn a_socket_of_another_process_is_asked_nothing() {
 }
 
 #[tokio::test]
+async fn a_socket_of_another_process_stays_refused_however_long_the_check_took() {
+    let dir = TempDir::new("slow-other");
+    let _served = answering(&dir, b"640, 400");
+    let slow = |_| {
+        std::thread::sleep(DEADLINE + Duration::from_millis(30));
+        false
+    };
+    assert_eq!(ask(&dir.socket(), slow).await, Err(Failure::OtherProcess));
+}
+
+#[tokio::test]
 async fn no_socket_is_no_answer() {
     let dir = TempDir::new("none");
     assert_eq!(ask(&dir.socket(), ours).await, Err(Failure::NoAnswer));

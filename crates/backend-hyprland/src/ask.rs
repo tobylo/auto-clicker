@@ -62,13 +62,14 @@ pub(crate) async fn ask(path: &Path, belongs: impl FnOnce(u32) -> bool) -> Resul
         Ok(Ok(stream)) => stream,
         Ok(Err(_)) | Err(_) => return Err(Failure::NoAnswer),
     };
-    // Checked again once the answer is read: one read only after the
+    // Checked again once a position is read: one read only after the
     // daemon's thread was busy past the deadline is late, though it came
-    // in time, since it is stamped when read.
+    // in time, since it is stamped when read. A refusal stays a refusal.
     let deadline = Instant::now() + DEADLINE;
     match timeout_at(deadline, exchange(stream, belongs)).await {
-        Ok(answer) if Instant::now() <= deadline => answer,
-        Ok(_) | Err(_) => Err(Failure::NoAnswer),
+        Ok(Ok(_)) if Instant::now() > deadline => Err(Failure::NoAnswer),
+        Ok(answer) => answer,
+        Err(_) => Err(Failure::NoAnswer),
     }
 }
 
