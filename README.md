@@ -32,13 +32,13 @@ To record macros, and to have the hotkeys read from the keyboards rather than Pl
 sudo usermod -aG input NAME
 ```
 
-Restart the computer, then, logged in as that person:
+On niri and Hyprland, first set up a bar with a tray and, on Hyprland without uwsm, the lines that start the service from its config: see [On niri and Hyprland](docs/guide/install.md#on-niri-and-hyprland). Then restart the computer and, logged in as that person:
 
 ```fish
 systemctl --user enable --now auto-clicker
 ```
 
-The icon appears in the tray. niri and Hyprland need a bar with a tray, and on Hyprland without uwsm a line in its config: see [On niri and Hyprland](docs/guide/install.md#on-niri-and-hyprland).
+The icon appears in the tray.
 
 ## Documentation
 
