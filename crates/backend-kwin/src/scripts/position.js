@@ -27,6 +27,14 @@ function screensChanged() {
 }
 
 function reportPosition() {
+    // KWin rebuilds its list of outputs one at a time, so an output's
+    // signal can report only some of them, and it moves the pointer before
+    // it says the screens changed (workspace.cpp, updateOutputs). The
+    // layout as it is now goes out first whenever it differs from the last
+    // one reported.
+    if (currentLayout() !== reportedLayout) {
+        reportLayout();
+    }
     const p = workspace.cursorPos;
     callDBus(SERVICE, PATH, INTERFACE, "Position", TOKEN, p.x + " " + p.y);
 }

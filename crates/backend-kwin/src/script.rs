@@ -86,5 +86,11 @@ mod tests {
         let layout = source.find("\nreportLayout();").unwrap();
         let pointer = source.find("\nreportPosition();").unwrap();
         assert!(layout < pointer);
+        // And with each position, when the screens differ from the last
+        // report: KWin moves the pointer before it says they changed.
+        let position = &source[source.find("function reportPosition()").unwrap()..];
+        let checked = position.find("currentLayout() !== reportedLayout").unwrap();
+        let sent = position.find("\"Position\"").unwrap();
+        assert!(checked < sent);
     }
 }
