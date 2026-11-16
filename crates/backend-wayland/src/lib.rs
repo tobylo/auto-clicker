@@ -20,7 +20,9 @@
 mod client;
 #[cfg(test)]
 mod compositor_tests;
+mod cursor;
 mod gather;
+mod place;
 pub mod process;
 mod socket;
 
@@ -39,6 +41,7 @@ use auto_clicker_core::recording::Layout;
 use tokio::time::{Instant, timeout_at};
 
 use client::Link;
+pub use cursor::Cursors;
 pub use gather::Corner;
 use gather::Settled;
 
@@ -65,6 +68,9 @@ struct Shared {
     link: RefCell<Option<Link>>,
     /// A watcher was handed out.
     watched: Cell<bool>,
+    /// The display offered what cursor sessions need at start: a seat and
+    /// ext-image-copy-capture's two managers (W02).
+    cursors: bool,
 }
 
 impl Wayland {
@@ -112,6 +118,9 @@ impl Wayland {
         first: Settled,
         link: Result<Link, NoScreens>,
     ) -> Wayland {
+        let cursors = link
+            .as_ref()
+            .is_ok_and(|link| link.client.cursor_globals.all());
         let (link, layout) = match link {
             Ok(link) => (Some(link), first.layout.ok_or(NoScreens::NotWhole)),
             Err(why) => (None, Err(why)),
@@ -125,6 +134,7 @@ impl Wayland {
             path,
             link: RefCell::new(link),
             watched: Cell::new(false),
+            cursors,
         }))
     }
 
@@ -297,17 +307,20 @@ impl Shared {
     /// Connects to the display's socket, checks the listener is still the
     /// one found at start, and reads the first layout.
     async fn start_again(&self) -> Result<(Link, Settled), NoScreens> {
+        Link::start(self.open_checked().await?).await
+    }
+
+    /// A new connection to the display's socket, whose listener is still
+    /// the one found at start: the stream checked is the one used.
+    async fn open_checked(&self) -> Result<UnixStream, NoScreens> {
         let path = self.path.as_ref().ok_or(NoScreens::NoDisplay)?;
         let stream = socket::open(path).await?;
         let listener = socket::listener(&stream);
         if self.compositor.is_some() && listener != self.compositor {
-            eprintln!(
-                "auto-clicker: another process listens on the Wayland display now, so the \
-                 screens are unknown"
-            );
+            eprintln!("auto-clicker: another process listens on the Wayland display now");
             return Err(NoScreens::CannotConnect);
         }
-        Link::start(stream).await
+        Ok(stream)
     }
 
     /// Makes `settled`'s layout the current one; a connection that gives

@@ -14,7 +14,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use auto_clicker_core::recording::{Layout, Output, Rect};
+use auto_clicker_core::recording::{Layout, Output, Point, Rect};
+
+use crate::place::Place;
 
 /// What the compositor said about one output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +122,9 @@ pub(crate) struct Gather {
     syncing: bool,
     /// See [`Settled::moved`]; since the last settled round trip.
     moved: bool,
+    /// The last settled layout and its outputs' places, by name; `None`
+    /// while it is not whole.
+    last: Option<(Layout, BTreeMap<u32, Place>)>,
 }
 
 impl Gather {
@@ -188,11 +193,12 @@ impl Gather {
         if self.changed || updating {
             return None;
         }
-        let (layout, corner) = self
-            .layout()
-            .map_or((None, Corner::default()), |(layout, corner)| {
-                (Some(layout), corner)
-            });
+        let whole = self.layout();
+        let (layout, corner) = match &whole {
+            Some((layout, corner, _)) => (Some(layout.clone()), *corner),
+            None => (None, Corner::default()),
+        };
+        self.last = whole.map(|(layout, _, places)| (layout, places));
         Some(Settled {
             layout,
             corner,
@@ -200,27 +206,47 @@ impl Gather {
         })
     }
 
+    /// A cursor session's position `(x, y)` on the output `name`, as a
+    /// point on the layout it was taken on, with that layout; `None` while
+    /// anything heard is not settled yet (brief W4: the position may be on
+    /// screens the last layout does not describe), the layout is not
+    /// whole, or the point lies off its output ([`Place::point`]).
+    pub(crate) fn position(&self, name: u32, x: i32, y: i32) -> Option<(Point, Layout)> {
+        if self.changed || self.syncing {
+            return None;
+        }
+        let (layout, places) = self.last.as_ref()?;
+        let point = places.get(&name)?.point(x, y)?;
+        Some((point, layout.clone()))
+    }
+
     /// The outputs as one layout, moved so its bounding box starts at
-    /// (0, 0), and the corner it was moved from; `None` when an output's
-    /// place or size is still missing, or they make no layout
-    /// ([`Layout::new`]).
-    fn layout(&self) -> Option<(Layout, Corner)> {
+    /// (0, 0), the corner it was moved from, and each output's place on
+    /// it; `None` when an output's place or size is still missing, or they
+    /// make no layout ([`Layout::new`]).
+    fn layout(&self) -> Option<(Layout, Corner, BTreeMap<u32, Place>)> {
         if !self.refused.is_empty() {
             return None;
         }
-        let placed: Vec<Placed> = self
+        let placed: Vec<(u32, Placed)> = self
             .screens
-            .values()
-            .map(Placed::of)
+            .iter()
+            .map(|(&name, screen)| Some((name, Placed::of(screen)?)))
             .collect::<Option<_>>()?;
-        let left = placed.iter().map(|screen| screen.x).min()?;
-        let top = placed.iter().map(|screen| screen.y).min()?;
+        let left = placed.iter().map(|(_, screen)| screen.x).min()?;
+        let top = placed.iter().map(|(_, screen)| screen.y).min()?;
+        let places: BTreeMap<u32, Place> = placed
+            .iter()
+            .map(|(name, screen)| Some((*name, screen.place(left, top)?)))
+            .collect::<Option<_>>()?;
         let outputs = placed
             .iter()
-            .map(|screen| screen.output(left, top))
+            .zip(places.values())
+            .map(|((_, screen), place)| screen.output(place))
             .collect::<Option<_>>()?;
         let corner = Corner { x: left, y: top };
-        Layout::new(outputs).ok().map(|layout| (layout, corner))
+        let layout = Layout::new(outputs).ok()?;
+        Some((layout, corner, places))
     }
 }
 
@@ -231,6 +257,8 @@ struct Placed {
     width: u32,
     height: u32,
     scale_milli: u32,
+    /// The current mode as displayed.
+    physical: Option<(u32, u32)>,
 }
 
 impl Placed {
@@ -245,19 +273,44 @@ impl Placed {
             width,
             height,
             scale_milli: scale_milli(screen, width)?,
+            physical: displayed(screen),
         })
     }
 
-    /// The output moved by (`left`, `top`), the bounding box's corner.
-    fn output(&self, left: i64, top: i64) -> Option<Output> {
-        let rect = Rect {
+    /// Its place on the layout, moved by (`left`, `top`), the bounding
+    /// box's corner.
+    fn place(&self, left: i64, top: i64) -> Option<Place> {
+        Some(Place {
             x: u32::try_from(self.x.checked_sub(left)?).ok()?,
             y: u32::try_from(self.y.checked_sub(top)?).ok()?,
             width: self.width,
             height: self.height,
+            physical: self.physical,
+        })
+    }
+
+    /// The output at `place`.
+    fn output(&self, place: &Place) -> Option<Output> {
+        let rect = Rect {
+            x: place.x,
+            y: place.y,
+            width: place.width,
+            height: place.height,
         };
         Output::new(rect, self.scale_milli).ok()
     }
+}
+
+/// The current mode as the output displays it: turned a quarter, its
+/// width is the mode's height.
+fn displayed(screen: &Screen) -> Option<(u32, u32)> {
+    let (width, height) = screen.mode?;
+    let (width, height) = (u32::try_from(width).ok()?, u32::try_from(height).ok()?);
+    Some(if screen.turned {
+        (height, width)
+    } else {
+        (width, height)
+    })
 }
 
 /// The scale in thousandths: the current mode's width over the logical

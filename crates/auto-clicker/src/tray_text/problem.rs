@@ -58,6 +58,7 @@ fn no_pointer(why: NoPointer) -> &'static str {
         NoPointer::HyprlandNoAnswer => "Hyprlands socket svarade inte",
         NoPointer::HyprlandUnreadable => "Hyprland svarade i en form som programmet inte kan läsa",
         NoPointer::HyprlandOtherDisplay => "Hyprlands socket hör till en annan Wayland-display",
+        NoPointer::DisplayNoPosition => "Wayland-displayen gav ingen pekarposition; se loggen",
     }
 }
 

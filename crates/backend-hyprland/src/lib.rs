@@ -6,11 +6,14 @@
 //! Hyprland (W2).
 //!
 //! The source is picked once at start by what answers, never by the
-//! desktop's name (W1): `HYPRLAND_INSTANCE_SIGNATURE` must name a socket
-//! ([`path`]) whose process is the daemon's Wayland display's listener or
-//! its child, the rule KWin's backend follows too. A signature that names
-//! nothing usable, a socket of another display, or no display to check
-//! against leaves Hyprland out, with the reason kept. The first ask at
+//! desktop's name (W1): a socket ([`path`]) whose process is the daemon's
+//! Wayland display's listener or its child, the rule KWin's backend follows
+//! too. The one `HYPRLAND_INSTANCE_SIGNATURE` names is tried first, then
+//! each under `$XDG_RUNTIME_DIR/hypr`, so a Hyprland the daemon was not
+//! told of is still found and its own route kept: the cursor sessions other
+//! compositors report through never stand in for it (W02). A signature
+//! that names nothing of this display leaves Hyprland out, with the reason
+//! kept; none, and nothing found, is no Hyprland. The first ask at
 //! start says whether Hyprland answers; one that does not still picks it,
 //! since Hyprland holds its answers during a modeset, as at login.
 //!
@@ -109,46 +112,38 @@ impl Hyprland {
     }
 
     /// The same for a signature, runtime directory and listener given.
+    /// Without a signature, or with one that names no socket of this
+    /// display, each socket under the runtime directory's `hypr` is tried:
+    /// a Hyprland started without the variable, or with a stale one, is
+    /// still Hyprland (W02).
     pub(crate) async fn find_at(
         signature: Option<OsString>,
         runtime: Option<OsString>,
         listener: Option<NonZeroU32>,
         clock: fn() -> Duration,
     ) -> Hyprland {
-        let Some(signature) = signature else {
-            return Hyprland::of(None, None, clock);
+        let named = signature
+            .as_deref()
+            .zip(runtime.as_deref())
+            .and_then(|(signature, runtime)| path::socket(runtime, signature));
+        let named = match named {
+            Some(socket) => try_socket(socket, listener, clock).await,
+            None => None,
         };
-        let socket = runtime.and_then(|runtime| path::socket(&runtime, &signature));
-        let (Some(socket), Some(listener)) = (socket, listener) else {
-            eprintln!(
-                "auto-clicker: HYPRLAND_INSTANCE_SIGNATURE names no socket this daemon can check \
-                 against its Wayland display, so Hyprland gives no positions"
-            );
-            return Hyprland::of(None, Some(NoPointer::HyprlandOtherDisplay), clock);
-        };
-        let process = Cell::new(None);
-        let answer = ask(&socket, |pid| {
-            process.set(Some(pid));
-            listener_or_child(pid, parent_of(pid), listener) == Some(true)
-        })
-        .await;
-        match (answer, process.get()) {
-            (Err(ask::Failure::OtherProcess), _) | (_, None) => {
-                eprintln!(
-                    "auto-clicker: Hyprland's socket is not this display's, so Hyprland gives \
-                     no positions"
-                );
-                Hyprland::of(None, Some(NoPointer::HyprlandOtherDisplay), clock)
-            }
-            (answer, Some(pid)) => {
-                let found = Hyprland::of(Some((socket, pid)), None, clock);
-                found
-                    .0
-                    .reason
-                    .set(answer.map(|_| ()).map_err(ask::Failure::reason));
-                found
-            }
+        if let Some(found) = named {
+            return found;
         }
+        if let Some(found) = scan(runtime.as_deref(), listener, clock).await {
+            return found;
+        }
+        if signature.is_none() {
+            return Hyprland::of(None, None, clock);
+        }
+        eprintln!(
+            "auto-clicker: HYPRLAND_INSTANCE_SIGNATURE names no socket of this daemon's Wayland \
+             display, so Hyprland gives no positions"
+        );
+        Hyprland::of(None, Some(NoPointer::HyprlandOtherDisplay), clock)
     }
 
     /// Not Hyprland: the platform asks KWin.
@@ -207,6 +202,52 @@ impl Hyprland {
         };
         Box::pin(watcher.run())
     }
+}
+
+/// The first Hyprland under `runtime`'s `hypr` whose process is
+/// `listener` or its child.
+async fn scan(
+    runtime: Option<&std::ffi::OsStr>,
+    listener: Option<NonZeroU32>,
+    clock: fn() -> Duration,
+) -> Option<Hyprland> {
+    let (runtime, listener) = (runtime?, listener?);
+    for socket in path::sockets(runtime) {
+        if let Some(found) = try_socket(socket, Some(listener), clock).await {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Hyprland on `socket`, picked when its process is `listener` or its
+/// child, with whether it answered; `None` when nothing listens there, the
+/// process is another display's, or there is no listener to check against.
+async fn try_socket(
+    socket: PathBuf,
+    listener: Option<NonZeroU32>,
+    clock: fn() -> Duration,
+) -> Option<Hyprland> {
+    let listener = listener?;
+    let process = Cell::new(None);
+    let answer = ask(&socket, |pid| {
+        let belongs = listener_or_child(pid, parent_of(pid), listener) == Some(true);
+        if belongs {
+            process.set(Some(pid));
+        }
+        belongs
+    })
+    .await;
+    if answer == Err(ask::Failure::OtherProcess) {
+        return None;
+    }
+    let pid = process.get()?;
+    let found = Hyprland::of(Some((socket, pid)), None, clock);
+    found
+        .0
+        .reason
+        .set(answer.map(|_| ()).map_err(ask::Failure::reason));
+    Some(found)
 }
 
 /// Asks over the socket found at start, of the process found there.

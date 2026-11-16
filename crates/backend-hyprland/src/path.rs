@@ -2,6 +2,10 @@
 //! built only from a signature that is one path component (W01 brief,
 //! "Settled by W01d"), so the environment cannot point the daemon at
 //! another file.
+//!
+//! Without a signature that names this display's socket, the daemon looks
+//! at each directory under `$XDG_RUNTIME_DIR/hypr` ([`sockets`]), at most
+//! [`MOST`] of them, each name passed through the same rule.
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -20,6 +24,28 @@ pub(crate) fn socket(runtime: &OsStr, signature: &OsStr) -> Option<PathBuf> {
         && !bytes.contains(&0);
     (runtime.is_absolute() && one_component)
         .then(|| runtime.join("hypr").join(signature).join(".socket.sock"))
+}
+
+/// The most directories under `hypr` looked at: one per Hyprland started
+/// since the runtime directory was made, each left behind when it ends.
+pub(crate) const MOST: usize = 16;
+
+/// The sockets of the instances under `runtime`'s `hypr`, by name, at most
+/// [`MOST`]; none when it cannot be read.
+pub(crate) fn sockets(runtime: &OsStr) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(Path::new(runtime).join("hypr")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<_> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .take(MOST)
+        .collect();
+    names.sort();
+    names
+        .iter()
+        .filter_map(|name| socket(runtime, name))
+        .collect()
 }
 
 #[cfg(test)]
@@ -41,5 +67,20 @@ mod tests {
         }
         assert_eq!(socket(OsStr::new("run/user"), OsStr::new(signature)), None);
         assert_eq!(socket(OsStr::new(""), OsStr::new(signature)), None);
+    }
+
+    #[test]
+    fn the_instances_found_are_bounded_and_none_without_a_directory() {
+        let dir =
+            std::env::temp_dir().join(format!("auto-clicker-hypr-dirs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(sockets(dir.as_os_str()).is_empty());
+        for n in 0..MOST + 4 {
+            std::fs::create_dir_all(dir.join("hypr").join(format!("i{n:02}"))).unwrap();
+        }
+        let found = sockets(dir.as_os_str());
+        assert_eq!(found.len(), MOST);
+        assert!(found.iter().all(|path| path.ends_with(".socket.sock")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

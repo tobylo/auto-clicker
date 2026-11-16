@@ -438,6 +438,9 @@ msgstr "Hyprland svarade i en form som programmet inte kan läsa"
 msgid "Hyprland's socket belongs to another display"
 msgstr "Hyprlands socket hör till en annan Wayland-display"
 
+msgid "the Wayland display gave no pointer position; see the log"
+msgstr "Wayland-displayen gav ingen pekarposition; se loggen"
+
 msgid "the screens changed while the point was picked: pick it again"
 msgstr "skärmarna ändrades medan punkten valdes: välj den igen"
 

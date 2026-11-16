@@ -212,6 +212,10 @@ fn no_positions(said: &Said<'_>) {
             NoPositions::Pointer(NoPointer::HyprlandOtherDisplay),
             "Hyprlands socket hör till en annan Wayland-display",
         ),
+        (
+            NoPositions::Pointer(NoPointer::DisplayNoPosition),
+            "Wayland-displayen gav ingen pekarposition; se loggen",
+        ),
     ];
     for (why, swedish) in reasons {
         assert_eq!(

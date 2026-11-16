@@ -70,6 +70,7 @@ impl Said<'_> {
             NoPointer::HyprlandNoAnswer => t.invoke_no_pointer_hyprland_no_answer(),
             NoPointer::HyprlandUnreadable => t.invoke_no_pointer_hyprland_unreadable(),
             NoPointer::HyprlandOtherDisplay => t.invoke_no_pointer_hyprland_other_display(),
+            NoPointer::DisplayNoPosition => t.invoke_no_pointer_display_no_position(),
         }
     }
 

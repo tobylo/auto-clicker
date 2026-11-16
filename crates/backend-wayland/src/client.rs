@@ -15,9 +15,11 @@ use wayland_client::backend::{ReadEventsGuard, WaylandError};
 use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_output::{self, Transform, WlOutput};
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
-use wayland_client::{Connection, Dispatch, DispatchError, EventQueue, Proxy, QueueHandle, WEnum};
+use wayland_client::{Connection, DispatchError, EventQueue, Proxy, QueueHandle, WEnum};
 use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_manager_v1::ZxdgOutputManagerV1;
 use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_v1::{self, ZxdgOutputV1};
+
+use auto_clicker_core::recording::{Layout, Point};
 
 use crate::gather::{Gather, Heard, Settled};
 use crate::socket::{self, Waiting};
@@ -41,6 +43,8 @@ pub(crate) enum Mark {
     Globals,
     /// One asked for by [`Gather`].
     Layout,
+    /// After the seat was bound: what it can do is known.
+    Seat,
 }
 
 /// An output and its xdg-output.
@@ -51,7 +55,7 @@ struct Bound {
 
 /// A global the compositor offers.
 #[derive(Clone, Copy, Debug)]
-struct Global {
+pub(crate) struct Global {
     name: u32,
     version: u32,
 }
@@ -72,6 +76,16 @@ pub(crate) struct Client {
     synced: bool,
     /// What a round trip settled on, until it is taken.
     pub(crate) settled: Option<Settled>,
+    registry: Option<WlRegistry>,
+    /// The globals cursor sessions need, as offered.
+    pub(crate) cursor_globals: sessions::Offered,
+    /// The seat's capabilities came, and whether it has a pointer.
+    seat_known: bool,
+    pointer_capable: bool,
+    /// A recording's cursor sessions, once opened.
+    sessions: Option<sessions::Sessions>,
+    /// Positions placed as they were heard, until they are taken.
+    pub(crate) positions: Vec<(Point, Layout)>,
 }
 
 /// An event as it arrived: for which object, with that object's data, and
@@ -87,14 +101,14 @@ struct Arrived<'a, I: Proxy, U> {
 /// `Client::$handler`: the five interfaces share `Dispatch`'s signature.
 macro_rules! dispatch_to {
     ($interface:ty, $data:ty, $handler:ident) => {
-        impl Dispatch<$interface, $data> for Client {
+        impl ::wayland_client::Dispatch<$interface, $data> for Client {
             fn event(
                 client: &mut Self,
                 proxy: &$interface,
                 event: <$interface as Proxy>::Event,
                 data: &$data,
-                _: &Connection,
-                queue: &QueueHandle<Self>,
+                _: &::wayland_client::Connection,
+                queue: &::wayland_client::QueueHandle<Self>,
             ) {
                 client.$handler(Arrived {
                     proxy,
@@ -112,6 +126,9 @@ dispatch_to!(WlOutput, u32, output_event);
 dispatch_to!(ZxdgOutputV1, u32, xdg_output_event);
 dispatch_to!(ZxdgOutputManagerV1, (), manager_event);
 dispatch_to!(WlCallback, Mark, callback_event);
+
+mod sessions;
+pub(crate) use sessions::Refused;
 
 impl Client {
     /// Binds the outputs offered at start and their xdg-outputs.
@@ -148,6 +165,7 @@ impl Client {
         }
         let output: WlOutput = registry.bind(name, version.min(OUTPUT_VERSION), queue, name);
         let xdg = manager.get_xdg_output(&output, queue, name);
+        self.open_session(name, &output, queue);
         self.outputs.insert(name, Bound { output, xdg });
         self.gather.added(name);
     }
@@ -162,6 +180,8 @@ impl Client {
         {
             self.manager_offered = None;
         }
+        self.cursor_globals.removed(name);
+        self.close_session(name);
         self.gather.removed(name);
         let Some(Bound { output, xdg }) = self.outputs.remove(&name) else {
             return;
@@ -183,7 +203,9 @@ impl Client {
                 match interface.as_str() {
                     OUTPUT => self.bind_output(arrived.proxy, arrived.queue, global),
                     XDG_OUTPUT_MANAGER => self.manager_offered = Some(global),
-                    _ => {}
+                    other => {
+                        self.cursor_globals.note(other, global);
+                    }
                 }
             }
             wl_registry::Event::GlobalRemove { name } => self.remove_global(name),
@@ -234,6 +256,7 @@ impl Client {
         match arrived.data {
             Mark::Globals => self.globals_known = true,
             Mark::Layout => self.synced = true,
+            Mark::Seat => self.seat_known = true,
         }
     }
 
@@ -281,6 +304,7 @@ impl Link {
         let mut link = Link::over(stream)?;
         let queue = link.queue.handle();
         let registry = link.connection.display().get_registry(&queue, ());
+        link.client.registry = Some(registry.clone());
         link.connection.display().sync(&queue, Mark::Globals);
         link.until(|client| client.globals_known).await?;
         link.client.bind_offered(&registry, &queue)?;
@@ -453,5 +477,7 @@ fn dispatch_error(err: DispatchError) -> NoScreens {
     }
 }
 
+#[cfg(test)]
+pub(crate) mod fake;
 #[cfg(test)]
 mod tests;
