@@ -12,7 +12,7 @@ Clicking, hotkeys, recording and playback of relative movement already work on n
 
 In scope: a layout source on xdg-output for every desktop, Plasma included (it matches KWin's layout, decision 0004); picking the sources at start; positions on Hyprland; the tray's and tooltip's wording for a missing source; the README for niri and Hyprland users.
 
-Out of scope: GNOME; the ScreenCast portal as a position source; the portal route on niri and Hyprland (`auto` already falls back to the kernel route); a tray of the program's own (niri and Hyprland users run a bar with a StatusNotifierItem tray); positions on niri (W02, waiting for a niri release with ext-image-copy-capture cursor sessions, [0004](../../decisions/0004-pointer-mapping-on-niri-and-hyprland.md)); working around niri's rounding (decision 8); a virtual device the user binds to one output in Hyprland's config (the README says positions and picking assume it is not).
+Out of scope: GNOME; the ScreenCast portal as a position source; the portal route on niri and Hyprland (`auto` already falls back to the kernel route); a tray of the program's own (niri and Hyprland users run a bar with a StatusNotifierItem tray); positions on niri (W02, #79: built against niri's main branch through `niri-git`, on ext-image-copy-capture cursor sessions, [0004](../../decisions/0004-pointer-mapping-on-niri-and-hyprland.md)); working around niri's rounding (decision 8); a virtual device the user binds to one output in Hyprland's config (the README says positions and picking assume it is not).
 
 ## Invariants
 
@@ -57,7 +57,7 @@ Decided by the owner in refinement (2026-11-12):
 
 Defaults (reviewed; go ahead without asking):
 12. Invariants W1 to W7.
-13. niri: no upstream request for a pointer command. Its maintainer has declined one (niri PR #1924) and points to ext-image-copy-capture cursor sessions, already on niri's main branch (0004). W02 takes it up once a release ships them.
+13. niri: no upstream request for a pointer command. Its maintainer has declined one (niri PR #1924) and points to ext-image-copy-capture cursor sessions, already on niri's main branch (0004). W02 took it up against that branch (`niri-git`), without waiting for a release.
 14. Decision record 0004 holds every measurement, each marked measured or read from source; W01a and W01c add theirs.
 
 Decided by the owner after W01c (2026-11-13):

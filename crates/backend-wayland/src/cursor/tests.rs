@@ -188,12 +188,24 @@ async fn a_recording_gets_each_position_on_its_output_the_first_without_a_move()
         h.record().await;
         let mut fake = h.connected().await;
         // The position niri sends as each session is made, then a move
-        // onto the right-hand output; the left one's session reports the
-        // cursor's image still overlapping it, off the output.
+        // onto the right-hand output: it enters there and tells its
+        // hotspot; the left one's session reports the cursor's image still
+        // overlapping it, off the output, then leaves. Entering, leaving
+        // and the hotspot give no position.
+        let session = |name| fake.session(name);
+        let event = |object, opcode, words| Message {
+            object,
+            opcode,
+            words,
+        };
         let positions = vec![
+            event(session(A), 0, Vec::new()),
             fake.position(A, 100, 200),
+            event(session(B), 0, Vec::new()),
+            event(session(B), 3, vec![4, 4]),
             fake.position(B, 10, 20),
             fake.position(A, 2050, 20),
+            event(session(A), 1, Vec::new()),
         ];
         sent(&mut fake, positions).await;
         assert_eq!(h.cursors.found(), Some(Ok(())));
