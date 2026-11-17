@@ -4,8 +4,9 @@
 //! another file.
 //!
 //! Without a signature that names this display's socket, the daemon looks
-//! at each directory under `$XDG_RUNTIME_DIR/hypr` ([`sockets`]), at most
-//! [`MOST`] of them, each name passed through the same rule.
+//! at the directories under `$XDG_RUNTIME_DIR/hypr` ([`sockets`]), the
+//! newest first and at most [`MOST`] of them, each name passed through the
+//! same rule.
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -27,25 +28,35 @@ pub(crate) fn socket(runtime: &OsStr, signature: &OsStr) -> Option<PathBuf> {
 }
 
 /// The most directories under `hypr` looked at: one per Hyprland started
-/// since the runtime directory was made, each left behind when it ends.
+/// since the runtime directory was made, and one a Hyprland that crashed
+/// left behind. The running one is among the newest: missing it takes
+/// sixteen Hyprlands started after it.
 pub(crate) const MOST: usize = 16;
 
-/// The sockets of the instances under `runtime`'s `hypr`, by name, at most
-/// [`MOST`]; none when it cannot be read.
+/// The sockets of the instances under `runtime`'s `hypr`, the most recently
+/// changed directory first, at most [`MOST`]; none when it cannot be read.
 pub(crate) fn sockets(runtime: &OsStr) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(Path::new(runtime).join("hypr")) else {
         return Vec::new();
     };
-    let mut names: Vec<_> = entries
+    let mut dated: Vec<_> = entries
         .filter_map(Result::ok)
-        .map(|entry| entry.file_name())
-        .take(MOST)
+        .map(|entry| (changed(&entry), entry.file_name()))
         .collect();
-    names.sort();
-    names
+    dated.sort_by(|a, b| b.cmp(a));
+    dated
         .iter()
-        .filter_map(|name| socket(runtime, name))
+        .take(MOST)
+        .filter_map(|(_, name)| socket(runtime, name))
         .collect()
+}
+
+/// When `entry` last changed; the oldest time when that cannot be read.
+fn changed(entry: &std::fs::DirEntry) -> std::time::SystemTime {
+    entry
+        .metadata()
+        .and_then(|metadata| metadata.modified())
+        .unwrap_or(std::time::UNIX_EPOCH)
 }
 
 #[cfg(test)]
@@ -70,7 +81,7 @@ mod tests {
     }
 
     #[test]
-    fn the_instances_found_are_bounded_and_none_without_a_directory() {
+    fn the_instances_found_are_the_newest_bounded_and_none_without_a_directory() {
         let dir =
             std::env::temp_dir().join(format!("auto-clicker-hypr-dirs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -78,9 +89,16 @@ mod tests {
         for n in 0..MOST + 4 {
             std::fs::create_dir_all(dir.join("hypr").join(format!("i{n:02}"))).unwrap();
         }
+        // The running one is the newest, whatever its name; MOST + 4 = 20.
+        let newest = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::open(dir.join("hypr").join("i19"))
+            .unwrap()
+            .set_modified(newest)
+            .unwrap();
         let found = sockets(dir.as_os_str());
         assert_eq!(found.len(), MOST);
         assert!(found.iter().all(|path| path.ends_with(".socket.sock")));
+        assert_eq!(found[0], dir.join("hypr/i19/.socket.sock"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

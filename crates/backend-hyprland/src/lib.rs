@@ -9,9 +9,10 @@
 //! desktop's name (W1): a socket ([`path`]) whose process is the daemon's
 //! Wayland display's listener or its child, the rule KWin's backend follows
 //! too. The one `HYPRLAND_INSTANCE_SIGNATURE` names is tried first, then
-//! each under `$XDG_RUNTIME_DIR/hypr`, so a Hyprland the daemon was not
-//! told of is still found and its own route kept: the cursor sessions other
-//! compositors report through never stand in for it (W02). A signature
+//! those under `$XDG_RUNTIME_DIR/hypr`, newest first, so a Hyprland the
+//! daemon was not told of is still found and its own route kept: the
+//! cursor sessions other compositors report through never stand in for it
+//! (W02). A signature
 //! that names nothing of this display leaves Hyprland out, with the reason
 //! kept; none, and nothing found, is no Hyprland. The first ask at
 //! start says whether Hyprland answers; one that does not still picks it,
@@ -113,9 +114,9 @@ impl Hyprland {
 
     /// The same for a signature, runtime directory and listener given.
     /// Without a signature, or with one that names no socket of this
-    /// display, each socket under the runtime directory's `hypr` is tried:
-    /// a Hyprland started without the variable, or with a stale one, is
-    /// still Hyprland (W02).
+    /// display, the sockets under the runtime directory's `hypr` are tried,
+    /// newest first: a Hyprland started without the variable, or with a
+    /// stale one, is still Hyprland (W02).
     pub(crate) async fn find_at(
         signature: Option<OsString>,
         runtime: Option<OsString>,
