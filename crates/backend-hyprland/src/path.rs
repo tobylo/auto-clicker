@@ -34,19 +34,20 @@ pub(crate) fn socket(runtime: &OsStr, signature: &OsStr) -> Option<PathBuf> {
 pub(crate) const MOST: usize = 16;
 
 /// The sockets of the instances under `runtime`'s `hypr`, the most recently
-/// changed directory first, at most [`MOST`]; none when it cannot be read.
+/// changed directory first, at most [`MOST`], only those kept while it is
+/// read; none when it cannot be read.
 pub(crate) fn sockets(runtime: &OsStr) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(Path::new(runtime).join("hypr")) else {
         return Vec::new();
     };
-    let mut dated: Vec<_> = entries
-        .filter_map(Result::ok)
-        .map(|entry| (changed(&entry), entry.file_name()))
-        .collect();
-    dated.sort_by(|a, b| b.cmp(a));
-    dated
+    let mut newest = Vec::with_capacity(MOST + 1);
+    for entry in entries.filter_map(Result::ok) {
+        newest.push((changed(&entry), entry.file_name()));
+        newest.sort_by(|a, b| b.cmp(a));
+        newest.truncate(MOST);
+    }
+    newest
         .iter()
-        .take(MOST)
         .filter_map(|(_, name)| socket(runtime, name))
         .collect()
 }
@@ -89,16 +90,17 @@ mod tests {
         for n in 0..MOST + 4 {
             std::fs::create_dir_all(dir.join("hypr").join(format!("i{n:02}"))).unwrap();
         }
-        // The running one is the newest, whatever its name; MOST + 4 = 20.
+        // The running one is the newest, whatever its name: neither first
+        // nor last by name.
         let newest = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
-        std::fs::File::open(dir.join("hypr").join("i19"))
+        std::fs::File::open(dir.join("hypr").join("i05"))
             .unwrap()
             .set_modified(newest)
             .unwrap();
         let found = sockets(dir.as_os_str());
         assert_eq!(found.len(), MOST);
         assert!(found.iter().all(|path| path.ends_with(".socket.sock")));
-        assert_eq!(found[0], dir.join("hypr/i19/.socket.sock"));
+        assert_eq!(found[0], dir.join("hypr/i05/.socket.sock"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

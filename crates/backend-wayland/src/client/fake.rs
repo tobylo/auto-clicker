@@ -357,14 +357,15 @@ impl Fake {
 
 impl Fake {
     /// Answers the round trip after the seat was bound, the seat telling
-    /// first whether it has a pointer.
+    /// first that it has a keyboard and whether it has a pointer.
     pub(crate) async fn seat(&mut self, pointer: bool) {
         let callback = self.until_sync().await;
         let seat = self.id_of(SEAT).unwrap();
         let capabilities = Message {
             object: seat,
             opcode: 0,
-            words: vec![u32::from(pointer)],
+            // A keyboard as well, as on a desktop.
+            words: vec![u32::from(pointer) | 2],
         };
         self.send(vec![capabilities]).await;
         self.answer(callback).await;

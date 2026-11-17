@@ -461,3 +461,18 @@ async fn a_display_another_process_listens_on_now_gives_no_position() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_display_that_no_longer_offers_them_says_why_and_closes() {
+    local(async {
+        let h = Harness::new(true).await;
+        h.record().await;
+        let mut fake = timeout(BOUND, h.display.accept()).await.unwrap();
+        timeout(BOUND, fake.start_with_two()).await.unwrap();
+        assert!(timeout(AT_ONCE, fake.closed()).await.unwrap());
+        settle().await;
+        assert_eq!(h.cursors.found(), Some(Err(NoPointer::DisplayNoPosition)));
+        assert_eq!(h.fired.get(), 1);
+    })
+    .await;
+}
