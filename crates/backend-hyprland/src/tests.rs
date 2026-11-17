@@ -107,8 +107,7 @@ async fn hyprland_of_the_display_is_found_by_its_socket_without_a_usable_signatu
     // A socket of another display: none.
     let other = NonZeroU32::new(u32::MAX - 1);
     assert_eq!(find(None, &runtime, other).await, Found::Absent);
-    // No listener to check against, and someone listens: it may be it.
-    assert_eq!(find(None, &runtime, None).await, Found::Unsure);
+    assert_eq!(find(None, &runtime, None).await, Found::Absent);
 }
 
 #[tokio::test]
@@ -159,14 +158,8 @@ async fn hyprland_the_daemon_cannot_tie_to_its_display_is_refused() {
             "{bad:?}"
         );
     }
-    // Nothing to check against: refused where nothing listens, unsure
-    // where someone does.
-    let empty_with_signature = Runtime::new("refused-nothing");
-    assert_eq!(
-        find(Some(SIGNATURE), &empty_with_signature, None).await,
-        refused
-    );
-    assert_eq!(find(Some(SIGNATURE), &runtime, None).await, Found::Unsure);
+    // Nothing to check against.
+    assert_eq!(find(Some(SIGNATURE), &runtime, None).await, refused);
     // Another display's listener: neither this process nor its parent.
     let other = NonZeroU32::new(u32::MAX - 1);
     assert_eq!(find(Some(SIGNATURE), &runtime, other).await, refused);

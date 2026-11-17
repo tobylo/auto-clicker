@@ -230,12 +230,16 @@ enum Tried {
 }
 
 /// The first of `candidates` whose process is `listener` or its child,
-/// else whether one could not be checked.
+/// else whether one could not be checked; none without a listener to
+/// check against (W01d).
 async fn look(
     candidates: Vec<PathBuf>,
     listener: Option<NonZeroU32>,
     clock: fn() -> Duration,
 ) -> Tried {
+    let Some(listener) = listener else {
+        return Tried::Not;
+    };
     let mut tried = Tried::Not;
     for socket in candidates {
         match try_socket(socket, listener, clock).await {
@@ -251,17 +255,12 @@ async fn look(
 /// child, with whether it answered; not when nothing listens there or the
 /// process is known to be another display's; unsure when the connect
 /// failed otherwise or ran late, or the process could not be told apart
-/// (its peer, its parent or the listener unknown).
-async fn try_socket(
-    socket: PathBuf,
-    listener: Option<NonZeroU32>,
-    clock: fn() -> Duration,
-) -> Tried {
+/// (its peer or its parent unknown).
+async fn try_socket(socket: PathBuf, listener: NonZeroU32, clock: fn() -> Duration) -> Tried {
     let process = Cell::new(None);
     let other = Cell::new(false);
     let answer = ask(&socket, |pid| {
-        let belongs =
-            listener.and_then(|listener| listener_or_child(pid, parent_of(pid), listener));
+        let belongs = listener_or_child(pid, parent_of(pid), listener);
         match belongs {
             Some(true) => process.set(Some(pid)),
             Some(false) => other.set(true),
