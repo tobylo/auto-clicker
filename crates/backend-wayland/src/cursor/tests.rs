@@ -440,7 +440,9 @@ async fn a_setup_past_its_deadline_says_why_and_closes() {
         let mut fake = timeout(BOUND, h.display.accept()).await.unwrap();
         let started = StdInstant::now();
         assert!(timeout(BOUND, fake.closed()).await.unwrap());
-        assert!(started.elapsed() >= SETUP - Duration::from_millis(50));
+        // Closed by the deadline, which began before the connection was
+        // accepted: well past a stop or a refusal.
+        assert!(started.elapsed() >= SETUP / 2);
         settle().await;
         assert_eq!(h.cursors.found(), Some(Err(NoPointer::DisplayNoPosition)));
     })
@@ -473,6 +475,23 @@ async fn a_display_that_no_longer_offers_them_says_why_and_closes() {
         settle().await;
         assert_eq!(h.cursors.found(), Some(Err(NoPointer::DisplayNoPosition)));
         assert_eq!(h.fired.get(), 1);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_seat_that_loses_its_pointer_during_the_recording_says_why_and_closes() {
+    local(async {
+        let h = Harness::new(true).await;
+        h.record().await;
+        let mut fake = h.connected().await;
+        let lost = fake.capabilities(false);
+        fake.send(vec![lost]).await;
+        assert!(timeout(AT_ONCE, fake.closed()).await.unwrap());
+        settle().await;
+        assert_eq!(h.cursors.found(), Some(Err(NoPointer::DisplayNoPosition)));
+        h.stop().await;
+        assert_eq!(h.cursors.found(), Some(Ok(())));
     })
     .await;
 }

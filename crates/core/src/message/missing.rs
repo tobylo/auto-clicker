@@ -64,8 +64,8 @@ pub enum NoPointer {
     /// compositor's, or the signature names no socket of one.
     HyprlandOtherDisplay,
     /// The display's cursor sessions gave no position: their connection
-    /// could not be made in time, has no pointer, or ended during the
-    /// recording. The log says which (W02).
+    /// could not be made in time, has no pointer, or ended or lost the
+    /// pointer during the recording. The log says which (W02).
     DisplayNoPosition,
 }
 

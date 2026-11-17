@@ -193,6 +193,11 @@ impl Client {
         }
     }
 
+    /// Whether the seat said last that it has a pointer.
+    pub(crate) fn has_pointer(&self) -> bool {
+        self.pointer_capable
+    }
+
     fn seat_event(&mut self, arrived: Arrived<'_, WlSeat, ()>) {
         if let wl_seat::Event::Capabilities { capabilities } = arrived.event {
             self.pointer_capable = matches!(

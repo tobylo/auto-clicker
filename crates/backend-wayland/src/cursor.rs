@@ -20,9 +20,10 @@
 //!   on the one connection: a position heard while an update is not
 //!   settled is dropped, and every other is placed on the layout settled
 //!   last ([`Gather::position`]) and handed to the recorder with it.
-//! - **The reason.** A setup that fails or runs late, and a connection that
-//!   ends, set [`NoPointer::DisplayNoPosition`] for the rest of the
-//!   recording; its stop clears it.
+//! - **The reason.** A setup that fails or runs late, a connection that
+//!   ends, and a seat that loses its pointer set
+//!   [`NoPointer::DisplayNoPosition`] for the rest of the recording; its
+//!   stop clears it.
 //!
 //! [`Gather::position`]: crate::gather::Gather::position
 
@@ -191,11 +192,16 @@ impl Watcher {
         }
     }
 
-    /// Reads `link` until it ends, handing each position placed to the
-    /// recording, stamped when it was read.
+    /// Reads `link` until it ends or its seat loses the pointer, whose
+    /// sessions then report nothing more, handing each position placed to
+    /// the recording, stamped when it was read.
     async fn read(&self, mut link: Link) {
         loop {
             if link.dispatch().is_err() {
+                return;
+            }
+            if !link.client.has_pointer() {
+                eprintln!("auto-clicker: the Wayland display's seat no longer has a pointer");
                 return;
             }
             link.client.settled = None;

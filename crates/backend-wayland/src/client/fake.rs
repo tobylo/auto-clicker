@@ -360,15 +360,19 @@ impl Fake {
     /// first that it has a keyboard and whether it has a pointer.
     pub(crate) async fn seat(&mut self, pointer: bool) {
         let callback = self.until_sync().await;
-        let seat = self.id_of(SEAT).unwrap();
-        let capabilities = Message {
-            object: seat,
-            opcode: 0,
-            // A keyboard as well, as on a desktop.
-            words: vec![u32::from(pointer) | 2],
-        };
+        let capabilities = self.capabilities(pointer);
         self.send(vec![capabilities]).await;
         self.answer(callback).await;
+    }
+
+    /// The seat telling what it has: a keyboard, as on a desktop, and a
+    /// pointer when `pointer` holds.
+    pub(crate) fn capabilities(&self, pointer: bool) -> Message {
+        Message {
+            object: self.id_of(SEAT).unwrap(),
+            opcode: 0,
+            words: vec![u32::from(pointer) | 2],
+        }
     }
 
     /// The cursor session on the output `name`.
