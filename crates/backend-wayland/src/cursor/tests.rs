@@ -436,13 +436,13 @@ async fn a_connection_lost_during_the_recording_says_why() {
 async fn a_setup_past_its_deadline_says_why_and_closes() {
     local(async {
         let h = Harness::new(true).await;
+        // Before the recording starts, so before the deadline does.
+        let started = StdInstant::now();
         h.record().await;
         let mut fake = timeout(BOUND, h.display.accept()).await.unwrap();
-        let started = StdInstant::now();
         assert!(timeout(BOUND, fake.closed()).await.unwrap());
-        // Closed by the deadline, which began before the connection was
-        // accepted: well past a stop or a refusal.
-        assert!(started.elapsed() >= SETUP / 2);
+        // Closed by the deadline, not before it.
+        assert!(started.elapsed() >= SETUP);
         settle().await;
         assert_eq!(h.cursors.found(), Some(Err(NoPointer::DisplayNoPosition)));
     })
@@ -493,6 +493,20 @@ async fn a_seat_that_loses_its_pointer_during_the_recording_says_why_and_closes(
         assert_eq!(h.cursors.found(), Some(Err(NoPointer::DisplayNoPosition)));
         h.stop().await;
         assert_eq!(h.cursors.found(), Some(Ok(())));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_seat_removed_during_the_recording_says_why_and_closes() {
+    local(async {
+        let h = Harness::new(true).await;
+        h.record().await;
+        let mut fake = h.connected().await;
+        fake.send(vec![crate::client::fake::removed(SEAT)]).await;
+        assert!(timeout(AT_ONCE, fake.closed()).await.unwrap());
+        settle().await;
+        assert_eq!(h.cursors.found(), Some(Err(NoPointer::DisplayNoPosition)));
     })
     .await;
 }

@@ -33,23 +33,46 @@ pub(crate) fn socket(runtime: &OsStr, signature: &OsStr) -> Option<PathBuf> {
 /// sixteen Hyprlands started after it.
 pub(crate) const MOST: usize = 16;
 
-/// The sockets of the instances under `runtime`'s `hypr`, the most recently
-/// changed directory first, at most [`MOST`], only those kept while it is
-/// read; none when it cannot be read.
-pub(crate) fn sockets(runtime: &OsStr) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(Path::new(runtime).join("hypr")) else {
-        return Vec::new();
+/// The instances found under `runtime`'s `hypr`.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Scan {
+    /// Their sockets, the most recently changed directory first, at most
+    /// [`MOST`], only those kept while it is read.
+    pub(crate) sockets: Vec<PathBuf>,
+    /// Whether the directory, or one of its entries, could not be read:
+    /// an instance may be missing (W02).
+    pub(crate) failed: bool,
+}
+
+/// The instances under `runtime`'s `hypr`; none when there is no such
+/// directory.
+pub(crate) fn sockets(runtime: &OsStr) -> Scan {
+    let entries = match std::fs::read_dir(Path::new(runtime).join("hypr")) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Scan::default(),
+        Err(_) => {
+            return Scan {
+                sockets: Vec::new(),
+                failed: true,
+            };
+        }
     };
+    let mut failed = false;
     let mut newest = Vec::with_capacity(MOST + 1);
-    for entry in entries.filter_map(Result::ok) {
+    for entry in entries {
+        let Ok(entry) = entry else {
+            failed = true;
+            continue;
+        };
         newest.push((changed(&entry), entry.file_name()));
         newest.sort_by(|a, b| b.cmp(a));
         newest.truncate(MOST);
     }
-    newest
+    let sockets = newest
         .iter()
         .filter_map(|(_, name)| socket(runtime, name))
-        .collect()
+        .collect();
+    Scan { sockets, failed }
 }
 
 /// When `entry` last changed; the oldest time when that cannot be read.
@@ -86,7 +109,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("auto-clicker-hypr-dirs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(sockets(dir.as_os_str()).is_empty());
+        assert_eq!(sockets(dir.as_os_str()), Scan::default());
         for n in 0..MOST + 4 {
             std::fs::create_dir_all(dir.join("hypr").join(format!("i{n:02}"))).unwrap();
         }
@@ -97,7 +120,7 @@ mod tests {
             .unwrap()
             .set_modified(newest)
             .unwrap();
-        let found = sockets(dir.as_os_str());
+        let found = sockets(dir.as_os_str()).sockets;
         assert_eq!(found.len(), MOST);
         assert!(found.iter().all(|path| path.ends_with(".socket.sock")));
         assert_eq!(found[0], dir.join("hypr/i05/.socket.sock"));

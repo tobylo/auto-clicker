@@ -132,13 +132,21 @@ impl Hyprland {
             .as_deref()
             .zip(runtime.as_deref())
             .and_then(|(signature, runtime)| path::socket(runtime, signature));
-        let scanned = runtime.as_deref().map(path::sockets).unwrap_or_default();
-        let others = scanned
+        let scan = runtime.as_deref().map(path::sockets).unwrap_or_default();
+        let others = scan
+            .sockets
             .into_iter()
             .filter(|socket| Some(socket) != named.as_ref());
         let candidates: Vec<PathBuf> = named.clone().into_iter().chain(others).collect();
         match look(candidates, listener, clock).await {
             Tried::Picked(found) => found,
+            Tried::Not if scan.failed => {
+                eprintln!(
+                    "auto-clicker: the runtime directory's hypr could not be read, so neither \
+                     Hyprland nor the display's cursor sessions give positions"
+                );
+                Hyprland::of(None, Found::Unsure, clock)
+            }
             Tried::Unsure => {
                 eprintln!(
                     "auto-clicker: a Hyprland socket could not be checked against this daemon's \
@@ -222,16 +230,12 @@ enum Tried {
 }
 
 /// The first of `candidates` whose process is `listener` or its child,
-/// else whether one could not be checked; none without a listener to
-/// check against.
+/// else whether one could not be checked.
 async fn look(
     candidates: Vec<PathBuf>,
     listener: Option<NonZeroU32>,
     clock: fn() -> Duration,
 ) -> Tried {
-    let Some(listener) = listener else {
-        return Tried::Not;
-    };
     let mut tried = Tried::Not;
     for socket in candidates {
         match try_socket(socket, listener, clock).await {
@@ -245,20 +249,30 @@ async fn look(
 
 /// Hyprland on `socket`, picked when its process is `listener` or its
 /// child, with whether it answered; not when nothing listens there or the
-/// process is another display's; unsure when the connect failed otherwise
-/// or ran late.
-async fn try_socket(socket: PathBuf, listener: NonZeroU32, clock: fn() -> Duration) -> Tried {
+/// process is known to be another display's; unsure when the connect
+/// failed otherwise or ran late, or the process could not be told apart
+/// (its peer, its parent or the listener unknown).
+async fn try_socket(
+    socket: PathBuf,
+    listener: Option<NonZeroU32>,
+    clock: fn() -> Duration,
+) -> Tried {
     let process = Cell::new(None);
+    let other = Cell::new(false);
     let answer = ask(&socket, |pid| {
-        let belongs = listener_or_child(pid, parent_of(pid), listener) == Some(true);
-        if belongs {
-            process.set(Some(pid));
+        let belongs =
+            listener.and_then(|listener| listener_or_child(pid, parent_of(pid), listener));
+        match belongs {
+            Some(true) => process.set(Some(pid)),
+            Some(false) => other.set(true),
+            None => {}
         }
-        belongs
+        belongs == Some(true)
     })
     .await;
     let pid = match (answer, process.get()) {
-        (Err(ask::Failure::OtherProcess | ask::Failure::Nothing), _) => return Tried::Not,
+        (Err(ask::Failure::Nothing), _) => return Tried::Not,
+        (Err(ask::Failure::OtherProcess), _) if other.get() => return Tried::Not,
         (_, None) => return Tried::Unsure,
         (_, Some(pid)) => pid,
     };

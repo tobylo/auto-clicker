@@ -107,7 +107,8 @@ async fn hyprland_of_the_display_is_found_by_its_socket_without_a_usable_signatu
     // A socket of another display: none.
     let other = NonZeroU32::new(u32::MAX - 1);
     assert_eq!(find(None, &runtime, other).await, Found::Absent);
-    assert_eq!(find(None, &runtime, None).await, Found::Absent);
+    // No listener to check against, and someone listens: it may be it.
+    assert_eq!(find(None, &runtime, None).await, Found::Unsure);
 }
 
 #[tokio::test]
@@ -158,8 +159,14 @@ async fn hyprland_the_daemon_cannot_tie_to_its_display_is_refused() {
             "{bad:?}"
         );
     }
-    // Nothing to check against.
-    assert_eq!(find(Some(SIGNATURE), &runtime, None).await, refused);
+    // Nothing to check against: refused where nothing listens, unsure
+    // where someone does.
+    let empty_with_signature = Runtime::new("refused-nothing");
+    assert_eq!(
+        find(Some(SIGNATURE), &empty_with_signature, None).await,
+        refused
+    );
+    assert_eq!(find(Some(SIGNATURE), &runtime, None).await, Found::Unsure);
     // Another display's listener: neither this process nor its parent.
     let other = NonZeroU32::new(u32::MAX - 1);
     assert_eq!(find(Some(SIGNATURE), &runtime, other).await, refused);
@@ -221,4 +228,20 @@ async fn a_socket_that_cannot_be_checked_leaves_it_unsure_and_one_left_behind_do
     runtime.answering_as("0a_other", b"640, 400");
     let found = find(Some(SIGNATURE), &runtime, this_process()).await;
     assert_eq!(found, Found::Picked(Ok(())));
+}
+
+#[tokio::test]
+async fn a_hypr_directory_that_cannot_be_read_leaves_it_unsure_unless_one_is_picked() {
+    use std::os::unix::fs::PermissionsExt;
+    let runtime = Runtime::new("unlisted");
+    runtime.answering(b"640, 400");
+    let hypr = runtime.0.join("hypr");
+    // Searchable, so the socket the signature names is reached, but not
+    // listed.
+    std::fs::set_permissions(&hypr, std::fs::Permissions::from_mode(0o100)).unwrap();
+    let without = find(None, &runtime, this_process()).await;
+    let named = find(Some(SIGNATURE), &runtime, this_process()).await;
+    std::fs::set_permissions(&hypr, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(without, Found::Unsure);
+    assert_eq!(named, Found::Picked(Ok(())));
 }

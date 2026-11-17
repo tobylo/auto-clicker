@@ -180,8 +180,7 @@ impl Client {
         {
             self.manager_offered = None;
         }
-        self.cursor_globals.removed(name);
-        self.close_session(name);
+        self.cursor_global_removed(name);
         self.gather.removed(name);
         let Some(Bound { output, xdg }) = self.outputs.remove(&name) else {
             return;

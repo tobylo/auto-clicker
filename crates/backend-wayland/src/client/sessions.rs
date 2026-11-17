@@ -66,6 +66,11 @@ impl Offered {
         }
     }
 
+    /// Whether `name` is the seat offered.
+    fn is_seat(&self, name: u32) -> bool {
+        self.seat.is_some_and(|seat| seat.name == name)
+    }
+
     /// Whether all three are offered.
     pub(crate) fn all(&self) -> bool {
         self.seat.is_some() && self.capture.is_some() && self.sources.is_some()
@@ -186,16 +191,21 @@ impl Client {
         }
     }
 
-    /// Ends the output `name`'s session, if it has one.
-    pub(crate) fn close_session(&mut self, name: u32) {
+    /// The global `name` went: an output's session ends with it, and the
+    /// seat the sessions were made on takes their pointer with it.
+    pub(crate) fn cursor_global_removed(&mut self, name: u32) {
+        if self.sessions.is_some() && self.cursor_globals.is_seat(name) {
+            self.pointer_capable = false;
+        }
+        self.cursor_globals.removed(name);
         if let Some(sessions) = &mut self.sessions {
             sessions.close(name);
         }
     }
 
     /// Whether the seat has a pointer: as it said last before the sessions
-    /// opened, and since then whether it never lost it, since the sessions
-    /// stay on the pointer they were made with.
+    /// opened, and since then whether it never lost it and was never
+    /// removed, since the sessions stay on the pointer they were made with.
     pub(crate) fn has_pointer(&self) -> bool {
         self.pointer_capable
     }
