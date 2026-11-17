@@ -104,7 +104,7 @@ fn an_update_to_two_outputs_interleaved_is_never_read_half_done() {
 }
 
 #[test]
-fn a_round_trip_answered_before_an_outputs_done_reads_nothing() {
+fn a_round_trip_answered_before_an_outputs_done_reads_nothing_and_places_nothing() {
     let mut gather = two();
     settled(&mut gather);
     // A's new place, right of B, arrives and the round trip is answered
@@ -112,6 +112,11 @@ fn a_round_trip_answered_before_an_outputs_done_reads_nothing() {
     gather.heard(A, Heard::Position { x: 5488, y: 0 });
     assert!(gather.wants_sync());
     assert_eq!(gather.synced(), None, "read A's place with its old size");
+    assert_eq!(
+        gather.position(B, 0, 0),
+        None,
+        "a position heard while A's update has not ended"
+    );
     gather.heard(
         A,
         Heard::Size {
@@ -444,6 +449,7 @@ fn a_layout_that_is_not_whole_places_no_position() {
     settled(&mut gather).unwrap();
     assert!(gather.position(A, 0, 0).is_some());
     gather.added(11);
+    assert_eq!(gather.position(A, 0, 0), None, "an output came");
     assert!(gather.wants_sync());
     assert_eq!(gather.synced().map(|settled| settled.layout), Some(None));
     assert_eq!(gather.position(A, 0, 0), None);

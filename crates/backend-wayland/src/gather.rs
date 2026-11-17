@@ -123,7 +123,8 @@ pub(crate) struct Gather {
     /// See [`Settled::moved`]; since the last settled round trip.
     moved: bool,
     /// The last settled layout and its outputs' places, by name; `None`
-    /// while it is not whole.
+    /// while it is not whole, and from anything heard until the next
+    /// layout settles (brief W4).
     last: Option<(Layout, BTreeMap<u32, Place>)>,
 }
 
@@ -151,6 +152,7 @@ impl Gather {
     fn came_or_went(&mut self) {
         self.changed = true;
         self.moved = true;
+        self.last = None;
     }
 
     /// The compositor said `heard` about the output `name`.
@@ -160,6 +162,7 @@ impl Gather {
         };
         self.moved |= screen.hear(heard);
         self.changed = true;
+        self.last = None;
     }
 
     /// Asks for the first layout even when nothing is bound.
@@ -208,13 +211,11 @@ impl Gather {
 
     /// A cursor session's position `(x, y)` on the output `name`, as a
     /// point on the layout it was taken on, with that layout; `None` while
-    /// anything heard is not settled yet (brief W4: the position may be on
-    /// screens the last layout does not describe), the layout is not
-    /// whole, or the point lies off its output ([`Place::point`]).
+    /// anything heard is not settled yet, an output's update included
+    /// (brief W4: the position may be on screens the last layout does not
+    /// describe), the layout is not whole, or the point lies off its output
+    /// ([`Place::point`]).
     pub(crate) fn position(&self, name: u32, x: i32, y: i32) -> Option<(Point, Layout)> {
-        if self.changed || self.syncing {
-            return None;
-        }
         let (layout, places) = self.last.as_ref()?;
         let point = places.get(&name)?.point(x, y)?;
         Some((point, layout.clone()))
