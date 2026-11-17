@@ -2,7 +2,7 @@
 
 - Status: accepted, 2026-11-12; Hyprland measured by W01c, 2026-11-13; KWin's absolute moves under a lock by W01d, 2026-11-13; niri's cursor sessions by W02, 2026-11-17. niri and Plasma measured. W01a added niri at a negative position (one output); two outputs wait for a second monitor.
 - Issue: W01 (#75). It shapes the slices in the [W01 brief](../planning/features/w01-other-desktops.md).
-- Measured on: the dev box, niri 26.04 (8ed0da4), Linux 7.3.3-1-cachyos, one output (HDMI-A-1, LG 34GN850, 3440x1440 at 85 Hz); the laptop, KWin 6.8.2, eDP-1 (2560x1600) and DP-1 (3440x1440). Hyprland 0.57.2 on both machines (below). Read from source: niri v26.04 (commit 8ed0da4; 6a0a862 is its tag object) with its pinned smithay (ff5fa7d), Hyprland v0.57.2 (11cbc6c; main at 8333bb7 for the pointer lock), KWin v6.8.2.
+- Measured on: the dev box, niri 26.04 (8ed0da4), and for W02 niri-git 689c1e9 on Linux 7.3.5-1-cachyos with a second output (DP-4); Linux 7.3.3-1-cachyos, one output (HDMI-A-1, LG 34GN850, 3440x1440 at 85 Hz); the laptop, KWin 6.8.2, eDP-1 (2560x1600) and DP-1 (3440x1440). Hyprland 0.57.2 on both machines (below). Read from source: niri v26.04 (commit 8ed0da4; 6a0a862 is its tag object) with its pinned smithay (ff5fa7d), Hyprland v0.57.2 (11cbc6c; main at 8333bb7 for the pointer lock), KWin v6.8.2.
 
 ## Decision
 
@@ -52,7 +52,7 @@ The same device and probe, with `niri msg output HDMI-A-1 position set -- -500 -
 
 ## niri cursor sessions (W02)
 
-Read from source at niri 5935130 with its pinned smithay (65aa86f); checked on the dev box with niri-git 689c1e9, whose 15 later commits touch none of the code below.
+Read from source at niri 5935130 with its pinned smithay (65aa86f); measured on the dev box with niri-git 689c1e9, whose 15 later commits touch none of the code below.
 
 - **What a session sends.** smithay sends a session's position only when it changed (`src/wayland/image_copy_capture/mod.rs:482-505`): `enter`, `hotspot` and `position` when the cursor comes onto the output, `position` on each change, `leave` when it goes. niri computes it as round((pointer − output's logical corner) × scale), in physical px in the output's displayed orientation (`src/niri.rs:6340`), and refreshes it after each pass of its event loop (`refresh_and_flush_clients`), not per frame. A session reports while any part of the cursor's image overlaps its output, so a position can be negative or past the output's size; that one is the neighbour's. The first position is sent as the session is made, with no capture session; a session niri cannot give constraints is stopped with no event (`mod.rs:1054-1102`), and an output that goes drops its sessions with no event.
 - **No screen cast.** niri counts a cursor session as a cast only from its second frame (`src/handlers/image_copy_capture.rs:76-80`, `src/ipc/server.rs:935`); the program never asks for a frame.
@@ -60,6 +60,16 @@ Read from source at niri 5935130 with its pinned smithay (65aa86f); checked on t
 - **The scale.** niri's scales are multiples of 1/120 (`src/utils/scale.rs:53-58`); a client sees no fractional scale, only the mode and xdg-output's logical size, round(mode / scale) (smithay `src/wayland/output/xdg.rs:70`). The program takes the one step that gives back both logical sides, else mode over logical size (at most 0.5 logical px off across the output). The layout's stored thousandths would be up to 3 physical px off at 7/6.
 - **The error,** worst per axis in physical px over a 3440 x 1440 output, stored as whole logical px and played through the absolute device (65536 steps): 0.52 at scale 1, 1.02 at 1.25 and 1.03 at 1.5, with 99 % within 0.50, 0.98 and 0.99 (computed; fractions of a px stored would give 0.52 everywhere). The 0.02 to 0.03 past 1 is the device's quantisation, which every source shares. On top comes niri's ceil box (above): at 1.5 on 3440 px, up to 2.5 px at the right edge, growing across x; 1440 / 1.5 is whole, so y is exact.
 - **Hyprland offers the same globals,** but its sessions report truncated logical px and its locked pointer drifts (Route B, below), so the program uses cursor sessions only where neither KWin nor Hyprland reports the pointer, and finds Hyprland by its socket even without `HYPRLAND_INSTANCE_SIGNATURE`.
+
+### Measured on niri-git (W02, 2026-11-17)
+
+The dev box with niri-git 689c1e9, two outputs side by side: HDMI-A-1 (3440x1440 at 85 Hz) and DP-4 (3440x1440 at 144 Hz) to its right. Tools under the worktree's `.claude/local/w02` (`hm`, from W01c's).
+
+- **Replay.** A virtual mouse puts the pointer at a random place on one output; the cursor session's position goes through the program's mapping and playback's formula, and the session reports where the pointer then lands. 300 places per case, |landed − reported| per axis in physical px: 0 at most on HDMI-A-1 and on DP-4 at scale 1; at most 1 on HDMI-A-1 at 1.25 and at 1.5 (most were 0). With DP-4 beside it, niri placed DP-4 at x = 2294 at 1.5, so its box and the reported one were the same and no ceil gap showed. The scale was set back to 1.
+- **Delay.** A position followed each move 0.05 ms after it at the median, 0.20 ms at the 99th percentile and 0.74 ms at most (3,000 moves at 1 kHz, none missed); 0.11 / 0.26 / 0.42 ms at 125 Hz. niri sends it after each pass of its event loop, not on the output's frame as Hyprland does, so it is well inside R03's 2 ms delivery delay and 5 ms cover window.
+- **A game holding the pointer.** With `lockwin.py` (SDL 3, relative mode, fullscreen) holding the pointer, 2,000 relative moves reached the window and no position came. Then 20 absolute moves gave the window no motion but moved the pointer, across both outputs (20 positions), and left no window focused: niri does not ignore absolute moves under a lock (F4 above).
+- **The daemon.** The release build recorded two clicks made with a virtual mouse, the first without moving after the hotkey started the recording: version 2, positions (945, 439) and (2100, 1099), each just before its press, as the device values predict on the 6880 x 1440 layout. Played back from elsewhere, both presses landed on those pixels in the probe window. `niri msg casts` said "No screencasts." while it recorded.
+- **Idle,** 60 s (`scripts/measure-daemon.py`): 0 CPU ticks, 0 context switches, 1 thread, 8.1 MiB resident, as before. The daemon is 6,388,168 bytes (main 6,257,112: +131 KB, the staging protocols and the cursor sessions).
 
 ## Hyprland, from source (v0.57.2)
 
