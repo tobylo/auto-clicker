@@ -485,8 +485,9 @@ async fn a_seat_that_loses_its_pointer_during_the_recording_says_why_and_closes(
         let h = Harness::new(true).await;
         h.record().await;
         let mut fake = h.connected().await;
-        let lost = fake.capabilities(false);
-        fake.send(vec![lost]).await;
+        // Lost and back in one batch: the sessions stay on the pointer lost.
+        let (lost, back) = (fake.capabilities(false), fake.capabilities(true));
+        fake.send(vec![lost, back]).await;
         assert!(timeout(AT_ONCE, fake.closed()).await.unwrap());
         settle().await;
         assert_eq!(h.cursors.found(), Some(Err(NoPointer::DisplayNoPosition)));

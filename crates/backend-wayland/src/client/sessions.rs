@@ -193,17 +193,21 @@ impl Client {
         }
     }
 
-    /// Whether the seat said last that it has a pointer.
+    /// Whether the seat has a pointer: as it said last before the sessions
+    /// opened, and since then whether it never lost it, since the sessions
+    /// stay on the pointer they were made with.
     pub(crate) fn has_pointer(&self) -> bool {
         self.pointer_capable
     }
 
     fn seat_event(&mut self, arrived: Arrived<'_, WlSeat, ()>) {
         if let wl_seat::Event::Capabilities { capabilities } = arrived.event {
-            self.pointer_capable = matches!(
+            let has = matches!(
                 capabilities,
                 WEnum::Value(capabilities) if capabilities.contains(Capability::Pointer)
             );
+            let kept = self.sessions.is_none() || self.pointer_capable;
+            self.pointer_capable = has && kept;
         }
     }
 
