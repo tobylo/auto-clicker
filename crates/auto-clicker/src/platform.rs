@@ -71,8 +71,9 @@ impl Desktop {
 
     /// Whether KWin, Hyprland or the display's cursor sessions report the
     /// pointer, or why none does: KWin when it does, else a found
-    /// Hyprland's reason, else the cursor sessions' when the display offers
-    /// them, else why KWin's script is unusable, else why Hyprland was
+    /// Hyprland's reason, else that a Hyprland socket did not answer when
+    /// one could not be checked, else the cursor sessions' when the display
+    /// offers them, else why KWin's script is unusable, else why Hyprland was
     /// refused, else nothing reports it. So a stale
     /// `HYPRLAND_INSTANCE_SIGNATURE` on Plasma never hides KWin's own
     /// reason, and cursor sessions never stand in for KWin's or Hyprland's
@@ -113,9 +114,10 @@ impl Desktop {
 
 /// Whether a recording that starts now opens cursor sessions: not when
 /// KWin reports the pointer or Hyprland of this display was found, whose
-/// own routes are measured (W02).
+/// own routes are measured, nor when a Hyprland socket could not be
+/// checked (W02).
 fn cursor_sessions_open(kwin: Result<(), NoPointer>, hyprland: Found) -> bool {
-    kwin.is_err() && !matches!(hyprland, Found::Picked(_))
+    kwin.is_err() && !matches!(hyprland, Found::Picked(_) | Found::Unsure)
 }
 
 /// What [`Desktop::pointer`] says, from what KWin says, what was found of
@@ -128,6 +130,7 @@ fn pointer(
     match (kwin, hyprland, cursors) {
         (Ok(()), _, _) => Ok(()),
         (_, Found::Picked(reason), _) => reason,
+        (_, Found::Unsure, _) => Err(NoPointer::HyprlandNoAnswer),
         (_, _, Some(reason)) => reason,
         (Err(NoPointer::NoSource), Found::Refused(why), None) => Err(why),
         (kwin, _, _) => kwin,
@@ -379,6 +382,14 @@ mod tests {
             // script: the cursor sessions report.
             (Err(NoSource), refused, Some(Ok(())), Ok(())),
             (Err(Unusable), Found::Absent, Some(Ok(())), Ok(())),
+            // A Hyprland socket that could not be checked: no cursor
+            // sessions stand in for it.
+            (
+                Err(NoSource),
+                Found::Unsure,
+                Some(Ok(())),
+                Err(HyprlandNoAnswer),
+            ),
         ];
         for (kwin, hyprland, cursors, said) in cases {
             let label = format!("{kwin:?} {hyprland:?} {cursors:?}");
@@ -391,6 +402,7 @@ mod tests {
             (Err(NoSource), Found::Absent, true),
             (Err(Unusable), Found::Absent, true),
             (Err(NoSource), refused, true),
+            (Err(NoSource), Found::Unsure, false),
         ];
         for (kwin, hyprland, open) in opens {
             assert_eq!(

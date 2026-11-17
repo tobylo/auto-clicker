@@ -113,9 +113,11 @@ async fn a_socket_of_another_process_stays_refused_however_long_the_check_took()
 }
 
 #[tokio::test]
-async fn no_socket_is_no_answer() {
+async fn no_socket_is_no_answer_from_nothing_listening() {
     let dir = TempDir::new("none");
-    assert_eq!(ask(&dir.socket(), ours).await, Err(Failure::NoAnswer));
+    let failure = ask(&dir.socket(), ours).await.unwrap_err();
+    assert_eq!(failure, Failure::Nothing);
+    assert_eq!(failure.reason(), NoPointer::HyprlandNoAnswer);
 }
 
 #[tokio::test]

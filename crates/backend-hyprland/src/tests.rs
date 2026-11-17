@@ -196,3 +196,29 @@ async fn only_a_picked_hyprlands_first_watch_watches() {
     let _nothing = watch(&none);
     assert!(!none.0.watched.get(), "watched without Hyprland");
 }
+
+#[tokio::test]
+async fn a_socket_that_cannot_be_checked_leaves_it_unsure_and_one_left_behind_does_not() {
+    use std::os::unix::fs::PermissionsExt;
+    // Left behind: the socket is there and nobody accepts on it.
+    let runtime = Runtime::new("left");
+    let path = runtime.0.join("hypr").join(SIGNATURE).join(".socket.sock");
+    drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+    assert_eq!(find(None, &runtime, this_process()).await, Found::Absent);
+    // Someone listens, but the connect fails otherwise: it may be this
+    // display's Hyprland.
+    let runtime = Runtime::new("unsure");
+    runtime.answering(b"640, 400");
+    let path = runtime.0.join("hypr").join(SIGNATURE).join(".socket.sock");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert_eq!(find(None, &runtime, this_process()).await, Found::Unsure);
+    assert_eq!(
+        find(Some(SIGNATURE), &runtime, this_process()).await,
+        Found::Unsure
+    );
+    // One of this display beside it is still picked, though the one the
+    // signature names, tried first, could not be checked.
+    runtime.answering_as("0a_other", b"640, 400");
+    let found = find(Some(SIGNATURE), &runtime, this_process()).await;
+    assert_eq!(found, Found::Picked(Ok(())));
+}
