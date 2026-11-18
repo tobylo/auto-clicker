@@ -238,3 +238,10 @@ async fn a_hypr_directory_that_cannot_be_read_leaves_it_unsure_unless_one_is_pic
     assert_eq!(without, Found::Unsure);
     assert_eq!(named, Found::Picked(Ok(())));
 }
+
+#[tokio::test]
+async fn a_file_where_an_instance_would_be_is_nothing_listening() {
+    let runtime = Runtime::new("file");
+    std::fs::write(runtime.0.join("hypr").join("hyprland.log"), b"").unwrap();
+    assert_eq!(find(None, &runtime, this_process()).await, Found::Absent);
+}

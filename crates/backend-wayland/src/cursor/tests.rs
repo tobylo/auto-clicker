@@ -510,3 +510,27 @@ async fn a_seat_removed_during_the_recording_says_why_and_closes() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_seat_removed_while_the_sessions_are_set_up_says_why_and_closes() {
+    local(async {
+        let h = Harness::new(true).await;
+        h.record().await;
+        let mut fake = timeout(BOUND, h.display.accept()).await.unwrap();
+        fake.cursors = true;
+        timeout(BOUND, async {
+            fake.start_with_two().await;
+            let callback = fake.until_sync().await;
+            let has = fake.capabilities(true);
+            fake.send(vec![has, crate::client::fake::removed(SEAT)])
+                .await;
+            fake.answer(callback).await;
+        })
+        .await
+        .unwrap();
+        assert!(timeout(AT_ONCE, fake.closed()).await.unwrap());
+        settle().await;
+        assert_eq!(h.cursors.found(), Some(Err(NoPointer::DisplayNoPosition)));
+    })
+    .await;
+}

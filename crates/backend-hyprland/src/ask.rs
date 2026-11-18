@@ -78,12 +78,11 @@ pub(crate) async fn ask(path: &Path, belongs: impl FnOnce(u32) -> bool) -> Resul
 }
 
 /// Whether a connect failed with `err` because nothing listens: a socket
-/// left behind, or none. Any other failure may be a Hyprland that is busy.
+/// left behind, none, or a file where an instance's directory would be.
+/// Any other failure may be a Hyprland that is busy.
 fn nothing_listens(err: &std::io::Error) -> bool {
-    matches!(
-        err.kind(),
-        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-    )
+    use std::io::ErrorKind::{ConnectionRefused, NotADirectory, NotFound};
+    matches!(err.kind(), NotFound | ConnectionRefused | NotADirectory)
 }
 
 async fn exchange(

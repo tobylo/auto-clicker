@@ -192,9 +192,9 @@ impl Client {
     }
 
     /// The global `name` went: an output's session ends with it, and the
-    /// seat the sessions were made on takes their pointer with it.
+    /// seat, bound or about to be, takes its pointer with it.
     pub(crate) fn cursor_global_removed(&mut self, name: u32) {
-        if self.sessions.is_some() && self.cursor_globals.is_seat(name) {
+        if self.cursor_globals.is_seat(name) {
             self.pointer_capable = false;
         }
         self.cursor_globals.removed(name);
