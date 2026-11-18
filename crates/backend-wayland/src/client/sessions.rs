@@ -136,9 +136,13 @@ impl Link {
         let Some(registry) = self.client.registry.clone() else {
             return Ok(Err(Refused::NotOffered));
         };
-        let seat: WlSeat = registry.bind(seat.name, seat.version.min(SEAT_VERSION), &queue, ());
+        let bound = seat.name;
+        let seat: WlSeat = registry.bind(bound, seat.version.min(SEAT_VERSION), &queue, ());
         self.connection.display().sync(&queue, Mark::Seat);
         self.until(|client| client.seat_known).await?;
+        if !self.client.cursor_globals.is_seat(bound) {
+            return Ok(Err(Refused::NotOffered));
+        }
         if !self.client.pointer_capable {
             return Ok(Err(Refused::NoPointer));
         }

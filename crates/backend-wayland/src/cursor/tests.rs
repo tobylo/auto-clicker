@@ -513,24 +513,37 @@ async fn a_seat_removed_during_the_recording_says_why_and_closes() {
 
 #[tokio::test]
 async fn a_seat_removed_while_the_sessions_are_set_up_says_why_and_closes() {
-    local(async {
-        let h = Harness::new(true).await;
-        h.record().await;
-        let mut fake = timeout(BOUND, h.display.accept()).await.unwrap();
-        fake.cursors = true;
-        timeout(BOUND, async {
-            fake.start_with_two().await;
-            let callback = fake.until_sync().await;
-            let has = fake.capabilities(true);
-            fake.send(vec![has, crate::client::fake::removed(SEAT)])
-                .await;
-            fake.answer(callback).await;
+    // Before and after what it can do comes.
+    for removed_first in [true, false] {
+        local(async {
+            let h = Harness::new(true).await;
+            h.record().await;
+            let mut fake = timeout(BOUND, h.display.accept()).await.unwrap();
+            fake.cursors = true;
+            timeout(BOUND, async {
+                fake.start_with_two().await;
+                let callback = fake.until_sync().await;
+                let mut told = vec![fake.capabilities(true)];
+                let removed = crate::client::fake::removed(SEAT);
+                if removed_first {
+                    told.insert(0, removed);
+                } else {
+                    told.push(removed);
+                }
+                fake.send(told).await;
+                fake.answer(callback).await;
+            })
+            .await
+            .unwrap();
+            assert!(timeout(AT_ONCE, fake.closed()).await.unwrap());
+            settle().await;
+            let found = h.cursors.found();
+            assert_eq!(
+                found,
+                Some(Err(NoPointer::DisplayNoPosition)),
+                "{removed_first}"
+            );
         })
-        .await
-        .unwrap();
-        assert!(timeout(AT_ONCE, fake.closed()).await.unwrap());
-        settle().await;
-        assert_eq!(h.cursors.found(), Some(Err(NoPointer::DisplayNoPosition)));
-    })
-    .await;
+        .await;
+    }
 }
