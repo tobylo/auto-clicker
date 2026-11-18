@@ -122,6 +122,7 @@ pub(super) fn no_pointers() -> Vec<NoPointer> {
         NoPointer::HyprlandNoAnswer,
         NoPointer::HyprlandUnreadable,
         NoPointer::HyprlandOtherDisplay,
+        NoPointer::DisplayNoPosition,
     ]
 }
 

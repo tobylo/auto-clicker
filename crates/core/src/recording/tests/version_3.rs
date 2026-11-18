@@ -42,6 +42,27 @@ fn hyprlands_positions_are_written_as_version_3_and_round_trip() {
 }
 
 #[test]
+fn cursor_session_positions_are_written_as_version_2_and_read_back_as_kwins() {
+    let mut recording = from_hyprland();
+    recording.source = PointerSource::CursorSessions;
+    let text = json(&recording);
+    let start = r#"{"version":2,"name":"n","created":"2026-11-09T18:04:05.123+01:00","duration_us":5000,"layout":["#;
+    assert!(text.starts_with(start), "{text}");
+    let read = Recording::from_json(text.as_bytes()).unwrap();
+    assert_eq!(read.positions_from(), Some(PointerSource::Kwin));
+    recording.source = PointerSource::Kwin;
+    assert_eq!(read, recording);
+    // Played as KWin's: every covered move skipped, positions as stored.
+    assert!(!PointerSource::CursorSessions.sends_every_move());
+    let layout = two_screens();
+    let point = Point { x: 640, y: 400 };
+    assert_eq!(
+        PointerSource::CursorSessions.absolute(&layout, point),
+        PointerSource::Kwin.absolute(&layout, point)
+    );
+}
+
+#[test]
 fn version_2_is_kwins_and_a_recording_without_positions_has_no_source() {
     let read = Recording::from_json(file(2, &format!(",{LAYOUT}")).as_bytes()).unwrap();
     assert_eq!(read.positions_from(), Some(PointerSource::Kwin));

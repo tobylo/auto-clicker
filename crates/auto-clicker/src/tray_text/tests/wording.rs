@@ -284,6 +284,11 @@ fn every_reason_nothing_reports_the_pointer_reads_as_written() {
             "Hyprland's socket belongs to another display",
             "Hyprlands socket hör till en annan Wayland-display",
         ),
+        (
+            pointer(NoPointer::DisplayNoPosition),
+            "the Wayland display gave no pointer position; see the log",
+            "Wayland-displayen gav ingen pekarposition; se loggen",
+        ),
     ];
     for (problem, english, swedish) in rows {
         let english = format!("Recordings keep movement only: {english}");

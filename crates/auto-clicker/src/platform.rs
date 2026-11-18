@@ -1,8 +1,8 @@
 //! The controller's platforms: uinput devices or the desktop's portal for
 //! output, and on either the hotkeys from the keyboards or from the
 //! desktop's shortcuts, the screen layout from the Wayland display and the
-//! pointer from KWin or Hyprland, and the clocks and directory recordings
-//! need.
+//! pointer from KWin, Hyprland or the display's cursor sessions, and the
+//! clocks and directory recordings need.
 
 use std::future::pending;
 use std::path::PathBuf;
@@ -14,7 +14,7 @@ use auto_clicker_backend_kernel::{
 };
 use auto_clicker_backend_kwin::Kwin;
 use auto_clicker_backend_portal::{PortalBackend, PortalOutput, read_shortcuts};
-use auto_clicker_backend_wayland::Wayland;
+use auto_clicker_backend_wayland::{Cursors, Wayland};
 use auto_clicker_core::controller::{
     HotkeyReader, InputLifetime, InputLoss, InputReader, LayoutSignal, LayoutWatch, OpenInput,
     Platform, ReadInput, Route,
@@ -55,11 +55,13 @@ impl Hotkeys {
 }
 
 /// What the desktop gives besides input: the layout from the Wayland
-/// display, the pointer from KWin or Hyprland, whichever counts.
+/// display, the pointer from KWin, Hyprland or the display's cursor
+/// sessions, whichever counts.
 pub struct Desktop {
     pub wayland: Wayland,
     pub kwin: Kwin,
     pub hyprland: Hyprland,
+    pub cursors: Cursors,
 }
 
 impl Desktop {
@@ -67,13 +69,21 @@ impl Desktop {
         self.wayland.layout()
     }
 
-    /// Whether KWin or Hyprland reports the pointer, or why neither does:
-    /// KWin when it does, else a picked Hyprland's reason, else why KWin's
-    /// script is unusable, else why Hyprland was refused, else nothing
-    /// reports it. So a stale `HYPRLAND_INSTANCE_SIGNATURE` on Plasma never
-    /// hides KWin's own reason.
+    /// Whether KWin, Hyprland or the display's cursor sessions report the
+    /// pointer, or why none does: KWin when it does, else a found
+    /// Hyprland's reason, else that a Hyprland socket did not answer when
+    /// one could not be checked, else the cursor sessions' when the display
+    /// offers them, else why KWin's script is unusable, else why Hyprland was
+    /// refused, else nothing reports it. So a stale
+    /// `HYPRLAND_INSTANCE_SIGNATURE` on Plasma never hides KWin's own
+    /// reason, and cursor sessions never stand in for KWin's or Hyprland's
+    /// route (W02).
     fn pointer(&self) -> Result<(), NoPointer> {
-        pointer(self.kwin.pointer(), self.hyprland.found())
+        pointer(
+            self.kwin.pointer(),
+            self.hyprland.found(),
+            self.cursors.found(),
+        )
     }
 
     /// The one watch of the layout and the positions: the display's
@@ -83,27 +93,47 @@ impl Desktop {
     /// come, the first included, has the display's watcher connect again
     /// (W01 brief, W5). Hyprland's feeds positions on Hyprland and fires it
     /// when why it gives none changes.
+    /// The cursor sessions' opens a connection for each recording that
+    /// starts while neither KWin nor Hyprland reports the pointer, feeds it
+    /// its positions, and fires it when why it gives none changes.
     fn watch(&self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
         let hyprland = self
             .hyprland
             .watch(self.wayland.clone(), feed.clone(), changed.clone());
+        let (kwin, found) = (self.kwin.clone(), self.hyprland.clone());
+        let open = Box::new(move || cursor_sessions_open(kwin.pointer(), found.found()));
+        let cursors = self.cursors.watch(feed.clone(), open, changed.clone());
         let pointer = changed.clone();
         joined(
             |restarted| self.kwin.watch(feed, restarted, pointer),
             |again| self.wayland.watch(changed, again),
-            hyprland,
+            [hyprland, cursors],
         )
     }
 }
 
-/// What [`Desktop::pointer`] says, from what KWin says and what was found
-/// of Hyprland.
-fn pointer(kwin: Result<(), NoPointer>, hyprland: Found) -> Result<(), NoPointer> {
-    match (kwin, hyprland) {
-        (Ok(()), _) => Ok(()),
-        (_, Found::Picked(reason)) => reason,
-        (Err(NoPointer::NoSource), Found::Refused(why)) => Err(why),
-        (kwin, _) => kwin,
+/// Whether a recording that starts now opens cursor sessions: not when
+/// KWin reports the pointer or Hyprland of this display was found, whose
+/// own routes are measured, nor when a Hyprland socket could not be
+/// checked (W02).
+fn cursor_sessions_open(kwin: Result<(), NoPointer>, hyprland: Found) -> bool {
+    kwin.is_err() && !matches!(hyprland, Found::Picked(_) | Found::Unsure)
+}
+
+/// What [`Desktop::pointer`] says, from what KWin says, what was found of
+/// Hyprland, and the cursor sessions' reason when the display offers them.
+fn pointer(
+    kwin: Result<(), NoPointer>,
+    hyprland: Found,
+    cursors: Option<Result<(), NoPointer>>,
+) -> Result<(), NoPointer> {
+    match (kwin, hyprland, cursors) {
+        (Ok(()), _, _) => Ok(()),
+        (_, Found::Picked(reason), _) => reason,
+        (_, Found::Unsure, _) => Err(NoPointer::HyprlandNoAnswer),
+        (_, _, Some(reason)) => reason,
+        (Err(NoPointer::NoSource), Found::Refused(why), None) => Err(why),
+        (kwin, _, _) => kwin,
     }
 }
 
@@ -229,19 +259,20 @@ impl Platform for Portal {
 /// the display hears of a restart in the same poll and fires the
 /// controller's signal there, before a playback using positions takes its
 /// next event, however much budget KWin's spent (the display's watcher
-/// reads the word outside it). Hyprland's is polled last, so a layout the
-/// display reads in a poll is published before Hyprland's watcher, in the
-/// same poll, judges a position by it.
+/// reads the word outside it). Hyprland's and the cursor sessions' are
+/// polled last, in that order, so a layout the display reads in a poll is
+/// published before Hyprland's watcher, in the same poll, judges a
+/// position by it.
 fn joined(
     kwin: impl FnOnce(LayoutSignal) -> LayoutWatch,
     display: impl FnOnce(LayoutSignal) -> LayoutWatch,
-    hyprland: LayoutWatch,
+    [hyprland, cursors]: [LayoutWatch; 2],
 ) -> LayoutWatch {
     let restarted = LayoutSignal::default();
     let kwin = kwin(restarted.clone());
     let display = display(restarted);
     Box::pin(async move {
-        tokio::join!(biased; kwin, display, hyprland);
+        tokio::join!(biased; kwin, display, hyprland, cursors);
     })
 }
 
@@ -291,8 +322,10 @@ mod tests {
     }
 
     fn desktop() -> Desktop {
+        let wayland = no_display();
         Desktop {
-            wayland: no_display(),
+            cursors: Cursors::of(&wayland, monotonic_now),
+            wayland,
             kwin: Kwin::none(),
             hyprland: Hyprland::none(),
         }
@@ -324,7 +357,59 @@ mod tests {
             (Err(Unusable), Found::Absent, Err(Unusable)),
         ];
         for (kwin, hyprland, said) in cases {
-            assert_eq!(pointer(kwin, hyprland), said, "{kwin:?} {hyprland:?}");
+            assert_eq!(pointer(kwin, hyprland, None), said, "{kwin:?} {hyprland:?}");
+        }
+    }
+
+    #[test]
+    fn cursor_sessions_count_only_where_neither_kwin_nor_hyprland_reports() {
+        use NoPointer::{
+            DisplayNoPosition, HyprlandNoAnswer, HyprlandOtherDisplay, NoSource, Unusable,
+        };
+        let refused = Found::Refused(HyprlandOtherDisplay);
+        let failed = Some(Err(DisplayNoPosition));
+        let cases = [
+            (Ok(()), Found::Absent, failed, Ok(())),
+            (
+                Err(NoSource),
+                Found::Picked(Err(HyprlandNoAnswer)),
+                Some(Ok(())),
+                Err(HyprlandNoAnswer),
+            ),
+            (Err(NoSource), Found::Absent, Some(Ok(())), Ok(())),
+            (Err(NoSource), Found::Absent, failed, Err(DisplayNoPosition)),
+            // niri with a stale signature, or with no folder for KWin's
+            // script: the cursor sessions report.
+            (Err(NoSource), refused, Some(Ok(())), Ok(())),
+            (Err(Unusable), Found::Absent, Some(Ok(())), Ok(())),
+            // A Hyprland socket that could not be checked: no cursor
+            // sessions stand in for it.
+            (
+                Err(NoSource),
+                Found::Unsure,
+                Some(Ok(())),
+                Err(HyprlandNoAnswer),
+            ),
+        ];
+        for (kwin, hyprland, cursors, said) in cases {
+            let label = format!("{kwin:?} {hyprland:?} {cursors:?}");
+            assert_eq!(pointer(kwin, hyprland, cursors), said, "{label}");
+        }
+        let opens = [
+            (Ok(()), Found::Absent, false),
+            (Err(NoSource), Found::Picked(Ok(())), false),
+            (Err(Unusable), Found::Picked(Err(HyprlandNoAnswer)), false),
+            (Err(NoSource), Found::Absent, true),
+            (Err(Unusable), Found::Absent, true),
+            (Err(NoSource), refused, true),
+            (Err(NoSource), Found::Unsure, false),
+        ];
+        for (kwin, hyprland, open) in opens {
+            assert_eq!(
+                cursor_sessions_open(kwin, hyprland),
+                open,
+                "{kwin:?} {hyprland:?}"
+            );
         }
     }
 
@@ -399,7 +484,7 @@ mod tests {
                     pending::<()>().await;
                 })
             },
-            Box::pin(pending()),
+            [Box::pin(pending()), Box::pin(pending())],
         );
         let ran = timeout(Duration::from_secs(1), watch).await;
         assert!(ran.is_err(), "the watch ended");
@@ -444,7 +529,7 @@ mod tests {
         let mut watch = joined(
             kwin_restarting(Rc::clone(&staged)),
             display_firing(changed.clone()),
-            Box::pin(pending()),
+            [Box::pin(pending()), Box::pin(pending())],
         );
         let mut cx = Context::from_waker(Waker::noop());
         // More polls than branches: each would have its turn to go first in
@@ -468,7 +553,7 @@ mod tests {
                     std::task::Poll::Pending
                 }))
             },
-            Box::pin(pending()),
+            [Box::pin(pending()), Box::pin(pending())],
         );
         let ran = timeout(Duration::from_millis(50), watch).await;
         assert!(ran.is_err(), "the watch ended with one watcher");
@@ -476,7 +561,7 @@ mod tests {
     }
 
     #[test]
-    fn hyprlands_watcher_is_polled_after_the_display_in_each_poll() {
+    fn hyprlands_and_the_cursor_sessions_watchers_are_polled_after_the_display_in_each_poll() {
         let order = Rc::new(std::cell::RefCell::new(Vec::new()));
         let polled = |name: &'static str| {
             let order = Rc::clone(&order);
@@ -489,13 +574,13 @@ mod tests {
         let mut watch = joined(
             move |_| Box::pin(kwin),
             move |_| Box::pin(display),
-            Box::pin(polled("hyprland")),
+            [Box::pin(polled("hyprland")), Box::pin(polled("cursors"))],
         );
         let mut cx = Context::from_waker(Waker::noop());
         for _ in 0..3 {
             assert!(watch.as_mut().poll(&mut cx).is_pending());
         }
-        let once = ["kwin", "display", "hyprland"];
+        let once = ["kwin", "display", "hyprland", "cursors"];
         assert_eq!(*order.borrow(), once.repeat(3));
     }
 }

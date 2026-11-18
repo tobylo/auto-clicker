@@ -15,6 +15,12 @@ pub enum PointerSource {
     /// logical pixels, and a game's locked pointer drifts, so its positions
     /// can cover the game's moves (decision 0004).
     Hyprland,
+    /// A Wayland display's cursor sessions (ext-image-copy-capture, niri):
+    /// physical pixels mapped to the nearest whole logical pixel, and none
+    /// while a game holds the pointer, which does not move then (W02). They
+    /// play as KWin's and are written as version 2, which reads back as
+    /// [`PointerSource::Kwin`].
+    CursorSessions,
 }
 
 impl PointerSource {

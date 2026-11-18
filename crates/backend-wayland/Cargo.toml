@@ -13,8 +13,9 @@ auto-clicker-core = { path = "../core" }
 # libwayland (W01 decision 7). Both already in the tree through the settings
 # window's winit.
 wayland-client = "0.31.15"
-# `unstable`: xdg-output.
-wayland-protocols = { version = "0.32.13", features = ["client", "unstable"] }
+# `unstable`: xdg-output; `staging`: ext-image-copy-capture's cursor
+# sessions, the pointer's position on niri (W02).
+wayland-protocols = { version = "0.32.13", features = ["client", "unstable", "staging"] }
 # SO_PEERCRED on the display's socket; already a dependency of the daemon.
 libc = "0.2.191"
 tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time"] }

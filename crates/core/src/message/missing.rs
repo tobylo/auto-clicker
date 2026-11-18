@@ -63,6 +63,10 @@ pub enum NoPointer {
     /// The socket `HYPRLAND_INSTANCE_SIGNATURE` names is not this display's
     /// compositor's, or the signature names no socket of one.
     HyprlandOtherDisplay,
+    /// The display's cursor sessions gave no position: their connection
+    /// could not be made in time, has no pointer, or ended or lost the
+    /// pointer during the recording. The log says which (W02).
+    DisplayNoPosition,
 }
 
 impl fmt::Display for NoPointer {
@@ -75,6 +79,9 @@ impl fmt::Display for NoPointer {
                 "Hyprland answered in a form this program does not read"
             }
             NoPointer::HyprlandOtherDisplay => "Hyprland's socket belongs to another display",
+            NoPointer::DisplayNoPosition => {
+                "the Wayland display gave no pointer position; see the log"
+            }
         })
     }
 }

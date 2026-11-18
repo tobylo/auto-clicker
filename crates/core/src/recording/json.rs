@@ -48,15 +48,15 @@ const FROM_HYPRLAND: &str = "hyprland";
 
 impl Recording {
     /// Writes the recording, one event per line: as version 3 when Hyprland
-    /// reported its positions, version 2 when KWin did, version 1 without
-    /// positions.
+    /// reported its positions, version 2 when KWin or a display's cursor
+    /// sessions did, version 1 without positions.
     ///
     /// # Errors
     /// Only what `out` returns.
     pub fn write_json(&self, out: &mut dyn Write) -> io::Result<()> {
         let version = match self.positions_from() {
             Some(PointerSource::Hyprland) => VERSION_HYPRLAND,
-            Some(PointerSource::Kwin) => VERSION_POSITIONS,
+            Some(PointerSource::Kwin | PointerSource::CursorSessions) => VERSION_POSITIONS,
             None => VERSION,
         };
         write!(out, "{{\"version\":{version},\"name\":")?;

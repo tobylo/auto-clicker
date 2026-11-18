@@ -104,7 +104,7 @@ fn an_update_to_two_outputs_interleaved_is_never_read_half_done() {
 }
 
 #[test]
-fn a_round_trip_answered_before_an_outputs_done_reads_nothing() {
+fn a_round_trip_answered_before_an_outputs_done_reads_nothing_and_places_nothing() {
     let mut gather = two();
     settled(&mut gather);
     // A's new place, right of B, arrives and the round trip is answered
@@ -112,6 +112,11 @@ fn a_round_trip_answered_before_an_outputs_done_reads_nothing() {
     gather.heard(A, Heard::Position { x: 5488, y: 0 });
     assert!(gather.wants_sync());
     assert_eq!(gather.synced(), None, "read A's place with its old size");
+    assert_eq!(
+        gather.position(B, 0, 0),
+        None,
+        "a position heard while A's update has not ended"
+    );
     gather.heard(
         A,
         Heard::Size {
@@ -356,4 +361,96 @@ fn an_output_too_old_to_bind_leaves_the_layout_unknown_while_it_is_there() {
     assert_eq!(refused, Some(unknown));
     gather.removed(11);
     assert!(settled(&mut gather).is_some(), "the old output went");
+}
+
+#[test]
+fn a_position_is_placed_on_the_last_settled_layout_only_while_nothing_is_unsettled() {
+    let mut gather = Gather::default();
+    gather.added(A);
+    // 2560 x 1600 at 1.25, beside nothing: 2048 x 1280 logical, at (100, 50)
+    // in the display's own space.
+    gather.heard(A, Heard::Position { x: 100, y: 50 });
+    gather.heard(
+        A,
+        Heard::Size {
+            width: 2048,
+            height: 1280,
+        },
+    );
+    gather.heard(
+        A,
+        Heard::Mode {
+            width: 2560,
+            height: 1600,
+        },
+    );
+    gather.heard(A, DONE);
+    assert_eq!(gather.position(A, 0, 0), None, "nothing settled yet");
+    let expected = settled(&mut gather).unwrap();
+    let on = |x, y| Some((Point { x, y }, expected.clone()));
+    // Moved by the corner: the layout starts at (0, 0).
+    assert_eq!(gather.position(A, 0, 0), on(0, 0));
+    assert_eq!(gather.position(A, 1250, 625), on(1000, 500));
+    assert_eq!(
+        gather.position(B, 0, 0),
+        None,
+        "not an output of the layout"
+    );
+    assert_eq!(gather.position(A, 2560, 0), None, "off the output");
+
+    // Heard, then asked for, then answered: none until the answer settles.
+    gather.heard(A, Heard::Position { x: 0, y: 0 });
+    assert_eq!(gather.position(A, 0, 0), None, "heard");
+    assert!(gather.wants_sync());
+    assert_eq!(gather.position(A, 0, 0), None, "a round trip on its way");
+    gather.heard(A, DONE);
+    assert!(
+        gather.synced().is_none(),
+        "the done came during the round trip"
+    );
+    assert_eq!(gather.position(A, 0, 0), None);
+    let settled_again = settled(&mut gather).unwrap();
+    assert_eq!(
+        settled_again, expected,
+        "moved alone, the layout is the same"
+    );
+    assert_eq!(gather.position(A, 1250, 625), on(1000, 500));
+}
+
+#[test]
+fn a_turned_output_places_positions_on_its_displayed_sides() {
+    let mut gather = Gather::default();
+    gather.added(A);
+    gather.heard(A, Heard::Position { x: 0, y: 0 });
+    gather.heard(
+        A,
+        Heard::Size {
+            width: 1080,
+            height: 1920,
+        },
+    );
+    gather.heard(
+        A,
+        Heard::Mode {
+            width: 3840,
+            height: 2160,
+        },
+    );
+    gather.heard(A, Heard::Turned(true));
+    gather.heard(A, DONE);
+    settled(&mut gather).unwrap();
+    let (point, _) = gather.position(A, 2159, 3839).unwrap();
+    assert_eq!(point, Point { x: 1079, y: 1919 });
+}
+
+#[test]
+fn a_layout_that_is_not_whole_places_no_position() {
+    let mut gather = two();
+    settled(&mut gather).unwrap();
+    assert!(gather.position(A, 0, 0).is_some());
+    gather.added(11);
+    assert_eq!(gather.position(A, 0, 0), None, "an output came");
+    assert!(gather.wants_sync());
+    assert_eq!(gather.synced().map(|settled| settled.layout), Some(None));
+    assert_eq!(gather.position(A, 0, 0), None);
 }

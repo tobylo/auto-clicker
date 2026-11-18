@@ -35,7 +35,10 @@ pub(crate) const LIMIT: usize = 64;
 /// Why an ask gave no position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Failure {
-    /// No connection, or no whole answer before the deadline.
+    /// Nothing listens there: no socket, or one nobody accepts on.
+    Nothing,
+    /// No connection for another reason, or no whole answer before the
+    /// deadline.
     NoAnswer,
     /// An answer, but not in Hyprland's form.
     Unreadable,
@@ -47,7 +50,7 @@ impl Failure {
     /// What the tray says while asks fail so.
     pub(crate) fn reason(self) -> NoPointer {
         match self {
-            Failure::NoAnswer => NoPointer::HyprlandNoAnswer,
+            Failure::Nothing | Failure::NoAnswer => NoPointer::HyprlandNoAnswer,
             Failure::Unreadable => NoPointer::HyprlandUnreadable,
             Failure::OtherProcess => NoPointer::HyprlandOtherDisplay,
         }
@@ -60,6 +63,7 @@ impl Failure {
 pub(crate) async fn ask(path: &Path, belongs: impl FnOnce(u32) -> bool) -> Result<Global, Failure> {
     let stream = match timeout(DEADLINE, UnixStream::connect(path)).await {
         Ok(Ok(stream)) => stream,
+        Ok(Err(err)) if nothing_listens(&err) => return Err(Failure::Nothing),
         Ok(Err(_)) | Err(_) => return Err(Failure::NoAnswer),
     };
     // Checked again once a position is read: one read only after the
@@ -71,6 +75,14 @@ pub(crate) async fn ask(path: &Path, belongs: impl FnOnce(u32) -> bool) -> Resul
         Ok(answer) => answer,
         Err(_) => Err(Failure::NoAnswer),
     }
+}
+
+/// Whether a connect failed with `err` because nothing listens: a socket
+/// left behind, none, or a file where an instance's directory would be.
+/// Any other failure may be a Hyprland that is busy.
+fn nothing_listens(err: &std::io::Error) -> bool {
+    use std::io::ErrorKind::{ConnectionRefused, NotADirectory, NotFound};
+    matches!(err.kind(), NotFound | ConnectionRefused | NotADirectory)
 }
 
 async fn exchange(
