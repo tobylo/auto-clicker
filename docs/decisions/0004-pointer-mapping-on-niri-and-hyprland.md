@@ -202,6 +202,29 @@ Minecraft Java 26.3 from the official launcher (`minecraft-launcher.sh`), single
 
 `lockabs.py` on the laptop (game closed): `lockwin.py` held the pointer (SDL 3, Wayland, fullscreen), then 2,000 absolute moves and 2,000 relative moves went in. The window counted 0 motion events from the absolute moves and 2,000 from the relative ones, and `cursorpos` stayed at the lock point through the absolute moves. Measured: absolute moves during a lock gave the window no motion, and `cursorpos` read the same before and after the 2,000 moves. From source, `blocksAbsoluteMotion` (`SeatManager.cpp:421`) keeps the motion from the window, while the pointer itself is moved and warped back like a relative move, so the same early return could leave it moved for a while; this run neither showed nor rules that out. The game gets no motion from a played-back position either way.
 
+### Finding Hyprland (W03, 2026-11-18)
+
+Checks of how the daemon finds Hyprland since W02: first the socket that `HYPRLAND_INSTANCE_SIGNATURE` names, then the newest directories under `$XDG_RUNTIME_DIR/hypr`, and an unsure result that opens no cursor sessions. They ran on the laptop, logged into Hyprland 0.57.2 (11cbc6c) alone at the login screen, on Linux 7.3.4-1-cachyos, with eDP-1 alone at scale 1.6 (a 1600x1000 layout). The daemon was the release build of main at 36012ed (sha256 `a7d6d04f…`). The installed service was stopped during the checks.
+
+The tools are under `.claude/local/w03/` in the main checkout. `run-all.sh` runs `case.py` once per case. Each case runs the daemon with its own config and data directories and `LANG=C.UTF-8`, and makes a virtual mouse and keyboard (W01d's `devices.py`). It reads the tray's `ToolTip` over D-Bus at idle and while recording. It records 150 relative moves with Ctrl+Shift+F7, with no clicks. The script also counts the daemon's connections to the display: Hyprland's ends of the display socket (`ss -xH`) whose peer is one of the daemon's sockets. Then it reads the recording and the log.
+
+The cases need no other setup. For a stale signature with no directory, the script names `<commit>_1700000000_123456789` under `hypr`. For a leftover instance, it creates `hypr/<commit>_1700000001_w03stale/` and binds `.socket.sock` in it without listening, closing the socket without unlinking it, so a connect is refused. For an unreachable socket, it runs `chmod 000` on the instance's `.socket.sock` before the daemon starts and restores the old mode once the log shows the detection line. To run every case: copy `case.py`, `devices.py`, `run-all.sh` and the binary to `/tmp/w03` on the Hyprland machine, then run `bash /tmp/w03/run-all.sh`, which writes `/tmp/w03/out.txt`. To run one case, stop the installed service and run, for example, `python3 /tmp/w03/case.py set`. The other cases are `unset`, `stale-missing`, `stale-dead`, `chmod` and `chmod-unset`.
+
+As a control, the counter was run on niri, where cursor sessions open. It read 1 connection at idle and 2 while recording, so it can tell the two apart.
+
+| Case | Daemon's `HYPRLAND_INSTANCE_SIGNATURE` | Log | Tooltip | Display connections, idle / recording | Recording |
+| --- | --- | --- | --- | --- | --- |
+| Set | the running instance | nothing about Hyprland | no problem | 1 / 1 | version 3, `"positions_from":"hyprland"`, 161 positions for 150 moves |
+| Unset | removed | nothing about Hyprland | no problem | 1 / 1 | version 3, Hyprland, 159 positions |
+| Stale, no such directory | `…_1700000000_123456789` | nothing about Hyprland | no problem | 1 / 1 | version 3, Hyprland, 157 positions |
+| Stale, left behind | a fake instance made for the case, newer than the running one, holding a bound socket nobody listens on | nothing about Hyprland | no problem | 1 / 1 | version 3, Hyprland, 156 positions |
+| Socket unreachable | the running instance, its `.socket.sock` at mode 000 until the daemon logged its detection, then put back (`hyprctl` answered again) | "a Hyprland socket could not be checked against this daemon's Wayland display, so neither Hyprland nor the display's cursor sessions give positions" | "Recordings keep movement only: Hyprland's socket did not answer", at idle and while recording | 1 / 1 | version 1, movement only: 150 moves, no positions, no layout |
+| The same, unset | removed, the socket at mode 000 as above | the same line | the same | 1 / 1 | version 1, movement only |
+
+- **Each case passed.** With a signature, without one, or with a stale one, the daemon picks the running Hyprland and records its route (version 3). Without a signature, or with a stale one, the scan finds it, so no "names no socket of this daemon's Wayland display" line is logged.
+- **The unsure case,** reached here through `EACCES` on connect, stays unsure for the daemon's life: the socket was readable again before the recording, and the recording still kept movement only. It opens no second connection to the display while recording, so no cursor session stands in for Hyprland.
+- **The fake instance** was removed after its case. The socket's mode was put back after each unreachable case. The laptop went back to Plasma afterwards.
+
 ### For an upstream report to Hyprland (the owner files it)
 
 - **Reproducer:** on Hyprland 0.57.2 (and main, 8333bb7), an SDL 3 window in relative mouse mode, fullscreen (`zwp_locked_pointer_v1`, locked). A relative mouse sends REL_X = +2 every 1 ms for 500 moves, then -2 for 500 (the first version of `hm lock`; default pointer acceleration). `hyprctl cursorpos` takes three values, the lock point and 4 px either side (1037, 1041 and 1045, here), changing on 1,915 of 2,855 answers, instead of staying at the lock point.
