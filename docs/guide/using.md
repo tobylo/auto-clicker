@@ -25,7 +25,10 @@ Screenshots, recordings and streams of the screen include the number. Its surfac
       block-out-from "screencast"
   }
   ```
-- **Hyprland:** a layer rule with `no_screen_share` matching the namespace `auto-clicker-on-screen`.
+- **Hyprland:** in `~/.config/hypr/hyprland.lua`:
+  ```lua
+  hl.layer_rule({ match = { namespace = "^auto-clicker-on-screen$" }, no_screen_share = true })
+  ```
 - **Plasma:** KWin has no such rule; turn the countdown off with `countdown = false` before streaming.
 
 Clicking and playback stop when the screen locks, another user's session comes to the front, or the computer goes to sleep, and they cannot start again until the session is back. A recording stops and is saved at those moments too. Before sleep, the program holds the computer back (for 2 seconds at most) until it has let go of every button and key it pressed, so nothing stays pressed while asleep. The tooltip says what the clicker will do, and why it stopped or cannot start.
