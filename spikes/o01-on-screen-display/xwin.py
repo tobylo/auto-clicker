@@ -49,6 +49,8 @@ x.XGrabPointer.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes
 x.XWarpPointer.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
                            ctypes.c_uint, ctypes.c_uint, ctypes.c_int, ctypes.c_int]
 x.XConnectionNumber.argtypes = [ctypes.c_void_p]
+x.XNextRequest.argtypes = [ctypes.c_void_p]
+x.XNextRequest.restype = ctypes.c_ulong
 x.XGetGeometry.argtypes = [ctypes.c_void_p, ctypes.c_ulong] + [ctypes.c_void_p] * 7
 
 
@@ -110,18 +112,21 @@ class Heard:
     def __init__(self, display, window, lock):
         self.display, self.window, self.lock = display, window, lock
         self.centre = (0, 0)
-        # The last position heard, and how many warps to the centre have not
-        # come back as motion yet: moves are counted from the last position,
-        # so moves queued before a warp lands are each counted once.
+        # The last position heard, and the request serial of the latest warp
+        # to the centre. Moves are counted from the last position, so moves
+        # queued before a warp lands are each counted once. Only an event the
+        # server sent after that warp (its serial at least the warp's) can be
+        # the warp's own motion; a real move back to the centre queued before
+        # it is still counted.
         self.last = (0, 0)
-        self.warps = 0
+        self.warp_serial = None
         self.relative = [0, 0, 0]
         self.printed = None
 
     def warp_to_centre(self):
         """Warps the pointer to the centre; its motion event is not a move."""
+        self.warp_serial = x.XNextRequest(self.display)
         x.XWarpPointer(self.display, 0, self.window, 0, 0, 0, 0, *self.centre)
-        self.warps += 1
 
     def report(self):
         if self.printed != tuple(self.relative):
@@ -129,9 +134,10 @@ class Heard:
             say(f"relative total {count} sum {dx},{dy}")
             self.printed = tuple(self.relative)
 
-    def motion(self, at_x, at_y):
-        if self.warps and (at_x, at_y) == self.centre:
-            self.warps -= 1
+    def motion(self, at_x, at_y, serial):
+        after_warp = self.warp_serial is not None and serial >= self.warp_serial
+        if after_warp and (at_x, at_y) == self.centre:
+            self.warp_serial = None
             self.last = self.centre
             return
         dx, dy = at_x - self.last[0], at_y - self.last[1]
@@ -141,8 +147,15 @@ class Heard:
         self.relative[0] += 1
         self.relative[1] += dx
         self.relative[2] += dy
-        if self.lock and self.last != self.centre:
+        if self.needs_warp():
             self.warp_to_centre()
+
+    def needs_warp(self):
+        """Whether to warp back to the centre now. One warp in flight at a
+        time: a second would leave the first's motion looking like a real
+        move back to the centre."""
+        off_centre = self.last != self.centre
+        return self.lock and off_centre and self.warp_serial is None
 
     def configured(self, kind, event):
         width, height = struct.unpack_from("ii", event, 56)
@@ -152,7 +165,8 @@ class Heard:
             self.warp_to_centre()
 
     def moved(self, kind, event):
-        self.motion(*struct.unpack_from("ii", event, 64))
+        serial = struct.unpack_from("Q", event, 8)[0]
+        self.motion(*struct.unpack_from("ii", event, 64), serial)
 
     def button(self, kind, event):
         self.report()

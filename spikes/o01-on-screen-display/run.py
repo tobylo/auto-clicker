@@ -16,7 +16,8 @@ picture's place. Nothing more is injected once the window's latest lines
 say it lost focus or its lock, and every device is released and destroyed
 on the way out. Prints a summary line per case: sent against received, and
 VOID instead of PASS or FAIL when the display never drew, ended with an
-error, or an SDL window was refused relative mode.
+error or died, the guard stopped injection early, or an SDL window was
+refused relative mode.
 """
 
 import os
@@ -58,6 +59,11 @@ class Process:
                 print(f"[{self.tag}] {line}", flush=True)
             self.seen.append(line)
             self.lines.put(line)
+
+    def alive(self):
+        """Whether the child is still running; one that died says so here even
+        when it printed nothing."""
+        return self.proc.poll() is None
 
     def send(self, command):
         try:
@@ -173,6 +179,8 @@ class Run:
     box: tuple
     devices: object = None
     window: object = None
+    # Set when the guard stopped injection: the run measured less than it says.
+    aborted: bool = False
 
     @property
     def locked(self):
@@ -212,8 +220,9 @@ def holds(window):
     """Whether the window has keyboard focus and, if it reported a lock, the
     lock, by its latest lines (a flicker at startup that ends in "gained"
     counts as held), and has not ended."""
-    ended = any("ended:" in line for line in list(window.seen))
-    return not ended and last_state(window, "keyboard focus: ") == "gained" and last_state(window, "pointer lock: ") != "UNLOCKED"
+    ended = not window.alive() or any("ended:" in line for line in list(window.seen))
+    focused = last_state(window, "keyboard focus: ") == "gained" and last_state(window, "pointer focus: ") != "LOST"
+    return not ended and focused and last_state(window, "pointer lock: ") != "UNLOCKED"
 
 
 def inject(devices, tick, sent):
@@ -241,6 +250,7 @@ def run_locked(run, length=3.0):
         display = follow(script, elapsed, display)
         if not holds(run.window):
             print("--- the window lost focus or its lock: injection stopped", flush=True)
+            run.aborted = True
             break
         inject(run.devices, tick, sent)
         tick += 1
@@ -253,6 +263,7 @@ def click_three(run, sent):
     for _ in range(3):
         if not holds(run.window):
             print("--- the window lost focus: no more clicks", flush=True)
+            run.aborted = True
             return
         devices = run.devices
         devices.button(True)
@@ -316,6 +327,8 @@ def start_window(run):
     fullscreen_by_command()
     time.sleep(0.5)
     run.devices.place(*run.target, run.box)
+    if any("relative mode: False" in line for line in list(run.window.seen)):
+        sys.exit("the window was refused relative mode; nothing injected")
     if run.locked:
         await_lock(run)
 
@@ -326,17 +339,23 @@ def write_trace(run, display):
         trace.write("\n".join("display " + line for line in (display.seen if display else [])) + "\n")
 
 
-def shown(run, display):
-    """Whether the run measured what it claims: the display drew and did not
-    end with an error (unless it is a control), and an SDL window got
-    relative mode when locked."""
-    refused = any("relative mode: False" in line for line in list(run.window.seen))
-    if run.scenario == "control":
-        return not refused
-    seen = list(display.seen) if display else []
+def display_worked(display):
+    """Whether the display drew, is still running and printed no error."""
+    if not display or not display.alive():
+        return False
+    seen = list(display.seen)
     drew = any(" drew " in line for line in seen)
-    failed = any(" ended: " in line or " no buffer" in line for line in seen)
-    return drew and not failed and not refused
+    return drew and not any(" ended: " in line or " no buffer" in line for line in seen)
+
+
+def shown(run, display):
+    """Whether the run measured what it claims: injection was not stopped
+    early, an SDL window got relative mode, and (unless it is a control) the
+    display worked."""
+    refused = any("relative mode: False" in line for line in list(run.window.seen))
+    if run.aborted or refused:
+        return False
+    return run.scenario == "control" or display_worked(display)
 
 
 def judge(run, before, sent, display):
