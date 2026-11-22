@@ -167,7 +167,7 @@ struct Shown {
     surface: WlSurface,
     layer: ZwlrLayerSurfaceV1,
     scale: Option<(WpViewport, WpFractionalScaleV1)>,
-    /// Its size, as last asked for.
+    /// Its size, as asked for: another size takes another surface.
     fit: Fit,
     /// The preferred scale in 120ths; [`WHOLE`] until the compositor says.
     preferred: u32,
@@ -341,26 +341,19 @@ impl Surfaces {
     }
 
     /// Asks for the surface `asking` says, unless its screen has one that
-    /// size or shows nothing. An answered surface of another size is asked
-    /// for the new one; one whose answer is still awaited is made anew, so
-    /// that an answer to what it asked first reaches nothing (O2).
+    /// size or shows nothing. A surface of another size is made anew: an
+    /// answer carries nothing to say which size it answers, so one to the
+    /// old surface reaches nothing (O2).
     fn ask(&mut self, asking: Asking<'_>, queue: &QueueHandle<Client>, now: Instant) {
         let Asking { name, fit, .. } = asking;
         let due = now.checked_add(ANSWER).unwrap_or(now);
-        match self.screens.get_mut(&name) {
+        match self.screens.get(&name) {
             Some(Screen::Missing(_)) => return,
             Some(Screen::Shown(shown)) if shown.fit == fit => return,
-            Some(Screen::Shown(shown)) if shown.answer.is_none() => {
-                shown.fit = fit;
-                shown.answer = Some(due);
-                shown.layer.set_size(fit.width, fit.height);
-                shown.surface.commit();
-                return;
-            }
             Some(Screen::Shown(_)) | None => {}
         }
-        if let Some(Screen::Shown(waiting)) = self.screens.remove(&name) {
-            waiting.destroy();
+        if let Some(Screen::Shown(other)) = self.screens.remove(&name) {
+            other.destroy();
         }
         let shown = self.create(asking, queue, due);
         self.screens.insert(name, Screen::Shown(Box::new(shown)));

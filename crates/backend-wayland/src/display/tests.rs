@@ -252,7 +252,7 @@ async fn a_tray_countdown_shows_on_every_screen_follows_the_seconds_and_goes() {
         // next is shown.
         release_shown(&mut fake, A, 2).await;
         release_shown(&mut fake, B, 2).await;
-        // Ten is wider: each surface is asked for its new size first.
+        // Ten is wider: each screen's surface is made anew at its size.
         let sizes = [A, B].map(|name| fake.shell.on(fake.ids(name)).unwrap().size);
         harness.set(Activity::RecordingIn(10));
         harness
@@ -260,7 +260,10 @@ async fn a_tray_countdown_shows_on_every_screen_follows_the_seconds_and_goes() {
             .await;
         for (name, was) in [A, B].into_iter().zip(sizes) {
             let output = fake.ids(name);
-            let asked = |fake: &Fake| fake.shell.on(output).unwrap().size != was;
+            let asked = |fake: &Fake| {
+                let surface = fake.shell.on(output);
+                surface.is_some_and(|surface| surface.size != was && surface.commits > 0)
+            };
             timeout(BOUND, fake.until(asked)).await.unwrap();
         }
         answer(&mut fake, A).await;
@@ -879,16 +882,19 @@ async fn a_screen_that_changes_size_is_tried_again() {
         harness
             .shows(&[(names[0], Showing::Asked), (names[1], Showing::Asked)])
             .await;
-        // A screen that shows and changes size keeps its one surface, asked
-        // for the new size.
+        // A screen that shows and changes size has its surface made anew
+        // at the new size, the old one gone.
         answer(&mut fake, names[1]).await;
-        let before = fake.shell.on(fake.ids(names[1])).unwrap().size;
+        let output = fake.ids(names[1]);
+        let before = fake.shell.on(output).unwrap().clone();
         fake.screen(names[1], BELOW).await;
         harness
             .shows(&[(names[0], Showing::Asked), (names[1], Showing::Asked)])
             .await;
-        let output = fake.ids(names[1]);
-        let resized = |fake: &Fake| fake.shell.on(output).unwrap().size != before;
+        let resized = |fake: &Fake| {
+            let now = fake.shell.on(output);
+            now.is_some_and(|now| now.id != before.id && now.size != before.size)
+        };
         timeout(BOUND, fake.until(resized)).await.unwrap();
         assert_eq!(live(&fake, names[1]), 1);
     })
@@ -930,7 +936,7 @@ async fn a_screen_that_showed_nothing_is_tried_again_when_a_screen_is_added() {
 }
 
 #[tokio::test]
-async fn a_new_size_asked_before_the_first_is_answered_takes_a_new_surface() {
+async fn a_new_size_takes_a_new_surface_and_an_answer_to_the_old_one_reaches_nothing() {
     local(async {
         let harness = Harness::new().await;
         harness.set(Activity::StartingIn(5));
@@ -939,20 +945,11 @@ async fn a_new_size_asked_before_the_first_is_answered_takes_a_new_surface() {
         let all_asked = move |fake: &Fake| outputs.iter().all(|&output| asked(fake, output));
         timeout(BOUND, fake.until(all_asked)).await.unwrap();
         let first = fake.shell.on(outputs[0]).unwrap().clone();
-        // Ten is wider: asked before the first is answered, then wider
-        // again, each on a surface of its own.
+        // Wider twice before the first is answered: each size on a
+        // surface of its own.
         for seconds in [10, 100] {
-            let shown = outputs.map(|output| fake.shell.on(output).unwrap().id);
-            harness.set(Activity::StartingIn(seconds));
-            let anew = move |fake: &Fake| {
-                let surface = |output| fake.shell.on(output).map(|s| (s.id, s.commits));
-                (0..2).all(|i| {
-                    surface(outputs[i]).is_some_and(|(id, commits)| id != shown[i] && commits > 0)
-                })
-            };
-            timeout(BOUND, fake.until(anew)).await.unwrap();
+            anew(&harness, &mut fake, seconds).await;
         }
-        assert_eq!((live(&fake, A), live(&fake, B)), (1, 1));
         // The first surface's answer comes late: it answers nothing. B's,
         // sent after it, shows that it was read.
         fake.send(vec![first.configure(3)]).await;
@@ -962,6 +959,33 @@ async fn a_new_size_asked_before_the_first_is_answered_takes_a_new_surface() {
             .await;
         answer(&mut fake, A).await;
         harness.shows(&[(A, drawn("2m")), (B, drawn("2m"))]).await;
+        // The same once a surface was answered and drawn: the desktop
+        // configures it again just as the label narrows.
+        let drawn_on_a = fake.shell.on(outputs[0]).unwrap().clone();
+        anew(&harness, &mut fake, 99).await;
+        fake.send(vec![drawn_on_a.configure(4)]).await;
+        answer(&mut fake, B).await;
+        harness
+            .shows(&[(A, Showing::Asked), (B, drawn("99"))])
+            .await;
     })
     .await;
+}
+
+/// Sets the countdown to `seconds`, a label of another width, and reads
+/// until both screens have a surface made anew and asked for, the old one
+/// destroyed.
+async fn anew(harness: &Harness, fake: &mut Fake, seconds: u64) {
+    let outputs = [A, B].map(|name| fake.ids(name));
+    let shown = outputs.map(|output| fake.shell.on(output).unwrap().id);
+    harness.set(Activity::StartingIn(seconds));
+    let made = move |fake: &Fake| {
+        let surface = |output| fake.shell.on(output).map(|s| (s.id, s.commits));
+        let new = |i: usize| {
+            surface(outputs[i]).is_some_and(|(id, commits)| id != shown[i] && commits > 0)
+        };
+        new(0) && new(1)
+    };
+    timeout(BOUND, fake.until(made)).await.unwrap();
+    assert_eq!((live(fake, A), live(fake, B)), (1, 1));
 }
