@@ -481,6 +481,7 @@ export component SettingsWindow inherits Window {
                     Text {
                         text: @tr("Recordings, newest first; ✓ marks the one the playback hotkey plays. Ctrl+click or Shift+click selects several.");
                         font-weight: 600;
+                        wrap: word-wrap;
                     }
                     if root.recordings.length == 0: Text {
                         text: @tr("No recordings yet.");

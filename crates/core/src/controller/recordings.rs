@@ -334,4 +334,26 @@ mod tests {
         };
         assert_eq!(removal(one, &[]).to_string(), "Deleted 1 recording.");
     }
+
+    #[test]
+    fn a_delete_that_found_nothing_says_so_and_one_that_only_failed_says_only_that() {
+        let nothing = Removal::default();
+        assert!(!nothing.fell_short());
+        assert_eq!(nothing.to_string(), "Deleted 0 recordings.");
+        let uncounted = Removal {
+            more_failed: 2,
+            ..Removal::default()
+        };
+        assert!(uncounted.fell_short());
+        assert_eq!(uncounted.to_string(), "2 more were not deleted.");
+        let one = Removal {
+            deleted: 1,
+            more_failed: 1,
+            ..Removal::default()
+        };
+        assert_eq!(
+            one.to_string(),
+            "Deleted 1 recording. 1 more was not deleted."
+        );
+    }
 }
