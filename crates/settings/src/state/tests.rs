@@ -5,11 +5,11 @@ use auto_clicker_core::controller::{Hotkey, Routes};
 use auto_clicker_core::hotkeys::Binding;
 use auto_clicker_core::message::NoScreens;
 use auto_clicker_core::recording::{Layout, Output};
-use auto_clicker_core::window::{Answer, ShownHotkeys, Since, Spot};
+use auto_clicker_core::window::{Answer, NotDeleted, ShownHotkeys, Since, Spot};
 
 use super::*;
 
-fn view(settings: Draft, answer: Option<Answer>) -> WindowView {
+pub(crate) fn view(settings: Draft, answer: Option<Answer>) -> WindowView {
     let config = Config::default();
     WindowView {
         running: settings.input,
@@ -30,7 +30,7 @@ fn view(settings: Draft, answer: Option<Answer>) -> WindowView {
     }
 }
 
-fn defaults() -> Draft {
+pub(crate) fn defaults() -> Draft {
     Draft::from(&Config::default())
 }
 
@@ -62,10 +62,31 @@ fn asks_nothing(state: &mut State) {
         state.save(&fields()),
         state.capture(Target::Hotkey(0)),
         state.configure(),
-        state.recording(file(), "label".to_owned(), RecordingAction::Play),
+        state.recording(file(), RecordingAction::Play),
         state.locate(spot(1.0, 1.0), panel_rect(), Since::default()),
     );
     assert_eq!(asked, (None, None, None, None, None));
+    // Nor does a delete ask its question.
+    let question = state.question().cloned();
+    state.delete(vec![other()], "other".to_owned());
+    state.delete_all(7);
+    assert_eq!(state.question(), question.as_ref());
+}
+
+fn other() -> FileName {
+    FileName::parse("2026-11-10_07-00-00.000.json").unwrap()
+}
+
+/// What a request deletes.
+fn deletion_of(request: Request) -> Deletion {
+    match request.ask {
+        Ask::Delete(which) => which,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn files(files: &[FileName]) -> Files {
+    Files::new(files.to_vec()).unwrap()
 }
 
 fn file() -> FileName {
@@ -174,7 +195,7 @@ fn answers_become_notes() {
                 | Note::Refused(..)
                 | Note::Unavailable(_)
                 | Note::Recording(
-                    RecordingOutcome::NotChanged(..) | RecordingOutcome::NotPlaying(_)
+                    RecordingOutcome::NotRenamed(_) | RecordingOutcome::NotPlaying(_)
                 )
         );
         assert_eq!(note.is_error(), error, "{note:?}");
@@ -335,9 +356,7 @@ fn a_rename_a_choice_or_a_play_goes_at_once_and_waits_for_its_answer() {
     ];
     for action in actions {
         let mut state = started();
-        let request = state
-            .recording(file(), "label".to_owned(), action.clone())
-            .unwrap();
+        let request = state.recording(file(), action.clone()).unwrap();
         let id = request.id;
         assert_eq!(recording_of(request), (file(), action));
         asks_nothing(&mut state);
@@ -351,21 +370,20 @@ fn a_rename_a_choice_or_a_play_goes_at_once_and_waits_for_its_answer() {
 fn a_delete_asks_first_and_goes_only_on_a_yes() {
     let mut state = started();
     let label = "Farm loop (2026-11-09 18:04:05)".to_owned();
-    let asked = state.recording(file(), label.clone(), RecordingAction::Delete);
-    assert_eq!(asked, None);
+    state.delete(vec![file()], label.clone());
     assert_eq!(
         state.question(),
-        Some(&Question::Delete(file(), label.clone()))
+        Some(&Question::DeleteOne(file(), label.clone()))
     );
     asks_nothing(&mut state);
 
     let request = state.agree(&fields()).unwrap().unwrap();
-    assert_eq!(recording_of(request), (file(), RecordingAction::Delete));
+    assert_eq!(deletion_of(request), Deletion::Files(files(&[file()])));
     assert_eq!(state.question(), None);
     assert!(state.waiting());
 
     let mut state = started();
-    state.recording(file(), label, RecordingAction::Delete);
+    state.delete(vec![file()], label);
     state.decline();
     assert_eq!(state.question(), None);
     assert_eq!(state.agree(&fields()), None);
@@ -373,18 +391,97 @@ fn a_delete_asks_first_and_goes_only_on_a_yes() {
 }
 
 #[test]
-fn selecting_another_recording_calls_off_a_delete_asked_about() {
+fn a_delete_of_several_asks_about_them_all_and_sends_them_together() {
     let mut state = started();
-    let other = FileName::parse("2026-11-10_07-00-00.000.json").unwrap();
-    state.recording(file(), "label".to_owned(), RecordingAction::Delete);
-    // The same one again keeps the question.
-    state.selected(Some(&file()));
-    assert!(matches!(state.question(), Some(Question::Delete(..))));
+    state.delete(vec![file(), other()], "unused".to_owned());
+    assert_eq!(
+        state.question(),
+        Some(&Question::DeleteSeveral(files(&[file(), other()])))
+    );
 
-    state.selected(Some(&other));
+    let request = state.agree(&fields()).unwrap().unwrap();
+
+    let id = request.id;
+    assert_eq!(
+        deletion_of(request),
+        Deletion::Files(files(&[file(), other()]))
+    );
+    let removal = Removal {
+        deleted: 2,
+        ..Removal::default()
+    };
+    let shown = answered(&mut state, id, Outcome::Deleted(removal.clone()));
+    assert_eq!(shown.note, Some(Note::Deleted(removal)));
+    assert!(state.may_ask());
+    // None selected: nothing to ask.
+    state.delete(Vec::new(), String::new());
+    assert_eq!(state.question(), None);
+}
+
+#[test]
+fn delete_all_asks_with_the_count_and_sends_all() {
+    let mut state = started();
+    state.delete_all(0);
+    assert_eq!(state.question(), None);
+    state.delete_all(205);
+    assert_eq!(state.question(), Some(&Question::DeleteAll(205)));
+    asks_nothing(&mut state);
+
+    let request = state.agree(&fields()).unwrap().unwrap();
+
+    assert_eq!(deletion_of(request), Deletion::All);
+    assert!(state.waiting());
+}
+
+#[test]
+fn a_delete_that_fell_short_or_did_nothing_shows_as_an_error() {
+    let failed = NotDeleted {
+        recording: auto_clicker_core::message::Titled::new(file(), None),
+        why: ChangeFailure::Missing,
+    };
+    let short = Removal {
+        deleted: 1,
+        failed: vec![failed],
+        ..Removal::default()
+    };
+    let counted = Removal {
+        more_failed: 1,
+        ..Removal::default()
+    };
+    assert!(Note::Deleted(short).is_error());
+    assert!(Note::Deleted(counted).is_error());
+    assert!(Note::NotDeleted(ChangeFailure::Missing).is_error());
+    let whole = Removal {
+        deleted: 3,
+        unsynced: Some(Quoted::new("EIO")),
+        ..Removal::default()
+    };
+    assert!(!Note::Deleted(whole).is_error());
+}
+
+#[test]
+fn another_selection_calls_off_a_delete_asked_about() {
+    let mut state = started();
+    state.delete(vec![file()], "label".to_owned());
+    // The same one again keeps the question.
+    state.selected(&[file()], 2);
+    assert!(matches!(state.question(), Some(Question::DeleteOne(..))));
+
+    state.selected(&[other()], 2);
 
     assert_eq!(state.question(), None);
     assert_eq!(state.agree(&fields()), None);
+
+    state.delete(vec![file(), other()], String::new());
+    state.selected(&[file(), other()], 2);
+    assert!(state.question().is_some());
+    state.selected(&[file()], 2);
+    assert_eq!(state.question(), None);
+    // A selection that grew calls it off too.
+    state.delete(vec![file()], String::new());
+    state.selected(&[file(), other()], 2);
+    assert_eq!(state.question(), None);
+
     // A save's question stays whatever is selected.
     let save = saved(&mut state);
     answered(
@@ -392,17 +489,31 @@ fn selecting_another_recording_calls_off_a_delete_asked_about() {
         save.id,
         Outcome::Confirm(Confirm::Replace(Stale::Changed)),
     );
-    state.selected(Some(&other));
-    state.selected(None);
+    state.selected(&[other()], 2);
+    state.selected(&[], 0);
     assert_eq!(state.question(), Some(&Question::Replace(Stale::Changed)));
 }
 
 #[test]
 fn a_selected_recording_leaving_the_list_calls_off_its_delete() {
     let mut state = started();
-    state.recording(file(), "label".to_owned(), RecordingAction::Delete);
+    state.delete(vec![file()], "label".to_owned());
 
-    state.selected(None);
+    state.selected(&[], 1);
+
+    assert_eq!(state.question(), None);
+    assert_eq!(state.agree(&fields()), None);
+}
+
+#[test]
+fn delete_all_is_called_off_when_the_count_changes_and_not_by_the_selection() {
+    let mut state = started();
+    state.delete_all(3);
+    state.selected(&[file()], 3);
+    state.selected(&[], 3);
+    assert_eq!(state.question(), Some(&Question::DeleteAll(3)));
+
+    state.selected(&[], 4);
 
     assert_eq!(state.question(), None);
     assert_eq!(state.agree(&fields()), None);

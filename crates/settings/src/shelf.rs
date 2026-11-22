@@ -1,7 +1,6 @@
 //! The recordings list as the window shows it: one row per recording the
-//! daemon listed, and which row is selected. A selection follows its
-//! recording, by file, when the list changes, and ends when the recording
-//! is gone.
+//! daemon listed, and which rows are selected. A selection follows its
+//! recordings, by file, when the list changes, and drops each one gone.
 
 use auto_clicker_core::controller::Listed;
 use auto_clicker_core::recording::{FileName, MAX_NAME_CHARS};
@@ -34,11 +33,173 @@ pub fn sendable_name(text: &str) -> String {
         .collect()
 }
 
-/// Where the recording `selected` is in `view`'s list, as Slint takes it:
-/// -1 when it is not there.
-pub fn place(view: &RecordingsView, selected: Option<&FileName>) -> i32 {
-    selected
-        .and_then(|selected| view.listed.iter().position(|l| l.file == *selected))
+/// How a click on a row selects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Click {
+    /// That row alone: a plain click.
+    Only,
+    /// That row in or out, the others as they are: Ctrl+click.
+    Toggle,
+    /// The rows from the last plain or Ctrl click to that one: Shift+click.
+    Range,
+}
+
+/// The selected recordings, by file, in the order the list shows them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Selection {
+    files: Vec<FileName>,
+    /// Where a Shift range starts: the row last clicked without Shift, or
+    /// moved to without it.
+    anchor: Option<FileName>,
+    /// The row the arrow keys move from: the one last clicked or moved to.
+    cursor: Option<FileName>,
+}
+
+impl Selection {
+    /// The selected recordings, in list order.
+    pub fn files(&self) -> &[FileName] {
+        &self.files
+    }
+
+    /// The recording selected, when exactly one is.
+    pub fn one(&self) -> Option<&FileName> {
+        match &self.files[..] {
+            [one] => Some(one),
+            _ => None,
+        }
+    }
+
+    /// Whether each row of `view` is selected.
+    pub fn flags(&self, view: &RecordingsView) -> Vec<bool> {
+        view.listed
+            .iter()
+            .map(|listed| self.files.contains(&listed.file))
+            .collect()
+    }
+
+    /// Where the row the arrow keys move from is, as Slint takes it: -1
+    /// for none.
+    pub fn cursor(&self, view: &RecordingsView) -> i32 {
+        slint_place(
+            self.cursor
+                .as_ref()
+                .and_then(|cursor| position(view, cursor)),
+        )
+    }
+
+    /// The row at `index` was clicked, as `click` says; a place that holds
+    /// no row changes nothing.
+    pub fn click(&mut self, view: &RecordingsView, index: i32, click: Click) {
+        let Some(listed) = at(view, index) else {
+            return;
+        };
+        let file = listed.file.clone();
+        match click {
+            Click::Only => self.files = vec![file.clone()],
+            Click::Toggle => {
+                let mut files = std::mem::take(&mut self.files);
+                if files.contains(&file) {
+                    files.retain(|selected| *selected != file);
+                } else {
+                    files.push(file.clone());
+                }
+                self.files = in_list_order(view, &files);
+            }
+            Click::Range => {
+                self.range(view, &file);
+                self.cursor = Some(file);
+                return;
+            }
+        }
+        self.anchor = Some(file.clone());
+        self.cursor = Some(file);
+    }
+
+    /// The arrow keys moved the selection `by` rows (Home and End by as
+    /// many as there are), selecting that row alone or, with Shift
+    /// (`extend`), the rows from the anchor to it. With no row to move
+    /// from, it moves from just above the first: Down and Home reach the
+    /// first, End the last.
+    pub fn step(&mut self, view: &RecordingsView, by: i32, extend: bool) {
+        let Some(last) = view.listed.len().checked_sub(1) else {
+            return;
+        };
+        let by = isize::try_from(by).unwrap_or(isize::MAX);
+        let to = match self
+            .cursor
+            .as_ref()
+            .and_then(|cursor| position(view, cursor))
+        {
+            Some(from) => from.saturating_add_signed(by),
+            None => usize::try_from(by.saturating_sub(1)).unwrap_or(0),
+        }
+        .min(last);
+        let file = view.listed[to].file.clone();
+        if extend {
+            self.range(view, &file);
+        } else {
+            self.files = vec![file.clone()];
+            self.anchor = Some(file.clone());
+        }
+        self.cursor = Some(file);
+    }
+
+    /// Ctrl+A: every listed recording.
+    pub fn all(&mut self, view: &RecordingsView) {
+        self.files = view
+            .listed
+            .iter()
+            .map(|listed| listed.file.clone())
+            .collect();
+    }
+
+    /// The list changed to `view`: keeps what is still listed, in its new
+    /// order.
+    pub fn follow(&mut self, view: &RecordingsView) {
+        let listed = |file: &Option<FileName>| {
+            file.as_ref()
+                .filter(|file| position(view, file).is_some())
+                .cloned()
+        };
+        self.anchor = listed(&self.anchor);
+        self.cursor = listed(&self.cursor);
+        self.files = in_list_order(view, &self.files);
+    }
+
+    /// Selects the rows from the anchor, or the first row with none, to
+    /// `to`, and only those.
+    fn range(&mut self, view: &RecordingsView, to: &FileName) {
+        let from = self
+            .anchor
+            .as_ref()
+            .and_then(|anchor| position(view, anchor))
+            .unwrap_or(0);
+        let to = position(view, to).unwrap_or(from);
+        let (first, last) = (from.min(to), from.max(to));
+        self.files = view.listed[first..=last]
+            .iter()
+            .map(|listed| listed.file.clone())
+            .collect();
+    }
+}
+
+/// Those of `files` that `view` lists, in its order.
+fn in_list_order(view: &RecordingsView, files: &[FileName]) -> Vec<FileName> {
+    view.listed
+        .iter()
+        .filter(|listed| files.contains(&listed.file))
+        .map(|listed| listed.file.clone())
+        .collect()
+}
+
+/// Where `file` is in `view`'s list.
+fn position(view: &RecordingsView, file: &FileName) -> Option<usize> {
+    view.listed.iter().position(|listed| listed.file == *file)
+}
+
+/// `place` as Slint takes it: -1 for none.
+fn slint_place(place: Option<usize>) -> i32 {
+    place
         .and_then(|place| i32::try_from(place).ok())
         .unwrap_or(-1)
 }
@@ -99,13 +260,133 @@ mod tests {
         assert_eq!(sendable_name(&long).chars().count(), MAX_NAME_CHARS + 1);
     }
 
+    /// The days of the selected recordings.
+    fn days(selection: &Selection) -> Vec<u32> {
+        selection
+            .files()
+            .iter()
+            .map(|file| file.as_str()[8..10].parse().unwrap())
+            .collect()
+    }
+
     #[test]
-    fn a_selection_follows_its_recording_and_ends_when_it_is_gone() {
-        let selected = file(9);
-        assert_eq!(place(&view(&[10, 9], None), Some(&selected)), 1);
-        assert_eq!(place(&view(&[11, 10, 9], None), Some(&selected)), 2);
-        assert_eq!(place(&view(&[11, 10], None), Some(&selected)), -1);
-        assert_eq!(place(&view(&[9, 8], None), None), -1);
+    fn a_click_selects_one_ctrl_toggles_and_shift_takes_the_range_from_the_last_click() {
+        let list = view(&[15, 14, 13, 12, 11, 10], None);
+        let mut selection = Selection::default();
+
+        selection.click(&list, 1, Click::Only);
+        assert_eq!(days(&selection), [14]);
+        assert_eq!(selection.one(), Some(&file(14)));
+        selection.click(&list, 3, Click::Toggle);
+        assert_eq!(days(&selection), [14, 12]);
+        assert_eq!(selection.one(), None);
+        // From the Ctrl+click, up or down, replacing the rest.
+        selection.click(&list, 5, Click::Range);
+        assert_eq!(days(&selection), [12, 11, 10]);
+        selection.click(&list, 0, Click::Range);
+        assert_eq!(days(&selection), [15, 14, 13, 12]);
+        // Ctrl+click again takes one out, and the last one out leaves none.
+        selection.click(&list, 0, Click::Toggle);
+        assert_eq!(days(&selection), [14, 13, 12]);
+        selection.click(&list, 4, Click::Only);
+        selection.click(&list, 4, Click::Toggle);
+        assert!(selection.files().is_empty());
+        assert_eq!(selection.one(), None);
+        // A Shift+click with no click before ranges from the first row.
+        let mut fresh = Selection::default();
+        fresh.click(&list, 2, Click::Range);
+        assert_eq!(days(&fresh), [15, 14, 13]);
+        assert_eq!(
+            selection.flags(&list),
+            [false, false, false, false, false, false]
+        );
+        fresh.click(&list, 1, Click::Toggle);
+        assert_eq!(fresh.flags(&list), [true, false, true, false, false, false]);
+    }
+
+    #[test]
+    fn a_click_off_the_rows_changes_nothing() {
+        let list = view(&[10, 9], None);
+        let mut selection = Selection::default();
+        selection.click(&list, 0, Click::Only);
+        let before = selection.clone();
+        for index in [-1, 2, i32::MAX, i32::MIN] {
+            for click in [Click::Only, Click::Toggle, Click::Range] {
+                selection.click(&list, index, click);
+                assert_eq!(selection, before, "{index} {click:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_arrows_move_one_row_shift_extends_and_home_and_end_reach_the_ends() {
+        let list = view(&[15, 14, 13, 12, 11], None);
+        let mut selection = Selection::default();
+        // With nothing to move from, the first row.
+        selection.step(&list, 1, false);
+        assert_eq!(days(&selection), [15]);
+        selection.step(&list, 1, false);
+        selection.step(&list, 1, false);
+        assert_eq!(days(&selection), [13]);
+        assert_eq!(selection.cursor(&list), 2);
+        selection.step(&list, -1, true);
+        selection.step(&list, -1, true);
+        assert_eq!(days(&selection), [15, 14, 13]);
+        assert_eq!(selection.cursor(&list), 0);
+        // Past the ends: there.
+        selection.step(&list, -1, true);
+        assert_eq!(days(&selection), [15, 14, 13]);
+        selection.step(&list, i32::MAX, true);
+        assert_eq!(days(&selection), [13, 12, 11]);
+        selection.step(&list, i32::MIN, false);
+        assert_eq!(days(&selection), [15]);
+        // A Shift+click ranges from where the arrows left the anchor.
+        selection.step(&list, 2, false);
+        selection.click(&list, 4, Click::Range);
+        assert_eq!(days(&selection), [13, 12, 11]);
+        assert_eq!(selection.cursor(&list), 4);
+        let mut none = Selection::default();
+        none.step(&view(&[], None), 1, false);
+        assert_eq!(none, Selection::default());
+        // With no row to move from, End reaches the last and Up the first.
+        let mut ended = Selection::default();
+        ended.step(&list, 5, false);
+        assert_eq!(days(&ended), [11]);
+        let mut up = Selection::default();
+        up.step(&list, -1, false);
+        assert_eq!(days(&up), [15]);
+    }
+
+    #[test]
+    fn ctrl_a_selects_every_listed_recording() {
+        let list = view(&[12, 11, 10], None);
+        let mut selection = Selection::default();
+        selection.all(&list);
+        assert_eq!(days(&selection), [12, 11, 10]);
+        selection.all(&view(&[], None));
+        assert!(selection.files().is_empty());
+    }
+
+    #[test]
+    fn a_selection_follows_its_recordings_and_drops_each_one_gone() {
+        let list = view(&[12, 11, 10, 9], None);
+        let mut selection = Selection::default();
+        selection.click(&list, 1, Click::Only);
+        selection.click(&list, 3, Click::Toggle);
+        assert_eq!(selection.cursor(&list), 3);
+
+        let newer = view(&[13, 12, 11, 10, 9], None);
+        selection.follow(&newer);
+        assert_eq!(days(&selection), [11, 9]);
+        assert_eq!(selection.cursor(&newer), 4);
+
+        let fewer = view(&[13, 11, 10], None);
+        selection.follow(&fewer);
+        assert_eq!(days(&selection), [11]);
+        assert_eq!(selection.cursor(&fewer), -1);
+        // The anchor, Day 9, went too: a range starts at the first row.
+        selection.click(&fewer, 1, Click::Range);
+        assert_eq!(days(&selection), [13, 11]);
     }
 
     #[test]

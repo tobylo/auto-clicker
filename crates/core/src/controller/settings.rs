@@ -161,6 +161,7 @@ impl<P: Platform> Controller<P> {
                         self.configure_shortcuts(id, activation_token)
                     }
                     Ask::Recording { file, action } => Some(self.recording_request(&file, action)),
+                    Ask::Delete(which) => Some(self.delete_request(&which)),
                     Ask::Locate { at, on, since } => Some(self.locate(at, on, since)),
                 };
                 if let Some(outcome) = outcome {

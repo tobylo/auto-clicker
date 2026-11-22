@@ -1,0 +1,129 @@
+// The recordings list of the settings window's Playback tab.
+
+import { ListView, Palette } from "std-widgets.slint";
+
+// A recording as the list shows it.
+export struct RecordingRow {
+    text: string,
+    selected: bool,
+}
+
+// The recordings, any number selected. A click selects one, Ctrl+click
+// toggles one and Shift+click selects the range from the last click; the
+// arrow keys move the selection (Shift extends it), PageUp and PageDown by
+// a screenful, Home and End go to the ends and Ctrl+A selects all. Rust
+// keeps the selection; the list only says what was pressed, and scrolls to
+// the row the keys reached.
+export component RecordingList inherits FocusScope {
+    in property <[RecordingRow]> rows;
+    // The row the arrow keys move from, which the list keeps in view.
+    in property <int> cursor: -1;
+    callback pressed(/* index */ int, /* toggle */ bool, /* range */ bool);
+    callback step(/* by */ int, /* extend */ bool);
+    callback select-all();
+    property <length> row-height: 28px;
+    property <length> border: 1px;
+
+    function show(index: int) {
+        if index < 0 {
+            return;
+        }
+        let top = index * root.row-height;
+        if top + list.content-y < 0 {
+            list.content-y = -top;
+        } else if top + root.row-height + list.content-y > list.visible-height {
+            list.content-y = list.visible-height - top - root.row-height;
+        }
+    }
+
+    changed cursor => {
+        root.show(root.cursor);
+    }
+
+    // How many rows PageUp and PageDown move: as many as fit in view, at
+    // least one.
+    function page() -> int {
+        max(1, floor(list.visible-height / root.row-height))
+    }
+
+    // Moves the selection `by` rows and shows the row it reached, even
+    // when that row was the cursor already and scrolled out of view.
+    function move(by: int, extend: bool) {
+        root.step(by, extend);
+        root.show(root.cursor);
+    }
+
+    key-pressed(event) => {
+        if event.modifiers.control && (event.text == "a" || event.text == "A") {
+            root.select-all();
+            return accept;
+        }
+        if event.text == Key.UpArrow {
+            root.move(-1, event.modifiers.shift);
+            return accept;
+        }
+        if event.text == Key.DownArrow {
+            root.move(1, event.modifiers.shift);
+            return accept;
+        }
+        if event.text == Key.PageUp {
+            root.move(-root.page(), event.modifiers.shift);
+            return accept;
+        }
+        if event.text == Key.PageDown {
+            root.move(root.page(), event.modifiers.shift);
+            return accept;
+        }
+        if event.text == Key.Home {
+            root.move(-root.rows.length, event.modifiers.shift);
+            return accept;
+        }
+        if event.text == Key.End {
+            root.move(root.rows.length, event.modifiers.shift);
+            return accept;
+        }
+        reject
+    }
+
+    Rectangle {
+        border-width: root.border;
+        border-radius: 4px;
+        border-color: root.has-focus ? Palette.accent-background : Palette.border;
+        // The rows inside the border, clipped to its rounded corners, so a
+        // selected row never covers it.
+        Rectangle {
+            x: root.border;
+            y: root.border;
+            width: parent.width - 2 * root.border;
+            height: parent.height - 2 * root.border;
+            border-radius: 3px;
+            clip: true;
+            list := ListView {
+                for row[index] in root.rows: Rectangle {
+                    height: root.row-height;
+                    background: row.selected ? Palette.selection-background : transparent;
+                    accessible-role: list-item;
+                    accessible-label: row.text;
+                    accessible-item-selected: row.selected;
+                    accessible-item-index: index;
+                    Text {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        text: row.text;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        color: row.selected ? Palette.selection-foreground : Palette.foreground;
+                    }
+                    TouchArea {
+                        pointer-event(event) => {
+                            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                                root.focus();
+                                root.pressed(index, event.modifiers.control, event.modifiers.shift);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -2,8 +2,10 @@
 // reads them back for a save; every text the window shows is here, under
 // @tr, so the bundled translations cover it all.
 
-import { AboutSlint, Button, CheckBox, ComboBox, GroupBox, LineEdit, SpinBox, StandardListView, TabWidget, ScrollView, Palette } from "std-widgets.slint";
+import { AboutSlint, Button, CheckBox, ComboBox, GroupBox, LineEdit, SpinBox, TabWidget, ScrollView, Palette } from "std-widgets.slint";
+import { RecordingList, RecordingRow } from "recordings.slint";
 export { PickWindow } from "pick.slint";
+export { RecordingRow }
 
 // Texts Rust builds messages from.
 export global Texts {
@@ -43,10 +45,16 @@ export global Texts {
     public pure function captured-hotkey(keys: string) -> string { @tr("Captured {}; save to keep it.", keys) }
     public pure function captured-key(key: string) -> string { @tr("Key set to {}; save to keep it.", key) }
     public pure function renamed() -> string { @tr("Renamed.") }
-    public pure function deleted() -> string { @tr("Deleted.") }
+    public pure function deleted(count: int) -> string { @tr("Deleted {n} recording." | "Deleted {n} recordings." % count) }
+    public pure function deleted-unsynced(count: int, why: string) -> string { @tr("Deleted {n} recording, but this may not survive a power loss: {}." | "Deleted {n} recordings, but this may not survive a power loss: {}." % count, why) }
+    public pure function not-deleted-these(recordings: string) -> string { @tr("Not deleted: {}.", recordings) }
+    public pure function not-deleted-one(recording: string, why: string) -> string { @tr("{}: {}", recording, why) }
+    public pure function more-not-deleted(count: int) -> string { @tr("{n} more was not deleted." | "{n} more were not deleted." % count) }
     public pure function chosen() -> string { @tr("The playback hotkey plays this recording now.") }
     public pure function playing() -> string { @tr("Playing.") }
     public pure function delete-question(name: string) -> string { @tr("Delete {} for good? It cannot be undone.", name) }
+    public pure function delete-several-question(count: int) -> string { @tr("Delete {n} recording for good? It cannot be undone." | "Delete these {n} recordings for good? It cannot be undone." % count) }
+    public pure function delete-all-question(count: int) -> string { @tr("Delete the only recording for good? It cannot be undone." | "Delete all {n} recordings, the unlisted ones too, for good? It cannot be undone." % count) }
     public pure function no-name() -> string { @tr("(the name cannot be read)") }
     public pure function more-recordings(count: string) -> string { @tr("{} older recordings are not listed.", count) }
     // What the daemon says, as core's messages give it: each with its own
@@ -155,7 +163,6 @@ export global Texts {
     public pure function own-key-unreadable(trigger: string) -> string { @tr("the hotkey “{}” is not on a function key (F1 to F24), so the program cannot tell whether its own key presses would set it off; change it in System Settings", trigger) }
     public pure function own-key-not-reported() -> string { @tr("the desktop has not said yet which keys the hotkeys use, and the program must not press one of them") }
     public pure function unsynced-renamed(why: string) -> string { @tr("Renamed, but it may not survive a power loss: {}", why) }
-    public pure function unsynced-deleted(why: string) -> string { @tr("Deleted, but it may not survive a power loss: {}", why) }
     public pure function not-renamed(why: string) -> string { @tr("Not renamed: {}", why) }
     public pure function not-deleted(why: string) -> string { @tr("Not deleted: {}", why) }
     public pure function generated-name(made: string) -> string { @tr("Recording {}", made) }
@@ -209,10 +216,19 @@ export component SettingsWindow inherits Window {
     in-out property <bool> plays-forever;
     in-out property <string> plays-text: "1";
     // Recordings
-    in property <[StandardListViewItem]> recordings;
+    in property <[RecordingRow]> recordings;
     in property <string> more-recordings;
-    in-out property <int> selected: -1;
+    // How many recordings there are, listed or not.
+    in property <int> recordings-total;
+    // How many are selected, and the row the arrow keys move from.
+    in property <int> selected-count;
+    in property <int> recording-cursor: -1;
     in-out property <string> recording-name;
+    // What may be done with the recordings now: with the one selected
+    // alone, with all those selected, and with every one.
+    out property <bool> may-use-one: root.selected-count == 1 && root.idle && root.may-ask;
+    out property <bool> may-delete: root.selected-count >= 1 && root.idle && root.may-ask;
+    out property <bool> may-delete-all: root.recordings-total >= 1 && root.idle && root.may-ask;
     // State
     in property <bool> idle;
     // The screens are known, so a point can be picked on them.
@@ -238,9 +254,12 @@ export component SettingsWindow inherits Window {
     callback configure-shortcuts();
     callback confirm();
     callback dismiss();
-    callback select-recording(int);
+    callback press-recording(int, bool, bool);
+    callback step-recordings(int, bool);
+    callback select-all-recordings();
     callback rename-recording();
-    callback delete-recording();
+    callback delete-recordings();
+    callback delete-all-recordings();
     callback choose-recording();
     callback play-recording();
 
@@ -460,19 +479,21 @@ export component SettingsWindow inherits Window {
                         wrap: word-wrap;
                     }
                     Text {
-                        text: @tr("Recordings, newest first; ✓ marks the one the playback hotkey plays");
+                        text: @tr("Recordings, newest first; ✓ marks the one the playback hotkey plays. Ctrl+click or Shift+click selects several.");
                         font-weight: 600;
+                        wrap: word-wrap;
                     }
                     if root.recordings.length == 0: Text {
                         text: @tr("No recordings yet.");
                     }
-                    // Arrow keys move the selection, as a click does.
-                    StandardListView {
+                    RecordingList {
                         min-height: 180px;
                         vertical-stretch: 1;
-                        model: root.recordings;
-                        current-item <=> root.selected;
-                        current-item-changed(index) => { root.select-recording(index); }
+                        rows: root.recordings;
+                        cursor: root.recording-cursor;
+                        pressed(index, toggle, range) => { root.press-recording(index, toggle, range); }
+                        step(by, extend) => { root.step-recordings(by, extend); }
+                        select-all => { root.select-all-recordings(); }
                     }
                     if root.more-recordings != "": Text {
                         text: root.more-recordings;
@@ -481,12 +502,12 @@ export component SettingsWindow inherits Window {
                     Row {
                         label: @tr("Name");
                         LineEdit {
-                            enabled: root.selected >= 0 && !root.waiting;
+                            enabled: root.selected-count == 1 && !root.waiting;
                             text <=> root.recording-name;
                         }
                         Button {
                             text: @tr("Rename");
-                            enabled: root.selected >= 0 && root.idle && root.may-ask;
+                            enabled: root.may-use-one;
                             clicked => { root.rename-recording(); }
                         }
                     }
@@ -495,18 +516,23 @@ export component SettingsWindow inherits Window {
                         alignment: start;
                         Button {
                             text: @tr("Play");
-                            enabled: root.selected >= 0 && root.idle && root.may-ask;
+                            enabled: root.may-use-one;
                             clicked => { root.play-recording(); }
                         }
                         Button {
                             text: @tr("Play with the hotkey");
-                            enabled: root.selected >= 0 && root.idle && root.may-ask;
+                            enabled: root.may-use-one;
                             clicked => { root.choose-recording(); }
                         }
                         Button {
                             text: @tr("Delete…");
-                            enabled: root.selected >= 0 && root.idle && root.may-ask;
-                            clicked => { root.delete-recording(); }
+                            enabled: root.may-delete;
+                            clicked => { root.delete-recordings(); }
+                        }
+                        Button {
+                            text: @tr("Delete all…");
+                            enabled: root.may-delete-all;
+                            clicked => { root.delete-all-recordings(); }
                         }
                     }
                 }

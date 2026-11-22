@@ -1,5 +1,5 @@
 //! Changing the recordings the user keeps: renaming one, which rewrites its
-//! file whole under the same file name, and deleting one.
+//! file whole under the same file name, and deleting some or all of them.
 //!
 //! Each opens the recordings folder once and works through that open
 //! folder, like a save, so a folder renamed or replaced meanwhile is never
@@ -155,22 +155,79 @@ impl Write for Capped<'_> {
     }
 }
 
-/// Deletes the recording `file` in `dir`, for good.
+/// Which recordings a deletion takes.
+#[derive(Clone, Copy, Debug)]
+pub enum Doomed<'a> {
+    These(&'a [FileName]),
+    /// Every file in the folder with a recording's name, as the folder
+    /// holds them when the deletion begins.
+    All,
+}
+
+/// What a deletion did.
+#[derive(Debug, Default)]
+pub struct Removed {
+    /// How many files it removed.
+    pub deleted: usize,
+    /// The first files it could not remove, and why.
+    pub failed: Vec<(FileName, ChangeError)>,
+    /// How many more it could not remove.
+    pub more_failed: usize,
+    /// Why the folder was not flushed after it removed some, so a power
+    /// loss could bring them back.
+    pub unsynced: Option<io::Error>,
+}
+
+/// Deletes the recordings `doomed` in `dir`, for good. A file that cannot
+/// be removed (one already gone included) does not stop the others; the
+/// first `keep` of them are named, with why. The folder is flushed once,
+/// after, when anything was removed.
 ///
 /// # Errors
-/// [`ChangeError::Missing`] when it is already gone;
-/// [`ChangeError::NotDone`] when it cannot be removed.
-pub fn delete(dir: &Path, file: &FileName) -> Result<Changed, ChangeError> {
+/// [`ChangeError::Missing`] when there is no recordings folder, and
+/// [`ChangeError::Failed`] when it cannot be opened or, for
+/// [`Doomed::All`], read. Nothing was removed then.
+pub fn delete(dir: &Path, doomed: Doomed<'_>, keep: usize) -> Result<Removed, ChangeError> {
     let folder = open(dir)?;
-    match fs::remove_file(held_path(&folder).join(file.as_str())) {
-        Ok(()) => {}
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Err(ChangeError::Missing),
-        Err(err) => return Err(failed(&folder, dir, Step::Deleted, &err)),
+    let files = match doomed {
+        Doomed::These(files) => files.to_vec(),
+        Doomed::All => every(&folder, dir)?,
+    };
+    let mut removed = Removed::default();
+    for file in files {
+        match remove(&folder, dir, &file) {
+            Ok(()) => removed.deleted = removed.deleted.saturating_add(1),
+            Err(err) if removed.failed.len() < keep => removed.failed.push((file, err)),
+            Err(_) => removed.more_failed = removed.more_failed.saturating_add(1),
+        }
     }
-    Ok(match folder.sync_all() {
-        Ok(()) => Changed::Synced,
-        Err(err) => Changed::Unsynced(err),
-    })
+    if removed.deleted > 0 {
+        removed.unsynced = folder.sync_all().err();
+    }
+    Ok(removed)
+}
+
+/// Every file with a recording's name in the open `folder`. Read whole
+/// before any is removed, so removing one never moves what is read next.
+fn every(folder: &File, dir: &Path) -> Result<Vec<FileName>, ChangeError> {
+    let unread = |err: io::Error| ChangeError::Failed(named(folder, dir, &err));
+    let mut files = Vec::new();
+    for entry in fs::read_dir(held_path(folder)).map_err(unread)? {
+        let name = entry.map_err(unread)?.file_name();
+        if let Some(file) = name.to_str().and_then(FileName::parse) {
+            files.push(file);
+        }
+    }
+    Ok(files)
+}
+
+/// Removes `file` from the open `folder`.
+fn remove(folder: &File, dir: &Path, file: &FileName) -> Result<(), ChangeError> {
+    match fs::remove_file(held_path(folder).join(file.as_str())) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Err(ChangeError::Missing),
+        Err(err) => Err(failed(folder, dir, Step::Deleted, &err)),
+    }
 }
 
 /// Opens the recordings folder, refusing a symlink in its place.

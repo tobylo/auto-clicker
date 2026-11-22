@@ -260,8 +260,23 @@ msgstr "Spara"
 msgid "Renamed."
 msgstr "Bytte namn."
 
-msgid "Deleted."
-msgstr "Raderad."
+msgid "Deleted {n} recording."
+msgid_plural "Deleted {n} recordings."
+msgstr[0] "Raderade {n} inspelning."
+msgstr[1] "Raderade {n} inspelningar."
+
+msgid "Deleted {n} recording, but this may not survive a power loss: {}."
+msgid_plural "Deleted {n} recordings, but this may not survive a power loss: {}."
+msgstr[0] "Raderade {n} inspelning, men det kanske inte klarar ett strömavbrott: {}."
+msgstr[1] "Raderade {n} inspelningar, men det kanske inte klarar ett strömavbrott: {}."
+
+msgid "Not deleted: {}."
+msgstr "Kunde inte tas bort: {}."
+
+msgid "{n} more was not deleted."
+msgid_plural "{n} more were not deleted."
+msgstr[0] "{n} till kunde inte tas bort."
+msgstr[1] "{n} till kunde inte tas bort."
 
 msgid "The playback hotkey plays this recording now."
 msgstr "Snabbtangenten för uppspelning spelar nu den här inspelningen."
@@ -272,6 +287,16 @@ msgstr "Spelar upp."
 msgid "Delete {} for good? It cannot be undone."
 msgstr "Radera {} för gott? Det går inte att ångra."
 
+msgid "Delete {n} recording for good? It cannot be undone."
+msgid_plural "Delete these {n} recordings for good? It cannot be undone."
+msgstr[0] "Radera {n} inspelning för gott? Det går inte att ångra."
+msgstr[1] "Radera dessa {n} inspelningar för gott? Det går inte att ångra."
+
+msgid "Delete the only recording for good? It cannot be undone."
+msgid_plural "Delete all {n} recordings, the unlisted ones too, for good? It cannot be undone."
+msgstr[0] "Radera den enda inspelningen för gott? Det går inte att ångra."
+msgstr[1] "Radera alla {n} inspelningar, även de som inte visas, för gott? Det går inte att ångra."
+
 msgid "(the name cannot be read)"
 msgstr "(namnet kan inte läsas)"
 
@@ -281,8 +306,8 @@ msgstr "{} äldre inspelningar visas inte."
 msgid "Speed and plays apply from the next playback once saved. Changes to the recordings below apply at once."
 msgstr "Hastighet och antal uppspelningar gäller från nästa uppspelning när de sparats. Ändringar av inspelningarna nedan gäller direkt."
 
-msgid "Recordings, newest first; ✓ marks the one the playback hotkey plays"
-msgstr "Inspelningar, nyaste först; ✓ markerar den som snabbtangenten för uppspelning spelar"
+msgid "Recordings, newest first; ✓ marks the one the playback hotkey plays. Ctrl+click or Shift+click selects several."
+msgstr "Inspelningar, nyaste först; ✓ markerar den som snabbtangenten för uppspelning spelar. Ctrl+klick eller Skift+klick markerar flera."
 
 msgid "No recordings yet."
 msgstr "Inga inspelningar än."
@@ -301,6 +326,9 @@ msgstr "Spela med snabbtangenten"
 
 msgid "Delete…"
 msgstr "Radera…"
+
+msgid "Delete all…"
+msgstr "Radera alla…"
 
 msgid "Clicking cannot start: {}"
 msgstr "Kan inte börja klicka: {}"
@@ -613,9 +641,6 @@ msgstr "skrivbordet har inte sagt än vilka tangenter snabbtangenterna använder
 
 msgid "Renamed, but it may not survive a power loss: {}"
 msgstr "Bytte namn, men det kanske inte klarar ett strömavbrott: {}"
-
-msgid "Deleted, but it may not survive a power loss: {}"
-msgstr "Borttagen, men det kanske inte klarar ett strömavbrott: {}"
 
 msgid "Not renamed: {}"
 msgstr "Bytte inte namn: {}"

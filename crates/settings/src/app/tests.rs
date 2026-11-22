@@ -10,17 +10,19 @@ use auto_clicker_core::hotkeys::Unavailable;
 use auto_clicker_core::locale::Language;
 use auto_clicker_core::message::{
     ChangeFailure, ConfigProblem, Failure, Hindrance, InputFailure, NoPointer, NoPositions,
-    NoScreens, Notice, PlayStart, PointScreens, Problem, Quoted, RecordingChange, SaveFailure,
-    Saving, Start, Step, Stop, Titled, Unavailability, Unplayable,
+    NoScreens, Notice, PlayStart, PointScreens, Problem, Quoted, SaveFailure, Saving, Start, Step,
+    Stop, Titled, Unavailability, Unplayable,
 };
 use auto_clicker_core::playback::Fallback;
 use auto_clicker_core::recording::FileName;
-use auto_clicker_core::window::RecordingOutcome;
+use auto_clicker_core::window::{NotDeleted, RecordingOutcome, Removal};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
 
 use super::*;
 use crate::ui::SettingsWindow;
+
+mod list;
 
 /// A platform giving every window a software window of its own.
 struct Headless;
@@ -52,7 +54,12 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
     recordings(&said);
     point_screens(&said);
     titles(&said);
+    deletions(&said);
     crate::pick::tests::every_end_is_told_once_and_closes_every_overlay();
+    list::the_list_tells_clicks_with_their_keys_and_the_keys_that_select();
+    list::the_list_keeps_the_row_the_arrows_reached_in_view();
+    list::the_actions_follow_the_selection();
+    list::a_delete_asks_once_and_sends_the_selection_whole();
 }
 
 /// A refusal, a failure and an unavailable, as a note.
@@ -264,18 +271,10 @@ fn recordings(said: &Said<'_>) {
         "Stoppat: skärmen är låst. Inspelningen kunde inte sparas: ingen datamapp: varken \
          XDG_DATA_HOME eller HOME är satt"
     );
-    let gone = RecordingOutcome::NotChanged(RecordingChange::Delete, ChangeFailure::Missing);
-    assert_eq!(
-        note(Note::Recording(gone)),
-        "Inte borttagen: filen finns inte längre"
-    );
-    let full = RecordingOutcome::NotChanged(
-        RecordingChange::Rename,
-        ChangeFailure::NotDone {
-            step: Step::Written,
-            why: Quoted::new("No space left on device (os error 28)"),
-        },
-    );
+    let full = RecordingOutcome::NotRenamed(ChangeFailure::NotDone {
+        step: Step::Written,
+        why: Quoted::new("No space left on device (os error 28)"),
+    });
     assert_eq!(
         note(Note::Recording(full)),
         "Bytte inte namn: filen kunde inte skrivas: No space left on device (os error 28)"
@@ -291,6 +290,71 @@ fn recordings(said: &Said<'_>) {
         "Spelar inte upp: leftshift är en modifierare, och om programmet håller den ändras \
          vilken snabbtangent skrivbordet ser"
     );
+}
+
+/// What a delete of several answers, in Swedish, with its plurals.
+fn deletions(said: &Said<'_>) {
+    let file =
+        |minute: u32| FileName::parse(&format!("2026-11-09_18-{minute:02}-00.000.json")).unwrap();
+    let one = Removal {
+        deleted: 1,
+        ..Removal::default()
+    };
+    assert_eq!(said.removal(&one), "Raderade 1 inspelning.");
+    let unsynced = Removal {
+        deleted: 3,
+        unsynced: Some(Quoted::new("EIO")),
+        ..Removal::default()
+    };
+    assert_eq!(
+        said.removal(&unsynced),
+        "Raderade 3 inspelningar, men det kanske inte klarar ett strömavbrott: EIO."
+    );
+    let failed = |minute, name: Option<&str>, why| NotDeleted {
+        recording: Titled::new(file(minute), name),
+        why,
+    };
+    let short = Removal {
+        deleted: 2,
+        failed: vec![
+            failed(1, None, ChangeFailure::Missing),
+            failed(
+                2,
+                Some("Farm loop"),
+                ChangeFailure::NotDone {
+                    step: Step::Deleted,
+                    why: Quoted::new("Permission denied (os error 13)"),
+                },
+            ),
+        ],
+        more_failed: 4,
+        unsynced: None,
+    };
+    assert_eq!(
+        said.removal(&short),
+        "Raderade 2 inspelningar. Kunde inte tas bort: Inspelning 2026-11-09 18:01:00: filen \
+         finns inte längre; Farm loop (2026-11-09 18:02:00): filen kunde inte tas bort: \
+         Permission denied (os error 13). 4 till kunde inte tas bort."
+    );
+    // None went: only what did not.
+    let none = Removal {
+        failed: vec![failed(1, None, ChangeFailure::Missing)],
+        ..Removal::default()
+    };
+    assert_eq!(
+        said.removal(&none),
+        "Kunde inte tas bort: Inspelning 2026-11-09 18:01:00: filen finns inte längre."
+    );
+    assert_eq!(
+        said.not_deleted(&ChangeFailure::Folder(Quoted::new("EACCES"))),
+        "Inte borttagen: EACCES"
+    );
+    let t = said.texts;
+    assert_eq!(
+        t.invoke_delete_all_question(1),
+        "Radera den enda inspelningen för gott? Det går inte att ångra."
+    );
+    assert_eq!(t.invoke_more_not_deleted(1), "1 till kunde inte tas bort.");
 }
 
 /// A recording named in a notice: generated names in Swedish, the user's

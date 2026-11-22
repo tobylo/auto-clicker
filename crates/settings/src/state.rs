@@ -5,11 +5,11 @@
 use auto_clicker_core::config::{Draft, Field, HotkeysDraft, Reason, Stale};
 use auto_clicker_core::controller::{Activity, Route};
 use auto_clicker_core::hotkeys::{Action, Capture};
-use auto_clicker_core::message::{Failure, Quoted, Unavailability};
+use auto_clicker_core::message::{ChangeFailure, Failure, Quoted, Unavailability};
 use auto_clicker_core::recording::{FileName, Rect};
 use auto_clicker_core::window::{
-    Ask, CaptureEnd, Confirm, Located, Outcome, RecordingAction, RecordingOutcome, Request, Since,
-    Spot, WindowView,
+    Ask, CaptureEnd, Confirm, Deletion, Files, Located, Outcome, RecordingAction, RecordingOutcome,
+    Removal, Request, Since, Spot, WindowView,
 };
 
 use crate::model::{Fields, Picked, Unreadable, with_hotkey};
@@ -52,6 +52,10 @@ pub enum Note {
     Unreadable(Unreadable),
     /// What came of something done with a recording.
     Recording(RecordingOutcome),
+    /// What a delete did.
+    Deleted(Removal),
+    /// A delete deleted nothing: why.
+    NotDeleted(ChangeFailure),
 }
 
 impl Note {
@@ -64,10 +68,11 @@ impl Note {
                 | Note::Unavailable(_)
                 | Note::PickFailed(_)
                 | Note::Unreadable(_)
+                | Note::NotDeleted(_)
                 | Note::Recording(
-                    RecordingOutcome::NotChanged(..) | RecordingOutcome::NotPlaying(_)
+                    RecordingOutcome::NotRenamed(_) | RecordingOutcome::NotPlaying(_)
                 )
-        )
+        ) || matches!(self, Note::Deleted(removal) if removal.fell_short())
     }
 }
 
@@ -77,7 +82,35 @@ pub enum Question {
     Replace(Stale),
     WithoutModifier(Vec<Action>),
     /// Delete this recording, for good? With what the list calls it.
-    Delete(FileName, String),
+    DeleteOne(FileName, String),
+    /// Delete these recordings, for good?
+    DeleteSeveral(Files),
+    /// Delete every recording, this many, for good?
+    DeleteAll(u64),
+}
+
+impl Question {
+    /// Whether it asks about a delete other than of `selected` or, for
+    /// every recording, of `total`: the selection or the list changed
+    /// since it was asked.
+    fn outdated(&self, selected: &[FileName], total: u64) -> bool {
+        match self {
+            Question::DeleteOne(file, _) => selected != std::slice::from_ref(file),
+            Question::DeleteSeveral(files) => selected != files.as_slice(),
+            Question::DeleteAll(asked) => *asked != total,
+            Question::Replace(_) | Question::WithoutModifier(_) => false,
+        }
+    }
+
+    /// What a yes to it deletes, when it asks about a delete.
+    fn deletion(&self) -> Option<Deletion> {
+        match self {
+            Question::DeleteOne(file, _) => Files::new(vec![file.clone()]).map(Deletion::Files),
+            Question::DeleteSeveral(files) => Some(Deletion::Files(files.clone())),
+            Question::DeleteAll(_) => Some(Deletion::All),
+            Question::Replace(_) | Question::WithoutModifier(_) => None,
+        }
+    }
 }
 
 /// What the user agreed to for a save.
@@ -169,6 +202,8 @@ impl State {
             Outcome::CaptureEnded(why) => Note::CaptureEnded(why),
             Outcome::Configured => Note::Configured,
             Outcome::Recording(outcome) => Note::Recording(outcome),
+            Outcome::Deleted(removal) => Note::Deleted(removal),
+            Outcome::NotDeleted(why) => Note::NotDeleted(why),
             Outcome::Located(located) => self.located(located),
         })
     }
@@ -240,15 +275,15 @@ impl State {
             return None;
         }
         let (question, agreed) = self.question.as_ref()?;
+        if let Some(deletion) = question.deletion() {
+            self.question = None;
+            return Some(Ok(self.send(Ask::Delete(deletion), Asked::Recording)));
+        }
         let mut agreed = agreed.clone();
         match question {
             Question::Replace(_) => agreed.replace = true,
             Question::WithoutModifier(actions) => agreed.without_modifier.extend(actions),
-            Question::Delete(file, _) => {
-                let file = file.clone();
-                self.question = None;
-                return Some(Ok(self.send_recording(file, RecordingAction::Delete)));
-            }
+            Question::DeleteOne(..) | Question::DeleteSeveral(_) | Question::DeleteAll(_) => {}
         }
         let sent = self.send_save(fields, agreed);
         if matches!(sent, Some(Ok(_))) {
@@ -262,11 +297,11 @@ impl State {
         self.question = None;
     }
 
-    /// The user selected `file` in the list, or nothing (`None`) when the
-    /// one selected left it: a delete asked about another recording is
-    /// called off, so a yes never deletes one not selected.
-    pub fn selected(&mut self, file: Option<&FileName>) {
-        if matches!(&self.question, Some((Question::Delete(asked, _), _)) if Some(asked) != file) {
+    /// The recordings `selected` in the list now, of `total`: a delete
+    /// asked about others, or about all when there were more or fewer, is
+    /// called off, so a yes never deletes what the user did not see asked.
+    pub fn selected(&mut self, selected: &[FileName], total: u64) {
+        if matches!(&self.question, Some((question, _)) if question.outdated(selected, total)) {
             self.question = None;
         }
     }
@@ -295,22 +330,39 @@ impl State {
         Some(self.send(ask, Asked::Configure))
     }
 
-    /// Does `action` with the recording `file`; a delete asks first.
-    /// `None` while the user may not ask anything, or when it asks.
-    pub fn recording(
-        &mut self,
-        file: FileName,
-        label: String,
-        action: RecordingAction,
-    ) -> Option<Request> {
+    /// Does `action` with the recording `file`; `None` while the user may
+    /// not ask anything.
+    pub fn recording(&mut self, file: FileName, action: RecordingAction) -> Option<Request> {
         if !self.may_ask() {
             return None;
         }
-        if action == RecordingAction::Delete {
-            self.question = Some((Question::Delete(file, label), Agreed::default()));
-            return None;
+        Some(self.send(Ask::Recording { file, action }, Asked::Recording))
+    }
+
+    /// Asks whether to delete the recordings `selected`, the first called
+    /// `label` in the list: by that name when it is the only one, else by
+    /// how many. Nothing while the user may not ask anything, or with none
+    /// selected.
+    pub fn delete(&mut self, selected: Vec<FileName>, label: String) {
+        if !self.may_ask() {
+            return;
         }
-        Some(self.send_recording(file, action))
+        let question = match &selected[..] {
+            [one] => Question::DeleteOne(one.clone(), label),
+            _ => match Files::new(selected) {
+                Some(files) => Question::DeleteSeveral(files),
+                None => return,
+            },
+        };
+        self.question = Some((question, Agreed::default()));
+    }
+
+    /// Asks whether to delete every recording, `total` of them; nothing
+    /// while the user may not ask anything, or with none.
+    pub fn delete_all(&mut self, total: u64) {
+        if self.may_ask() && total > 0 {
+            self.question = Some((Question::DeleteAll(total), Agreed::default()));
+        }
     }
 
     /// Where the clicker clicks for `at`, picked on the screen at `on` in a
@@ -321,10 +373,6 @@ impl State {
             return None;
         }
         Some(self.send(Ask::Locate { at, on, since }, Asked::Locate))
-    }
-
-    fn send_recording(&mut self, file: FileName, action: RecordingAction) -> Request {
-        self.send(Ask::Recording { file, action }, Asked::Recording)
     }
 
     fn send_save(
@@ -371,4 +419,4 @@ pub fn routes_pending(view: &WindowView) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

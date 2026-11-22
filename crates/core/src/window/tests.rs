@@ -4,7 +4,7 @@ use crate::config::{Config, Field};
 use crate::controller::Blocked;
 use crate::controller::{Route, Routes, WINDOW_RECORDINGS};
 use crate::hotkeys::{Binding, Unavailable};
-use crate::message::{ChangeFailure, ConfigProblem, RecordingChange};
+use crate::message::{ChangeFailure, ConfigProblem, Step, Titled};
 use crate::recording::{MAX_OUTPUTS, Output};
 
 fn file(text: &str) -> FileName {
@@ -125,17 +125,21 @@ fn every_answer_reads_back_as_sent() {
         Outcome::Configured,
         Outcome::Unavailable(Unavailability::Hotkeys(Unavailable::NoKeyboard)),
         Outcome::Recording(RecordingOutcome::Renamed),
-        Outcome::Recording(RecordingOutcome::Deleted),
         Outcome::Recording(RecordingOutcome::Chosen),
         Outcome::Recording(RecordingOutcome::Playing),
-        Outcome::Recording(RecordingOutcome::NotChanged(
-            RecordingChange::Rename,
-            ChangeFailure::Missing,
-        )),
-        Outcome::Recording(RecordingOutcome::Unsynced(
-            RecordingChange::Delete,
-            Quoted::new("no flush"),
-        )),
+        Outcome::Recording(RecordingOutcome::NotRenamed(ChangeFailure::Missing)),
+        Outcome::Recording(RecordingOutcome::Unsynced(Quoted::new("no flush"))),
+        Outcome::Deleted(Removal::default()),
+        Outcome::Deleted(Removal {
+            deleted: 3,
+            failed: vec![NotDeleted {
+                recording: Titled::new(file("2026-11-09_18-04-05.123.json"), Some("Farm")),
+                why: ChangeFailure::Missing,
+            }],
+            more_failed: 2,
+            unsynced: Some(Quoted::new("no flush")),
+        }),
+        Outcome::NotDeleted(ChangeFailure::Folder(Quoted::new("EACCES"))),
         Outcome::Recording(RecordingOutcome::NotPlaying(Some(Notice::NothingToPlay))),
         Outcome::Recording(RecordingOutcome::NotPlaying(None)),
         Outcome::Unavailable(Unavailability::ScreensUnknown(NoScreens::Lost)),
@@ -169,10 +173,14 @@ fn every_request_reads_back_as_sent() {
                 name: "Farm \"loop\"".to_owned(),
             },
         },
-        Ask::Recording {
-            file: file("2026-11-09_18-04-05.123.json"),
-            action: RecordingAction::Delete,
-        },
+        Ask::Delete(Deletion::Files(
+            Files::new(vec![
+                file("2026-11-09_18-04-05.123.json"),
+                file("2026-11-09_18-04-05.123-1.json"),
+            ])
+            .unwrap(),
+        )),
+        Ask::Delete(Deletion::All),
         Ask::Recording {
             file: file("2026-11-09_18-04-05.123.json"),
             action: RecordingAction::Choose,
@@ -207,9 +215,12 @@ fn a_request_with_an_unknown_field_is_not_read() {
 fn a_recording_is_named_only_by_its_file_names_one_form() {
     let ask = Ask::Recording {
         file: file("2026-11-09_18-04-05.123.json"),
-        action: RecordingAction::Delete,
+        action: RecordingAction::Choose,
     };
     let mut value = serde_json::to_value(Request { id: 1, ask }).unwrap();
+    let files = Files::new(vec![file("2026-11-09_18-04-05.123.json")]).unwrap();
+    let ask = Ask::Delete(Deletion::Files(files));
+    let mut deleted = serde_json::to_value(Request { id: 1, ask }).unwrap();
     for named in [
         "../2026-11-09_18-04-05.123.json",
         "2026-11-09_18-04-05.123.json/",
@@ -219,7 +230,47 @@ fn a_recording_is_named_only_by_its_file_names_one_form() {
         value["ask"]["recording"]["file"] = serde_json::json!(named);
         let bytes = serde_json::to_vec(&value).unwrap();
         assert!(parse::<Request>(&bytes).is_err(), "{named}");
+        deleted["ask"]["delete"]["files"][0] = serde_json::json!(named);
+        let bytes = serde_json::to_vec(&deleted).unwrap();
+        assert!(parse::<Request>(&bytes).is_err(), "delete {named}");
     }
+}
+
+#[test]
+fn a_delete_names_one_to_as_many_recordings_as_are_listed_each_once() {
+    let named = |n: usize| -> Vec<FileName> { (0..n).map(|day| listed(day, None).file).collect() };
+    let request = |files: Vec<FileName>| {
+        let files: Vec<String> = files.into_iter().map(String::from).collect();
+        let value = serde_json::json!({ "id": 1, "ask": { "delete": { "files": files } } });
+        parse::<Request>(&serde_json::to_vec(&value).unwrap())
+    };
+    // `listed` repeats its days after 28, so build distinct names past that.
+    let distinct = |n: usize| -> Vec<FileName> {
+        (0..n)
+            .map(|at| {
+                file(&format!(
+                    "2026-11-01_18-{:02}-{:02}.123.json",
+                    at / 60,
+                    at % 60
+                ))
+            })
+            .collect()
+    };
+    let mut twice = named(2);
+    twice.push(twice[0].clone());
+    let read = [
+        named(1),
+        distinct(WINDOW_RECORDINGS),
+        distinct(WINDOW_RECORDINGS + 1),
+        Vec::new(),
+        twice.clone(),
+    ]
+    .map(|files| request(files).is_ok());
+    assert_eq!(read, [true, true, false, false, false]);
+    let made = [twice, Vec::new(), distinct(WINDOW_RECORDINGS + 1)].map(Files::new);
+    assert_eq!(made, [None, None, None]);
+    let all = serde_json::json!({ "id": 1, "ask": { "delete": "all" } });
+    assert!(parse::<Request>(&serde_json::to_vec(&all).unwrap()).is_ok());
 }
 
 #[test]
@@ -301,11 +352,11 @@ fn a_line_of_exactly_the_limit_is_sent_and_read_and_one_more_byte_is_not() {
     assert!(parse::<WindowView>(&body).is_err());
 }
 
-#[test]
-fn long_messages_are_cut_so_every_view_fits_a_line() {
-    // Control characters are the longest to escape: six bytes each.
-    let worst = "\u{1}".repeat(MAX_LINE);
-    let desktop = || Hotkey::Desktop(Some(worst.clone()));
+/// A view as large as one can be: every text from outside the program
+/// `worst`, the most problems, recordings with the longest names and the
+/// most screens.
+fn widest(worst: &str) -> WindowView {
+    let desktop = || Hotkey::Desktop(Some(worst.to_owned()));
     let mut widest = view();
     widest.hotkeys = ShownHotkeys {
         toggle_clicking: desktop(),
@@ -314,9 +365,9 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
     };
     // The problem that quotes the most: two texts.
     let config = Problem::Config(ConfigProblem::Invalid {
-        file: Quoted::new(worst.clone()),
+        file: Quoted::new(worst.to_owned()),
         line: Some(usize::MAX),
-        why: Quoted::new(worst.clone()),
+        why: Quoted::new(worst.to_owned()),
     });
     widest.problems = vec![config; MAX_PROBLEMS + 1];
     // The longest names a recording may have, in the widest characters
@@ -336,9 +387,17 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
         id: u64::MAX,
         outcome: Outcome::Refused(Refusal::new(
             Field::Key,
-            Reason::Binding(Quoted::new(worst.clone())),
+            Reason::Binding(Quoted::new(worst.to_owned())),
         )),
     });
+    widest
+}
+
+#[test]
+fn long_messages_are_cut_so_every_view_fits_a_line() {
+    // Control characters are the longest to escape: six bytes each.
+    let worst = "\u{1}".repeat(MAX_LINE);
+    let mut widest = widest(&worst);
     for why in [
         Unavailable::ReadFailed(worst.clone().into()),
         Unavailable::WatchFailed(worst.clone().into()),
@@ -362,18 +421,47 @@ fn long_messages_are_cut_so_every_view_fits_a_line() {
         Outcome::Unavailable(Unavailability::Blocked(Blocked::Unknown(
             worst.clone().into(),
         ))),
-        Outcome::Recording(RecordingOutcome::NotChanged(
-            RecordingChange::Delete,
-            ChangeFailure::Folder(Quoted::new(worst.clone())),
-        )),
-        Outcome::Recording(RecordingOutcome::Unsynced(
-            RecordingChange::Rename,
+        Outcome::Recording(RecordingOutcome::NotRenamed(ChangeFailure::Folder(
             Quoted::new(worst.clone()),
-        )),
+        ))),
+        Outcome::Recording(RecordingOutcome::Unsynced(Quoted::new(worst.clone()))),
+        Outcome::NotDeleted(ChangeFailure::Folder(Quoted::new(worst.clone()))),
     ] {
         let answer = Answer { id: 1, outcome };
         assert!(line(&answer).unwrap().len() < MAX_TEXT * 7);
     }
+}
+
+#[test]
+fn the_delete_that_says_the_most_fits_a_line_in_the_largest_view() {
+    let worst = "\u{1}".repeat(MAX_LINE);
+    // Every failure it names quoting the most, and its flush failing too.
+    let failed = NotDeleted {
+        recording: Titled::new(file("2026-11-09_18-04-05.123-9.json"), Some(&worst)),
+        why: ChangeFailure::NotDone {
+            step: Step::Deleted,
+            why: Quoted::new(worst.clone()),
+        },
+    };
+    let removal = Removal {
+        deleted: u64::MAX,
+        failed: vec![failed; MAX_FAILURES],
+        more_failed: u64::MAX,
+        unsynced: Some(Quoted::new(worst.clone())),
+    };
+    let answer = Answer {
+        id: u64::MAX,
+        outcome: Outcome::Deleted(removal),
+    };
+    let sent = line(&answer).unwrap();
+    assert!(
+        sent.len() < MAX_TEXT * 7 * (2 * MAX_FAILURES + 2),
+        "{}",
+        sent.len()
+    );
+    let mut largest = widest(&worst);
+    largest.answer = Some(answer);
+    assert!(line(&Update::View(Box::new(largest.bounded()))).is_ok());
 }
 
 #[test]
@@ -461,22 +549,17 @@ fn a_nested_reason_longer_than_cut_is_not_read() {
 fn what_comes_of_a_recording_reads_as_the_window_says_it() {
     let cases = [
         (RecordingOutcome::Renamed, "Renamed."),
-        (RecordingOutcome::Deleted, "Deleted."),
         (
             RecordingOutcome::Chosen,
             "The playback hotkey plays this recording now.",
         ),
         (RecordingOutcome::Playing, "Playing."),
         (
-            RecordingOutcome::Unsynced(RecordingChange::Rename, Quoted::new("EIO")),
+            RecordingOutcome::Unsynced(Quoted::new("EIO")),
             "Renamed, but it may not survive a power loss: EIO",
         ),
         (
-            RecordingOutcome::NotChanged(RecordingChange::Delete, ChangeFailure::Missing),
-            "Not deleted: the file is no longer there",
-        ),
-        (
-            RecordingOutcome::NotChanged(RecordingChange::Rename, ChangeFailure::Missing),
+            RecordingOutcome::NotRenamed(ChangeFailure::Missing),
             "Not renamed: the file is no longer there",
         ),
         (

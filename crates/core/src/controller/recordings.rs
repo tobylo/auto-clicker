@@ -16,9 +16,14 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::{Controller, LISTED_RECORDINGS, Listed, Platform, State};
-use crate::message::{ChangeFailure, Problem, Quoted, RecordingChange};
-use crate::recording::{ChangeError, Changed, CurrentFile, FileName, delete, list, rename};
-use crate::window::{Outcome, RecordingAction, RecordingOutcome, RecordingsView};
+use crate::message::{ChangeFailure, Problem, Quoted, Titled};
+use crate::recording::{
+    ChangeError, Changed, CurrentFile, Doomed, FileName, Removed, delete, list, rename,
+};
+use crate::window::{
+    Deletion, MAX_FAILURES, NotDeleted, Outcome, RecordingAction, RecordingOutcome, RecordingsView,
+    Removal,
+};
 
 /// How many recordings the settings window lists, newest first. While it is
 /// open, the controller lists this many; else the tray's
@@ -187,11 +192,7 @@ impl<P: Platform> Controller<P> {
         Outcome::Recording(match action {
             RecordingAction::Rename { name } => {
                 let renamed = self.change(|dir| rename(dir, file, name));
-                done(renamed, RecordingOutcome::Renamed, RecordingChange::Rename)
-            }
-            RecordingAction::Delete => {
-                let deleted = self.change(|dir| delete(dir, file));
-                done(deleted, RecordingOutcome::Deleted, RecordingChange::Delete)
+                renamed_outcome(renamed)
             }
             RecordingAction::Choose => {
                 self.make_current(file);
@@ -203,13 +204,33 @@ impl<P: Platform> Controller<P> {
         })
     }
 
+    /// What the settings window asked to delete. Only while idle, like
+    /// the other changes: nothing that plays or counts down is deleted, and
+    /// no stop waits on the files. A recording the playback hotkey plays
+    /// that goes leaves the newest to play, as the list shows.
+    pub(super) fn delete_request(&mut self, which: &Deletion) -> Outcome {
+        if !self.settled() {
+            return Outcome::Busy;
+        }
+        let doomed = match which {
+            Deletion::Files(files) => Doomed::These(files.as_slice()),
+            Deletion::All => Doomed::All,
+        };
+        // The names the list showed, for the files that stay.
+        let listed = Arc::clone(&self.shelf.listed);
+        match self.change(|dir| delete(dir, doomed, MAX_FAILURES)) {
+            Ok(removed) => Outcome::Deleted(removal(removed, &listed)),
+            Err(err) => Outcome::NotDeleted(ChangeFailure::from(&err)),
+        }
+    }
+
     /// Changes the recordings in their folder with `change`, then lists
     /// them again, whatever came of it: a file found gone was gone from the
     /// list too.
-    fn change(
+    fn change<T>(
         &mut self,
-        change: impl FnOnce(&Path) -> Result<Changed, ChangeError>,
-    ) -> Result<Changed, ChangeError> {
+        change: impl FnOnce(&Path) -> Result<T, ChangeError>,
+    ) -> Result<T, ChangeError> {
         let changed = match self.platform.recordings_dir() {
             Some(dir) => change(&dir),
             None => Err(ChangeError::Missing),
@@ -230,19 +251,39 @@ impl<P: Platform> Controller<P> {
     }
 }
 
-/// `ok` when `changed` went through and reached the disk; else how
-/// `change` went short of that.
-fn done(
-    changed: Result<Changed, ChangeError>,
-    ok: RecordingOutcome,
-    change: RecordingChange,
-) -> RecordingOutcome {
+/// Renamed when the rename went through and reached the disk; else how it
+/// went short of that.
+fn renamed_outcome(changed: Result<Changed, ChangeError>) -> RecordingOutcome {
     match changed {
-        Ok(Changed::Synced) => ok,
-        Ok(Changed::Unsynced(err)) => {
-            RecordingOutcome::Unsynced(change, Quoted::new(err.to_string()))
-        }
-        Err(err) => RecordingOutcome::NotChanged(change, ChangeFailure::from(&err)),
+        Ok(Changed::Synced) => RecordingOutcome::Renamed,
+        Ok(Changed::Unsynced(err)) => RecordingOutcome::Unsynced(Quoted::new(err.to_string())),
+        Err(err) => RecordingOutcome::NotRenamed(ChangeFailure::from(&err)),
+    }
+}
+
+/// What the window is told of `removed`, naming each file left by its
+/// name in `listed`, when it is there.
+fn removal(removed: Removed, listed: &[Listed]) -> Removal {
+    let titled = |file: &FileName| {
+        let name = listed
+            .iter()
+            .find(|listed| listed.file == *file)
+            .and_then(|listed| listed.name.as_deref());
+        Titled::new(file.clone(), name)
+    };
+    let count = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    Removal {
+        deleted: count(removed.deleted),
+        failed: removed
+            .failed
+            .iter()
+            .map(|(file, err)| NotDeleted {
+                recording: titled(file),
+                why: ChangeFailure::from(err),
+            })
+            .collect(),
+        more_failed: count(removed.more_failed),
+        unsynced: removed.unsynced.map(|err| Quoted::new(err.to_string())),
     }
 }
 
@@ -253,18 +294,66 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_change_says_whether_it_was_done_and_whether_it_reached_the_disk() {
-        let said =
-            |changed| done(changed, RecordingOutcome::Deleted, RecordingChange::Delete).to_string();
-        assert_eq!(said(Ok(Changed::Synced)), "Deleted.");
+    fn a_rename_says_whether_it_was_done_and_whether_it_reached_the_disk() {
+        let said = |changed| renamed_outcome(changed).to_string();
+        assert_eq!(said(Ok(Changed::Synced)), "Renamed.");
         let unsynced = Changed::Unsynced(io::Error::other("no flush"));
         assert_eq!(
             said(Ok(unsynced)),
-            "Deleted, but it may not survive a power loss: no flush"
+            "Renamed, but it may not survive a power loss: no flush"
         );
         assert_eq!(
             said(Err(ChangeError::Missing)),
-            "Not deleted: the file is no longer there"
+            "Not renamed: the file is no longer there"
+        );
+    }
+
+    #[test]
+    fn a_delete_counts_what_went_and_names_what_did_not() {
+        let file = |at: &str| FileName::parse(&format!("2026-11-09_{at}.000.json")).unwrap();
+        let listed = [Listed::new(file("18-01-00"), Some("Farm loop".to_owned()))];
+        let removed = Removed {
+            deleted: 2,
+            failed: vec![
+                (file("18-00-00"), ChangeError::Missing),
+                (file("18-01-00"), ChangeError::Missing),
+            ],
+            more_failed: 3,
+            unsynced: Some(io::Error::other("no flush")),
+        };
+        assert_eq!(
+            removal(removed, &listed).to_string(),
+            "Deleted 2 recordings, but this may not survive a power loss: no flush. \
+             Not deleted: Recording 2026-11-09 18:00:00: the file is no longer there; \
+             Farm loop (2026-11-09 18:01:00): the file is no longer there. \
+             3 more were not deleted."
+        );
+        let one = Removed {
+            deleted: 1,
+            ..Removed::default()
+        };
+        assert_eq!(removal(one, &[]).to_string(), "Deleted 1 recording.");
+    }
+
+    #[test]
+    fn a_delete_that_found_nothing_says_so_and_one_that_only_failed_says_only_that() {
+        let nothing = Removal::default();
+        assert!(!nothing.fell_short());
+        assert_eq!(nothing.to_string(), "Deleted 0 recordings.");
+        let uncounted = Removal {
+            more_failed: 2,
+            ..Removal::default()
+        };
+        assert!(uncounted.fell_short());
+        assert_eq!(uncounted.to_string(), "2 more were not deleted.");
+        let one = Removal {
+            deleted: 1,
+            more_failed: 1,
+            ..Removal::default()
+        };
+        assert_eq!(
+            one.to_string(),
+            "Deleted 1 recording. 1 more was not deleted."
         );
     }
 }

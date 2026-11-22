@@ -4,11 +4,11 @@
 
 use auto_clicker_core::hotkeys::Refusal;
 use auto_clicker_core::message::{
-    ChangeFailure, Hindrance, Notice, PlayStart, PointScreens, RecordingChange, SaveFailure,
-    Saving, Start, Step, Stop, Titled, Unplayable,
+    ChangeFailure, Hindrance, Notice, PlayStart, PointScreens, SaveFailure, Saving, Start, Step,
+    Stop, Titled, Unplayable,
 };
 use auto_clicker_core::playback::Fallback;
-use auto_clicker_core::window::RecordingOutcome;
+use auto_clicker_core::window::{RecordingOutcome, Removal};
 use slint::SharedString;
 
 use super::{Said, s};
@@ -20,24 +20,48 @@ impl Said<'_> {
         let t = self.texts;
         match outcome {
             RecordingOutcome::Renamed => t.invoke_renamed(),
-            RecordingOutcome::Deleted => t.invoke_deleted(),
             RecordingOutcome::Chosen => t.invoke_chosen(),
             RecordingOutcome::Playing => t.invoke_playing(),
-            RecordingOutcome::Unsynced(RecordingChange::Rename, why) => {
-                t.invoke_unsynced_renamed(s(why))
-            }
-            RecordingOutcome::Unsynced(RecordingChange::Delete, why) => {
-                t.invoke_unsynced_deleted(s(why))
-            }
-            RecordingOutcome::NotChanged(RecordingChange::Rename, why) => {
-                t.invoke_not_renamed(self.change_failure(why))
-            }
-            RecordingOutcome::NotChanged(RecordingChange::Delete, why) => {
-                t.invoke_not_deleted(self.change_failure(why))
-            }
+            RecordingOutcome::Unsynced(why) => t.invoke_unsynced_renamed(s(why)),
+            RecordingOutcome::NotRenamed(why) => t.invoke_not_renamed(self.change_failure(why)),
             RecordingOutcome::NotPlaying(Some(notice)) => self.notice(notice),
             RecordingOutcome::NotPlaying(None) => t.invoke_not_playing(),
         }
+    }
+
+    /// What a delete did: how many went, unless none did and some did not,
+    /// then the first that did not, each with why, and how many more.
+    pub fn removal(&self, removal: &Removal) -> SharedString {
+        let t = self.texts;
+        let count = |n: u64| i32::try_from(n).unwrap_or(i32::MAX);
+        let mut said = Vec::new();
+        if removal.deleted > 0 || !removal.fell_short() {
+            let deleted = count(removal.deleted);
+            said.push(match &removal.unsynced {
+                Some(why) => t.invoke_deleted_unsynced(deleted, s(why)),
+                None => t.invoke_deleted(deleted),
+            });
+        }
+        if !removal.failed.is_empty() {
+            let failed: Vec<SharedString> = removal
+                .failed
+                .iter()
+                .map(|failed| {
+                    let why = self.change_failure(&failed.why);
+                    t.invoke_not_deleted_one(self.titled(&failed.recording), why)
+                })
+                .collect();
+            said.push(t.invoke_not_deleted_these(failed.join("; ").into()));
+        }
+        if removal.more_failed > 0 {
+            said.push(t.invoke_more_not_deleted(count(removal.more_failed)));
+        }
+        said.join(" ").into()
+    }
+
+    /// Why a delete deleted nothing.
+    pub fn not_deleted(&self, why: &ChangeFailure) -> SharedString {
+        self.texts.invoke_not_deleted(self.change_failure(why))
     }
 
     fn change_failure(&self, why: &ChangeFailure) -> SharedString {

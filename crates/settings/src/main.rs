@@ -122,18 +122,40 @@ mod tests {
         Some((&body[..end], &body[end + 1..]))
     }
 
-    /// Every `@tr` text of `ui`, with its context if it has one.
-    fn texts(ui: &str) -> Vec<(Option<&str>, &str)> {
+    /// A text the window shows: its context, if it has one, the text,
+    /// and its plural, if it has one.
+    #[derive(Debug, PartialEq)]
+    struct Text<'a> {
+        context: Option<&'a str>,
+        text: &'a str,
+        plural: Option<&'a str>,
+    }
+
+    /// Every `@tr` text of `ui`.
+    fn texts(ui: &str) -> Vec<Text<'_>> {
         ui.split("@tr(")
             .skip(1)
             .filter_map(|rest| {
                 let (first, after) = literal(rest)?;
-                match after.strip_prefix(" => ").and_then(literal) {
-                    Some((text, _)) => Some((Some(first), text)),
-                    None => Some((None, first)),
-                }
+                let (context, text, after) = match after.strip_prefix(" => ").and_then(literal) {
+                    Some((text, after)) => (Some(first), text, after),
+                    None => (None, first, after),
+                };
+                let plural = after.strip_prefix(" | ").and_then(literal).map(|(p, _)| p);
+                Some(Text {
+                    context,
+                    text,
+                    plural,
+                })
             })
             .collect()
+    }
+
+    /// The translation that follows `entry` in `po`, when it is there and
+    /// not empty.
+    fn translated<'a>(po: &'a str, entry: &str) -> Option<&'a str> {
+        let (swedish, _) = po.split(entry).nth(1).and_then(literal)?;
+        (!swedish.is_empty()).then_some(swedish)
     }
 
     /// Every text the window shows has a Swedish translation: a missing one
@@ -148,25 +170,54 @@ mod tests {
         let po = include_str!("../translations/sv/LC_MESSAGES/auto-clicker-settings.po");
         let texts = texts(&ui);
         assert!(texts.len() > 100, "{}", texts.len());
-        for (context, text) in texts {
+        for Text {
+            context,
+            text,
+            plural,
+        } in texts
+        {
             let context = context
                 .map(|c| format!("msgctxt \"{c}\"\n"))
                 .unwrap_or_default();
-            let entry = format!("\n{context}msgid \"{text}\"\nmsgstr ");
-            let translated = po.split(&entry).nth(1).and_then(literal);
-            assert!(
-                translated.is_some_and(|(swedish, _)| !swedish.is_empty()),
-                "{text}"
-            );
+            let entry = format!("\n{context}msgid \"{text}\"\n");
+            match plural {
+                None => assert!(
+                    translated(po, &format!("{entry}msgstr ")).is_some(),
+                    "{text}"
+                ),
+                Some(plural) => {
+                    let entry = format!("{entry}msgid_plural \"{plural}\"\n");
+                    let one = translated(po, &format!("{entry}msgstr[0] "));
+                    let many = translated(
+                        po,
+                        &format!(
+                            "{entry}msgstr[0] \"{}\"\nmsgstr[1] ",
+                            one.unwrap_or_default()
+                        ),
+                    );
+                    assert!(one.is_some() && many.is_some(), "{text}");
+                }
+            }
         }
     }
 
     #[test]
     fn texts_are_read_with_their_context_and_escapes() {
-        let ui = r#"@tr("a \"b\" c") @tr("ctx" => "{}: {}", x) @tr("d")"#;
+        let ui =
+            r#"@tr("a \"b\" c") @tr("ctx" => "{}: {}", x) @tr("d") @tr("{n} e" | "{n} es" % n)"#;
+        let text = |context, text, plural| Text {
+            context,
+            text,
+            plural,
+        };
         assert_eq!(
             texts(ui),
-            [(None, r#"a \"b\" c"#), (Some("ctx"), "{}: {}"), (None, "d")]
+            [
+                text(None, r#"a \"b\" c"#, None),
+                text(Some("ctx"), "{}: {}", None),
+                text(None, "d", None),
+                text(None, "{n} e", Some("{n} es")),
+            ]
         );
     }
 }
