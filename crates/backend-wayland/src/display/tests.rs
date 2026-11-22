@@ -930,31 +930,38 @@ async fn a_screen_that_showed_nothing_is_tried_again_when_a_screen_is_added() {
 }
 
 #[tokio::test]
-async fn an_answer_to_an_earlier_size_leaves_the_later_one_waiting() {
+async fn a_new_size_asked_before_the_first_is_answered_takes_a_new_surface() {
     local(async {
         let harness = Harness::new().await;
         harness.set(Activity::StartingIn(5));
         let mut fake = harness.connected().await;
-        let output = fake.ids(A);
-        timeout(BOUND, fake.until(|fake| asked(fake, output)))
-            .await
-            .unwrap();
-        let first = fake.shell.on(output).unwrap().clone();
-        // Ten is wider: a new size is asked before the first is answered.
-        harness.set(Activity::StartingIn(10));
-        let resized = |fake: &Fake| fake.shell.on(output).unwrap().size != first.size;
-        timeout(BOUND, fake.until(resized)).await.unwrap();
+        let outputs = [A, B].map(|name| fake.ids(name));
+        let all_asked = move |fake: &Fake| outputs.iter().all(|&output| asked(fake, output));
+        timeout(BOUND, fake.until(all_asked)).await.unwrap();
+        let first = fake.shell.on(outputs[0]).unwrap().clone();
+        // Ten is wider: asked before the first is answered, then wider
+        // again, each on a surface of its own.
+        for seconds in [10, 100] {
+            let shown = outputs.map(|output| fake.shell.on(output).unwrap().id);
+            harness.set(Activity::StartingIn(seconds));
+            let anew = move |fake: &Fake| {
+                let surface = |output| fake.shell.on(output).map(|s| (s.id, s.commits));
+                (0..2).all(|i| {
+                    surface(outputs[i]).is_some_and(|(id, commits)| id != shown[i] && commits > 0)
+                })
+            };
+            timeout(BOUND, fake.until(anew)).await.unwrap();
+        }
+        assert_eq!((live(&fake, A), live(&fake, B)), (1, 1));
+        // The first surface's answer comes late: it answers nothing. B's,
+        // sent after it, shows that it was read.
         fake.send(vec![first.configure(3)]).await;
-        let acked = |fake: &Fake| fake.shell.on(output).unwrap().acked.contains(&3);
-        timeout(BOUND, fake.until(acked)).await.unwrap();
+        answer(&mut fake, B).await;
         harness
-            .shows(&[(A, Showing::Asked), (B, Showing::Asked)])
+            .shows(&[(A, Showing::Asked), (B, drawn("2m"))])
             .await;
-        // The answer to the size asked last draws it.
         answer(&mut fake, A).await;
-        harness
-            .shows(&[(A, drawn("10")), (B, Showing::Asked)])
-            .await;
+        harness.shows(&[(A, drawn("2m")), (B, drawn("2m"))]).await;
     })
     .await;
 }

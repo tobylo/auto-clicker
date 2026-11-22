@@ -174,9 +174,6 @@ struct Shown {
     /// When the compositor's answer to the last size asked for is due;
     /// `None` once it came.
     answer: Option<Instant>,
-    /// The size asked for before the last, while the last waits: an
-    /// answer of that size is to the earlier request.
-    replaced: Option<(u32, u32)>,
     /// What was drawn last, at which scale and size.
     drawn: Option<(Wanted, u32, Fit)>,
     /// Its buffers the compositor has not released, at most [`LIVE`].
@@ -344,27 +341,29 @@ impl Surfaces {
     }
 
     /// Asks for the surface `asking` says, unless its screen has one that
-    /// size or shows nothing; a surface of another size is asked for the
-    /// new one.
+    /// size or shows nothing. An answered surface of another size is asked
+    /// for the new one; one whose answer is still awaited is made anew, so
+    /// that an answer to what it asked first reaches nothing (O2).
     fn ask(&mut self, asking: Asking<'_>, queue: &QueueHandle<Client>, now: Instant) {
         let Asking { name, fit, .. } = asking;
         let due = now.checked_add(ANSWER).unwrap_or(now);
         match self.screens.get_mut(&name) {
-            Some(Screen::Missing(_)) => {}
-            Some(Screen::Shown(shown)) => {
-                if shown.fit != fit {
-                    shown.replaced = Some((shown.fit.width, shown.fit.height));
-                    shown.fit = fit;
-                    shown.answer = Some(due);
-                    shown.layer.set_size(fit.width, fit.height);
-                    shown.surface.commit();
-                }
+            Some(Screen::Missing(_)) => return,
+            Some(Screen::Shown(shown)) if shown.fit == fit => return,
+            Some(Screen::Shown(shown)) if shown.answer.is_none() => {
+                shown.fit = fit;
+                shown.answer = Some(due);
+                shown.layer.set_size(fit.width, fit.height);
+                shown.surface.commit();
+                return;
             }
-            None => {
-                let shown = self.create(asking, queue, due);
-                self.screens.insert(name, Screen::Shown(Box::new(shown)));
-            }
+            Some(Screen::Shown(_)) | None => {}
         }
+        if let Some(Screen::Shown(waiting)) = self.screens.remove(&name) {
+            waiting.destroy();
+        }
+        let shown = self.create(asking, queue, due);
+        self.screens.insert(name, Screen::Shown(Box::new(shown)));
     }
 
     /// The surface `asking` says, on the overlay layer and centred, taking
@@ -403,7 +402,6 @@ impl Surfaces {
             fit,
             preferred: WHOLE,
             answer: Some(due),
-            replaced: None,
             drawn: None,
             buffers: Vec::new(),
         }
@@ -573,18 +571,9 @@ impl Client {
             return;
         };
         match arrived.event {
-            zwlr_layer_surface_v1::Event::Configure {
-                serial,
-                width,
-                height,
-            } => {
+            zwlr_layer_surface_v1::Event::Configure { serial, .. } => {
                 arrived.proxy.ack_configure(serial);
-                // One of the size asked for before answers that request,
-                // and leaves the last one waiting.
-                if shown.replaced != Some((width, height)) {
-                    shown.answer = None;
-                    shown.replaced = None;
-                }
+                shown.answer = None;
             }
             zwlr_layer_surface_v1::Event::Closed => surfaces.miss(name, Missing::Closed),
             _ => {}
