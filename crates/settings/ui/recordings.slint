@@ -22,6 +22,7 @@ export component RecordingList inherits FocusScope {
     callback step(/* by */ int, /* extend */ bool);
     callback select-all();
     property <length> row-height: 28px;
+    property <length> border: 1px;
 
     function show(index: int) {
         if index < 0 {
@@ -85,30 +86,40 @@ export component RecordingList inherits FocusScope {
     }
 
     Rectangle {
-        border-width: 1px;
+        border-width: root.border;
         border-radius: 4px;
         border-color: root.has-focus ? Palette.accent-background : Palette.border;
-        list := ListView {
-            for row[index] in root.rows: Rectangle {
-                height: root.row-height;
-                background: row.selected ? Palette.selection-background : transparent;
-                accessible-role: list-item;
-                accessible-label: row.text;
-                accessible-item-selected: row.selected;
-                accessible-item-index: index;
-                Text {
-                    x: 8px;
-                    width: parent.width - 16px;
-                    text: row.text;
-                    overflow: elide;
-                    vertical-alignment: center;
-                    color: row.selected ? Palette.selection-foreground : Palette.foreground;
-                }
-                TouchArea {
-                    pointer-event(event) => {
-                        if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
-                            root.focus();
-                            root.pressed(index, event.modifiers.control, event.modifiers.shift);
+        // The rows inside the border, clipped to its rounded corners, so a
+        // selected row never covers it.
+        Rectangle {
+            x: root.border;
+            y: root.border;
+            width: parent.width - 2 * root.border;
+            height: parent.height - 2 * root.border;
+            border-radius: 3px;
+            clip: true;
+            list := ListView {
+                for row[index] in root.rows: Rectangle {
+                    height: root.row-height;
+                    background: row.selected ? Palette.selection-background : transparent;
+                    accessible-role: list-item;
+                    accessible-label: row.text;
+                    accessible-item-selected: row.selected;
+                    accessible-item-index: index;
+                    Text {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        text: row.text;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        color: row.selected ? Palette.selection-foreground : Palette.foreground;
+                    }
+                    TouchArea {
+                        pointer-event(event) => {
+                            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                                root.focus();
+                                root.pressed(index, event.modifiers.control, event.modifiers.shift);
+                            }
                         }
                     }
                 }
@@ -116,4 +127,3 @@ export component RecordingList inherits FocusScope {
         }
     }
 }
-
