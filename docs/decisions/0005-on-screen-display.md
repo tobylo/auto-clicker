@@ -14,7 +14,7 @@
 - **The invariants O1 to O8 and the defaults stand.** The badge cost Minecraft no frames that could be measured, at vsync on and a 120 fps cap. Two costs the brief did not name, both from source: while any surface of ours shows on a screen, the game on that screen is no longer scanned out directly, and Hyprland stops tearing there (point 6). Given both, the owner kept the badges on by default (2026-11-22, O01 decision 2).
 - **The countdown is drawn with one sample per pixel, or by filling its rectangles.** The digits and their outline lie on whole pixels, so one sample is exact. Drawn the tray icon's way (16 samples per pixel), the largest common screens take 41 to 257 ms per draw on the daemon's one thread (point 11).
 - **Buffers:** the size is round(logical × scale / 120) from `wp_fractional_scale_v1`, shown at the logical size through `wp_viewporter`. This was sharp at 1.25 on Plasma and niri. Shared memory is an anonymous file from `memfd_create` (rustix with `fs`, already in the daemon), written with `pwrite`: no `mmap`, no `unsafe` and no crate beyond `wayland-protocols-wlr`. The daemon grows by 148,912 bytes.
-- **A known flaw on Hyprland:** a program that holds the pointer the old X11 way gets an extra motion of 2 to 27 px when a surface of ours appears, changes its buffer or goes. Minecraft, which reads raw motion, did not show it. The owner kept the display available on Hyprland (2026-11-22, O01 decision 8), and the flaw goes to Hyprland as an upstream report (below).
+- **A possible flaw on Hyprland, not confirmed:** an X11 test window that holds the pointer by warping it counted an extra motion of 2 to 27 px when a surface of ours appeared, changed its buffer or went. The window's counting then could count moves twice when several queued before its warp landed, so a short stall at those moments would look the same. The counting is fixed, and the effect is to be measured again on Hyprland before anything is reported upstream. Minecraft, which reads raw motion, showed nothing. The owner kept the display available on Hyprland either way (2026-11-22, O01 decision 8).
 
 ## How it was measured
 
@@ -72,13 +72,15 @@ Each cell gives the runs, and in every one the window kept keyboard focus and it
 - **Two screens on Plasma:** with the window on DP-1 or on eDP-1 and the display on both, the results matched one screen's.
 - **Minecraft, played by hand:** on Plasma (native and XWayland), niri (native and XWayland) and Hyprland under XWayland, the owner saw no lost mouse, no lost keys and no stutter while the pictures appeared and went. After Hyprland's native round the owner reported only the screen it ran on, and no problem.
 
-**Hyprland and the X11 pointer hold (measured).** The X11 window's motion rate stayed at exactly 1 px per move. Matched to the display's nearest event in the three traced runs, extra motion along the direction of travel came:
+**Hyprland and the X11 pointer hold (measured, not confirmed).** The X11 window's motion rate stayed at exactly 1 px per move. Matched to the display's nearest event in the three traced runs, extra motion along the direction of travel came:
 - when the countdown appeared (27 px, in one run of two);
 - when its buffer changed to 2 and to 1 (5 and 2 px, in the other run);
 - when it went (21 and 11 px, both runs);
 - when the badge went (20 px); the badge's appearance gave none.
 
 The 7 controls never showed it.
+
+**Why it is not confirmed.** In these runs the window counted each motion from the screen's centre. Moves that queue before its warp back to the centre lands are then counted from the centre each time: two queued moves of 1 px count as 3. A stall of a few milliseconds when a surface maps, commits or unmaps would therefore show as extra motion, without Hyprland sending any. The window now counts from the last position it saw and skips the motion of its own warps; rerun on niri, it counted 2,999 px for 2,999 moves, with and without the countdown. It was not rerun on Hyprland: the laptop was off the network by then.
 
 From source:
 - Mapping a layer surface makes Hyprland check the pointer again (`refocusPointer`, `src/desktop/view/LayerSurface.cpp:230`; `src/managers/input/InputManager.cpp:1846-1851`). Unmapping sends a simulated pointer movement (`simulateMouseMovement`, `LayerSurface.cpp:311`; `InputManager.cpp:195-198`).
@@ -87,7 +89,7 @@ From source:
 
 What it means for games:
 - A native Wayland game on Hyprland gets nothing extra.
-- An X11 game that reads warped motion sees its view nudged when the display appears, changes or goes: a few times per countdown, and once when a badge goes.
+- If the effect is Hyprland's, an X11 game that reads warped motion sees its view nudged when the display appears, changes or goes; if it is the window's counting, nothing happens.
 - Minecraft under XWayland reads raw motion (SDL 3's XInput2): the owner saw no jump.
 
 ### 6: what it costs the game (measured, with the scanout rules read from source)
@@ -99,10 +101,10 @@ Minecraft 26.3 at the owner's settings, vsync on and a 120 fps cap, so the game'
 | Plasma, DP-1 at 144 Hz | native | 117.2 fps; median 8.28 ms, p99 14.04 | 118.4 fps; 8.31, 13.50 | 117.6 fps; 8.32, 12.53 |
 | Plasma, DP-1 | XWayland | 116.0 fps; 8.34, 16.26 | 118.0 fps; 8.34, 16.53 | 119.1 fps; 8.34, 12.74 |
 | Hyprland, DP-1 | XWayland | 120.0 fps; 8.34, 11.58 | 120.0 fps; 8.35, 11.63 | 119.8 fps; 8.35, 10.65 |
-| niri, HDMI-A-1 at 85 Hz | native | 84.8 fps; 11.76, 12.23 | 84.5 fps; 11.76, 12.35 | 84.9 fps; 11.76, 12.25 |
-| niri | XWayland | 85.0 fps; 11.76, 13.24 | 84.0 fps; 11.76, 14.51 | 84.5 fps; 11.76, 14.23 |
+| niri, HDMI-A-1 at 85 Hz | native | 85.0 fps; 11.76, 12.18 | 85.0 fps; 11.76, 12.15 | 85.0 fps; 11.76, 12.24 |
+| niri | XWayland | 85.0 fps; 11.76, 12.28 | 85.0 fps; 11.75, 14.27 | 84.8 fps; 11.75, 13.99 |
 
-- Each row is one round of about 90 s, with roughly 3,000 to 4,000 frames with nothing shown, 700 to 950 with the countdown and 2,400 to 3,400 with the badge. No difference beyond one round's spread.
+- Each row is one round of about 90 s. MangoHud's log names its start to the second, so a frame's time is known to within a second, and each phase's edges are left out: on niri the first and last second (about 2,100 frames with nothing shown, 340 with the countdown and 2,040 with the badge). The laptop's rows leave out only the first second (3,000 to 4,000, 700 to 950 and 2,400 to 3,400 frames), since their logs were lost before the last second could be cut too. No difference beyond one round's spread.
 - What this does not show: a game running uncapped, where composition could take frames, and KWin on amdgpu or NVIDIA. On the laptop the game rendered on the Intel GPU, the one case where KWin may keep the game on a plane of its own (below).
 - Hyprland's native round has no frame log: the owner's answer came after the 4-minute log had ended.
 - Plasma's native round overlapped another session's test: from 15:09:30 to 15:10:10 a test build of the daemon and its settings window ran on DP-1, the window above Minecraft. That covers about the last 30 s of that round's 90 s. Its frame log went with the laptop's reboot, so those seconds could not be cut out afterwards. Plasma's XWayland round, on the same screen with nothing else running, gave the same result, and the Plasma result rests on it.
@@ -174,10 +176,12 @@ W02's `hm replay 300 0 3440 1440`, which puts the pointer at 300 random places a
 - **The guide** names the namespace and how to keep the display out of a recording or stream: niri's `layer-rule` with `block-out-from "screencast"`, or `"screen-capture"`, matched on the namespace (`src/layer/mod.rs:98-103`); Hyprland's layer rule `no_screen_share` (`src/desktop/rule/layerRule/LayerRule.cpp:64`). KWin has no rule for layer surfaces: window rules do not apply to them (`src/window.cpp:4276-4278`).
 - **The guide** also says: while the badge shows, the game on that screen is composited (no direct scanout), and on Hyprland it does not tear.
 
-## For an upstream report to Hyprland (the owner files it)
+## For an upstream report to Hyprland (held until measured again)
+
+Not to be filed until `xwin.py`, with its fixed counting, shows the extra motion again on Hyprland, with controls. If it does, the facts are these.
 
 - **Reproducer:** Hyprland 0.57.2. A fullscreen X11 client under Xwayland grabs the pointer, hides its cursor and warps the pointer back to its centre after each move (`xwin.py locked`). Relative moves come from a mouse. A layer-shell client maps, or unmaps, an overlay-layer surface with an empty input region anywhere on the screens.
-- **Observed:** when the layer surface maps, changes its buffer or unmaps, the X11 client receives an extra motion of 2 to 27 px along the direction of travel. In 7 controls without the layer surface, the summed motion was identical every time (4,557 px).
+- **Observed (with the old counting):** when the layer surface maps, changes its buffer or unmaps, the X11 client receives an extra motion of 2 to 27 px along the direction of travel. In 7 controls without the layer surface, the summed motion was identical every time (4,557 px).
 - **Expected:** a surface that takes no input changes nothing for the client that holds the pointer.
 - **Where:** `CLayerSurface::onMap` calls `refocusPointer()` (`src/desktop/view/LayerSurface.cpp:230`) and `onUnmap` calls `simulateMouseMovement()` (`:311`, `src/managers/input/InputManager.cpp:195-198`). With the pointer locked and drifting (decision 0004), these likely send the drifted position (an inference). The path for a buffer change was not found.
 - **Where it hurts:** X11 games that read warped motion (older and Wine games) see their view nudged when any layer surface appears or goes: notifications, bars and this display.

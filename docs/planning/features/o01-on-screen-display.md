@@ -67,7 +67,7 @@ Decided by the owner after the slices were opened (2026-11-22):
 
 Decided by the owner after O01a's measurements (2026-11-22, [decision record 0005](../../decisions/0005-on-screen-display.md)):
 13. **The badges stay on by default.** They cost Minecraft no frames that could be measured, at vsync on and a 120 fps cap. While a badge shows, the game on that screen is no longer scanned out directly (every desktop), and Hyprland stops tearing there; the guide says so and how to switch the badges off.
-14. **Hyprland stays available.** On Hyprland an X11 game that holds the pointer by warping it gets a nudge of a few pixels when the display appears, changes or goes; native games and Minecraft do not. The guide names it, and the owner reports it upstream.
+14. **Hyprland stays available.** On Hyprland an X11 test window that holds the pointer by warping it counted a nudge of a few pixels when the display appeared, changed or went; native games and Minecraft showed none. The window's counting could produce the same numbers, so the nudge is to be measured again on Hyprland before the guide names it or anything is reported upstream.
 
 ## Acceptance criteria
 

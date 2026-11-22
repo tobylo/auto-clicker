@@ -6,8 +6,8 @@ times with nothing shown, with the countdown and with the badge.
 
 MangoHud names its log after the second logging began (local time) and
 stamps each frame with nanoseconds since then, so frames line up with the
-cycle's Unix times to within a second; the first second of each phase is
-left out to cover that.
+cycle's Unix times to within a second; the first and the last second of
+each phase are left out to cover that.
 """
 
 import csv
@@ -43,7 +43,7 @@ def phases(paths):
         # The countdown's three steps make one span.
         merged = [mark for index, mark in enumerate(kinds) if index == 0 or mark[1] != kinds[index - 1][1]]
         for (begin, kind), (end, _) in zip(merged, merged[1:]):
-            spans.append((begin + SETTLE, end, kind))
+            spans.append((begin + SETTLE, end - SETTLE, kind))
     return spans
 
 

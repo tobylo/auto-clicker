@@ -110,8 +110,18 @@ class Heard:
     def __init__(self, display, window, lock):
         self.display, self.window, self.lock = display, window, lock
         self.centre = (0, 0)
+        # The last position heard, and how many warps to the centre have not
+        # come back as motion yet: moves are counted from the last position,
+        # so moves queued before a warp lands are each counted once.
+        self.last = (0, 0)
+        self.warps = 0
         self.relative = [0, 0, 0]
         self.printed = None
+
+    def warp_to_centre(self):
+        """Warps the pointer to the centre; its motion event is not a move."""
+        x.XWarpPointer(self.display, 0, self.window, 0, 0, 0, 0, *self.centre)
+        self.warps += 1
 
     def report(self):
         if self.printed != tuple(self.relative):
@@ -120,23 +130,26 @@ class Heard:
             self.printed = tuple(self.relative)
 
     def motion(self, at_x, at_y):
-        cx, cy = self.centre
-        if (at_x, at_y) == (cx, cy):
+        if self.warps and (at_x, at_y) == self.centre:
+            self.warps -= 1
+            self.last = self.centre
+            return
+        dx, dy = at_x - self.last[0], at_y - self.last[1]
+        self.last = (at_x, at_y)
+        if (dx, dy) == (0, 0):
             return
         self.relative[0] += 1
-        self.relative[1] += at_x - cx
-        self.relative[2] += at_y - cy
-        if self.lock:
-            x.XWarpPointer(self.display, 0, self.window, 0, 0, 0, 0, cx, cy)
-        else:
-            self.centre = (at_x, at_y)
+        self.relative[1] += dx
+        self.relative[2] += dy
+        if self.lock and self.last != self.centre:
+            self.warp_to_centre()
 
     def configured(self, kind, event):
         width, height = struct.unpack_from("ii", event, 56)
         if (width // 2, height // 2) != self.centre and self.lock:
             self.centre = (width // 2, height // 2)
             say(f"configured {width}x{height}")
-            x.XWarpPointer(self.display, 0, self.window, 0, 0, 0, 0, *self.centre)
+            self.warp_to_centre()
 
     def moved(self, kind, event):
         self.motion(*struct.unpack_from("ii", event, 64))
@@ -206,11 +219,11 @@ class Window:
         ask_fullscreen(self.display, self.window)
         time.sleep(0.5)
         width, height = size(self.display, self.window)
-        self.heard.centre = (width // 2, height // 2)
+        self.heard.centre = self.heard.last = (width // 2, height // 2)
         grabbed = hide_and_grab(self.display, self.window) if self.lock else False
         say(f"mapped {width}x{height}; grabbed={grabbed}")
         if self.lock:
-            x.XWarpPointer(self.display, 0, self.window, 0, 0, 0, 0, *self.heard.centre)
+            self.heard.warp_to_centre()
 
     def drain(self, event):
         """Handles every event already queued."""

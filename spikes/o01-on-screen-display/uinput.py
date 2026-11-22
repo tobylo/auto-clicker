@@ -73,12 +73,25 @@ class Devices:
     def key(self, pressed):
         self._emit(self.keyboard, (EV_KEY, KEY_RIGHTSHIFT, 1 if pressed else 0))
 
+    @classmethod
+    def _release(cls, fd, events):
+        """Releases, destroys and closes one device; returns what failed, if anything."""
+        failure = None
+        try:
+            cls._emit(fd, *events)
+            time.sleep(0.05)
+            fcntl.ioctl(fd, UI_DEV_DESTROY)
+        except OSError as error:
+            failure = error
+        finally:
+            os.close(fd)
+        return failure
+
     def close(self):
-        for fd, events in ((self.mouse, ((EV_KEY, BTN_LEFT, 0), (EV_KEY, BTN_RIGHT, 0))),
-                           (self.keyboard, ((EV_KEY, KEY_RIGHTSHIFT, 0),))):
-            try:
-                self._emit(fd, *events)
-                time.sleep(0.05)
-                fcntl.ioctl(fd, UI_DEV_DESTROY)
-            finally:
-                os.close(fd)
+        """Releases and destroys both devices, each whatever happened to the
+        other, then raises the first failure."""
+        failures = [self._release(self.mouse, ((EV_KEY, BTN_LEFT, 0), (EV_KEY, BTN_RIGHT, 0))),
+                    self._release(self.keyboard, ((EV_KEY, KEY_RIGHTSHIFT, 0),))]
+        first = next((failure for failure in failures if failure), None)
+        if first:
+            raise first

@@ -35,7 +35,11 @@ def main():
         mark("end")
     finally:
         display.stdin.close()
-        display.wait(timeout=3)
+        try:
+            display.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            display.kill()
+            display.wait(timeout=3)
 
 
 if __name__ == "__main__":

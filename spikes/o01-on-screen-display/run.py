@@ -12,9 +12,11 @@ OUTPUT names the screen (the first one by default).
 
 Locked windows get relative moves at 1 kHz, a right Shift tap every 250 ms
 and a left click every 500 ms for 3 s; free windows get clicks at the
-picture's place. Injection stops at the first line saying the window lost
-focus or its lock, and every device is released and destroyed on the way
-out. Prints a summary line per phase: sent against received.
+picture's place. Nothing more is injected once the window's latest lines
+say it lost focus or its lock, and every device is released and destroyed
+on the way out. Prints a summary line per case: sent against received, and
+VOID instead of PASS or FAIL when the display never drew, ended with an
+error, or an SDL window was refused relative mode.
 """
 
 import os
@@ -197,9 +199,21 @@ def follow(script, elapsed, display):
     return display
 
 
-def lost(window, first):
-    """Whether the window said, since line `first`, that it lost focus or its lock."""
-    return any(word in line for line in window.seen[first:] for word in BAD)
+def last_state(window, prefix):
+    """The rest of the window's latest line starting with `prefix`, or None."""
+    for line in reversed(list(window.seen)):
+        text = line.split(" ", 1)[-1]
+        if text.startswith(prefix):
+            return text[len(prefix):]
+    return None
+
+
+def holds(window):
+    """Whether the window has keyboard focus and, if it reported a lock, the
+    lock, by its latest lines (a flicker at startup that ends in "gained"
+    counts as held), and has not ended."""
+    ended = any("ended:" in line for line in list(window.seen))
+    return not ended and last_state(window, "keyboard focus: ") == "gained" and last_state(window, "pointer lock: ") != "UNLOCKED"
 
 
 def inject(devices, tick, sent):
@@ -223,10 +237,9 @@ def run_locked(run, length=3.0):
     display, sent = PRE_SHOWN.get("display"), [0, 0, 0]
     start = time.monotonic()
     tick = 0
-    first = len(run.window.seen)
     while (elapsed := time.monotonic() - start) < length:
         display = follow(script, elapsed, display)
-        if lost(run.window, first):
+        if not holds(run.window):
             print("--- the window lost focus or its lock: injection stopped", flush=True)
             break
         inject(run.devices, tick, sent)
@@ -235,8 +248,13 @@ def run_locked(run, length=3.0):
     return sent, display
 
 
-def click_three(devices, sent):
+def click_three(run, sent):
+    """Three clicks, each only while the window still holds focus."""
     for _ in range(3):
+        if not holds(run.window):
+            print("--- the window lost focus: no more clicks", flush=True)
+            return
+        devices = run.devices
         devices.button(True)
         time.sleep(0.03)
         devices.button(False)
@@ -251,11 +269,11 @@ def run_free(run):
     run.devices.place(*run.target, run.box)
     time.sleep(0.3)
     display = None if run.scenario == "control" else show(SCRIPTS[run.scenario][1][1], 0.3)
-    click_three(run.devices, sent)
+    click_three(run, sent)
     if display:
         display.send("none")
         time.sleep(0.4)
-    click_three(run.devices, sent)
+    click_three(run, sent)
     return sent, display
 
 
@@ -308,12 +326,27 @@ def write_trace(run, display):
         trace.write("\n".join("display " + line for line in (display.seen if display else [])) + "\n")
 
 
+def shown(run, display):
+    """Whether the run measured what it claims: the display drew and did not
+    end with an error (unless it is a control), and an SDL window got
+    relative mode when locked."""
+    refused = any("relative mode: False" in line for line in list(run.window.seen))
+    if run.scenario == "control":
+        return not refused
+    seen = list(display.seen) if display else []
+    drew = any(" drew " in line for line in seen)
+    failed = any(" ended: " in line or " no buffer" in line for line in seen)
+    return drew and not failed and not refused
+
+
 def judge(run, before, sent, display):
     """Prints the verdict: what was sent against what the window got since `before`."""
     after = Tally(run.window).now()
     got = [after[i] - before[i] for i in range(3)]
     bad = after[3][len(before[3]):]
     verdict = "PASS" if got == sent and not bad else "FAIL"
+    if not shown(run, display):
+        verdict = "VOID"
     sums = [line.split()[-1] for line in run.window.seen if " relative total " in line][-1:]
     if os.environ.get("TRACE"):
         write_trace(run, display)
@@ -334,10 +367,12 @@ def main():
         time.sleep(0.6)
         judge(run, before, sent, display)
     finally:
-        run.devices.close()
-        for child in (display, run.window):
-            if child:
-                child.stop()
+        try:
+            run.devices.close()
+        finally:
+            for child in (display, run.window):
+                if child:
+                    child.stop()
 
 
 if __name__ == "__main__":
