@@ -1,5 +1,10 @@
 //! A fake compositor on the other end of a socket, speaking the wire
-//! protocol by hand: the layout's tests and the cursor sessions' share it.
+//! protocol by hand: the layout's tests, the cursor sessions' and the
+//! on-screen display's share it.
+
+mod shell;
+
+pub(crate) use shell::{COMPOSITOR, FRACTIONS, OVERLAY, SHELL, SHM, Shell, VIEWPORTER, release};
 
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -39,6 +44,26 @@ pub(crate) enum Offer {
     Seat,
     CaptureManager,
     SourceManager,
+    /// What the on-screen display needs: surfaces at a version, shared
+    /// memory and layer-shell; and the viewport and fractional scale.
+    Compositor(u32),
+    Shm,
+    LayerShell,
+    Viewporter,
+    Fractions,
+}
+
+impl Offer {
+    /// Everything the on-screen display uses.
+    pub(crate) fn display() -> [Offer; 5] {
+        [
+            Offer::Compositor(6),
+            Offer::Shm,
+            Offer::LayerShell,
+            Offer::Viewporter,
+            Offer::Fractions,
+        ]
+    }
 }
 
 /// An output's logical place and size, as xdg-output sends it.
@@ -142,6 +167,11 @@ pub(crate) struct Fake {
     pub(crate) sessions: Vec<(u32, u32)>,
     /// Whether [`Fake::start_with_two`] offers what cursor sessions need.
     pub(crate) cursors: bool,
+    /// Whether [`Fake::start_with_two`] offers what the on-screen display
+    /// needs.
+    pub(crate) display: bool,
+    /// What the on-screen display made.
+    pub(crate) shell: Shell,
 }
 
 impl Fake {
@@ -163,6 +193,8 @@ impl Fake {
             sources: Vec::new(),
             sessions: Vec::new(),
             cursors: false,
+            display: false,
+            shell: Shell::default(),
         }
     }
 
@@ -182,22 +214,27 @@ impl Fake {
     }
 
     pub(crate) async fn request(&mut self) -> Message {
+        self.next_request().await.unwrap()
+    }
+
+    /// The client's next request; `None` once it closed the connection.
+    async fn next_request(&mut self) -> Option<Message> {
         let mut header = [0u8; 8];
-        self.stream.read_exact(&mut header).await.unwrap();
+        self.stream.read_exact(&mut header).await.ok()?;
         let object = u32::from_ne_bytes(header[..4].try_into().unwrap());
         let second = u32::from_ne_bytes(header[4..].try_into().unwrap());
         let size = usize::try_from(second >> 16).unwrap();
         let mut body = vec![0u8; size - 8];
-        self.stream.read_exact(&mut body).await.unwrap();
+        self.stream.read_exact(&mut body).await.ok()?;
         let words = body
             .chunks(4)
             .map(|chunk| u32::from_ne_bytes(chunk.try_into().unwrap()))
             .collect();
-        Message {
+        Some(Message {
             object,
             opcode: u16::try_from(second & 0xffff).unwrap(),
             words,
-        }
+        })
     }
 
     /// Reads requests up to the client's next `wl_display.sync`, noting the
@@ -224,11 +261,41 @@ impl Fake {
         found.map(|&(_, id)| id)
     }
 
+    /// Reads requests, answering every round trip, until `done` holds.
+    pub(crate) async fn until(&mut self, done: impl Fn(&Fake) -> bool) {
+        while !done(self) {
+            if let Some(callback) = self.read_one().await {
+                self.answer(callback).await;
+            }
+        }
+    }
+
     /// Reads one request, noting what it binds or makes; the callback of a
     /// `wl_display.sync`.
     async fn read_one(&mut self) -> Option<Callback> {
         let request = self.request().await;
+        self.note(request)
+    }
+
+    /// Reads and notes every request until the client closes the
+    /// connection, answering none.
+    pub(crate) async fn read_to_close(&mut self) {
+        while let Some(request) = self.next_request().await {
+            self.note(request);
+        }
+    }
+
+    /// Notes what `request` binds or makes; the callback of a
+    /// `wl_display.sync`.
+    fn note(&mut self, request: Message) -> Option<Callback> {
         self.seen.push((request.object, request.opcode));
+        let global = self
+            .bound
+            .iter()
+            .rev()
+            .find(|(_, id)| *id == request.object)
+            .map(|&(name, _)| name);
+        self.shell.note(&request, global);
         let words = &request.words;
         let on = |name| self.id_of(name) == Some(request.object);
         match (request.object, request.opcode) {
@@ -284,6 +351,11 @@ impl Fake {
             Offer::Seat => (SEAT, "wl_seat", 9),
             Offer::CaptureManager => (CAPTURE, "ext_image_copy_capture_manager_v1", 1),
             Offer::SourceManager => (SOURCES, "ext_output_image_capture_source_manager_v1", 1),
+            Offer::Compositor(version) => (COMPOSITOR, "wl_compositor", version),
+            Offer::Shm => (SHM, "wl_shm", 1),
+            Offer::LayerShell => (SHELL, "zwlr_layer_shell_v1", 4),
+            Offer::Viewporter => (VIEWPORTER, "wp_viewporter", 1),
+            Offer::Fractions => (FRACTIONS, "wp_fractional_scale_manager_v1", 1),
         };
         let words = std::iter::once(name)
             .chain(string(interface))
@@ -341,10 +413,8 @@ impl Fake {
         self.offer(Offer::Manager).await;
         self.offer(Offer::Output(A)).await;
         self.offer(Offer::Output(B)).await;
-        if self.cursors {
-            for offer in [Offer::Seat, Offer::CaptureManager, Offer::SourceManager] {
-                self.offer(offer).await;
-            }
+        for offer in self.extras() {
+            self.offer(offer).await;
         }
         self.answer(callback).await;
         let callback = self.until_sync().await;
@@ -356,6 +426,15 @@ impl Fake {
 }
 
 impl Fake {
+    /// What [`Fake::start_with_two`] offers besides the outputs: what
+    /// cursor sessions need, and the on-screen display, as set.
+    fn extras(&self) -> Vec<Offer> {
+        let cursors = [Offer::Seat, Offer::CaptureManager, Offer::SourceManager];
+        let cursors = cursors.into_iter().filter(|_| self.cursors);
+        let display = Offer::display().into_iter().filter(|_| self.display);
+        cursors.chain(display).collect()
+    }
+
     /// Answers the round trip after the seat was bound, the seat telling
     /// first that it has a keyboard and whether it has a pointer.
     pub(crate) async fn seat(&mut self, pointer: bool) {

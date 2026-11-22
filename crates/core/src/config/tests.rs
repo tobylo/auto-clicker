@@ -80,6 +80,9 @@ fn every_option_is_read() {
         [playback]
         speed = 1.5
         repeat = 3
+
+        [on_screen]
+        countdown = false
         "#,
     );
     let expected = Config {
@@ -107,6 +110,7 @@ fn every_option_is_read() {
             speed: Speed::from_ratio(1.5).unwrap(),
             repeat: Repeat::Times(NonZeroU32::new(3).unwrap()),
         },
+        on_screen: OnScreenSettings { countdown: false },
     };
     assert_eq!(config, expected);
 }

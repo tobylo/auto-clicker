@@ -254,6 +254,43 @@ fn every_reason_recordings_keep_movement_only_reads_as_written() {
 }
 
 #[test]
+fn every_reason_the_countdown_cannot_show_reads_as_written() {
+    use auto_clicker_core::message::NoOnScreen;
+
+    let rows = [
+        (
+            NoOnScreen::NoDisplay,
+            "the program started without a Wayland display (WAYLAND_DISPLAY); see the README",
+            "programmet startade utan en Wayland-display (WAYLAND_DISPLAY); se README",
+        ),
+        (
+            NoOnScreen::CannotConnect,
+            "the program could not connect to the Wayland display",
+            "programmet kunde inte ansluta till Wayland-displayen",
+        ),
+        (
+            NoOnScreen::NoXdgOutput,
+            "the desktop does not tell the program its screens' sizes (no xdg-output)",
+            "skrivbordet berättar inte skärmarnas storlek för programmet (inget xdg-output)",
+        ),
+        (
+            NoOnScreen::NoLayerShell,
+            "this desktop cannot show it (no layer-shell)",
+            "skrivbordet kan inte visa den (inget layer-shell)",
+        ),
+    ];
+    for (why, english, swedish) in rows {
+        let problem = Problem::NoOnScreen(why);
+        let english = format!("The countdown cannot show on the screen: {english}");
+        let swedish = format!("Nedräkningen kan inte visas på skärmen: {swedish}");
+        assert_eq!(
+            (problem.to_string(), problem::swedish(&problem)),
+            (english, swedish)
+        );
+    }
+}
+
+#[test]
 fn every_reason_nothing_reports_the_pointer_reads_as_written() {
     use auto_clicker_core::message::{NoPointer, NoPositions};
 

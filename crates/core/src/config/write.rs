@@ -50,6 +50,8 @@ pub fn render(config: &Config) -> String {
     lines.section("playback");
     lines.value("speed", speed(config.playback.speed));
     lines.value("repeat", count(draft.playback.repeat));
+    lines.section("on_screen");
+    lines.value("countdown", draft.on_screen.countdown.to_string());
     text
 }
 

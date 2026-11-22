@@ -88,3 +88,75 @@ async fn the_running_compositor_gives_cursor_positions_while_recording() {
         })
         .await;
 }
+
+#[tokio::test]
+#[ignore = "needs a running Wayland compositor with layer-shell; shows a countdown on every screen for a few seconds"]
+async fn the_running_compositor_shows_the_countdown_on_every_screen_and_removes_it() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use auto_clicker_core::config::Config;
+    use auto_clicker_core::controller::{Activity, Hotkey, Routes, View};
+    use tokio::task::{LocalSet, yield_now};
+    use tokio::time::timeout;
+
+    use crate::client::Showing;
+
+    fn view(activity: Activity) -> View {
+        let config = Config::default();
+        View {
+            activity,
+            routes: Routes::default(),
+            settings: config.clicker,
+            hotkey: Hotkey::Bound(config.hotkeys.toggle_clicking),
+            record_hotkey: Hotkey::Bound(config.hotkeys.toggle_recording),
+            no_recording: None,
+            play_hotkey: Hotkey::Bound(config.hotkeys.toggle_playback),
+            playback: config.playback,
+            on_screen: config.on_screen,
+            recordings: Arc::from([]),
+            current: None,
+            playing: None,
+            notice: None,
+            problems: Vec::new(),
+        }
+    }
+
+    LocalSet::new()
+        .run_until(async {
+            let wayland =
+                Wayland::connect(tokio::time::Instant::now() + Duration::from_secs(2)).await;
+            let screens = wayland.layout().expect("no whole layout").outputs().len();
+            let on_screen = OnScreen::of(&wayland);
+            assert_eq!(on_screen.found(), Ok(()));
+            let (views, shown) = tokio::sync::watch::channel(view(Activity::Idle));
+            tokio::task::spawn_local(on_screen.watch(shown));
+            // Twelve to nine: across a change of the surfaces' size.
+            for seconds in (9..=12).rev() {
+                views.send_replace(view(Activity::StartingIn(seconds)));
+                let text = seconds.to_string();
+                let all_drawn = || {
+                    let now = on_screen.screens();
+                    now.len() == screens && now.values().all(|s| *s == Showing::Drawn(text.clone()))
+                };
+                let drawn = timeout(Duration::from_secs(2), async {
+                    while !all_drawn() {
+                        yield_now().await;
+                    }
+                })
+                .await;
+                assert!(drawn.is_ok(), "{seconds}: {:?}", on_screen.screens());
+                eprintln!("{seconds} on {screens} screens");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            views.send_replace(view(Activity::Clicking));
+            let gone = timeout(Duration::from_secs(1), async {
+                while !on_screen.screens().is_empty() {
+                    yield_now().await;
+                }
+            })
+            .await;
+            assert!(gone.is_ok(), "{:?}", on_screen.screens());
+        })
+        .await;
+}

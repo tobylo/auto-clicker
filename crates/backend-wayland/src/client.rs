@@ -86,6 +86,10 @@ pub(crate) struct Client {
     sessions: Option<sessions::Sessions>,
     /// Positions placed as they were heard, until they are taken.
     pub(crate) positions: Vec<(Point, Layout)>,
+    /// The globals the on-screen display needs, as offered.
+    pub(crate) display_globals: surfaces::Offered,
+    /// The on-screen display's surfaces, once its globals are bound.
+    surfaces: Option<surfaces::Surfaces>,
 }
 
 /// An event as it arrived: for which object, with that object's data, and
@@ -129,6 +133,8 @@ dispatch_to!(WlCallback, Mark, callback_event);
 
 mod sessions;
 pub(crate) use sessions::Refused;
+mod surfaces;
+pub(crate) use surfaces::{Showing, Wanted};
 
 impl Client {
     /// Binds the outputs offered at start and their xdg-outputs.
@@ -161,6 +167,7 @@ impl Client {
                  so the screens are unknown while it is there"
             );
             self.gather.refused(name);
+            self.surfaces_screens_changed();
             return;
         }
         let output: WlOutput = registry.bind(name, version.min(OUTPUT_VERSION), queue, name);
@@ -168,6 +175,7 @@ impl Client {
         self.open_session(name, &output, queue);
         self.outputs.insert(name, Bound { output, xdg });
         self.gather.added(name);
+        self.surfaces_screens_changed();
     }
 
     /// The global `name` went: an output's objects are released, and an
@@ -181,7 +189,10 @@ impl Client {
             self.manager_offered = None;
         }
         self.cursor_global_removed(name);
-        self.gather.removed(name);
+        self.surface_global_removed(name);
+        if self.gather.removed(name) {
+            self.surfaces_screens_changed();
+        }
         let Some(Bound { output, xdg }) = self.outputs.remove(&name) else {
             return;
         };
@@ -204,6 +215,7 @@ impl Client {
                     XDG_OUTPUT_MANAGER => self.manager_offered = Some(global),
                     other => {
                         self.cursor_globals.note(other, global);
+                        self.display_globals.note(other, global);
                     }
                 }
             }
@@ -247,6 +259,11 @@ impl Client {
 
     /// The manager sends no events.
     fn manager_event(&mut self, _: Arrived<'_, ZxdgOutputManagerV1, ()>) {}
+
+    /// Events nothing here acts on: the pointer gets none of its own (the
+    /// program's surfaces take no input), managers, sources, pools and
+    /// regions send none, and a surface's scale is the fractional one.
+    fn ignore<I: Proxy, U>(&mut self, _: Arrived<'_, I, U>) {}
 
     fn callback_event(&mut self, arrived: Arrived<'_, WlCallback, Mark>) {
         let wl_callback::Event::Done { .. } = arrived.event else {
@@ -300,13 +317,7 @@ impl Link {
     /// Connects over `stream`, binds the outputs and reads the first
     /// layout, which is `None` while it is not whole.
     pub(crate) async fn start(stream: UnixStream) -> Result<(Link, Settled), NoScreens> {
-        let mut link = Link::over(stream)?;
-        let queue = link.queue.handle();
-        let registry = link.connection.display().get_registry(&queue, ());
-        link.client.registry = Some(registry.clone());
-        link.connection.display().sync(&queue, Mark::Globals);
-        link.until(|client| client.globals_known).await?;
-        link.client.bind_offered(&registry, &queue)?;
+        let mut link = Link::bound(stream).await?;
         link.until(|client| client.settled.is_some()).await?;
         let first = link.client.settled.take().unwrap_or_default();
         Ok((
@@ -316,6 +327,20 @@ impl Link {
                 ..first
             },
         ))
+    }
+
+    /// Connects over `stream` and binds the outputs, without waiting for
+    /// any of them to describe itself: the on-screen display reads each
+    /// screen once its own update ended.
+    pub(crate) async fn bound(stream: UnixStream) -> Result<Link, NoScreens> {
+        let mut link = Link::over(stream)?;
+        let queue = link.queue.handle();
+        let registry = link.connection.display().get_registry(&queue, ());
+        link.client.registry = Some(registry.clone());
+        link.connection.display().sync(&queue, Mark::Globals);
+        link.until(|client| client.globals_known).await?;
+        link.client.bind_offered(&registry, &queue)?;
+        Ok(link)
     }
 
     /// A connection over `stream`, nothing sent yet.

@@ -30,6 +30,15 @@ pub(super) struct RawConfig {
     pub(super) input: RawInput,
     #[serde(default)]
     pub(super) playback: RawPlayback,
+    #[serde(default)]
+    pub(super) on_screen: RawOnScreen,
+}
+
+/// `[on_screen]`: what the on-screen display shows.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RawOnScreen {
+    pub(super) countdown: Option<bool>,
 }
 
 /// `[playback]`: how a recording plays.

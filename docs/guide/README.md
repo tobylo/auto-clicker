@@ -5,7 +5,7 @@ auto-clicker clicks, holds and repeats buttons and keys, and records and plays b
 | Page | What it covers |
 | --- | --- |
 | [Install, update and remove](install.md) | The package, setting it up on niri and Hyprland, the permissions it needs and why, updating, troubleshooting, uninstalling |
-| [Using it](using.md) | The tray menu, the clicking hotkey, when the program stops by itself, exit statuses |
+| [Using it](using.md) | The tray menu, the countdown on the screen, the clicking hotkey, when the program stops by itself, exit statuses |
 | [Recording](recording.md) | What a recording keeps and leaves out, where it is saved, pointer positions, the file format |
 | [Playing a recording](playback.md) | Which recording plays, starting and stopping, speed and repeats, timing, mouse movement |
 | [Settings window](settings-window.md) | The Clicker, Hotkeys and Playback tabs, picking a point on the screen, managing recordings |

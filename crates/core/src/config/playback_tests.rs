@@ -1,5 +1,5 @@
 //! `[playback]` in the config file: the speed and how often a recording
-//! plays.
+//! plays; and `[on_screen]`, what the on-screen display shows.
 
 use std::num::NonZeroU32;
 
@@ -77,4 +77,30 @@ fn playback_repeats_a_number_of_plays_or_until_stopped() {
     }
     let (_, reason) = invalid("version = 1\n[playback]\nrepeat = \"twice\"\n");
     assert!(reason.contains("a number of plays from 1"), "{reason}");
+}
+
+/// The `[on_screen]` section `section` gives.
+fn on_screen(section: &str) -> OnScreenSettings {
+    parse(&format!("version = 1\n[on_screen]\n{section}\n")).on_screen
+}
+
+#[test]
+fn the_countdown_shows_on_the_screen_unless_switched_off() {
+    assert!(parse("version = 1\n").on_screen.countdown);
+    assert!(on_screen("").countdown);
+    assert!(on_screen("countdown = true").countdown);
+    assert!(!on_screen("countdown = false").countdown);
+}
+
+#[test]
+fn an_on_screen_value_that_is_not_true_or_false_is_refused_at_its_line() {
+    for (section, says) in [
+        ("countdown = \"no\"", "boolean"),
+        ("countdown = 0", "boolean"),
+        ("badge = true", "unknown field"),
+    ] {
+        let (line, reason) = invalid(&format!("version = 1\n[on_screen]\n{section}\n"));
+        assert_eq!(line, Some(3), "{section}");
+        assert!(reason.contains(says), "{section}: {reason}");
+    }
 }

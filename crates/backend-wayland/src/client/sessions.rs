@@ -225,10 +225,6 @@ impl Client {
         }
     }
 
-    /// The pointer gets no events of its own (the program has no surface),
-    /// and the managers and sources send none.
-    fn ignore<I: Proxy, U>(&mut self, _: Arrived<'_, I, U>) {}
-
     /// A position on the output whose name the session carries, placed
     /// when it is heard ([`Gather::position`]); entering, leaving and the
     /// hotspot say nothing a recording keeps.

@@ -21,6 +21,7 @@ mod client;
 #[cfg(test)]
 mod compositor_tests;
 mod cursor;
+mod display;
 mod gather;
 mod place;
 pub mod process;
@@ -36,12 +37,14 @@ use std::rc::Rc;
 use std::task::Poll;
 
 use auto_clicker_core::controller::{LayoutSignal, LayoutWatch};
-use auto_clicker_core::message::NoScreens;
+use auto_clicker_core::message::{NoOnScreen, NoScreens};
 use auto_clicker_core::recording::Layout;
+use tokio::sync::watch;
 use tokio::time::{Instant, timeout_at};
 
 use client::Link;
 pub use cursor::Cursors;
+pub use display::OnScreen;
 pub use gather::Corner;
 use gather::Settled;
 
@@ -71,6 +74,13 @@ struct Shared {
     /// The display offered what cursor sessions need at start: a seat and
     /// ext-image-copy-capture's two managers (W02).
     cursors: bool,
+    /// Whether the on-screen display can show, as the layout's connection
+    /// found when it last connected (O01's O3).
+    on_screen: Cell<Result<(), NoOnScreen>>,
+    /// Counts each change of the screens the layout's connection settled,
+    /// whether or not it changed the layout: the on-screen display waits on
+    /// it after its connection failed, while the controller has the signal.
+    layout_changes: watch::Sender<u64>,
 }
 
 impl Wayland {
@@ -121,6 +131,7 @@ impl Wayland {
         let cursors = link
             .as_ref()
             .is_ok_and(|link| link.client.cursor_globals.all());
+        let on_screen = display::found(link.as_ref().map_err(|why| *why));
         let (link, layout) = match link {
             Ok(link) => (Some(link), first.layout.ok_or(NoScreens::NotWhole)),
             Err(why) => (None, Err(why)),
@@ -135,6 +146,8 @@ impl Wayland {
             link: RefCell::new(link),
             watched: Cell::new(false),
             cursors,
+            on_screen: Cell::new(on_screen),
+            layout_changes: watch::Sender::new(0),
         }))
     }
 
@@ -289,6 +302,8 @@ impl Shared {
                 biased;
                 () = again.fired() => {}
                 started = self.start_again() => {
+                    let link = started.as_ref().map(|(link, _)| link);
+                    self.found_on_screen(display::found(link.map_err(|why| *why)), changed);
                     return match started {
                         Ok((link, first)) => {
                             self.publish(first, changed);
@@ -301,6 +316,14 @@ impl Shared {
                     };
                 }
             }
+        }
+    }
+
+    /// Whether the on-screen display can show is `found` now, as a new
+    /// connection found it; the controller hears when that changed.
+    fn found_on_screen(&self, found: Result<(), NoOnScreen>, changed: &LayoutSignal) {
+        if self.on_screen.replace(found) != found {
+            changed.changed();
         }
     }
 
@@ -348,8 +371,16 @@ impl Shared {
             (was, now) => was != now,
         };
         if told {
-            self.changes.set(self.changes.get().wrapping_add(1));
+            let changes = self.changes.get().wrapping_add(1);
+            self.changes.set(changes);
             changed.changed();
+        }
+        // The on-screen display hears every change of the screens, also
+        // one that leaves the layout as unknown as it was: it shows on
+        // each screen it can.
+        if told || moved {
+            self.layout_changes
+                .send_modify(|count| *count = count.wrapping_add(1));
         }
     }
 }

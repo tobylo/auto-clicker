@@ -10,7 +10,7 @@
 //! with its English text: [`Blocked`], [`Unavailable`](crate::hotkeys::Unavailable),
 //! [`Refusal`](crate::hotkeys::Refusal) (a key the desktop's hotkeys use),
 //! [`NoRecording`](crate::controller::NoRecording), [`NoScreens`],
-//! [`NoPointer`], and the settings'
+//! [`NoPointer`], [`NoOnScreen`], and the settings'
 //! [`Reason`](crate::config::Reason).
 
 mod answer;
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 pub use answer::{ChangeFailure, Failure, Step, Unavailability};
 pub use input::InputFailure;
-pub use missing::{NoPointer, NoPositions, NoScreens};
+pub use missing::{NoOnScreen, NoPointer, NoPositions, NoScreens};
 pub use notice::{
     Hindrance, Notice, PlayStart, PointScreens, SaveFailure, Saving, Start, Stop, Unplayable,
 };
@@ -59,6 +59,8 @@ pub enum Problem {
     CurrentUnkept(Quoted),
     /// Recordings keep movement only: they get no positions.
     NoPositions(NoPositions),
+    /// The countdown cannot show on the screen.
+    NoOnScreen(NoOnScreen),
 }
 
 impl fmt::Display for Problem {
@@ -80,6 +82,9 @@ impl fmt::Display for Problem {
                  {why}"
             ),
             Problem::NoPositions(why) => write!(f, "Recordings keep movement only: {why}"),
+            Problem::NoOnScreen(why) => {
+                write!(f, "The countdown cannot show on the screen: {why}")
+            }
         }
     }
 }

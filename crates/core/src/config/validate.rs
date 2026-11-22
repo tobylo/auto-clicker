@@ -9,7 +9,7 @@ use toml::Spanned;
 
 use super::check;
 use super::raw::{RawClicker, RawConfig, RawPlayback};
-use super::{Config, InputSettings};
+use super::{Config, InputSettings, OnScreenSettings};
 use crate::clicker::{ClickerSettings, Interval, Mode};
 use crate::playback::{PlaybackSettings, Speed};
 
@@ -60,6 +60,12 @@ pub(super) fn validate(raw: RawConfig) -> Result<Config, Invalid> {
         fixed_screens,
         input,
         playback: playback(&raw.playback, defaults.playback)?,
+        on_screen: OnScreenSettings {
+            countdown: raw
+                .on_screen
+                .countdown
+                .unwrap_or(defaults.on_screen.countdown),
+        },
     })
 }
 

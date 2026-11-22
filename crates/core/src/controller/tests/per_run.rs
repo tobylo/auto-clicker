@@ -162,6 +162,11 @@ impl Platform for PerRunPlatform {
     fn recordings_dir(&self) -> Option<PathBuf> {
         self.fake().recordings_dir()
     }
+
+    /// The countdown can show: these tests are about the devices.
+    fn on_screen(&self) -> Result<(), NoOnScreen> {
+        Ok(())
+    }
 }
 
 impl PerRunPlatform {

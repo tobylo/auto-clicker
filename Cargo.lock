@@ -375,9 +375,11 @@ version = "1.0.0"
 dependencies = [
  "auto-clicker-core",
  "libc",
+ "rustix 1.1.6",
  "tokio",
  "wayland-client",
  "wayland-protocols",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]

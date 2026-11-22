@@ -33,6 +33,10 @@
 //! [playback]
 //! speed = 1.0                   # 0.25 to 4 times the recorded speed
 //! repeat = 1                    # a number of plays, or "until_stopped"
+//!
+//! [on_screen]
+//! countdown = true              # a tray start's countdown in the middle of
+//!                               # every screen
 //! ```
 
 pub(crate) mod check;
@@ -51,9 +55,11 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 pub use draft::{
-    ClickerDraft, CountDraft, Draft, Field, HotkeysDraft, InputDraft, IntervalDraft, PlaybackDraft,
-    PositionDraft, Refusal, spell_interval,
+    ClickerDraft, CountDraft, Draft, Field, HotkeysDraft, InputDraft, IntervalDraft, OnScreenDraft,
+    PlaybackDraft, PositionDraft, Refusal, spell_interval,
 };
 pub use error::{ConfigError, Problem};
 use file::Seen;
@@ -84,6 +90,21 @@ pub struct Config {
     pub hotkeys: Bindings,
     pub input: InputSettings,
     pub playback: PlaybackSettings,
+    pub on_screen: OnScreenSettings,
+}
+
+/// `[on_screen]`: what the on-screen display shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OnScreenSettings {
+    /// A tray start's countdown, in the middle of every screen.
+    pub countdown: bool,
+}
+
+impl Default for OnScreenSettings {
+    fn default() -> Self {
+        OnScreenSettings { countdown: true }
+    }
 }
 
 /// `[input]`: how the program reaches the input devices.
@@ -141,6 +162,7 @@ impl Default for Config {
             hotkeys: Bindings::default(),
             input: InputSettings::default(),
             playback: PlaybackSettings::default(),
+            on_screen: OnScreenSettings::default(),
         }
     }
 }

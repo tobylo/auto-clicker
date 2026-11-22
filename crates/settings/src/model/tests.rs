@@ -87,7 +87,9 @@ fn a_picked_point_keeps_its_screens_only_while_the_fields_hold_it() {
     let position = |change: fn(&mut Fields)| {
         let mut fields = Fields::from_draft(&shown, '.');
         change(&mut fields);
-        let read = fields.to_draft(&shown.hotkeys, picked.as_ref()).unwrap();
+        let read = fields
+            .to_draft(&shown.hotkeys, shown.on_screen, picked.as_ref())
+            .unwrap();
         read.clicker.position
     };
     let typed = |x, y| PositionDraft::Fixed {
@@ -116,7 +118,7 @@ fn the_fields_give_back_the_draft_they_show_in_either_language() {
         for shown in drafts() {
             let fields = Fields::from_draft(&shown, decimal);
             assert_eq!(
-                fields.to_draft(&shown.hotkeys, Picked::of(&shown).as_ref()),
+                fields.to_draft(&shown.hotkeys, shown.on_screen, Picked::of(&shown).as_ref()),
                 Ok(shown.clone()),
                 "{fields:?}"
             );
@@ -134,7 +136,7 @@ fn decimals_show_with_the_languages_separator_and_read_with_either() {
         fields.speed_text = written.to_owned();
         assert_eq!(
             fields
-                .to_draft(&shown.hotkeys, None)
+                .to_draft(&shown.hotkeys, shown.on_screen, None)
                 .unwrap()
                 .playback
                 .speed,
@@ -149,7 +151,7 @@ fn the_hotkeys_come_from_the_captures_not_the_fields() {
     let shown = draft(|_| {});
     let captured = draft(|d| d.hotkeys.toggle_recording = "Ctrl+F9".to_owned()).hotkeys;
     let saved = Fields::from_draft(&shown, '.')
-        .to_draft(&captured, None)
+        .to_draft(&captured, shown.on_screen, None)
         .unwrap();
     assert_eq!(saved.hotkeys, captured);
 }
@@ -170,13 +172,15 @@ fn the_key_is_a_name_in_any_case_or_a_code_after_a_hash() {
     ];
     for (written, code) in keys {
         fields.key_text = written.to_owned();
-        let read = fields.to_draft(&shown.hotkeys, None).unwrap();
+        let read = fields
+            .to_draft(&shown.hotkeys, shown.on_screen, None)
+            .unwrap();
         assert_eq!(read.clicker.key, code, "{written}");
     }
     for unreadable in ["", "no such key", "113", "#70000", "#-1", "#"] {
         fields.key_text = unreadable.to_owned();
         assert_eq!(
-            fields.to_draft(&shown.hotkeys, None),
+            fields.to_draft(&shown.hotkeys, shown.on_screen, None),
             Err(Unreadable::Key),
             "{unreadable}"
         );
@@ -221,7 +225,7 @@ fn text_that_cannot_be_read_is_named() {
         let mut fields = base.clone();
         change(&mut fields);
         assert_eq!(
-            fields.to_draft(&shown.hotkeys, None),
+            fields.to_draft(&shown.hotkeys, shown.on_screen, None),
             Err(field),
             "{fields:?}"
         );
@@ -234,7 +238,9 @@ fn a_count_beyond_what_the_config_takes_goes_to_the_daemon_to_refuse() {
     let mut fields = Fields::from_draft(&shown, '.');
     fields.repeat_forever = false;
     fields.repeat_text = "5000000000".to_owned();
-    let read = fields.to_draft(&shown.hotkeys, None).unwrap();
+    let read = fields
+        .to_draft(&shown.hotkeys, shown.on_screen, None)
+        .unwrap();
     assert_eq!(read.clicker.repeat, CountDraft::Times(5_000_000_000));
 }
 
@@ -248,7 +254,9 @@ fn a_choice_no_widget_gives_falls_back_and_numbers_stay_in_range() {
     fields.position_x = 70_000;
     fields.position_y = -5;
     fields.jitter = -1;
-    let read = fields.to_draft(&shown.hotkeys, None).unwrap();
+    let read = fields
+        .to_draft(&shown.hotkeys, shown.on_screen, None)
+        .unwrap();
     assert_eq!(read.clicker.mode, ModeName::Click);
     assert_eq!(read.clicker.button, ButtonName::Left);
     assert_eq!(

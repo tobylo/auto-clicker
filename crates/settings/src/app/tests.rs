@@ -9,9 +9,9 @@ use auto_clicker_core::hotkeys::Refusal;
 use auto_clicker_core::hotkeys::Unavailable;
 use auto_clicker_core::locale::Language;
 use auto_clicker_core::message::{
-    ChangeFailure, ConfigProblem, Failure, Hindrance, InputFailure, NoPointer, NoPositions,
-    NoScreens, Notice, PlayStart, PointScreens, Problem, Quoted, SaveFailure, Saving, Start, Step,
-    Stop, Titled, Unavailability, Unplayable,
+    ChangeFailure, ConfigProblem, Failure, Hindrance, InputFailure, NoOnScreen, NoPointer,
+    NoPositions, NoScreens, Notice, PlayStart, PointScreens, Problem, Quoted, SaveFailure, Saving,
+    Start, Step, Stop, Titled, Unavailability, Unplayable,
 };
 use auto_clicker_core::playback::Fallback;
 use auto_clicker_core::recording::FileName;
@@ -51,6 +51,7 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
     refusals_and_failures(&said);
     problems(&said);
     no_positions(&said);
+    no_on_screen(&said);
     recordings(&said);
     point_screens(&said);
     titles(&said);
@@ -228,6 +229,34 @@ fn no_positions(said: &Said<'_>) {
         assert_eq!(
             said.problem(&Problem::NoPositions(why)),
             format!("Inspelningar sparar bara rörelser: {swedish}")
+        );
+    }
+}
+
+/// Why the countdown cannot show on the screen, each reason in Swedish.
+fn no_on_screen(said: &Said<'_>) {
+    let reasons = [
+        (
+            NoOnScreen::NoDisplay,
+            "programmet startade utan en Wayland-display (WAYLAND_DISPLAY); se README",
+        ),
+        (
+            NoOnScreen::CannotConnect,
+            "programmet kunde inte ansluta till Wayland-displayen",
+        ),
+        (
+            NoOnScreen::NoXdgOutput,
+            "skrivbordet berättar inte skärmarnas storlek för programmet (inget xdg-output)",
+        ),
+        (
+            NoOnScreen::NoLayerShell,
+            "skrivbordet kan inte visa den (inget layer-shell)",
+        ),
+    ];
+    for (why, swedish) in reasons {
+        assert_eq!(
+            said.problem(&Problem::NoOnScreen(why)),
+            format!("Nedräkningen kan inte visas på skärmen: {swedish}")
         );
     }
 }

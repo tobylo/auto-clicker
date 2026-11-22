@@ -124,6 +124,22 @@ fn the_fields_fill_when_the_saved_settings_change_and_only_then() {
 }
 
 #[test]
+fn a_save_keeps_the_on_screen_section_the_daemon_sent() {
+    let mut state = State::default();
+    let mut sent = defaults();
+    sent.on_screen.countdown = false;
+    state.view(&view(sent.clone(), None));
+    let (settings, ..) = save_of(
+        state
+            .save(&Fields::from_draft(&sent, '.'))
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(settings, sent);
+    assert!(!settings.on_screen.countdown);
+}
+
+#[test]
 fn nothing_is_asked_before_the_settings_came() {
     asks_nothing(&mut State::default());
 }

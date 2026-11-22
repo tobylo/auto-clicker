@@ -1,6 +1,6 @@
 [package]
 name = "auto-clicker-backend-wayland"
-description = "Wayland backend of auto-clicker: the screen layout from xdg-output"
+description = "Wayland backend of auto-clicker: the screen layout from xdg-output, and the on-screen display"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -14,11 +14,19 @@ auto-clicker-core = { path = "../core" }
 # window's winit.
 wayland-client = "0.31.15"
 # `unstable`: xdg-output; `staging`: ext-image-copy-capture's cursor
-# sessions, the pointer's position on niri (W02).
+# sessions, the pointer's position on niri (W02), and the fractional scale
+# the on-screen display draws at (O01b).
 wayland-protocols = { version = "0.32.13", features = ["client", "unstable", "staging"] }
+# The on-screen display's layer-shell surfaces (O01 decision 9); already in
+# Cargo.lock through the settings window's winit.
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 # SO_PEERCRED on the display's socket; already a dependency of the daemon.
 libc = "0.2.191"
-tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time"] }
+# The on-screen display's shared memory: an anonymous file from
+# memfd_create, written without mmap or unsafe; already a dependency of the
+# daemon through backend-kwin.
+rustix = { version = "1.0.7", default-features = false, features = ["std", "fs"] }
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time", "sync"] }
 
 [lints]
 workspace = true

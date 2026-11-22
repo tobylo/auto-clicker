@@ -105,6 +105,9 @@ export global Texts {
     public pure function no-pointer-hyprland-unreadable() -> string { @tr("Hyprland answered in a form this program does not read") }
     public pure function no-pointer-hyprland-other-display() -> string { @tr("Hyprland's socket belongs to another display") }
     public pure function no-pointer-display-no-position() -> string { @tr("the Wayland display gave no pointer position; see the log") }
+    public pure function problem-no-on-screen(why: string) -> string { @tr("The countdown cannot show on the screen: {}", why) }
+    public pure function no-on-screen-no-xdg-output() -> string { @tr("the desktop does not tell the program its screens' sizes (no xdg-output)") }
+    public pure function no-on-screen-no-layer-shell() -> string { @tr("this desktop cannot show it (no layer-shell)") }
     public pure function screens-changed() -> string { @tr("the screens changed while the point was picked: pick it again") }
     public pure function point-screens-changed() -> string { @tr("the screens changed since the fixed point was picked: pick it again in Settings") }
     public pure function point-screens-unknown() -> string { @tr("the screen layout is not known, so the picked point cannot be checked") }

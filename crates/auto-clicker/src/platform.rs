@@ -1,8 +1,8 @@
 //! The controller's platforms: uinput devices or the desktop's portal for
 //! output, and on either the hotkeys from the keyboards or from the
 //! desktop's shortcuts, the screen layout from the Wayland display and the
-//! pointer from KWin, Hyprland or the display's cursor sessions, and the
-//! clocks and directory recordings need.
+//! pointer from KWin, Hyprland or the display's cursor sessions, the
+//! on-screen display, and the clocks and directory recordings need.
 
 use std::future::pending;
 use std::path::PathBuf;
@@ -14,14 +14,15 @@ use auto_clicker_backend_kernel::{
 };
 use auto_clicker_backend_kwin::Kwin;
 use auto_clicker_backend_portal::{PortalBackend, PortalOutput, read_shortcuts};
-use auto_clicker_backend_wayland::{Cursors, Wayland};
+use auto_clicker_backend_wayland::{Cursors, OnScreen, Wayland};
 use auto_clicker_core::controller::{
     HotkeyReader, InputLifetime, InputLoss, InputReader, LayoutSignal, LayoutWatch, OpenInput,
-    Platform, ReadInput, Route,
+    Platform, ReadInput, Route, View,
 };
 use auto_clicker_core::input::Input;
-use auto_clicker_core::message::{NoPointer, NoScreens};
+use auto_clicker_core::message::{NoOnScreen, NoPointer, NoScreens};
 use auto_clicker_core::recording::{Layout, LocalTime, RecordingFeed, recordings_dir};
+use tokio::sync::watch;
 
 /// Where hotkeys come from, on either output: the reader detection picked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,12 +57,13 @@ impl Hotkeys {
 
 /// What the desktop gives besides input: the layout from the Wayland
 /// display, the pointer from KWin, Hyprland or the display's cursor
-/// sessions, whichever counts.
+/// sessions, whichever counts, and the on-screen display.
 pub struct Desktop {
     pub wayland: Wayland,
     pub kwin: Kwin,
     pub hyprland: Hyprland,
     pub cursors: Cursors,
+    pub on_screen: OnScreen,
 }
 
 impl Desktop {
@@ -95,19 +97,26 @@ impl Desktop {
     /// when why it gives none changes.
     /// The cursor sessions' opens a connection for each recording that
     /// starts while neither KWin nor Hyprland reports the pointer, feeds it
-    /// its positions, and fires it when why it gives none changes.
-    fn watch(&self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
+    /// its positions, and fires it when why it gives none changes. The
+    /// on-screen display's shows what `views` says should show.
+    fn watch(
+        &self,
+        feed: RecordingFeed,
+        views: watch::Receiver<View>,
+        changed: LayoutSignal,
+    ) -> LayoutWatch {
         let hyprland = self
             .hyprland
             .watch(self.wayland.clone(), feed.clone(), changed.clone());
         let (kwin, found) = (self.kwin.clone(), self.hyprland.clone());
         let open = Box::new(move || cursor_sessions_open(kwin.pointer(), found.found()));
         let cursors = self.cursors.watch(feed.clone(), open, changed.clone());
+        let on_screen = self.on_screen.watch(views);
         let pointer = changed.clone();
         joined(
             |restarted| self.kwin.watch(feed, restarted, pointer),
             |again| self.wayland.watch(changed, again),
-            [hyprland, cursors],
+            [hyprland, cursors, on_screen],
         )
     }
 }
@@ -188,8 +197,17 @@ impl Platform for Kernel {
         self.desktop.pointer()
     }
 
-    fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
-        self.desktop.watch(feed, changed)
+    fn on_screen(&self) -> Result<(), NoOnScreen> {
+        self.desktop.on_screen.found()
+    }
+
+    fn watch_layout(
+        &mut self,
+        feed: RecordingFeed,
+        views: watch::Receiver<View>,
+        changed: LayoutSignal,
+    ) -> LayoutWatch {
+        self.desktop.watch(feed, views, changed)
     }
 }
 
@@ -249,8 +267,17 @@ impl Platform for Portal {
         self.desktop.pointer()
     }
 
-    fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
-        self.desktop.watch(feed, changed)
+    fn on_screen(&self) -> Result<(), NoOnScreen> {
+        self.desktop.on_screen.found()
+    }
+
+    fn watch_layout(
+        &mut self,
+        feed: RecordingFeed,
+        views: watch::Receiver<View>,
+        changed: LayoutSignal,
+    ) -> LayoutWatch {
+        self.desktop.watch(feed, views, changed)
     }
 }
 
@@ -262,17 +289,18 @@ impl Platform for Portal {
 /// reads the word outside it). Hyprland's and the cursor sessions' are
 /// polled last, in that order, so a layout the display reads in a poll is
 /// published before Hyprland's watcher, in the same poll, judges a
-/// position by it.
+/// position by it. The on-screen display's comes after them all: a draw
+/// waits for the positions read in the same poll.
 fn joined(
     kwin: impl FnOnce(LayoutSignal) -> LayoutWatch,
     display: impl FnOnce(LayoutSignal) -> LayoutWatch,
-    [hyprland, cursors]: [LayoutWatch; 2],
+    [hyprland, cursors, on_screen]: [LayoutWatch; 3],
 ) -> LayoutWatch {
     let restarted = LayoutSignal::default();
     let kwin = kwin(restarted.clone());
     let display = display(restarted);
     Box::pin(async move {
-        tokio::join!(biased; kwin, display, hyprland, cursors);
+        tokio::join!(biased; kwin, display, hyprland, cursors, on_screen);
     })
 }
 
@@ -325,6 +353,7 @@ mod tests {
         let wayland = no_display();
         Desktop {
             cursors: Cursors::of(&wayland, monotonic_now),
+            on_screen: OnScreen::of(&wayland),
             wayland,
             kwin: Kwin::none(),
             hyprland: Hyprland::none(),
@@ -431,6 +460,8 @@ mod tests {
             let missing = (Err(NoScreens::NoDisplay), Err(NoPointer::Unusable));
             assert_eq!((kernel.layout(), kernel.pointer()), missing);
             assert_eq!((portal.layout(), portal.pointer()), missing);
+            assert_eq!(kernel.on_screen(), Err(NoOnScreen::NoDisplay));
+            assert_eq!(portal.on_screen(), Err(NoOnScreen::NoDisplay));
         }
         assert_eq!(Kernel::OUTPUT, Route::Kernel);
         assert_eq!(Portal::OUTPUT, Route::Portal);
@@ -484,7 +515,11 @@ mod tests {
                     pending::<()>().await;
                 })
             },
-            [Box::pin(pending()), Box::pin(pending())],
+            [
+                Box::pin(pending()),
+                Box::pin(pending()),
+                Box::pin(pending()),
+            ],
         );
         let ran = timeout(Duration::from_secs(1), watch).await;
         assert!(ran.is_err(), "the watch ended");
@@ -529,7 +564,11 @@ mod tests {
         let mut watch = joined(
             kwin_restarting(Rc::clone(&staged)),
             display_firing(changed.clone()),
-            [Box::pin(pending()), Box::pin(pending())],
+            [
+                Box::pin(pending()),
+                Box::pin(pending()),
+                Box::pin(pending()),
+            ],
         );
         let mut cx = Context::from_waker(Waker::noop());
         // More polls than branches: each would have its turn to go first in
@@ -553,7 +592,11 @@ mod tests {
                     std::task::Poll::Pending
                 }))
             },
-            [Box::pin(pending()), Box::pin(pending())],
+            [
+                Box::pin(pending()),
+                Box::pin(pending()),
+                Box::pin(pending()),
+            ],
         );
         let ran = timeout(Duration::from_millis(50), watch).await;
         assert!(ran.is_err(), "the watch ended with one watcher");
@@ -561,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn hyprlands_and_the_cursor_sessions_watchers_are_polled_after_the_display_in_each_poll() {
+    fn hyprlands_the_cursor_sessions_and_the_on_screen_watchers_are_polled_after_the_display() {
         let order = Rc::new(std::cell::RefCell::new(Vec::new()));
         let polled = |name: &'static str| {
             let order = Rc::clone(&order);
@@ -574,13 +617,17 @@ mod tests {
         let mut watch = joined(
             move |_| Box::pin(kwin),
             move |_| Box::pin(display),
-            [Box::pin(polled("hyprland")), Box::pin(polled("cursors"))],
+            [
+                Box::pin(polled("hyprland")),
+                Box::pin(polled("cursors")),
+                Box::pin(polled("on screen")),
+            ],
         );
         let mut cx = Context::from_waker(Waker::noop());
         for _ in 0..3 {
             assert!(watch.as_mut().poll(&mut cx).is_pending());
         }
-        let once = ["kwin", "display", "hyprland", "cursors"];
+        let once = ["kwin", "display", "hyprland", "cursors", "on screen"];
         assert_eq!(*order.borrow(), once.repeat(3));
     }
 }

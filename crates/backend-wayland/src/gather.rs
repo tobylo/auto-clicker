@@ -141,12 +141,15 @@ impl Gather {
         self.came_or_went();
     }
 
-    /// The output `name` went.
-    pub(crate) fn removed(&mut self, name: u32) {
+    /// The global `name` went; whether it was an output, bound or too
+    /// old to be.
+    pub(crate) fn removed(&mut self, name: u32) -> bool {
         let bound = self.screens.remove(&name).is_some();
-        if self.refused.remove(&name) || bound {
+        let output = self.refused.remove(&name) || bound;
+        if output {
             self.came_or_went();
         }
+        output
     }
 
     fn came_or_went(&mut self) {
@@ -207,6 +210,16 @@ impl Gather {
             corner,
             moved: std::mem::take(&mut self.moved),
         })
+    }
+
+    /// The logical size of each output whose update ended, by name, as the
+    /// compositor said it: each screen on its own, whether or not the
+    /// layout is whole.
+    pub(crate) fn sizes(&self) -> BTreeMap<u32, (i32, i32)> {
+        let ended = self.screens.iter().filter(|(_, screen)| !screen.updating());
+        ended
+            .filter_map(|(&name, screen)| Some((name, screen.size?)))
+            .collect()
     }
 
     /// A cursor session's position `(x, y)` on the output `name`, as a

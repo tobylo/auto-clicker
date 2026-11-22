@@ -16,6 +16,7 @@ fn view(activity: Activity) -> View {
         no_recording: None,
         play_hotkey: Hotkey::Desktop(Some("Meta+P".to_owned())),
         playback: config.playback,
+        on_screen: config.on_screen,
         recordings: Arc::from([]),
         current: None,
         playing: None,

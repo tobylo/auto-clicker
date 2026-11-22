@@ -193,6 +193,13 @@ fn playback_values() -> Vec<Named> {
                 ..d()
             },
         ),
+        (
+            "no countdown on the screen",
+            Config {
+                on_screen: OnScreenSettings { countdown: false },
+                ..d()
+            },
+        ),
     ]
 }
 

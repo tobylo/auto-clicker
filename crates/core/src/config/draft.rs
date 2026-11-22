@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::names::{ButtonName, ModeName, RouteName};
-use super::{Config, InputSettings, Reason, check};
+use super::{Config, InputSettings, OnScreenSettings, Reason, check};
 use crate::clicker::{ClickerSettings, Interval, Mode, Position, Repeat};
 use crate::hotkeys::{Action, Binding, Bindings};
 use crate::input::AbsolutePosition;
@@ -26,6 +26,7 @@ pub struct Draft {
     pub hotkeys: HotkeysDraft,
     pub input: InputDraft,
     pub playback: PlaybackDraft,
+    pub on_screen: OnScreenDraft,
 }
 
 /// `[clicker]`.
@@ -96,6 +97,9 @@ pub struct PlaybackDraft {
     pub speed: f64,
     pub repeat: CountDraft,
 }
+
+/// `[on_screen]`: on or off, nothing to check.
+pub type OnScreenDraft = OnScreenSettings;
 
 /// The setting a refused value belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -172,6 +176,7 @@ impl Draft {
             hotkeys,
             input,
             playback,
+            on_screen: self.on_screen,
         })
     }
 }
@@ -269,6 +274,7 @@ impl From<&Config> for Draft {
                 speed: f64::from(config.playback.speed.thousandths()) / 1000.0,
                 repeat: config.playback.repeat.into(),
             },
+            on_screen: config.on_screen,
         }
     }
 }

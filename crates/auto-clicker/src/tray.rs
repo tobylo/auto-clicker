@@ -435,6 +435,7 @@ mod tests {
             no_recording: None,
             play_hotkey: Hotkey::Bound(config.hotkeys.toggle_playback),
             playback: config.playback,
+            on_screen: config.on_screen,
             recordings: Arc::from(recordings),
             current: None,
             playing: None,

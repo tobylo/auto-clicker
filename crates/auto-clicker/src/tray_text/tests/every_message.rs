@@ -45,8 +45,9 @@ fn every_notice_has_a_swedish_form_that_keeps_quoted_text() {
 #[test]
 fn every_problem_has_a_swedish_form_that_keeps_quoted_text() {
     let all = problems();
-    assert_eq!(kinds(&all), 8);
+    assert_eq!(kinds(&all), 9);
     assert_eq!(kinds(&no_screens()), 6);
+    assert_eq!(kinds(&no_on_screens()), 4);
     assert_eq!(kinds(&no_pointers()), 6);
     assert_eq!(kinds(&blocked()), 4);
     assert_eq!(kinds(&inputs()), 9);
