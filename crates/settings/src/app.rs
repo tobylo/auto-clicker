@@ -8,18 +8,18 @@ use auto_clicker_core::config::Field;
 use auto_clicker_core::config::Stale;
 use auto_clicker_core::hotkeys::Action;
 use auto_clicker_core::recording::FileName;
-use auto_clicker_core::window::{CaptureEnd, RecordingAction, Request, Since, Update, WindowView};
-use slint::{
-    CloseRequestResponse, ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecModel,
+use auto_clicker_core::window::{
+    CaptureEnd, RecordingAction, RecordingsView, Request, Since, Update, WindowView,
 };
+use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::link::Link;
 use crate::model::{Fields, Unreadable, hotkey_text, key_text};
 use crate::pick::Pick;
 use crate::said::Said;
-use crate::shelf;
+use crate::shelf::{self, Click, Selection};
 use crate::state::{self, Note, Question, State, Target};
-use crate::ui::{SettingsWindow, Texts};
+use crate::ui::{RecordingRow, SettingsWindow, Texts};
 
 /// The window, its link to the daemon and its state.
 pub struct App {
@@ -30,8 +30,14 @@ pub struct App {
     last: Option<WindowView>,
     /// The decimal separator of the window's language.
     decimal: char,
-    /// The recording selected in the list.
-    selected: Option<FileName>,
+    /// The recordings selected in the list.
+    selection: Selection,
+    /// The recording whose name the name field was filled with: the one
+    /// selected alone, when it was.
+    named: Option<FileName>,
+    /// The list's rows, changed in place when only the selection changes,
+    /// so the list keeps where it is scrolled to.
+    rows: Rc<VecModel<RecordingRow>>,
     /// The overlays that pick the fixed point, while they are up, and the
     /// counts the pick is checked against.
     pick: Option<(Pick, Since)>,
@@ -46,9 +52,12 @@ impl App {
             state: State::default(),
             last: None,
             decimal,
-            selected: None,
+            selection: Selection::default(),
+            named: None,
+            rows: Rc::new(VecModel::default()),
             pick: None,
         }));
+        window.set_recordings(ModelRc::from(Rc::clone(&app.borrow().rows)));
         let on = |act: fn(&mut App)| {
             let app = Rc::downgrade(&app);
             move || {
@@ -63,7 +72,8 @@ impl App {
         window.on_confirm(on(App::agree));
         window.on_dismiss(on(App::decline));
         window.on_rename_recording(on(App::rename));
-        window.on_delete_recording(on(|app| app.recording(RecordingAction::Delete)));
+        window.on_delete_recordings(on(App::delete));
+        window.on_delete_all_recordings(on(App::delete_all));
         window.on_choose_recording(on(|app| app.recording(RecordingAction::Choose)));
         window.on_play_recording(on(|app| app.recording(RecordingAction::Play)));
         let weak = Rc::downgrade(&app);
@@ -80,12 +90,7 @@ impl App {
             }
             CloseRequestResponse::HideWindow
         });
-        let weak = Rc::downgrade(&app);
-        window.on_select_recording(move |index| {
-            if let Some(app) = weak.upgrade() {
-                app.borrow_mut().select(index);
-            }
-        });
+        App::connect_selection(window, &app);
         let weak = Rc::downgrade(&app);
         window.on_capture_hotkey(move |action| {
             if let Some(app) = weak.upgrade() {
@@ -93,6 +98,35 @@ impl App {
             }
         });
         app
+    }
+
+    /// Connects the list's clicks and keys to the selection of `app`.
+    fn connect_selection(window: &SettingsWindow, app: &Rc<RefCell<App>>) {
+        let weak = Rc::downgrade(app);
+        window.on_press_recording(move |index, toggle, range| {
+            let click = match (toggle, range) {
+                (_, true) => Click::Range,
+                (true, false) => Click::Toggle,
+                (false, false) => Click::Only,
+            };
+            if let Some(app) = weak.upgrade() {
+                app.borrow_mut()
+                    .select_with(|selection, view| selection.click(view, index, click));
+            }
+        });
+        let weak = Rc::downgrade(app);
+        window.on_step_recordings(move |by, extend| {
+            if let Some(app) = weak.upgrade() {
+                app.borrow_mut()
+                    .select_with(|selection, view| selection.step(view, by, extend));
+            }
+        });
+        let weak = Rc::downgrade(app);
+        window.on_select_all_recordings(move || {
+            if let Some(app) = weak.upgrade() {
+                app.borrow_mut().select_with(Selection::all);
+            }
+        });
     }
 
     /// Takes an update from the daemon.
@@ -224,49 +258,81 @@ impl App {
         w.set_hotkey_playback(playback.into());
     }
 
-    /// Shows the recordings, keeping the selected one selected while it is
-    /// listed. Only for a changed list: a new model resets where the list
-    /// is scrolled to.
+    /// Shows the recordings, keeping those selected that are still
+    /// listed. Only for a changed list: new rows reset where the list is
+    /// scrolled to.
     fn show_recordings(&mut self, view: &WindowView) {
         let w = &self.window;
         let texts = w.global::<Texts>();
         let no_name = texts.invoke_no_name();
-        let rows: Vec<StandardListViewItem> = shelf::lines(&view.recordings, &no_name)
+        self.selection.follow(&view.recordings);
+        let flags = self.selection.flags(&view.recordings);
+        let rows: Vec<RecordingRow> = shelf::lines(&view.recordings, &no_name)
             .into_iter()
-            .map(|line| StandardListViewItem::from(SharedString::from(line)))
+            .zip(flags)
+            .map(|(line, selected)| RecordingRow {
+                text: line.into(),
+                selected,
+            })
             .collect();
-        w.set_recordings(ModelRc::new(VecModel::from(rows)));
+        self.rows.set_vec(rows);
         let more = match view.recordings.more {
             0 => SharedString::new(),
             more => texts.invoke_more_recordings(more.to_string().into()),
         };
         w.set_more_recordings(more);
-        let place = shelf::place(&view.recordings, self.selected.as_ref());
-        if place < 0 {
-            self.selected = None;
-            self.state.selected(None);
-            w.set_recording_name(SharedString::new());
-        }
-        w.set_selected(place);
-        self.show_question();
+        w.set_recordings_total(slint_count(total(&view.recordings)));
+        self.show_selection();
     }
 
-    /// The user picked the recording at `index` in the list: its name goes
-    /// in the name field. A place that holds none (-1 when a row is
-    /// deselected) selects nothing.
-    fn select(&mut self, index: i32) {
-        let listed = self
-            .last
-            .as_ref()
-            .and_then(|view| shelf::at(&view.recordings, index))
-            .cloned();
-        let file = listed.as_ref().map(|listed| listed.file.clone());
-        self.state.selected(file.as_ref());
-        self.selected = file;
-        let name = listed.and_then(|listed| listed.name).unwrap_or_default();
-        self.window.set_recording_name(name.into());
+    /// Changes the selection with `change`, on the list as last shown, and
+    /// marks the rows that changed.
+    fn select_with(&mut self, change: impl FnOnce(&mut Selection, &RecordingsView)) {
+        let Some(view) = &self.last else {
+            return;
+        };
+        change(&mut self.selection, &view.recordings);
+        for (at, selected) in self
+            .selection
+            .flags(&view.recordings)
+            .into_iter()
+            .enumerate()
+        {
+            if let Some(row) = self
+                .rows
+                .row_data(at)
+                .filter(|row| row.selected != selected)
+            {
+                self.rows.set_row_data(at, RecordingRow { selected, ..row });
+            }
+        }
+        self.show_selection();
+    }
+
+    /// Shows what the selection allows: the name of the one recording
+    /// selected alone in the name field, the actions on one or on several,
+    /// and the row the arrows move from. A delete asked about another
+    /// selection is called off.
+    fn show_selection(&mut self) {
+        let recordings = self.last.as_ref().map(|view| &view.recordings);
+        let one = self.selection.one().cloned();
+        if one != self.named {
+            let name = one
+                .as_ref()
+                .zip(recordings)
+                .and_then(|(file, view)| view.listed.iter().find(|l| l.file == *file))
+                .and_then(|listed| listed.name.clone())
+                .unwrap_or_default();
+            self.window.set_recording_name(name.into());
+            self.named = one;
+        }
+        let count = self.selection.files().len();
         self.window
-            .set_selected(if self.selected.is_some() { index } else { -1 });
+            .set_selected_count(i32::try_from(count).unwrap_or(i32::MAX));
+        let cursor = recordings.map_or(-1, |view| self.selection.cursor(view));
+        self.window.set_recording_cursor(cursor);
+        let total = recordings.map_or(0, total);
+        self.state.selected(self.selection.files(), total);
         self.show_question();
     }
 
@@ -275,19 +341,35 @@ impl App {
         self.recording(RecordingAction::Rename { name });
     }
 
-    /// Does `action` with the selected recording; a delete asks first.
+    /// Does `action` with the recording selected alone.
     fn recording(&mut self, action: RecordingAction) {
-        let Some(file) = self.selected.clone() else {
+        let Some(file) = self.selection.one().cloned() else {
+            return;
+        };
+        if let Some(request) = self.state.recording(file, action) {
+            self.send(&request);
+        }
+    }
+
+    /// Asks whether to delete the selected recordings.
+    fn delete(&mut self) {
+        let files = self.selection.files().to_vec();
+        let Some(first) = files.first() else {
             return;
         };
         let label = self.last.as_ref().map_or_else(
-            || file.label(),
-            |view| shelf::label(&view.recordings, &file),
+            || first.label(),
+            |view| shelf::label(&view.recordings, first),
         );
-        match self.state.recording(file, label, action) {
-            Some(request) => self.send(&request),
-            None => self.show_question(),
-        }
+        self.state.delete(files, label);
+        self.show_question();
+    }
+
+    /// Asks whether to delete every recording, listed or not.
+    fn delete_all(&mut self) {
+        let total = self.last.as_ref().map_or(0, |view| total(&view.recordings));
+        self.state.delete_all(total);
+        self.show_question();
     }
 
     fn save(&mut self) {
@@ -372,7 +454,14 @@ impl App {
             None => SharedString::new(),
             Some(Question::Replace(Stale::Changed)) => texts.invoke_replace_changed(),
             Some(Question::Replace(Stale::Unusable)) => texts.invoke_replace_unusable(),
-            Some(Question::Delete(_, label)) => texts.invoke_delete_question(label.into()),
+            Some(Question::DeleteOne(_, label)) => texts.invoke_delete_question(label.into()),
+            Some(Question::DeleteSeveral(files)) => {
+                let count = i32::try_from(files.as_slice().len()).unwrap_or(i32::MAX);
+                texts.invoke_delete_several_question(count)
+            }
+            Some(Question::DeleteAll(total)) => {
+                texts.invoke_delete_all_question(slint_count(*total))
+            }
             Some(Question::WithoutModifier(actions)) => {
                 let names: Vec<String> = actions
                     .iter()
@@ -410,6 +499,8 @@ fn note_text(said: &Said<'_>, note: &Note) -> SharedString {
         Note::PickTimedOut => texts.invoke_pick_timed_out(),
         Note::PickFailed(why) => texts.invoke_pick_failed(why.into()),
         Note::Recording(outcome) => said.recording(outcome),
+        Note::Deleted(removal) => said.removal(removal),
+        Note::NotDeleted(why) => said.not_deleted(why),
         Note::Unreadable(field) => {
             let name = match field {
                 Unreadable::Interval => texts.invoke_field_interval(),
@@ -421,6 +512,18 @@ fn note_text(said: &Said<'_>, note: &Note) -> SharedString {
             texts.invoke_unreadable(name)
         }
     }
+}
+
+/// How many recordings there are, listed or not.
+fn total(view: &RecordingsView) -> u64 {
+    u64::try_from(view.listed.len())
+        .unwrap_or(u64::MAX)
+        .saturating_add(view.more)
+}
+
+/// `count` as Slint takes it, at most `i32::MAX`.
+fn slint_count(count: u64) -> i32 {
+    i32::try_from(count).unwrap_or(i32::MAX)
 }
 
 fn capture_end(texts: &Texts<'_>, why: CaptureEnd) -> SharedString {

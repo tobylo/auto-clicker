@@ -1,0 +1,22 @@
+// The recordings list alone in a window of its own, so the window's tests
+// can click its rows and press keys on it at known places. Compiled for
+// the tests only.
+
+import { RecordingList, RecordingRow } from "../recordings.slint";
+export { RecordingRow }
+
+export component RecordingListWindow inherits Window {
+    in property <[RecordingRow]> rows;
+    callback pressed(int, bool, bool);
+    callback step(int, bool);
+    callback select-all();
+    width: 400px;
+    height: 300px;
+
+    RecordingList {
+        rows: root.rows;
+        pressed(index, toggle, range) => { root.pressed(index, toggle, range); }
+        step(by, extend) => { root.step(by, extend); }
+        select-all => { root.select-all(); }
+    }
+}

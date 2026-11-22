@@ -18,10 +18,10 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Draft, InputDraft, Refusal, Stale};
-use crate::controller::{Activity, Hotkey, Listed, NoRecording, Routes};
+use crate::controller::{Activity, Hotkey, Listed, NoRecording, Routes, WINDOW_RECORDINGS};
 use crate::hotkeys::{Action, Binding, Capture};
 use crate::message::{
-    ChangeFailure, Failure, NoScreens, Notice, Problem, Quoted, RecordingChange, Unavailability,
+    ChangeFailure, Failure, NoScreens, Notice, Problem, Quoted, Titled, Unavailability,
 };
 use crate::recording::{FileName, Layout, Rect};
 
@@ -90,6 +90,10 @@ pub enum Ask {
         file: FileName,
         action: RecordingAction,
     },
+    /// Delete these recordings, for good: the user agreed. Answered
+    /// [`Outcome::Busy`] unless the program is idle, so a recording that
+    /// plays or counts down is never deleted.
+    Delete(Deletion),
     /// Where the clicker clicks for `at`, picked on the output covering
     /// `on` in the view's layout while the view showed `since`. Answered
     /// [`Outcome::Busy`] unless the program is idle and no run began since,
@@ -163,12 +167,58 @@ pub struct Since {
 pub enum RecordingAction {
     /// Give it this name, in its file.
     Rename { name: String },
-    /// Delete its file, for good: the user agreed.
-    Delete,
     /// Make it the one the playback hotkey plays.
     Choose,
     /// Play it after the tray's countdown; it becomes the current one.
     Play,
+}
+
+/// Which recordings a delete takes.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Deletion {
+    /// These, which the window selected in its list.
+    Files(Files),
+    /// Every recording in the folder when the request comes, listed or
+    /// not.
+    All,
+}
+
+/// From one to [`WINDOW_RECORDINGS`] recordings, each once: as many as the
+/// window lists. Read only in that form.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "Vec<FileName>", into = "Vec<FileName>")]
+pub struct Files(Vec<FileName>);
+
+impl Files {
+    /// `files`, unless there are none, more than [`WINDOW_RECORDINGS`], or
+    /// one twice.
+    pub fn new(files: Vec<FileName>) -> Option<Files> {
+        let counted = (1..=WINDOW_RECORDINGS).contains(&files.len());
+        let once = files
+            .iter()
+            .enumerate()
+            .all(|(at, file)| !files[..at].contains(file));
+        (counted && once).then_some(Files(files))
+    }
+
+    pub fn as_slice(&self) -> &[FileName] {
+        &self.0
+    }
+}
+
+impl TryFrom<Vec<FileName>> for Files {
+    type Error = &'static str;
+
+    fn try_from(files: Vec<FileName>) -> Result<Files, &'static str> {
+        Files::new(files).ok_or("a delete names no recording, too many, or one twice")
+    }
+}
+
+impl From<Files> for Vec<FileName> {
+    fn from(files: Files) -> Vec<FileName> {
+        files.0
+    }
 }
 
 /// How long a capture waits for a key.
@@ -271,6 +321,11 @@ pub enum Outcome {
     Unavailable(Unavailability),
     /// What came of a [`Ask::Recording`] that was not busy.
     Recording(RecordingOutcome),
+    /// What came of an [`Ask::Delete`] that was not busy.
+    Deleted(Removal),
+    /// An [`Ask::Delete`] deleted nothing: the recordings folder could not
+    /// be opened or read.
+    NotDeleted(ChangeFailure),
     /// Where the clicker clicks for the point asked about, on these screens.
     Located(Located),
 }
@@ -291,14 +346,13 @@ pub struct Located {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RecordingOutcome {
     Renamed,
-    Deleted,
     Chosen,
     /// Its countdown began, or it plays.
     Playing,
-    /// Done, but it may not survive a power loss: why.
-    Unsynced(RecordingChange, Quoted),
-    /// Nothing changed, and why.
-    NotChanged(RecordingChange, ChangeFailure),
+    /// Renamed, but it may not survive a power loss: why.
+    Unsynced(Quoted),
+    /// Not renamed, and why.
+    NotRenamed(ChangeFailure),
     /// It does not play: what the tray says about it, if anything.
     NotPlaying(Option<Notice>),
 }
@@ -308,20 +362,84 @@ impl fmt::Display for RecordingOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RecordingOutcome::Renamed => f.write_str("Renamed."),
-            RecordingOutcome::Deleted => f.write_str("Deleted."),
             RecordingOutcome::Chosen => {
                 f.write_str("The playback hotkey plays this recording now.")
             }
             RecordingOutcome::Playing => f.write_str("Playing."),
-            RecordingOutcome::Unsynced(change, why) => write!(
-                f,
-                "{}, but it may not survive a power loss: {why}",
-                change.done()
-            ),
-            RecordingOutcome::NotChanged(change, why) => write!(f, "{}: {why}", change.not_done()),
+            RecordingOutcome::Unsynced(why) => {
+                write!(f, "Renamed, but it may not survive a power loss: {why}")
+            }
+            RecordingOutcome::NotRenamed(why) => write!(f, "Not renamed: {why}"),
             RecordingOutcome::NotPlaying(Some(notice)) => notice.fmt(f),
             RecordingOutcome::NotPlaying(None) => f.write_str("Not playing"),
         }
+    }
+}
+
+/// The most recordings that could not be deleted an answer names; it
+/// counts the rest.
+pub const MAX_FAILURES: usize = 5;
+
+/// What a delete did.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Removal {
+    /// How many recordings it deleted.
+    pub deleted: u64,
+    /// The first it could not delete, at most [`MAX_FAILURES`].
+    pub failed: Vec<NotDeleted>,
+    /// How many more it could not delete.
+    pub more_failed: u64,
+    /// Why the deletions may not survive a power loss, when they may not.
+    pub unsynced: Option<Quoted>,
+}
+
+/// A recording a delete left, and why.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotDeleted {
+    /// It, by the name the list showed, if it was listed.
+    pub recording: Titled,
+    pub why: ChangeFailure,
+}
+
+impl Removal {
+    /// Whether some recording was not deleted.
+    pub fn fell_short(&self) -> bool {
+        !self.failed.is_empty() || self.more_failed > 0
+    }
+}
+
+/// What the window says of it, in English.
+impl fmt::Display for Removal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut said = Vec::new();
+        if self.deleted > 0 || !self.fell_short() {
+            let n = self.deleted;
+            let recordings = if n == 1 { "recording" } else { "recordings" };
+            said.push(match &self.unsynced {
+                Some(why) => {
+                    format!(
+                        "Deleted {n} {recordings}, but this may not survive a power loss: {why}."
+                    )
+                }
+                None => format!("Deleted {n} {recordings}."),
+            });
+        }
+        if !self.failed.is_empty() {
+            let failed: Vec<String> = self
+                .failed
+                .iter()
+                .map(|failed| format!("{}: {}", failed.recording, failed.why))
+                .collect();
+            said.push(format!("Not deleted: {}.", failed.join("; ")));
+        }
+        match self.more_failed {
+            0 => {}
+            1 => said.push("1 more was not deleted.".to_owned()),
+            more => said.push(format!("{more} more were not deleted.")),
+        }
+        f.write_str(&said.join(" "))
     }
 }
 

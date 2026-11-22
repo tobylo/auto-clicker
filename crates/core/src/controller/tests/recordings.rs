@@ -10,9 +10,12 @@ use super::recording::KEYBOARD;
 use super::settings::Window;
 use super::*;
 use crate::config::CountDraft;
+use crate::message::ChangeFailure;
 use crate::playback::{PlaybackSettings, Speed};
 use crate::recording::{Change, CurrentFile, FileName, load, recordable};
-use crate::window::{Ask, Outcome, RecordingAction, RecordingOutcome};
+use crate::window::{
+    Ask, Deletion, Files, NotDeleted, Outcome, RecordingAction, RecordingOutcome, Removal,
+};
 
 const W: u16 = 17;
 const PLAY: HotkeyEvent = HotkeyEvent::Fired(Action::TogglePlayback);
@@ -116,6 +119,16 @@ impl Setup {
         window.as_mut().expect("a window").ask(d, ask).await
     }
 
+    /// Asks the window to delete `which`, and returns what came of it.
+    async fn delete(&mut self, which: Deletion) -> Outcome {
+        let Setup { d, window, .. } = self;
+        window
+            .as_mut()
+            .expect("a window")
+            .ask(d, Ask::Delete(which))
+            .await
+    }
+
     /// The file name the state file holds, as written.
     fn kept(&self) -> String {
         fs::read_to_string(&self.current).unwrap_or_default()
@@ -147,8 +160,29 @@ fn done(outcome: RecordingOutcome) -> Outcome {
 fn not_done(outcome: &Outcome) -> String {
     match outcome {
         Outcome::Recording(
-            said @ (RecordingOutcome::NotChanged(..) | RecordingOutcome::NotPlaying(_)),
+            said @ (RecordingOutcome::NotRenamed(..) | RecordingOutcome::NotPlaying(_)),
         ) => said.to_string(),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A delete of `files`.
+fn these(files: &[&FileName]) -> Deletion {
+    Deletion::Files(Files::new(files.iter().map(|&file| file.clone()).collect()).unwrap())
+}
+
+/// What a delete that removed `n` and failed nothing answers.
+fn deleted(n: u64) -> Outcome {
+    Outcome::Deleted(Removal {
+        deleted: n,
+        ..Removal::default()
+    })
+}
+
+/// What a delete that went ahead says, in English.
+fn removal_said(outcome: &Outcome) -> String {
+    match outcome {
+        Outcome::Deleted(removal) => removal.to_string(),
         other => panic!("{other:?}"),
     }
 }
@@ -237,26 +271,144 @@ async fn a_delete_drops_the_recording_and_the_current_one_falls_back_to_the_newe
         );
         assert_eq!(s.d.view().current.as_ref(), Some(middle));
 
-        assert_eq!(
-            s.ask(oldest, RecordingAction::Delete).await,
-            done(RecordingOutcome::Deleted)
-        );
+        assert_eq!(s.delete(these(&[oldest])).await, deleted(1));
         assert_eq!(s.tray(), [label("18:02:00"), label("18:01:00")]);
         assert_eq!(s.d.view().current.as_ref(), Some(middle));
 
-        assert_eq!(
-            s.ask(middle, RecordingAction::Delete).await,
-            done(RecordingOutcome::Deleted)
-        );
-        assert!(!folder(&s.d.shared).join(middle.as_str()).exists());
+        assert_eq!(s.delete(these(&[middle])).await, deleted(1));
+        let gone = !folder(&s.d.shared).join(middle.as_str()).exists();
         let window = s.window().view().recordings;
-        assert_eq!(window.current.as_ref(), Some(newest));
-        assert_eq!(s.d.view().current.as_ref(), Some(newest));
+        let current = (window.current, s.d.view().current);
+        assert_eq!(
+            (gone, current),
+            (true, (Some(newest.clone()), Some(newest.clone())))
+        );
         assert_eq!(s.hotkey_plays().await, Some(label("18:02:00")));
 
         // Gone already: said so, not done twice.
-        let again = s.ask(middle, RecordingAction::Delete).await;
-        assert_eq!(not_done(&again), "Not deleted: the file is no longer there");
+        let again = s.delete(these(&[middle])).await;
+        assert_eq!(
+            removal_said(&again),
+            "Not deleted: Recording 2026-11-09 18:01:00: the file is no longer there."
+        );
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_delete_of_several_takes_them_together_and_the_current_one_with_them() {
+    local(async {
+        let (shared, files) = shared_with(&["18:00:00", "18:01:00", "18:02:00", "18:03:00"]);
+        let state = TempDir::new();
+        let mut s = setup(shared, config(0), &state, true).await;
+        let chosen = s.ask(&files[2], RecordingAction::Choose).await;
+        assert_eq!(chosen, done(RecordingOutcome::Chosen));
+
+        let outcome = s.delete(these(&[&files[0], &files[2], &files[3]])).await;
+
+        assert_eq!(outcome, deleted(3));
+        let window = s.window().view().recordings;
+        let left: Vec<&FileName> = window.listed.iter().map(|listed| &listed.file).collect();
+        assert_eq!(left, [&files[1]]);
+        // The chosen one went, so the one left plays.
+        assert_eq!(
+            (window.current.as_ref(), s.tray()),
+            (Some(&files[1]), vec![label("18:01:00")])
+        );
+        assert_eq!(s.hotkey_plays().await, Some(label("18:01:00")));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failure_partway_names_the_file_and_the_rest_are_still_deleted() {
+    local(async {
+        let (shared, files) = shared_with(&["18:00:00", "18:01:00", "18:02:00"]);
+        let dir = folder(&shared);
+        // A folder with a recording's name, which removing a file cannot
+        // remove.
+        let stuck = FileName::parse("2026-11-09_18-01-30.000.json").unwrap();
+        fs::create_dir(dir.join(stuck.as_str())).unwrap();
+        let state = TempDir::new();
+        let mut s = setup(shared, config(0), &state, true).await;
+        let listed = s.window().view().recordings.listed.len();
+        assert_eq!(listed, 4);
+
+        let outcome = s.delete(these(&[&files[0], &stuck, &files[2]])).await;
+
+        let Outcome::Deleted(removal) = &outcome else {
+            panic!("{outcome:?}");
+        };
+        assert_eq!(removal.deleted, 2);
+        let [NotDeleted { recording, why }] = &removal.failed[..] else {
+            panic!("{removal:?}");
+        };
+        assert_eq!(recording.file, stuck);
+        assert!(matches!(why, ChangeFailure::NotDone { .. }), "{why:?}");
+        assert!(removal.fell_short());
+        // The list shows what is left.
+        let left: Vec<FileName> = s
+            .window()
+            .view()
+            .recordings
+            .listed
+            .into_iter()
+            .map(|listed| listed.file)
+            .collect();
+        assert_eq!(left, [stuck.clone(), files[1].clone()]);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn delete_all_takes_every_recording_the_unlisted_ones_too() {
+    local(async {
+        let (shared, files) = shared_with(&["18:00:00"]);
+        let dir = folder(&shared);
+        for n in 0..WINDOW_RECORDINGS + 5 {
+            let name = format!("2026-11-09_17-{:02}-{:02}.000.json", n / 60, n % 60);
+            fs::write(dir.join(name), b"").unwrap();
+        }
+        fs::write(dir.join("notes.txt"), b"keep").unwrap();
+        let state = TempDir::new();
+        let mut s = setup(shared, config(0), &state, true).await;
+        let chosen = s.ask(&files[0], RecordingAction::Choose).await;
+        assert_eq!(chosen, done(RecordingOutcome::Chosen));
+        let view = s.window().view().recordings;
+        assert_eq!((view.listed.len(), view.more), (WINDOW_RECORDINGS, 6));
+
+        let outcome = s.delete(Deletion::All).await;
+
+        let all = u64::try_from(WINDOW_RECORDINGS + 6).unwrap();
+        assert_eq!(outcome, deleted(all));
+        let view = s.window().view().recordings;
+        assert_eq!((view.listed.len(), view.more, view.current), (0, 0, None));
+        assert!(s.tray().is_empty());
+        let entries: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(entries, ["notes.txt"]);
+        // Nothing left: the hotkey has nothing to play.
+        assert_eq!(s.hotkey_plays().await, None);
+        // A second asks finds none.
+        assert_eq!(s.delete(Deletion::All).await, deleted(0));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_delete_with_no_recordings_folder_says_why_and_deletes_nothing() {
+    local(async {
+        let (shared, files) = shared_with(&["18:00:00"]);
+        let state = TempDir::new();
+        let mut s = setup(shared, config(0), &state, true).await;
+        fs::remove_file(folder(&s.d.shared).join(files[0].as_str())).unwrap();
+        fs::remove_dir(folder(&s.d.shared)).unwrap();
+
+        let outcome = s.delete(Deletion::All).await;
+
+        assert_eq!(outcome, Outcome::NotDeleted(ChangeFailure::Missing));
     })
     .await;
 }
@@ -465,10 +617,10 @@ async fn nothing_is_done_with_a_recording_while_anything_runs_or_is_about_to() {
             RecordingAction::Rename {
                 name: "New".to_owned(),
             },
-            RecordingAction::Delete,
             RecordingAction::Choose,
             RecordingAction::Play,
         ];
+        let deletions = [these(&[&files[0], &files[1]]), Deletion::All];
         let starts = [
             Message::Start,
             Message::Record,
@@ -480,6 +632,10 @@ async fn nothing_is_done_with_a_recording_while_anything_runs_or_is_about_to() {
             for action in actions.clone() {
                 let outcome = s.ask(&files[0], action.clone()).await;
                 assert_eq!(outcome, Outcome::Busy, "{start:?} {action:?}");
+            }
+            for which in deletions.clone() {
+                let outcome = s.delete(which.clone()).await;
+                assert_eq!(outcome, Outcome::Busy, "{start:?} {which:?}");
             }
             let stop = match start {
                 Message::Record => Message::StopRecording,
@@ -498,6 +654,10 @@ async fn nothing_is_done_with_a_recording_while_anything_runs_or_is_about_to() {
                 Outcome::Busy,
                 "{action:?}"
             );
+        }
+        // The playing recording, and every other, stays.
+        for which in deletions {
+            assert_eq!(s.delete(which.clone()).await, Outcome::Busy, "{which:?}");
         }
         let after: Vec<Vec<u8>> = files
             .iter()

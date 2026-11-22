@@ -85,32 +85,6 @@ impl fmt::Display for Unavailability {
     }
 }
 
-/// What the settings window asked to change about a recording.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RecordingChange {
-    Rename,
-    Delete,
-}
-
-impl RecordingChange {
-    /// "Renamed", "Deleted".
-    pub fn done(self) -> &'static str {
-        match self {
-            RecordingChange::Rename => "Renamed",
-            RecordingChange::Delete => "Deleted",
-        }
-    }
-
-    /// "Not renamed", "Not deleted".
-    pub fn not_done(self) -> &'static str {
-        match self {
-            RecordingChange::Rename => "Not renamed",
-            RecordingChange::Delete => "Not deleted",
-        }
-    }
-}
-
 /// Why a recording was not changed.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]

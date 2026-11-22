@@ -95,19 +95,96 @@ fn a_rename_that_cannot_write_leaves_the_old_file_whole() {
     assert_eq!(dir.entries(), [file.as_str()]);
 }
 
+/// A folder holding the sample recording `n` times, in files of their own.
+fn saved_many(dir: &TempDir, n: usize) -> Vec<FileName> {
+    (0..n).map(|_| saved(dir).0).collect()
+}
+
 #[test]
-fn a_delete_removes_the_file_and_a_second_finds_it_gone() {
+fn a_delete_removes_the_files_named_and_counts_one_gone_as_not_deleted() {
     let dir = TempDir::new();
-    let (file, _) = saved(&dir);
+    let files = saved_many(&dir, 3);
 
-    let changed = delete(dir.path(), &file).unwrap();
+    let removed = delete(dir.path(), Doomed::These(&files[..2]), 8).unwrap();
 
-    assert!(matches!(changed, Changed::Synced), "{changed:?}");
-    assert!(dir.entries().is_empty());
-    let err = delete(dir.path(), &file).unwrap_err();
+    let whole = removed.failed.is_empty() && removed.more_failed == 0;
+    assert!(whole && removed.unsynced.is_none(), "{removed:?}");
+    assert_eq!(
+        (removed.deleted, dir.entries()),
+        (2, vec![files[2].to_string()])
+    );
+    let again = delete(dir.path(), Doomed::These(&files[..1]), 8).unwrap();
+    let [(file, err)] = &again.failed[..] else {
+        panic!("{again:?}");
+    };
+    assert_eq!((again.deleted, file), (0, &files[0]));
     assert!(matches!(err, ChangeError::Missing), "{err:?}");
-    let err = delete(&dir.path().join("none"), &file).unwrap_err();
+    let err = delete(&dir.path().join("none"), Doomed::All, 8).unwrap_err();
     assert!(matches!(err, ChangeError::Missing), "{err:?}");
+}
+
+#[test]
+fn deleting_all_takes_every_recording_and_nothing_else() {
+    let dir = TempDir::new();
+    saved_many(&dir, 3);
+    fs::write(dir.path().join("notes.txt"), b"keep").unwrap();
+
+    let removed = delete(dir.path(), Doomed::All, 8).unwrap();
+
+    assert_eq!(removed.deleted, 3);
+    assert!(removed.failed.is_empty(), "{removed:?}");
+    assert_eq!(dir.entries(), ["notes.txt"]);
+    let empty = delete(dir.path(), Doomed::All, 8).unwrap();
+    assert_eq!(empty.deleted, 0);
+    assert!(empty.failed.is_empty(), "{empty:?}");
+}
+
+#[test]
+fn a_file_that_cannot_be_removed_leaves_the_rest_going_and_the_first_are_named() {
+    let dir = TempDir::new();
+    let files = saved_many(&dir, 2);
+    // A folder with a recording's name: a file removal cannot remove it.
+    let stuck: Vec<FileName> = [
+        "2020-01-01_00-00-00.000.json",
+        "2020-01-01_00-00-01.000.json",
+    ]
+    .iter()
+    .map(|name| {
+        fs::create_dir(dir.path().join(name)).unwrap();
+        FileName::parse(name).unwrap()
+    })
+    .collect();
+    let doomed = [
+        stuck[0].clone(),
+        files[0].clone(),
+        stuck[1].clone(),
+        files[1].clone(),
+    ];
+
+    let removed = delete(dir.path(), Doomed::These(&doomed), 1).unwrap();
+
+    assert_eq!(removed.deleted, 2);
+    let [(file, err)] = &removed.failed[..] else {
+        panic!("{removed:?}");
+    };
+    assert_eq!(file, &stuck[0]);
+    assert!(
+        matches!(
+            err,
+            ChangeError::NotDone {
+                step: Step::Deleted,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+    assert_eq!(removed.more_failed, 1);
+    let mut left = dir.entries();
+    left.sort();
+    assert_eq!(left, [stuck[0].as_str(), stuck[1].as_str()]);
+    // Deleting all names the same ones.
+    let all = delete(dir.path(), Doomed::All, 8).unwrap();
+    assert_eq!((all.deleted, all.failed.len()), (0, 2));
 }
 
 #[test]
@@ -115,21 +192,39 @@ fn a_delete_that_is_not_allowed_is_a_failure_not_a_file_gone() {
     let dir = TempDir::new();
     let (file, path) = saved(&dir);
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o500)).unwrap();
-    let deleted = delete(dir.path(), &file);
+    let deleted = delete(dir.path(), Doomed::These(std::slice::from_ref(&file)), 8);
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    if !permissions_apply() {
+        return;
+    }
+    let removed = deleted.unwrap();
+    let [(_, err)] = &removed.failed[..] else {
+        panic!("{removed:?}");
+    };
+    assert!(
+        matches!(err, ChangeError::NotDone { step: Step::Deleted, err } if err.kind() == io::ErrorKind::PermissionDenied),
+        "{err:?}"
+    );
+    let said = err.to_string();
+    assert!(
+        said.starts_with("the file could not be deleted: "),
+        "{said}"
+    );
+    assert_eq!((path.exists(), removed.deleted), (true, 0));
+}
+
+#[test]
+fn a_folder_that_cannot_be_opened_deletes_nothing() {
+    let dir = TempDir::new();
+    let (_, path) = saved(&dir);
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o300)).unwrap();
+    let deleted = delete(dir.path(), Doomed::All, 8);
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
     if !permissions_apply() {
         return;
     }
     let err = deleted.unwrap_err();
-    assert!(
-        matches!(&err, ChangeError::NotDone { step: Step::Deleted, err } if err.kind() == io::ErrorKind::PermissionDenied),
-        "{err:?}"
-    );
-    assert!(
-        err.to_string()
-            .starts_with("the file could not be deleted: "),
-        "{err}"
-    );
+    assert!(matches!(err, ChangeError::Failed(_)), "{err:?}");
     assert!(path.exists());
 }
 
@@ -141,7 +236,7 @@ fn a_symlink_in_the_folders_place_is_refused() {
     let link = elsewhere.path().join("recordings");
     std::os::unix::fs::symlink(dir.path(), &link).unwrap();
     for err in [
-        delete(&link, &file).unwrap_err(),
+        delete(&link, Doomed::These(std::slice::from_ref(&file)), 8).unwrap_err(),
         rename(&link, &file, "New".to_owned()).unwrap_err(),
     ] {
         assert!(matches!(err, ChangeError::Failed(_)), "{err:?}");

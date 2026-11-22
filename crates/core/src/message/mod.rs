@@ -24,7 +24,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-pub use answer::{ChangeFailure, Failure, RecordingChange, Step, Unavailability};
+pub use answer::{ChangeFailure, Failure, Step, Unavailability};
 pub use input::InputFailure;
 pub use missing::{NoPointer, NoPositions, NoScreens};
 pub use notice::{

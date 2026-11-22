@@ -43,6 +43,13 @@ impl Link {
         Ok((Link { stream }, reader))
     }
 
+    /// A link over one end of a new socket pair, and the other end.
+    #[cfg(test)]
+    pub fn pair() -> io::Result<(Link, UnixStream)> {
+        let (stream, other) = UnixStream::pair()?;
+        Ok((Link { stream }, other))
+    }
+
     /// Sends `request`. A request is far shorter than a line may be, and
     /// the daemon reads them as they come.
     pub fn send(&self, request: &Request) -> io::Result<()> {
