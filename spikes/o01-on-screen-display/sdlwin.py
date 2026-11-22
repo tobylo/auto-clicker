@@ -78,7 +78,7 @@ class Heard:
             x, y = struct.unpack_from("ff", event, 28)
             self.report()
             what = "press" if kind == BUTTON_DOWN else "release"
-            say(f"button {button} {what} at {x:.1},{y:.1}")
+            say(f"button {button} {what} at {x:.1f},{y:.1f}")
         elif kind in (KEY_DOWN, KEY_UP):
             scancode = struct.unpack_from("I", event, 24)[0]
             say(f"key {scancode} {'Pressed' if kind == KEY_DOWN else 'Released'}")

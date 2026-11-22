@@ -24,6 +24,8 @@ Evidence for [docs/decisions/0005-on-screen-display.md](../../docs/decisions/000
 
 ## Running
 
+Prerequisites: write access to `/dev/uinput` (on these machines it belongs to the `input` group, which the owner's account is in), `setpriv` from util-linux, Python 3, and for the SDL and X11 windows `libSDL3.so.0` and libX11.
+
 Build the probe, then run cases on the session's compositor:
 
 ```sh

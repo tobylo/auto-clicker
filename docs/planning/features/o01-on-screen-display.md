@@ -82,7 +82,7 @@ Decided by the owner after O01a's measurements (2026-11-22, [decision record 000
 
 Unit tests against a fake compositor and the fake backend, on the paused clock, with an upper time bound on every "never delays" test. Hand checks on Plasma 6.8 (two screens), niri and Hyprland, with the versions in each PR. O01a's measurements need the machines: Minecraft holding a pointer lock on each desktop needs the owner there, and Hyprland runs as the only session.
 
-Measured by O01a on 2026-11-22 ([decision record 0005](../../decisions/0005-on-screen-display.md)): on Plasma 6.8.3 (two screens), niri 26.04-291 and Hyprland 0.57.2, a fullscreen game kept its keyboard focus, keys, clicks at the display's place and locked pointer while the countdown and the badge appeared, changed and went, natively and under XWayland, for test windows and for Minecraft played by hand, with no frame-rate change. Sleep, the lock screen on niri and Hyprland, a screen unplugged live on Plasma, VRR and tearing switched on, and Hyprland's sharpness at 1.6 were read from source only.
+Measured by O01a on 2026-11-22 ([decision record 0005](../../decisions/0005-on-screen-display.md)): on Plasma 6.8.3 (two screens), niri 26.04-291 and Hyprland 0.57.2, a fullscreen game kept its keyboard focus, keys, clicks at the display's place and locked pointer while the countdown and the badge appeared, changed and went, natively and under XWayland, for test windows and for Minecraft played by hand, with no frame-rate change. Read from source only: the lock screen on niri and Hyprland, a screen unplugged live on Plasma, and VRR and tearing switched on. Not measured: sleep (the laptop crashed entering it) and Hyprland's sharpness at 1.6 (no capture tool).
 
 ## Open questions
 

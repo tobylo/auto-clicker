@@ -332,9 +332,20 @@ def fullscreen_by_command():
         time.sleep(1.0)
 
 
+def wait_said(window, text, seconds):
+    """Waits up to `seconds` for `text` in any line the window printed,
+    including lines printed before this wait began."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if said(window, text):
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def await_lock(run):
     run.devices.move(1, 0)
-    if run.kind.startswith("probe") and not run.window.wait_for("pointer lock: locked", 5):
+    if run.kind.startswith("probe") and not wait_said(run.window, "pointer lock: locked", 5):
         raise NotStarted("the window never locked the pointer; nothing injected")
     if run.kind.startswith("xlib") and not said(run.window, "grabbed=True"):
         raise NotStarted("the X11 window never grabbed the pointer; nothing injected")

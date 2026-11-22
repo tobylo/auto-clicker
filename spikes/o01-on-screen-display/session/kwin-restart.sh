@@ -20,4 +20,4 @@ dbus-run-session -- bash -c '
   echo "after restart: new kwin $(pgrep -P $wrapper -x kwin_wayland)"; WAYLAND_DISPLAY=$name timeout 5 target/release/o01-probe outputs
   wait $probe; echo "probe exit $?"; cat nested-probe.log | grep -v preferred
 '
-pgrep -af "o01a-nested" || echo "nothing left running"
+pgrep -af "kwin_wayland_wrapper --virtual" || echo "nothing left running"
