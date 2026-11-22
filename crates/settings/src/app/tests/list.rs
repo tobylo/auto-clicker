@@ -227,6 +227,11 @@ pub fn the_actions_follow_the_selection() {
     window.invoke_press_recording(1, false, false);
     assert_eq!(may(), (true, true, true));
     assert_eq!(window.get_recording_name(), "Loop 2");
+    // A new name being typed stays when the list changes around it.
+    window.set_recording_name("Typed".into());
+    update(listing(&[4, 3, 2, 1, 0], 2));
+    assert_eq!(window.get_recording_name(), "Typed");
+    update(listing(&[3, 2, 1, 0], 2));
     window.invoke_press_recording(3, true, false);
     assert_eq!(may(), (false, true, true));
     assert_eq!(window.get_recording_name(), "");
