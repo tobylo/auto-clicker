@@ -469,6 +469,15 @@ msgstr "Hyprlands socket hör till en annan Wayland-display"
 msgid "the Wayland display gave no pointer position; see the log"
 msgstr "Wayland-displayen gav ingen pekarposition; se loggen"
 
+msgid "The countdown cannot show on the screen: {}"
+msgstr "Nedräkningen kan inte visas på skärmen: {}"
+
+msgid "the desktop does not tell the program its screens' sizes (no xdg-output)"
+msgstr "skrivbordet berättar inte skärmarnas storlek för programmet (inget xdg-output)"
+
+msgid "this desktop cannot show it (no layer-shell)"
+msgstr "skrivbordet kan inte visa den (inget layer-shell)"
+
 msgid "the screens changed while the point was picked: pick it again"
 msgstr "skärmarna ändrades medan punkten valdes: välj den igen"
 

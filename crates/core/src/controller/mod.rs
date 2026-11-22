@@ -53,8 +53,8 @@ use crate::config::Config;
 use crate::hotkeys::{Action, Binding, Bindings, Capture, HotkeyEvent, HotkeyStatus, Unavailable};
 use crate::input::{Input, InputBackend, InputError};
 use crate::message::{
-    ConfigProblem, Hindrance, InputFailure, NoPointer, NoScreens, Notice, Problem, Start, Stop,
-    Titled,
+    ConfigProblem, Hindrance, InputFailure, NoOnScreen, NoPointer, NoScreens, Notice, Problem,
+    Start, Stop, Titled,
 };
 use crate::recording::{FileName, Layout, LocalTime, RecordingFeed, RecordingSlot};
 use crate::run::{Ended, RunEnd, Signals};
@@ -236,15 +236,29 @@ pub trait Platform {
         Err(NoPointer::NoSource)
     }
 
+    /// Whether the on-screen display can show on this desktop, or why it
+    /// cannot; the layout watcher's signal says when that changes. A
+    /// platform that reports none has no Wayland display.
+    fn on_screen(&self) -> Result<(), NoOnScreen> {
+        Err(NoOnScreen::NoDisplay)
+    }
+
     /// Starts watching the screen layout; called once, when the controller
     /// starts. The watcher fires `changed` whenever [`Platform::layout`]
     /// changes, becomes unknown or is unknown for another reason, and
-    /// whenever [`Platform::pointer`] changes, and while a recording runs in `feed`'s
-    /// slot it hands the recorder where the pointer is. It starts and stops
+    /// whenever [`Platform::pointer`] or [`Platform::on_screen`] changes,
+    /// and while a recording runs in `feed`'s slot it hands the recorder
+    /// where the pointer is. It also shows what `views` says should show on
+    /// the screen (O01's O1): it only reads them. It starts and stops
     /// nothing. The controller polls it beside everything else and drops it
     /// when it ends. The default watches nothing.
-    fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
-        let _ = (feed, changed);
+    fn watch_layout(
+        &mut self,
+        feed: RecordingFeed,
+        views: watch::Receiver<View>,
+        changed: LayoutSignal,
+    ) -> LayoutWatch {
+        let _ = (feed, views, changed);
         Box::pin(pending())
     }
 }
@@ -467,6 +481,7 @@ impl<P: Platform> Controller<P> {
                 Action::TogglePlayback,
             ),
             playback: config.playback,
+            on_screen: config.on_screen,
             recordings: Arc::from([]),
             current: None,
             playing: None,
@@ -1034,10 +1049,12 @@ impl<P: Platform> Controller<P> {
             platform,
             recording,
             screen,
+            view,
             ..
         } = self;
         let feed = recording.feed();
-        screen.start(|changed| platform.watch_layout(feed, changed));
+        let views = view.subscribe();
+        screen.start(|changed| platform.watch_layout(feed, views, changed));
     }
 
     fn start_reader(&mut self) {
@@ -1075,6 +1092,7 @@ impl<P: Platform> Controller<P> {
             no_recording: self.no_recording(),
             play_hotkey: self.shown_hotkey(Action::TogglePlayback),
             playback: self.config.playback,
+            on_screen: self.config.on_screen,
             recordings: Arc::clone(&self.shelf.listed),
             current: self.shelf.shown_current(),
             playing: self.playing().cloned(),
@@ -1112,6 +1130,15 @@ impl<P: Platform> Controller<P> {
         }
     }
 
+    /// Why the countdown cannot show on the screen, while it is switched
+    /// on: with it off, nothing would show anyway.
+    fn no_on_screen(&self) -> Option<NoOnScreen> {
+        if !self.config.on_screen.countdown {
+            return None;
+        }
+        self.platform.on_screen().err()
+    }
+
     fn problems(&self) -> Vec<Problem> {
         let hotkeys = match &self.hotkey_status {
             Some(HotkeyStatus::Unavailable(why)) => Some(Problem::Hotkeys(why.clone())),
@@ -1125,6 +1152,7 @@ impl<P: Platform> Controller<P> {
             self.shelf.error.clone().map(Problem::Unlisted),
             self.shelf.current_error.clone(),
             self.no_positions().map(Problem::NoPositions),
+            self.no_on_screen().map(Problem::NoOnScreen),
         ]
         .into_iter()
         .flatten()

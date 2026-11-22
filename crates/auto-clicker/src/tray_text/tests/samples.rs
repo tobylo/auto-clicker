@@ -4,8 +4,8 @@ use auto_clicker_core::controller::{Blocked, NoRecording};
 use auto_clicker_core::hotkeys::{Binding, Refusal, Unavailable};
 use auto_clicker_core::input::Key;
 use auto_clicker_core::message::{
-    ConfigProblem, Hindrance, InputFailure, NoPointer, NoPositions, NoScreens, Notice, PlayStart,
-    PointScreens, Problem, Quoted, SaveFailure, Saving, Start, Stop, Titled, Unplayable,
+    ConfigProblem, Hindrance, InputFailure, NoOnScreen, NoPointer, NoPositions, NoScreens, Notice,
+    PlayStart, PointScreens, Problem, Quoted, SaveFailure, Saving, Start, Stop, Titled, Unplayable,
 };
 use auto_clicker_core::playback::Fallback;
 use auto_clicker_core::recording::FileName;
@@ -99,7 +99,18 @@ pub(super) fn problems() -> Vec<Problem> {
     let screens = no_screens().into_iter().map(NoPositions::Screens);
     let pointers = no_pointers().into_iter().map(NoPositions::Pointer);
     all.extend(screens.chain(pointers).map(Problem::NoPositions));
+    all.extend(no_on_screens().into_iter().map(Problem::NoOnScreen));
     all
+}
+
+/// Every reason the on-screen display cannot show.
+pub(super) fn no_on_screens() -> Vec<NoOnScreen> {
+    vec![
+        NoOnScreen::NoDisplay,
+        NoOnScreen::CannotConnect,
+        NoOnScreen::NoXdgOutput,
+        NoOnScreen::NoLayerShell,
+    ]
 }
 
 /// Every reason the screen layout is not known.

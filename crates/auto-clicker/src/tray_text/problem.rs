@@ -4,7 +4,7 @@
 use auto_clicker_core::controller::{Blocked, NoRecording};
 use auto_clicker_core::hotkeys::{Refusal, Unavailable};
 use auto_clicker_core::message::{
-    ConfigProblem, InputFailure, NoPointer, NoPositions, NoScreens, Problem,
+    ConfigProblem, InputFailure, NoOnScreen, NoPointer, NoPositions, NoScreens, Problem,
 };
 
 use super::lines::key_name;
@@ -27,6 +27,26 @@ pub(super) fn swedish(problem: &Problem) -> String {
         Problem::NoPositions(why) => {
             format!("Inspelningar sparar bara rörelser: {}", no_positions(*why))
         }
+        Problem::NoOnScreen(why) => {
+            format!(
+                "Nedräkningen kan inte visas på skärmen: {}",
+                no_on_screen(*why)
+            )
+        }
+    }
+}
+
+/// Why the on-screen display cannot show, in Swedish.
+fn no_on_screen(why: NoOnScreen) -> &'static str {
+    match why {
+        NoOnScreen::NoDisplay => {
+            "programmet startade utan en Wayland-display (WAYLAND_DISPLAY); se README"
+        }
+        NoOnScreen::CannotConnect => "programmet kunde inte ansluta till Wayland-displayen",
+        NoOnScreen::NoXdgOutput => {
+            "skrivbordet berättar inte skärmarnas storlek för programmet (inget xdg-output)"
+        }
+        NoOnScreen::NoLayerShell => "skrivbordet kan inte visa den (inget layer-shell)",
     }
 }
 

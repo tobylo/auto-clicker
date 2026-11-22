@@ -4,7 +4,7 @@
 
 use auto_clicker_core::config::{
     ButtonName, ClickerDraft, CountDraft, Draft, HotkeysDraft, InputDraft, IntervalDraft, ModeName,
-    PlaybackDraft, PositionDraft, RouteName,
+    OnScreenDraft, PlaybackDraft, PositionDraft, RouteName,
 };
 use auto_clicker_core::controller::Hotkey;
 use auto_clicker_core::input::Key;
@@ -129,12 +129,14 @@ impl Fields {
     }
 
     /// The draft these fields give, with the hotkeys of `hotkeys` (which
-    /// only a capture changes) and the screens of `picked` while the fields
-    /// hold its point; which field cannot be read, if one cannot. A decimal
-    /// is read with a point or a comma.
+    /// only a capture changes), `on_screen` as the daemon sent it (the
+    /// window has no field for it yet), and the screens of `picked` while
+    /// the fields hold its point; which field cannot be read, if one
+    /// cannot. A decimal is read with a point or a comma.
     pub fn to_draft(
         &self,
         hotkeys: &HotkeysDraft,
+        on_screen: OnScreenDraft,
         picked: Option<&Picked>,
     ) -> Result<Draft, Unreadable> {
         let interval = match self.interval_unit {
@@ -170,6 +172,7 @@ impl Fields {
                 speed: decimal(&self.speed_text, Unreadable::Speed)?,
                 repeat: count_draft(self.plays_forever, &self.plays_text, Unreadable::Plays)?,
             },
+            on_screen,
         })
     }
 }

@@ -1,5 +1,5 @@
-//! Why a part the desktop gives is missing: the screen layout, or the
-//! pointer's position in recordings (W01). The backends give these values
+//! Why a part the desktop gives is missing: the screen layout, the
+//! pointer's position in recordings (W01), or the on-screen display (O01). The backends give these values
 //! through the platform; the tray and the settings window only word them.
 
 use std::fmt;
@@ -82,6 +82,39 @@ impl fmt::Display for NoPointer {
             NoPointer::DisplayNoPosition => {
                 "the Wayland display gave no pointer position; see the log"
             }
+        })
+    }
+}
+
+/// Why the on-screen display cannot show on this desktop (O01's O3): read
+/// from what the layout's connection found when it last connected. A
+/// failure on one screen, or of the display's own connection, is not one:
+/// the log says why, and the next countdown tries again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoOnScreen {
+    /// The program was started without `WAYLAND_DISPLAY`.
+    NoDisplay,
+    /// The display did not answer, or not in time, or refused the program.
+    CannotConnect,
+    /// The compositor offers no xdg-output, so no screen's size is known.
+    NoXdgOutput,
+    /// The compositor offers no layer-shell, or not the shared memory and
+    /// surfaces it needs.
+    NoLayerShell,
+}
+
+impl fmt::Display for NoOnScreen {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            NoOnScreen::NoDisplay => {
+                "the program started without a Wayland display (WAYLAND_DISPLAY); see the README"
+            }
+            NoOnScreen::CannotConnect => "the program could not connect to the Wayland display",
+            NoOnScreen::NoXdgOutput => {
+                "the desktop does not tell the program its screens' sizes (no xdg-output)"
+            }
+            NoOnScreen::NoLayerShell => "this desktop cannot show it (no layer-shell)",
         })
     }
 }

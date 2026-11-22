@@ -17,7 +17,7 @@ use auto_clicker_backend_hyprland::Hyprland;
 use auto_clicker_backend_kernel::monotonic_now;
 use auto_clicker_backend_kwin::Kwin;
 use auto_clicker_backend_portal::{PortalOutput, token_path};
-use auto_clicker_backend_wayland::{Cursors, Wayland};
+use auto_clicker_backend_wayland::{Cursors, OnScreen, Wayland};
 use auto_clicker_core::config::{Config, ConfigFile, config_path};
 use auto_clicker_core::controller::{Controller, Links, Message, Platform};
 use auto_clicker_core::input::{Input, InputError};
@@ -67,11 +67,13 @@ async fn daemon() -> ExitCode {
     let kwin = serve_kwin(&name, &wayland).await;
     let hyprland = Hyprland::find(&wayland, monotonic_now).await;
     let cursors = Cursors::of(&wayland, monotonic_now);
+    let on_screen = OnScreen::of(&wayland);
     let desktop = Desktop {
         wayland,
         kwin: kwin.clone(),
         hyprland,
         cursors,
+        on_screen,
     };
     let status = run(name, desktop).await;
     kwin.exit().await;

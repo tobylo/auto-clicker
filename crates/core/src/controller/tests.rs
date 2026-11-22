@@ -22,7 +22,7 @@ use crate::clicker::{ClickerSettings, Mode, Repeat};
 use crate::hotkeys::Unavailable;
 use crate::input::fake::{Call, FakeBackend, FakeLog};
 use crate::input::{AbsolutePosition, Button, Key, PressState};
-use crate::message::{NoPointer, NoScreens, Quoted};
+use crate::message::{NoOnScreen, NoPointer, NoScreens, Quoted};
 use crate::recording::{LocalTime, Recorder, RecordingFeed};
 use crate::test_support::TempDir;
 
@@ -93,8 +93,12 @@ struct Record {
     no_screens: Option<NoScreens>,
     /// Why nothing reports the pointer; something does when `None`.
     no_pointer: Option<NoPointer>,
+    /// Why the on-screen display cannot show; it can when `None`.
+    no_on_screen: Option<NoOnScreen>,
     /// What each layout watcher was given: its feed and its signal.
     watches: Vec<(RecordingFeed, LayoutSignal)>,
+    /// The views each layout watcher was given.
+    views: Vec<watch::Receiver<View>>,
     /// How often the layout watchers were polled.
     watch_polls: usize,
     /// A layout the watcher has received and takes when it is next polled,
@@ -338,8 +342,20 @@ impl Platform for FakePlatform {
         self.0.with(|r| r.no_pointer.map_or(Ok(()), Err))
     }
 
-    fn watch_layout(&mut self, feed: RecordingFeed, changed: LayoutSignal) -> LayoutWatch {
-        self.0.with(|r| r.watches.push((feed, changed.clone())));
+    fn on_screen(&self) -> Result<(), NoOnScreen> {
+        self.0.with(|r| r.no_on_screen.map_or(Ok(()), Err))
+    }
+
+    fn watch_layout(
+        &mut self,
+        feed: RecordingFeed,
+        views: watch::Receiver<View>,
+        changed: LayoutSignal,
+    ) -> LayoutWatch {
+        self.0.with(|r| {
+            r.watches.push((feed, changed.clone()));
+            r.views.push(views);
+        });
         let shared = self.0.clone();
         Box::pin(poll_fn(move |_| {
             let taken = shared.with(|r| {
@@ -1286,6 +1302,7 @@ fn the_countdown_wakes_on_each_whole_second_and_then_the_deadline() {
 mod capture;
 mod desktop;
 mod missing;
+mod on_screen;
 mod per_run;
 mod pick;
 mod playback;

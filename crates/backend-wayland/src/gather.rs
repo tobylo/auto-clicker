@@ -209,6 +209,16 @@ impl Gather {
         })
     }
 
+    /// The logical size of each output whose update ended, by name, as the
+    /// compositor said it: each screen on its own, whether or not the
+    /// layout is whole.
+    pub(crate) fn sizes(&self) -> BTreeMap<u32, (i32, i32)> {
+        let ended = self.screens.iter().filter(|(_, screen)| !screen.updating());
+        ended
+            .filter_map(|(&name, screen)| Some((name, screen.size?)))
+            .collect()
+    }
+
     /// A cursor session's position `(x, y)` on the output `name`, as a
     /// point on the layout it was taken on, with that layout; `None` while
     /// anything heard is not settled yet, an output's update included

@@ -10,6 +10,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::clicker::{ClickerSettings, Mode, Position, Repeat};
+use crate::config::OnScreenSettings;
 use crate::hotkeys::{Binding, DESKTOP_RELEASE_PAUSE, Unavailable};
 use crate::input::{Button, Key};
 use crate::message::{Notice, Problem, Titled};
@@ -241,6 +242,9 @@ pub struct View {
     /// The hotkey that starts and stops playback.
     pub play_hotkey: Hotkey,
     pub playback: PlaybackSettings,
+    /// What the on-screen display shows: the display reads it, with the
+    /// activity, to know what should show (O01's O1).
+    pub on_screen: OnScreenSettings,
     /// The newest recordings, newest first: the tray offers the first
     /// [`LISTED_RECORDINGS`](super::LISTED_RECORDINGS) to play.
     pub recordings: Arc<[Listed]>,
@@ -472,6 +476,7 @@ mod tests {
             no_recording: None,
             play_hotkey: Hotkey::Bound(Binding::parse("Ctrl+Alt+F8").unwrap()),
             playback: PlaybackSettings::default(),
+            on_screen: OnScreenSettings::default(),
             recordings: Arc::from([]),
             current: None,
             playing: None,

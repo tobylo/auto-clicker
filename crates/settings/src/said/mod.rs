@@ -6,7 +6,7 @@ use auto_clicker_core::config::Reason;
 use auto_clicker_core::controller::{Blocked, NoRecording};
 use auto_clicker_core::hotkeys::Unavailable;
 use auto_clicker_core::message::{
-    ConfigProblem, Failure, InputFailure, NoPointer, NoPositions, NoScreens, Problem,
+    ConfigProblem, Failure, InputFailure, NoOnScreen, NoPointer, NoPositions, NoScreens, Problem,
     Unavailability,
 };
 use auto_clicker_core::playback::Speed;
@@ -39,6 +39,18 @@ impl Said<'_> {
             Problem::CurrentUnread(why) => t.invoke_problem_current_unread(s(why)),
             Problem::CurrentUnkept(why) => t.invoke_problem_current_unkept(s(why)),
             Problem::NoPositions(why) => t.invoke_problem_no_positions(self.no_positions(*why)),
+            Problem::NoOnScreen(why) => t.invoke_problem_no_on_screen(self.no_on_screen(*why)),
+        }
+    }
+
+    /// Why the on-screen display cannot show.
+    fn no_on_screen(&self, why: NoOnScreen) -> SharedString {
+        let t = self.texts;
+        match why {
+            NoOnScreen::NoDisplay => t.invoke_no_screens_no_display(),
+            NoOnScreen::CannotConnect => t.invoke_no_screens_cannot_connect(),
+            NoOnScreen::NoXdgOutput => t.invoke_no_on_screen_no_xdg_output(),
+            NoOnScreen::NoLayerShell => t.invoke_no_on_screen_no_layer_shell(),
         }
     }
 
