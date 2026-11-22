@@ -174,6 +174,9 @@ struct Shown {
     /// When the compositor's answer to the last size asked for is due;
     /// `None` once it came.
     answer: Option<Instant>,
+    /// The size asked for before the last, while the last waits: an
+    /// answer of that size is to the earlier request.
+    replaced: Option<(u32, u32)>,
     /// What was drawn last, at which scale and size.
     drawn: Option<(Wanted, u32, Fit)>,
     /// Its buffers the compositor has not released, at most [`LIVE`].
@@ -350,6 +353,7 @@ impl Surfaces {
             Some(Screen::Missing(_)) => {}
             Some(Screen::Shown(shown)) => {
                 if shown.fit != fit {
+                    shown.replaced = Some((shown.fit.width, shown.fit.height));
                     shown.fit = fit;
                     shown.answer = Some(due);
                     shown.layer.set_size(fit.width, fit.height);
@@ -399,6 +403,7 @@ impl Surfaces {
             fit,
             preferred: WHOLE,
             answer: Some(due),
+            replaced: None,
             drawn: None,
             buffers: Vec::new(),
         }
@@ -568,9 +573,18 @@ impl Client {
             return;
         };
         match arrived.event {
-            zwlr_layer_surface_v1::Event::Configure { serial, .. } => {
+            zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } => {
                 arrived.proxy.ack_configure(serial);
-                shown.answer = None;
+                // One of the size asked for before answers that request,
+                // and leaves the last one waiting.
+                if shown.replaced != Some((width, height)) {
+                    shown.answer = None;
+                    shown.replaced = None;
+                }
             }
             zwlr_layer_surface_v1::Event::Closed => surfaces.miss(name, Missing::Closed),
             _ => {}

@@ -273,7 +273,9 @@ impl Watcher {
 /// display's globals bound; `Err` when that fails, as the log says.
 async fn open(display: &Shared) -> Result<Link, ()> {
     let stream = display.open_checked().await.map_err(drop)?;
-    let mut link = Link::bound(stream).await.map_err(drop)?;
+    let mut link = Link::bound(stream).await.map_err(|why| {
+        eprintln!("auto-clicker: the countdown's connection to the Wayland display failed: {why}");
+    })?;
     if !link.open_surfaces() {
         eprintln!("auto-clicker: the Wayland display no longer offers layer-shell");
         return Err(());

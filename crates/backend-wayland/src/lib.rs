@@ -77,8 +77,9 @@ struct Shared {
     /// Whether the on-screen display can show, as the layout's connection
     /// found when it last connected (O01's O3).
     on_screen: Cell<Result<(), NoOnScreen>>,
-    /// [`Shared::changes`] as it changes: the on-screen display waits on it
-    /// after its connection failed, while the controller has the signal.
+    /// Counts each change of the screens the layout's connection settled,
+    /// whether or not it changed the layout: the on-screen display waits on
+    /// it after its connection failed, while the controller has the signal.
     layout_changes: watch::Sender<u64>,
 }
 
@@ -372,8 +373,14 @@ impl Shared {
         if told {
             let changes = self.changes.get().wrapping_add(1);
             self.changes.set(changes);
-            self.layout_changes.send_replace(changes);
             changed.changed();
+        }
+        // The on-screen display hears every change of the screens, also
+        // one that leaves the layout as unknown as it was: it shows on
+        // each screen it can.
+        if told || moved {
+            self.layout_changes
+                .send_modify(|count| *count = count.wrapping_add(1));
         }
     }
 }

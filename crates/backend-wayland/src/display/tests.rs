@@ -253,10 +253,16 @@ async fn a_tray_countdown_shows_on_every_screen_follows_the_seconds_and_goes() {
         release_shown(&mut fake, A, 2).await;
         release_shown(&mut fake, B, 2).await;
         // Ten is wider: each surface is asked for its new size first.
+        let sizes = [A, B].map(|name| fake.shell.on(fake.ids(name)).unwrap().size);
         harness.set(Activity::RecordingIn(10));
         harness
             .shows(&[(A, Showing::Asked), (B, Showing::Asked)])
             .await;
+        for (name, was) in [A, B].into_iter().zip(sizes) {
+            let output = fake.ids(name);
+            let asked = |fake: &Fake| fake.shell.on(output).unwrap().size != was;
+            timeout(BOUND, fake.until(asked)).await.unwrap();
+        }
         answer(&mut fake, A).await;
         answer(&mut fake, B).await;
         harness.shows(&[(A, drawn("10")), (B, drawn("10"))]).await;
@@ -919,6 +925,36 @@ async fn a_screen_that_showed_nothing_is_tried_again_when_a_screen_is_added() {
             .await;
         fake.send(vec![removed(C)]).await;
         harness.shows(&[(A, drawn("5")), (B, Showing::Asked)]).await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_answer_to_an_earlier_size_leaves_the_later_one_waiting() {
+    local(async {
+        let harness = Harness::new().await;
+        harness.set(Activity::StartingIn(5));
+        let mut fake = harness.connected().await;
+        let output = fake.ids(A);
+        timeout(BOUND, fake.until(|fake| asked(fake, output)))
+            .await
+            .unwrap();
+        let first = fake.shell.on(output).unwrap().clone();
+        // Ten is wider: a new size is asked before the first is answered.
+        harness.set(Activity::StartingIn(10));
+        let resized = |fake: &Fake| fake.shell.on(output).unwrap().size != first.size;
+        timeout(BOUND, fake.until(resized)).await.unwrap();
+        fake.send(vec![first.configure(3)]).await;
+        let acked = |fake: &Fake| fake.shell.on(output).unwrap().acked.contains(&3);
+        timeout(BOUND, fake.until(acked)).await.unwrap();
+        harness
+            .shows(&[(A, Showing::Asked), (B, Showing::Asked)])
+            .await;
+        // The answer to the size asked last draws it.
+        answer(&mut fake, A).await;
+        harness
+            .shows(&[(A, drawn("10")), (B, Showing::Asked)])
+            .await;
     })
     .await;
 }

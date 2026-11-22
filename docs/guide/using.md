@@ -25,6 +25,7 @@ Screenshots, recordings and streams of the screen include the number. Its surfac
       block-out-from "screencast"
   }
   ```
+  A stream or recording then shows a black rectangle where the number is; screenshots still include it unless the rule says `block-out-from "screen-capture"`, which leaves it out of both.
 - **Hyprland:** in `~/.config/hypr/hyprland.lua`:
   ```lua
   hl.layer_rule({ match = { namespace = "^auto-clicker-on-screen$" }, no_screen_share = true })

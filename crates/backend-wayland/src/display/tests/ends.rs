@@ -99,3 +99,36 @@ async fn a_second_watcher_shows_nothing() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_screen_change_that_leaves_the_layout_unknown_brings_a_lost_connection_back() {
+    local(async {
+        let mut harness = Harness::new().await;
+        let layout = harness
+            .wayland
+            .watch(LayoutSignal::default(), LayoutSignal::default());
+        let _layout = tokio::task::spawn_local(layout);
+        // A screen too old to say when it changed: the layout is unknown
+        // while it is there.
+        harness.layout.offer(Offer::OldOutput(C, 1)).await;
+        timeout(BOUND, harness.layout.round_trip()).await.unwrap();
+        let unknown = timeout(BOUND, async {
+            while harness.wayland.layout() != Err(NoScreens::NotWhole) {
+                yield_now().await;
+            }
+        })
+        .await;
+        assert!(unknown.is_ok(), "{:?}", harness.wayland.layout());
+        harness.set(Activity::StartingIn(5));
+        drop(harness.connected().await);
+        harness.set(Activity::StartingIn(4));
+        assert!(!harness.connects().await, "tried again on a tick");
+        // Another screen goes: the layout stays unknown, and the display
+        // is tried again.
+        harness.layout.send(vec![removed(B)]).await;
+        timeout(BOUND, harness.layout.round_trip()).await.unwrap();
+        let mut fake = harness.connected().await;
+        answer(&mut fake, A).await;
+    })
+    .await;
+}
