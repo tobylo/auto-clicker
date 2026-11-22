@@ -16,8 +16,8 @@ picture's place. Nothing more is injected once the window's latest lines
 say it lost focus or its lock, and every device is released and destroyed
 on the way out. Prints a summary line per case: sent against received, and
 VOID instead of PASS or FAIL when the display never drew, ended with an
-error or died, the guard stopped injection early, or an SDL window was
-refused relative mode.
+error or died, the guard stopped injection early, or the window never got
+focus, its lock or relative mode (then nothing is injected at all).
 """
 
 import os
@@ -168,6 +168,10 @@ SCRIPTS = {
 PRE = {"swap": "number 3", "remove": "number 3", "badge-remove": "badge"}
 
 
+class NotStarted(Exception):
+    """The window never got into the state the run needs; nothing was injected."""
+
+
 @dataclass
 class Run:
     """One run: the window kind, the scenario, where to aim, and what was made."""
@@ -312,7 +316,7 @@ def fullscreen_by_command():
 def await_lock(run):
     run.devices.move(1, 0)
     if run.kind.startswith("probe") and not run.window.wait_for("pointer lock: locked", 5):
-        sys.exit("the window never locked the pointer; nothing injected")
+        raise NotStarted("the window never locked the pointer; nothing injected")
     time.sleep(0.5)
 
 
@@ -323,12 +327,12 @@ def start_window(run):
     argv, env = window_argv(run.kind, run.name)
     run.window = Process("window", argv, env)
     if not run.window.wait_for("keyboard focus: gained", 8):
-        sys.exit("the window never got keyboard focus; nothing injected")
+        raise NotStarted("the window never got keyboard focus; nothing injected")
     fullscreen_by_command()
     time.sleep(0.5)
     run.devices.place(*run.target, run.box)
     if any("relative mode: False" in line for line in list(run.window.seen)):
-        sys.exit("the window was refused relative mode; nothing injected")
+        raise NotStarted("the window was refused relative mode; nothing injected")
     if run.locked:
         await_lock(run)
 
@@ -385,6 +389,10 @@ def main():
         sent, display = run_locked(run) if run.locked else run_free(run)
         time.sleep(0.6)
         judge(run, before, sent, display)
+    except NotStarted as reason:
+        if os.environ.get("TRACE"):
+            write_trace(run, display)
+        print(f"=== VOID {run.kind} {run.scenario} on {run.name}: {reason}", flush=True)
     finally:
         try:
             run.devices.close()

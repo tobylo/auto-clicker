@@ -8,7 +8,10 @@ export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 DBUS_SESSION_BUS
 say() { timeout 2 bash -c 'echo "$1" > /tmp/o01a/ctl' _ "$1" || echo "the display did not take: $1"; }
 case $CMD in
 start)
-  rm -f ctl; mkfifo ctl
+  # A FIFO left means a display may still run on it: stop that one first,
+  # or it is left showing with no way to reach it.
+  [ -e ctl ] && { echo "/tmp/o01a/ctl exists: run CMD=stop first"; exit 1; }
+  mkfifo ctl || exit 1
   setsid -f bash -c 'exec target/release/o01-probe show <> /tmp/o01a/ctl > /tmp/o01a/lock-probe.log 2>&1' < /dev/null > /dev/null 2>&1
   sleep 0.5; say "both 9"; sleep 1; grep -E "drew|entered" lock-probe.log | cut -c1-80 ;;
 lock)
