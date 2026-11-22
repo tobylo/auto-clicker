@@ -450,3 +450,31 @@ fn recording_changes_read_as_before() {
         ),
     ]);
 }
+
+#[test]
+fn why_the_countdown_cannot_show_on_the_screen_reads_in_english() {
+    let lead = "The countdown cannot show on the screen: ";
+    assert_english(&[
+        (
+            Problem::NoOnScreen(NoOnScreen::NoDisplay),
+            &*format!(
+                "{lead}the program started without a Wayland display (WAYLAND_DISPLAY); \
+                 see the README"
+            ),
+        ),
+        (
+            Problem::NoOnScreen(NoOnScreen::CannotConnect),
+            &*format!("{lead}the program could not connect to the Wayland display"),
+        ),
+        (
+            Problem::NoOnScreen(NoOnScreen::NoXdgOutput),
+            &*format!(
+                "{lead}the desktop does not tell the program its screens' sizes (no xdg-output)"
+            ),
+        ),
+        (
+            Problem::NoOnScreen(NoOnScreen::NoLayerShell),
+            &*format!("{lead}this desktop cannot show it (no layer-shell)"),
+        ),
+    ]);
+}

@@ -85,22 +85,6 @@ impl Offered {
         slot.get_or_insert(global);
     }
 
-    /// The global `name` went.
-    pub(crate) fn removed(&mut self, name: u32) {
-        let slots = [
-            &mut self.compositor,
-            &mut self.shm,
-            &mut self.shell,
-            &mut self.viewporter,
-            &mut self.fractions,
-        ];
-        for slot in slots {
-            if slot.is_some_and(|global| global.name == name) {
-                *slot = None;
-            }
-        }
-    }
-
     /// Whether the display can show: layer-shell, shared memory and
     /// surfaces new enough. The viewport and the fractional scale are
     /// optional, together.
@@ -526,9 +510,10 @@ impl Client {
         }
     }
 
-    /// The global `name` went: an output's surface goes with it.
+    /// The global `name` went: an output's surface goes with it. The
+    /// display's globals are read once, as the connection is made, so one
+    /// that goes later is not noted.
     pub(crate) fn surface_global_removed(&mut self, name: u32) {
-        self.display_globals.removed(name);
         if let Some(surfaces) = &mut self.surfaces {
             surfaces.forget(name);
         }

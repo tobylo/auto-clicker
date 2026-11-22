@@ -17,6 +17,8 @@ use crate::client::fake::{
 };
 use crate::display::fit::Missing;
 
+mod ends;
+
 /// Well under [`SETUP`] and [`ANSWER`]: a stop that waits either out
 /// fails.
 const AT_ONCE: Duration = Duration::from_millis(300);
@@ -183,6 +185,23 @@ async fn release_shown(fake: &mut Fake, name: Name, count: usize) {
             .all(|buffer| fake.shell.destroyed.contains(buffer))
     };
     timeout(BOUND, fake.until(gone)).await.unwrap();
+}
+
+/// Reads until the screen `name` has no surface left: each made on it
+/// was destroyed.
+async fn gone(fake: &mut Fake, name: Name) {
+    timeout(BOUND, fake.until(|fake| live(fake, name) == 0))
+        .await
+        .unwrap();
+}
+
+/// How many surfaces on the screen `name` were not destroyed.
+fn live(fake: &Fake, name: Name) -> usize {
+    let Ids { output, .. } = fake.ids(name);
+    let surfaces = fake.shell.surfaces.iter();
+    surfaces
+        .filter(|surface| surface.output == Some(output) && !surface.destroyed)
+        .count()
 }
 
 /// Waits until the client closed `fake`'s connection.
@@ -421,10 +440,12 @@ async fn a_closed_surface_or_a_late_answer_on_one_screen_leaves_the_other_showin
         harness.set(Activity::StartingIn(5));
         let mut fake = harness.connected().await;
         answer(&mut fake, A).await;
-        // B is never answered: past its deadline it shows nothing.
+        // B is never answered: past its deadline it shows nothing, and its
+        // surface goes.
         harness
             .shows(&[(A, drawn("5")), (B, Showing::Missing(Missing::Late))])
             .await;
+        gone(&mut fake, B).await;
         let surface = fake.shell.on(fake.ids(A)).unwrap().clone();
         fake.send(vec![surface.closed()]).await;
         harness
@@ -433,6 +454,7 @@ async fn a_closed_surface_or_a_late_answer_on_one_screen_leaves_the_other_showin
                 (B, Showing::Missing(Missing::Late)),
             ])
             .await;
+        gone(&mut fake, A).await;
         // A tick of the seconds tries neither again.
         harness.set(Activity::StartingIn(4));
         assert!(!harness.connects().await);
@@ -822,6 +844,52 @@ async fn a_screen_that_changes_size_is_tried_again() {
         harness
             .shows(&[(names[0], Showing::Asked), (names[1], Showing::Asked)])
             .await;
+        // A screen that shows and changes size keeps its one surface, asked
+        // for the new size.
+        answer(&mut fake, names[1]).await;
+        let before = fake.shell.on(fake.ids(names[1])).unwrap().size;
+        fake.screen(names[1], BELOW).await;
+        harness
+            .shows(&[(names[0], Showing::Asked), (names[1], Showing::Asked)])
+            .await;
+        let output = fake.ids(names[1]);
+        let resized = |fake: &Fake| fake.shell.on(output).unwrap().size != before;
+        timeout(BOUND, fake.until(resized)).await.unwrap();
+        assert_eq!(live(&fake, names[1]), 1);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_screen_that_showed_nothing_is_tried_again_when_a_screen_is_added() {
+    local(async {
+        let harness = Harness::new().await;
+        harness.set(Activity::StartingIn(5));
+        let mut fake = harness.connected().await;
+        answer(&mut fake, A).await;
+        // B is never answered.
+        harness
+            .shows(&[(A, drawn("5")), (B, Showing::Missing(Missing::Late))])
+            .await;
+        fake.offer(Offer::Output(C)).await;
+        timeout(BOUND, fake.until(|fake| fake.outputs.len() == 3))
+            .await
+            .unwrap();
+        fake.screen(C, BELOW).await;
+        harness
+            .shows(&[(A, drawn("5")), (B, Showing::Asked), (C, Showing::Asked)])
+            .await;
+        // Late again, B is tried again when a screen goes too.
+        answer(&mut fake, C).await;
+        harness
+            .shows(&[
+                (A, drawn("5")),
+                (B, Showing::Missing(Missing::Late)),
+                (C, drawn("5")),
+            ])
+            .await;
+        fake.send(vec![removed(C)]).await;
+        harness.shows(&[(A, drawn("5")), (B, Showing::Asked)]).await;
     })
     .await;
 }

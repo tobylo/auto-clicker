@@ -159,6 +159,16 @@ mod tests {
         // A tall one gives a surface past the limit.
         assert_eq!(fit(5, (3440, 20_000)), Err(Missing::Size));
         assert_eq!(fit(5, (i32::MAX, i32::MAX)), Err(Missing::Size));
+        // A screen wider than any there is, though its height would do;
+        // up to the widest one allowed, it shows.
+        assert_eq!(fit(5, (65_537, 1440)), Err(Missing::Size));
+        assert_eq!(fit(5, (100_000, 1440)), Err(Missing::Size));
+        assert!(fit(5, (65_536, 1440)).is_ok());
+        // The same for a screen taller than any, its width narrow enough
+        // that the label fits.
+        assert_eq!(fit(5, (1000, 65_537)), Err(Missing::Size));
+        assert_eq!(fit(5, (1000, 100_000)), Err(Missing::Size));
+        assert!(fit(5, (1000, 65_536)).is_ok());
         // So small that the characters round to nothing.
         assert_eq!(fit(5, (3440, 1)), Err(Missing::Size));
     }

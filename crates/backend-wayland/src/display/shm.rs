@@ -32,14 +32,7 @@ pub(crate) fn buffer(
     let height = i32::try_from(picture.height).map_err(|_| too_large())?;
     let stride = width.checked_mul(4).ok_or_else(too_large)?;
     let size = stride.checked_mul(height).ok_or_else(too_large)?;
-    let file = File::from(memfd_create(
-        NAME,
-        MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
-    )?);
-    file.set_len(u64::try_from(size).map_err(|_| too_large())?)?;
-    file.write_all_at(&picture.bytes, 0)?;
-    // The compositor maps it: sealed, it can never shrink under it.
-    fcntl_add_seals(&file, SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL)?;
+    let file = sealed(picture)?;
     let pool = shm.create_pool(file.as_fd(), size, queue, ());
     let buffer = pool.create_buffer(
         0,
@@ -52,4 +45,42 @@ pub(crate) fn buffer(
     );
     pool.destroy();
     Ok(buffer)
+}
+
+/// `picture`'s bytes in an anonymous file, sealed: the compositor maps it,
+/// and it can never shrink or grow under it.
+fn sealed(picture: &Picture) -> io::Result<File> {
+    let file = File::from(memfd_create(
+        NAME,
+        MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+    )?);
+    let length = u64::try_from(picture.bytes.len()).map_err(io::Error::other)?;
+    file.set_len(length)?;
+    file.write_all_at(&picture.bytes, 0)?;
+    fcntl_add_seals(&file, SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL)?;
+    Ok(file)
+}
+
+#[cfg(test)]
+mod tests {
+    use rustix::fs::fcntl_get_seals;
+
+    use super::*;
+
+    #[test]
+    fn the_file_holds_the_picture_and_is_sealed_against_any_change_of_size() {
+        let picture = Picture {
+            width: 2,
+            height: 1,
+            bytes: vec![1, 2, 3, 4, 5, 6, 7, 8],
+        };
+        let file = sealed(&picture).unwrap();
+        let mut read = vec![0; 8];
+        file.read_exact_at(&mut read, 0).unwrap();
+        assert_eq!(read, picture.bytes);
+        let seals = fcntl_get_seals(&file).unwrap();
+        let all = SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL;
+        assert!(seals.contains(all), "{seals:?}");
+        assert!(file.set_len(4).is_err() && file.set_len(16).is_err());
+    }
 }
