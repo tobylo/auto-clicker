@@ -138,12 +138,21 @@ class Tally:
         presses = sum(map(is_button_press, texts))
         bad = [line for line, text in zip(lines, texts) if is_bad(text)]
         count, dx = relative(totals[-1]) if totals else (0, 0)
-        return count, keys, presses, bad, dx
+        released = (sum(map(is_key_release, texts)), sum(map(is_button_release, texts)))
+        return count, keys, presses, bad, dx, released
 
 
 def relative(words):
     """The count and the x sum of a "relative total N sum X,Y" line, split."""
     return int(words[2]), int(float(words[4].split(",")[0]))
+
+
+def is_key_release(text):
+    return text.startswith("key ") and "Released" in text
+
+
+def is_button_release(text):
+    return text.startswith("button ") and " release" in text
 
 
 def is_key_press(text):
@@ -412,7 +421,10 @@ def judge(run, before, sent, display):
     after = Tally(run.window).now()
     got = [after[i] - before[i] for i in range(3)]
     bad = after[3][len(before[3]):]
-    received = moves_match(run, got, sent, after[4] - before[4]) and got[1:] == sent[1:]
+    # Every tap and click must also have come up: a lost release is a stuck
+    # key or button, the worst failure there is.
+    released = [after[5][i] - before[5][i] for i in range(2)]
+    received = moves_match(run, got, sent, after[4] - before[4]) and got[1:] == sent[1:] == released
     verdict = "PASS" if received and not bad else "FAIL"
     if not shown(run, display):
         verdict = "VOID"
