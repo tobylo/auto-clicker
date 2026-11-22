@@ -20,7 +20,10 @@ send) say "$WHAT"; sleep 0.5; tail -3 lock-probe.log ;;
 stop)
   # The FIFO goes only once the display has quit; otherwise it stays, so a
   # later stop can try again and a start still refuses.
-  say quit && sleep 0.5 && ! pgrep -f "o01-probe show" >/dev/null && rm -f ctl
+  say quit; sleep 0.5
+  # Whether quit arrived or not (a dead display cannot take it), the FIFO
+  # goes once no display is left to read it.
+  pgrep -f "o01-probe show" >/dev/null || rm -f ctl
   [ -e ctl ] && echo "the display has not quit; /tmp/o01a/ctl kept"
   grep -v preferred lock-probe.log | tail -25 ;;
 esac

@@ -2,7 +2,7 @@
 # and restarts KWin, as in a Plasma session); the display shows on it, then
 # the KWin process is killed. Every probe has a 5 s limit, and the wrapper
 # is stopped on every way out. Leaves nothing running.
-cd /tmp/o01a
+cd /tmp/o01a || exit 1
 export XDG_RUNTIME_DIR=/run/user/1000
 dbus-run-session -- bash -c '
   env -u WAYLAND_DISPLAY -u DISPLAY kwin_wayland_wrapper --virtual --no-lockscreen --no-global-shortcuts \
