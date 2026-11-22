@@ -7,6 +7,7 @@ export { RecordingRow }
 
 export component RecordingListWindow inherits Window {
     in property <[RecordingRow]> rows;
+    in property <int> cursor: -1;
     callback pressed(int, bool, bool);
     callback step(int, bool);
     callback select-all();
@@ -15,6 +16,7 @@ export component RecordingListWindow inherits Window {
 
     RecordingList {
         rows: root.rows;
+        cursor: root.cursor;
         pressed(index, toggle, range) => { root.pressed(index, toggle, range); }
         step(by, extend) => { root.step(by, extend); }
         select-all => { root.select-all(); }

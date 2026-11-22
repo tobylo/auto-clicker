@@ -99,6 +99,42 @@ pub fn the_list_tells_clicks_with_their_keys_and_the_keys_that_select() {
     );
 }
 
+/// The list scrolls the row the arrows reached into view, down and back
+/// up: a click at the bottom edge then hits it.
+pub fn the_list_keeps_the_row_the_arrows_reached_in_view() {
+    let list = alone::RecordingListWindow::new().unwrap();
+    list.window().set_size(LogicalSize::new(400.0, 300.0));
+    list.show().unwrap();
+    let rows: Vec<alone::RecordingRow> = (0..30)
+        .map(|n| alone::RecordingRow {
+            text: format!("row {n}").into(),
+            selected: false,
+        })
+        .collect();
+    list.set_rows(Rc::new(VecModel::from(rows)).into());
+    let hit = Rc::new(RefCell::new(Vec::<i32>::new()));
+    let pressed = Rc::clone(&hit);
+    list.on_pressed(move |index, _, _| pressed.borrow_mut().push(index));
+    let window = list.window();
+    let click = |y: f32| {
+        let position = LogicalPosition::new(50.0, y);
+        let button = PointerEventButton::Left;
+        window.dispatch_event(WindowEvent::PointerPressed { position, button });
+        window.dispatch_event(WindowEvent::PointerReleased { position, button });
+    };
+    let bottom = 300.0 - ROW / 2.0;
+
+    click(bottom);
+    list.set_cursor(29);
+    slint::platform::update_timers_and_animations();
+    click(bottom);
+    list.set_cursor(0);
+    slint::platform::update_timers_and_animations();
+    click(ROW / 2.0);
+
+    assert_eq!(*hit.borrow(), [10, 29, 0]);
+}
+
 /// A file made at `minute` past 18:00 on 2026-11-09.
 fn file(minute: u32) -> auto_clicker_core::recording::FileName {
     auto_clicker_core::recording::FileName::parse(&format!("2026-11-09_18-{minute:02}-00.000.json"))

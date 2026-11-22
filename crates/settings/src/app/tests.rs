@@ -57,6 +57,7 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
     deletions(&said);
     crate::pick::tests::every_end_is_told_once_and_closes_every_overlay();
     list::the_list_tells_clicks_with_their_keys_and_the_keys_that_select();
+    list::the_list_keeps_the_row_the_arrows_reached_in_view();
     list::the_actions_follow_the_selection();
     list::a_delete_asks_once_and_sends_the_selection_whole();
 }
