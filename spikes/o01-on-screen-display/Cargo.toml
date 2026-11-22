@@ -1,0 +1,23 @@
+[package]
+name = "o01-probe"
+description = "O01a spike: a click-through display on the overlay layer, and a test window that locks the pointer"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Not a member of the repository's workspace: spikes are not built by it.
+[workspace]
+
+[dependencies]
+# The versions the Wayland backend uses.
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", features = ["client", "unstable", "staging"] }
+# Already in Cargo.lock through the settings window's winit (O01 decision 9).
+wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
+# Already a direct dependency of the daemon (backend-kwin, "fs"): memfd_create
+# without unsafe. "event" and "time" are the spike's own poll and clock.
+rustix = { version = "1.0.7", default-features = false, features = ["std", "fs", "event", "time"] }
+
+[profile.release]
+debug = false

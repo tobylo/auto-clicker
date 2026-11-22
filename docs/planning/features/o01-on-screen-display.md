@@ -1,7 +1,7 @@
 # O01: Show the countdown and what is running on the screen
 
 - Issue: [#97](https://github.com/tobylo/auto-clicker/issues/97), a Feature after the 1.0 milestones (M0 to M4). Slices: O01a (#98), O01b (#99), O01c (#100).
-- Maturity: refined 2026-11-22, ready to slice. O01b and O01c are blocked on O01a's measurements: nothing is built on a desktop until decision record 0005 says a game keeps its input there. Rests on map D1, D5, D7 and D11, and on the Wayland backend of [W01](w01-other-desktops.md).
+- Maturity: refined 2026-11-22, sliced; O01a measured it the same day ([decision record 0005](../../decisions/0005-on-screen-display.md)): a game keeps its input under the display on Plasma, niri and Hyprland, so O01b and O01c go ahead. Rests on map D1, D5, D7 and D11, and on the Wayland backend of [W01](w01-other-desktops.md).
 - Diagram: [where the on-screen display sits, and a recording from the tray step by step](https://prlens.dev/c/FmYhh3EhHk18kbkoilARyA).
 
 ## Problem and outcome
@@ -31,7 +31,7 @@ These hold everywhere below and are stated once.
 
 ## Behaviour
 
-**The countdown (O01b).** While the view counts down to clicking, a recording or a playback, the whole seconds left show in the middle of every screen: see-through, in the tray tile's colours (indigo; red for a recording), with minutes past 99 seconds as on the tray icon. The number changes when the view does and goes when the run begins or the countdown is cancelled. The tray icon keeps showing it too.
+**The countdown (O01b).** While the view counts down to clicking, a recording or a playback, the whole seconds left show in the middle of every screen as digits alone: no tile and no backdrop behind them, and nothing dimmed. The digits take the job's colour (indigo; red for a recording) with a thin contrasting outline, so they read on light and dark scenes, and every other pixel of the surface is fully transparent. Minutes past 99 seconds show as on the tray icon. The number changes when the view does and goes when the run begins or the countdown is cancelled. The tray icon keeps showing it too.
 
 **The badge (O01c).** While the view says clicking, recording or playing, a small badge sits in the chosen corner of every screen: a pointer mark, a red dot or a triangle. It shows however the run was started, the hotkeys included, and does not blink or count.
 
@@ -55,12 +55,19 @@ Decided by the owner in refinement (2026-11-22):
 
 Defaults (reviewed; go ahead without asking):
 5. Invariants O1 to O8.
-6. **Mechanism:** layer-shell (`zwlr_layer_shell_v1`, the overlay layer), drawn by the daemon through the Wayland backend into shared memory, with the digits and marks drawn in code as the tray icon's are. No Slint in the daemon, no helper process and no font. A surface the compositor owns goes when the daemon dies, which a helper process would not guarantee.
+6. **Mechanism:** layer-shell (`zwlr_layer_shell_v1`, the overlay layer), drawn by the daemon through the Wayland backend into shared memory, with the digits and marks drawn in code. The countdown is drawn by its rectangles, one sample per pixel or filled rows: the tray icon's 16 samples per pixel take 41 to 257 ms per screen at these sizes (0005). No Slint in the daemon, no helper process and no font. A surface the compositor owns goes when the daemon dies, which a helper process would not guarantee.
 7. **An investigation first** (O01a, decision record 0005), since nothing else can say whether a game keeps its locked pointer when a surface appears and goes above it.
 8. **Available by what the compositor offers**, never by a desktop's name (W01's W1). A desktop is refused by name only if O01a measures a failure there, and the owner decides that.
-9. **Dependency:** `wayland-protocols-wlr` becomes a direct dependency of the Wayland backend. It is in `Cargo.lock` already through the settings window's winit, but the daemon is built on its own, so O01a measures what it adds to the binary, and says whether the shared-memory buffers need anything more.
+9. **Dependency:** `wayland-protocols-wlr` becomes a direct dependency of the Wayland backend. It is in `Cargo.lock` already through the settings window's winit, but the daemon is built on its own, so O01a measures what it adds to the binary, and says whether the shared-memory buffers need anything more. Measured (0005): the daemon grows by 148,912 bytes, and the buffers need nothing more: an anonymous file from rustix's `memfd_create`, already in the daemon, written without `mmap` or `unsafe`.
 10. **Hotkey starts** get no countdown and do get the badge.
 11. **Three slices:** the measurement; the display and the countdown behind its config key; the badges with the settings window's group. Each slice brings its own texts in English and Swedish and its part of the guide. The window's group waits for O01c so that O01b, which carries the fake compositor and its tests, stays near 1,500 lines; until then the window carries `[on_screen]` through a save unchanged, so a save there never resets a key set in the file.
+
+Decided by the owner after the slices were opened (2026-11-22):
+12. **The countdown is the digits alone**: no tile, no backdrop and nothing dimmed behind them. They take the job's colour with a thin contrasting outline (the default the owner was told about), and every other pixel is fully transparent (2026-11-22).
+
+Decided by the owner after O01a's measurements (2026-11-22, [decision record 0005](../../decisions/0005-on-screen-display.md)):
+13. **The badges stay on by default.** They cost Minecraft no frames that could be measured, at vsync on and a 120 fps cap. While a badge shows, the game on that screen is no longer scanned out directly (every desktop), and Hyprland stops tearing there; the guide says so and how to switch the badges off.
+14. **Hyprland stays available.** On Hyprland an X11 game that holds the pointer by warping it gets a nudge of a few pixels when the display appears, changes or goes; native games and Minecraft do not. The guide names it, and the owner reports it upstream.
 
 ## Acceptance criteria
 
@@ -75,12 +82,12 @@ Defaults (reviewed; go ahead without asking):
 
 Unit tests against a fake compositor and the fake backend, on the paused clock, with an upper time bound on every "never delays" test. Hand checks on Plasma 6.8 (two screens), niri and Hyprland, with the versions in each PR. O01a's measurements need the machines: Minecraft holding a pointer lock on each desktop needs the owner there, and Hyprland runs as the only session.
 
-Measured so far (niri v26.04-291 on the dev box, 2026-11-22): an ordinary program is offered `zwlr_layer_shell_v1` version 5; a surface on the overlay layer with no keyboard interactivity and an empty input region is accepted, configured at the size asked for, placed on the output and removed when its program exits. Nothing else is measured yet, and nothing on Plasma or Hyprland.
+Measured by O01a on 2026-11-22 ([decision record 0005](../../decisions/0005-on-screen-display.md)): on Plasma 6.8.3 (two screens), niri 26.04-291 and Hyprland 0.57.2, a fullscreen game kept its keyboard focus, keys, clicks at the display's place and locked pointer while the countdown and the badge appeared, changed and went, natively and under XWayland, for test windows and for Minecraft played by hand, with no frame-rate change. Sleep, the lock screen on niri and Hyprland, a screen unplugged live on Plasma, VRR and tearing switched on, and Hyprland's sharpness at 1.6 were read from source only.
 
 ## Open questions
 
-For O01a, which decides them by measurement (its issue lists all eleven points): above a fullscreen window, native and XWayland; focus and keys; clicks at the display's place; the pointer lock when the display appears under it and when it goes while input is injected; the cost to the game, with variable refresh rate and tearing; a screen added or removed and KWin restarted while it shows; the lock screen and waking from sleep; niri's cursor sessions beside it; sharpness at a fractional scale; the prototype's memory, wakeups and binary size.
+For O01a: settled by decision record 0005.
 
-For O01b, each settled with a test or fixture: how a buffer is sized and kept sharp at a fractional scale; whether the display hears of a screen added or removed from its own connection's outputs or from the layout's signal alone (after a lost connection it is the layout's signal, O3); whether the digits' drawing is shared with the tray icon or written for the larger size. Its issue lists the rest.
+For O01b, each settled with a test or fixture, with what 0005 found: the buffer is round(logical × scale / 120) from `wp_fractional_scale_v1`, shown through `wp_viewporter` (sharp at 1.25 on Plasma and niri); the display hears screens added and removed from its own connection's outputs and `closed` events on all three desktops, and after a lost connection only from the layout's signal (O3); the countdown is drawn by its rectangles, one sample per pixel, not the tray icon's 16. Its issue lists the rest.
 
 A daemon that hangs while a badge shows leaves the badge up until it is killed. Accepted: the same hang leaves the tray icon wrong, and killing the daemon removes both. A compositor that hangs is not the display's to solve: O2 closes the connection, and the surfaces go when the compositor reads again.
