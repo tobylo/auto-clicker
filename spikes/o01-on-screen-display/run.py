@@ -133,11 +133,17 @@ class Tally:
     def now(self):
         lines = list(self.window.seen)
         texts = [line.split(" ", 1)[-1] for line in lines]
-        totals = [int(text.split()[2]) for text in texts if text.startswith("relative total")]
+        totals = [text.split() for text in texts if text.startswith("relative total")]
         keys = sum(map(is_key_press, texts))
         presses = sum(map(is_button_press, texts))
         bad = [line for line, text in zip(lines, texts) if is_bad(text)]
-        return (totals[-1] if totals else 0), keys, presses, bad
+        count, dx = relative(totals[-1]) if totals else (0, 0)
+        return count, keys, presses, bad, dx
+
+
+def relative(words):
+    """The count and the x sum of a "relative total N sum X,Y" line, split."""
+    return int(words[2]), int(float(words[4].split(",")[0]))
 
 
 def is_key_press(text):
@@ -195,7 +201,9 @@ def show(command, settle):
     """A display showing `command`'s picture, once it drew it and `settle` s more."""
     display = Process("display", [PROBE, "show"])
     display.send(command)
-    display.wait_for("drew", 3)
+    if not display.wait_for("drew", 3):
+        display.stop()
+        raise NotStarted("the display never drew; nothing injected")
     time.sleep(settle)
     return display
 
@@ -387,12 +395,25 @@ def shown(run, display):
     return run.scenario == "control" or display_worked(display, run.name)
 
 
+def moves_match(run, got, sent, dx):
+    """Whether the window got the moves sent. With ONE_WAY, a Wayland window
+    reports unaccelerated motion, so its sum must equal the moves sent
+    (merged events keep it, lost ones do not); an X11 window's pixels are
+    scaled and accelerated, so there the event count is compared and the
+    sum is for a control to compare against."""
+    native = run.kind.startswith(("probe", "sdl"))
+    if os.environ.get("ONE_WAY") and native:
+        return dx == sent[0]
+    return got[0] == sent[0]
+
+
 def judge(run, before, sent, display):
     """Prints the verdict: what was sent against what the window got since `before`."""
     after = Tally(run.window).now()
     got = [after[i] - before[i] for i in range(3)]
     bad = after[3][len(before[3]):]
-    verdict = "PASS" if got == sent and not bad else "FAIL"
+    received = moves_match(run, got, sent, after[4] - before[4]) and got[1:] == sent[1:]
+    verdict = "PASS" if received and not bad else "FAIL"
     if not shown(run, display):
         verdict = "VOID"
     sums = [line.split()[-1] for line in run.window.seen if " relative total " in line][-1:]
