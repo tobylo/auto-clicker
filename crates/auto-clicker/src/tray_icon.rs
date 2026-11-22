@@ -7,7 +7,7 @@
 //! the view each time it changes, which a countdown does once a second.
 
 use auto_clicker_core::controller::Activity;
-use auto_clicker_core::digits::{self, Label, Point, Rect, Rgb};
+use auto_clicker_core::digits::{self, Label, Point, Rect, Rgb, Size};
 
 /// The sizes Plasma picks from: the default panel's, and larger panels' or
 /// scaled screens'.
@@ -49,11 +49,11 @@ pub fn pixmaps(activity: Activity) -> Vec<ksni::Icon> {
 /// single digit is no smaller than each of two.
 fn layout(label: &Label, side: f32) -> Vec<Rect> {
     let height = (HEIGHT * side).min(WIDTH * side / label.span()).floor();
-    let corner = Point {
-        x: ((side - label.width(height)) / 2.0).floor(),
-        y: ((side - height) / 2.0).floor(),
+    let icon = Size {
+        width: side,
+        height: side,
     };
-    label.draw(corner, height)
+    label.centred(icon, height)
 }
 
 /// What an icon shows: the label's strokes on a tile with rounded corners.

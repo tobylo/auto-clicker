@@ -141,12 +141,15 @@ impl Gather {
         self.came_or_went();
     }
 
-    /// The output `name` went.
-    pub(crate) fn removed(&mut self, name: u32) {
+    /// The global `name` went; whether it was an output, bound or too
+    /// old to be.
+    pub(crate) fn removed(&mut self, name: u32) -> bool {
         let bound = self.screens.remove(&name).is_some();
-        if self.refused.remove(&name) || bound {
+        let output = self.refused.remove(&name) || bound;
+        if output {
             self.came_or_went();
         }
+        output
     }
 
     fn came_or_went(&mut self) {

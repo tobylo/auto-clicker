@@ -214,22 +214,27 @@ impl Fake {
     }
 
     pub(crate) async fn request(&mut self) -> Message {
+        self.next_request().await.unwrap()
+    }
+
+    /// The client's next request; `None` once it closed the connection.
+    async fn next_request(&mut self) -> Option<Message> {
         let mut header = [0u8; 8];
-        self.stream.read_exact(&mut header).await.unwrap();
+        self.stream.read_exact(&mut header).await.ok()?;
         let object = u32::from_ne_bytes(header[..4].try_into().unwrap());
         let second = u32::from_ne_bytes(header[4..].try_into().unwrap());
         let size = usize::try_from(second >> 16).unwrap();
         let mut body = vec![0u8; size - 8];
-        self.stream.read_exact(&mut body).await.unwrap();
+        self.stream.read_exact(&mut body).await.ok()?;
         let words = body
             .chunks(4)
             .map(|chunk| u32::from_ne_bytes(chunk.try_into().unwrap()))
             .collect();
-        Message {
+        Some(Message {
             object,
             opcode: u16::try_from(second & 0xffff).unwrap(),
             words,
-        }
+        })
     }
 
     /// Reads requests up to the client's next `wl_display.sync`, noting the
@@ -269,6 +274,20 @@ impl Fake {
     /// `wl_display.sync`.
     async fn read_one(&mut self) -> Option<Callback> {
         let request = self.request().await;
+        self.note(request)
+    }
+
+    /// Reads and notes every request until the client closes the
+    /// connection, answering none.
+    pub(crate) async fn read_to_close(&mut self) {
+        while let Some(request) = self.next_request().await {
+            self.note(request);
+        }
+    }
+
+    /// Notes what `request` binds or makes; the callback of a
+    /// `wl_display.sync`.
+    fn note(&mut self, request: Message) -> Option<Callback> {
         self.seen.push((request.object, request.opcode));
         let global = self
             .bound

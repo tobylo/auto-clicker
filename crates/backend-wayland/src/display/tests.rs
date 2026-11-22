@@ -332,9 +332,11 @@ async fn an_answer_after_the_countdown_ended_shows_nothing() {
             .unwrap();
         let surface = fake.shell.on(output).unwrap().clone();
         harness.set(Activity::Clicking);
-        // The answer comes after: the connection is closed, nothing drawn.
+        // The answer comes after: the connection is closed, nothing drawn,
+        // every request read until it closed.
         let _ = fake.stream.try_write(&surface.configure(1).bytes());
-        closes(&mut fake).await;
+        let closed = timeout(AT_ONCE, fake.read_to_close()).await;
+        assert!(closed.is_ok(), "the connection stayed open");
         assert!(fake.shell.surfaces.iter().all(|s| s.attached.is_empty()));
     })
     .await;
@@ -988,4 +990,23 @@ async fn anew(harness: &Harness, fake: &mut Fake, seconds: u64) {
     };
     timeout(BOUND, fake.until(made)).await.unwrap();
     assert_eq!((live(fake, A), live(fake, B)), (1, 1));
+}
+
+#[tokio::test]
+async fn a_screen_too_old_to_use_coming_or_going_tries_one_that_showed_nothing_again() {
+    local(async {
+        let harness = Harness::new().await;
+        harness.set(Activity::StartingIn(5));
+        let mut fake = harness.connected().await;
+        answer(&mut fake, A).await;
+        let late = [(A, drawn("5")), (B, Showing::Missing(Missing::Late))];
+        let again = [(A, drawn("5")), (B, Showing::Asked)];
+        harness.shows(&late).await;
+        fake.offer(Offer::OldOutput(C, 1)).await;
+        harness.shows(&again).await;
+        harness.shows(&late).await;
+        fake.send(vec![removed(C)]).await;
+        harness.shows(&again).await;
+    })
+    .await;
 }

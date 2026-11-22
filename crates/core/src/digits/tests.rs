@@ -189,3 +189,23 @@ fn a_rectangle_grows_on_every_side() {
     let grown = rect(10.0, 20.0, 5.0, 6.0).grown(2.0);
     assert_eq!(grown, rect(8.0, 18.0, 9.0, 10.0));
 }
+
+#[test]
+fn a_label_is_centred_by_its_strokes() {
+    let size = Size {
+        width: 256.0,
+        height: 405.0,
+    };
+    for seconds in [1, 7, 11, 300] {
+        let rects = Label::of(seconds).centred(size, 270.0);
+        let left = rects.iter().map(|r| r.x).fold(f32::MAX, f32::min);
+        let right = rects.iter().map(|r| r.right).fold(f32::MIN, f32::max);
+        let top = rects.iter().map(|r| r.y).fold(f32::MAX, f32::min);
+        assert!(
+            (left - (256.0 - right)).abs() <= 1.0,
+            "{seconds}: {left}, {right}"
+        );
+        assert_eq!(top, 67.0, "{seconds}");
+        assert!(rects.iter().all(|r| r.x == r.x.round()), "{seconds}");
+    }
+}

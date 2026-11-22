@@ -98,6 +98,24 @@ impl Label {
         rects
     }
 
+    /// The rectangles that draw the label centred in a box `size` large,
+    /// characters `height` pixels high, centred by what is drawn: a "1"
+    /// lights only its cell's right side. With `size` and `height` on whole
+    /// pixels, so is every edge.
+    pub fn centred(&self, size: Size, height: f32) -> Vec<Rect> {
+        let top = ((size.height - height) / 2.0).floor();
+        let drawn = self.draw(Point { x: 0.0, y: top }, height);
+        let left = drawn.iter().map(|rect| rect.x).fold(f32::MAX, f32::min);
+        let right = drawn.iter().map(|rect| rect.right).fold(f32::MIN, f32::max);
+        let shift = ((size.width - (right - left)) / 2.0).floor() - left;
+        let moved = |rect: Rect| Rect {
+            x: rect.x + shift,
+            right: rect.right + shift,
+            ..rect
+        };
+        drawn.into_iter().map(moved).collect()
+    }
+
     /// The label's characters, as their shapes.
     fn characters(&self) -> impl Iterator<Item = Character> + '_ {
         self.0.chars().map(|character| match character {

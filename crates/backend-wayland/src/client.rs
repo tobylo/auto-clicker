@@ -167,6 +167,7 @@ impl Client {
                  so the screens are unknown while it is there"
             );
             self.gather.refused(name);
+            self.surfaces_screens_changed();
             return;
         }
         let output: WlOutput = registry.bind(name, version.min(OUTPUT_VERSION), queue, name);
@@ -189,11 +190,12 @@ impl Client {
         }
         self.cursor_global_removed(name);
         self.surface_global_removed(name);
-        self.gather.removed(name);
+        if self.gather.removed(name) {
+            self.surfaces_screens_changed();
+        }
         let Some(Bound { output, xdg }) = self.outputs.remove(&name) else {
             return;
         };
-        self.surfaces_screens_changed();
         xdg.destroy();
         if output.version() >= 3 {
             output.release();

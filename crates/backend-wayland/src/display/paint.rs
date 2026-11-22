@@ -3,7 +3,7 @@
 //! and the outline are rectangles on whole pixels, so each is filled row by
 //! row, with no sampling (decision 6 of the brief).
 
-use auto_clicker_core::digits::{Label, Point, Rect, Rgb};
+use auto_clicker_core::digits::{Label, Rect, Rgb, Size};
 
 use super::fit::Fit;
 
@@ -37,13 +37,12 @@ pub(crate) fn number(label: &Label, colour: Rgb, size: Fit) -> Picture {
 /// The digits' rectangles and their outline's, centred in `size`.
 pub(crate) fn shapes(label: &Label, size: Fit) -> (Vec<Rect>, Vec<Rect>) {
     // At most MAX_SIDE: exact as floats.
-    let (width, height) = (size.width as f32, size.height as f32);
-    let characters = size.characters as f32;
-    let corner = Point {
-        x: ((width - label.width(characters)) / 2.0).floor(),
-        y: ((height - characters) / 2.0).floor(),
+    let picture = Size {
+        width: size.width as f32,
+        height: size.height as f32,
     };
-    let lit = label.draw(corner, characters);
+    let characters = size.characters as f32;
+    let lit = label.centred(picture, characters);
     let edge = (characters * OUTLINE).round().max(1.0);
     let outline = lit.iter().map(|rect| rect.grown(edge)).collect();
     (lit, outline)
@@ -79,7 +78,7 @@ impl Picture {
 
 #[cfg(test)]
 mod tests {
-    use auto_clicker_core::digits::{CLICKING, RECORDING, Size};
+    use auto_clicker_core::digits::{CLICKING, Point, RECORDING};
 
     use super::*;
 
@@ -149,6 +148,11 @@ mod tests {
         // The thinnest outline is a pixel.
         let (lit, outline) = shapes(&Label::of(1), size(20, 30, 20));
         assert_eq!(outline[0].x, lit[0].x - 1.0);
+        // A "1" is centred by its strokes, not by its cell.
+        let (lit, _) = shapes(&Label::of(1), size(256, 405, 270));
+        let left = lit.iter().map(|r| r.x).fold(f32::MAX, f32::min);
+        let right = lit.iter().map(|r| r.right).fold(f32::MIN, f32::max);
+        assert!((left - (256.0 - right)).abs() <= 1.0, "{left}, {right}");
     }
 
     #[test]
