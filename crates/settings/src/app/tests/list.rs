@@ -75,6 +75,8 @@ pub fn the_list_tells_clicks_with_their_keys_and_the_keys_that_select() {
     // The list has the keyboard now: the click gave it focus.
     key(Key::DownArrow);
     held(Key::Shift, &|| key(Key::UpArrow));
+    key(Key::PageDown);
+    held(Key::Shift, &|| key(Key::PageUp));
     key(Key::Home);
     key(Key::End);
     held(Key::Control, &|| {
@@ -92,6 +94,8 @@ pub fn the_list_tells_clicks_with_their_keys_and_the_keys_that_select() {
             "press 4 false true",
             "step 1 false",
             "step -1 true",
+            "step 10 false",
+            "step -10 true",
             "step -5 false",
             "step 5 false",
             "all",

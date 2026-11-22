@@ -10,9 +10,10 @@ export struct RecordingRow {
 
 // The recordings, any number selected. A click selects one, Ctrl+click
 // toggles one and Shift+click selects the range from the last click; the
-// arrow keys move the selection (Shift extends it), Home and End go to the
-// ends and Ctrl+A selects all. Rust keeps the selection; the list only
-// says what was pressed, and scrolls to the row the arrows reached.
+// arrow keys move the selection (Shift extends it), PageUp and PageDown by
+// a screenful, Home and End go to the ends and Ctrl+A selects all. Rust
+// keeps the selection; the list only says what was pressed, and scrolls to
+// the row the keys reached.
 export component RecordingList inherits FocusScope {
     in property <[RecordingRow]> rows;
     // The row the arrow keys move from, which the list keeps in view.
@@ -38,6 +39,12 @@ export component RecordingList inherits FocusScope {
         root.show(root.cursor);
     }
 
+    // How many rows PageUp and PageDown move: as many as fit in view, at
+    // least one.
+    function page() -> int {
+        max(1, floor(list.visible-height / root.row-height))
+    }
+
     // Moves the selection `by` rows and shows the row it reached, even
     // when that row was the cursor already and scrolled out of view.
     function move(by: int, extend: bool) {
@@ -56,6 +63,14 @@ export component RecordingList inherits FocusScope {
         }
         if event.text == Key.DownArrow {
             root.move(1, event.modifiers.shift);
+            return accept;
+        }
+        if event.text == Key.PageUp {
+            root.move(-root.page(), event.modifiers.shift);
+            return accept;
+        }
+        if event.text == Key.PageDown {
+            root.move(root.page(), event.modifiers.shift);
             return accept;
         }
         if event.text == Key.Home {
