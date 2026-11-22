@@ -221,6 +221,9 @@ impl Watcher {
             let Some(wanted) = self.wanted() else {
                 return Ended::Gone;
             };
+            // An answer past its deadline is late even when it is read
+            // in the same wake: the surface goes before it is heard.
+            link.expire(Instant::now());
             if link.dispatch().is_err() {
                 return Ended::Failed;
             }
@@ -270,7 +273,7 @@ impl Watcher {
 /// display's globals bound; `Err` when that fails, as the log says.
 async fn open(display: &Shared) -> Result<Link, ()> {
     let stream = display.open_checked().await.map_err(drop)?;
-    let (mut link, _) = Link::start(stream).await.map_err(drop)?;
+    let mut link = Link::bound(stream).await.map_err(drop)?;
     if !link.open_surfaces() {
         eprintln!("auto-clicker: the Wayland display no longer offers layer-shell");
         return Err(());

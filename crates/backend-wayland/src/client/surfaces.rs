@@ -48,6 +48,11 @@ pub(crate) const LAYER_SHELL: &str = "zwlr_layer_shell_v1";
 pub(crate) const VIEWPORTER: &str = "wp_viewporter";
 pub(crate) const FRACTIONS: &str = "wp_fractional_scale_manager_v1";
 
+/// The most buffers a screen holds that the compositor has not released:
+/// the one it shows and the next. A screen with both waits for a release
+/// before it draws again, so a compositor that keeps them holds no more.
+const LIVE: usize = 2;
+
 /// `wl_surface.damage_buffer` came in version 4.
 const OLDEST_COMPOSITOR: u32 = 4;
 /// The newest versions the client knows; every request it makes is in
@@ -145,6 +150,9 @@ pub(crate) struct Surfaces {
     wanted: Option<Wanted>,
     /// By the output's global name.
     screens: BTreeMap<u32, Screen>,
+    /// Each screen's logical size as last read: a screen whose size
+    /// changed is tried again.
+    sizes: BTreeMap<u32, (i32, i32)>,
 }
 
 enum Screen {
@@ -167,6 +175,8 @@ struct Shown {
     answer: Option<Instant>,
     /// What was drawn last, at which scale and size.
     drawn: Option<(Wanted, u32, Fit)>,
+    /// Its buffers the compositor has not released, at most [`LIVE`].
+    buffers: Vec<WlBuffer>,
 }
 
 impl Shown {
@@ -213,14 +223,14 @@ impl Link {
             scaling,
             wanted: None,
             screens: BTreeMap::new(),
+            sizes: BTreeMap::new(),
         });
         true
     }
 
     /// Brings the screens in line with `wanted`, as of `now`: asks for a
-    /// surface on each screen whose size is known and that has none, gives
-    /// up on an answer past its deadline, and draws at most one screen.
-    /// Whether it drew one: another may be due.
+    /// surface on each screen whose size is known and that has none, and
+    /// draws at most one screen. Whether it drew one: another may be due.
     pub(crate) fn show(&mut self, wanted: Wanted, now: Instant) -> bool {
         let queue = self.queue.handle();
         let client = &mut self.client;
@@ -229,6 +239,7 @@ impl Link {
         };
         surfaces.wanted = Some(wanted.clone());
         let sizes = client.gather.sizes();
+        surfaces.resized(&sizes);
         for (index, (&name, bound)) in client.outputs.iter().enumerate() {
             if index >= MAX_OUTPUTS {
                 surfaces.miss(name, Missing::TooMany);
@@ -245,8 +256,15 @@ impl Link {
                 Err(missing) => surfaces.miss(name, missing),
             }
         }
-        surfaces.expire(now);
         surfaces.draw_one(&queue)
+    }
+
+    /// Every surface whose answer is past due at `now` goes, its screen
+    /// showing nothing: an answer after it shows nothing (O2).
+    pub(crate) fn expire(&mut self, now: Instant) {
+        if let Some(surfaces) = &mut self.client.surfaces {
+            surfaces.expire(now);
+        }
     }
 
     /// When the next answer is due, if one is awaited.
@@ -301,6 +319,18 @@ impl Surfaces {
                 eprintln!("auto-clicker: the countdown shows on screen {name} no more: {missing}");
             }
             _ => eprintln!("auto-clicker: the countdown cannot show on screen {name}: {missing}"),
+        }
+    }
+
+    /// A screen whose size changed since it was last read shows nothing
+    /// no more: it is tried again, as after a screen added or removed (O3).
+    fn resized(&mut self, sizes: &BTreeMap<u32, (i32, i32)>) {
+        for (name, size) in sizes {
+            let was = self.sizes.insert(*name, *size);
+            let missing = matches!(self.screens.get(name), Some(Screen::Missing(_)));
+            if missing && was.is_some_and(|was| was != *size) {
+                self.screens.remove(name);
+            }
         }
     }
 
@@ -364,6 +394,7 @@ impl Surfaces {
             preferred: WHOLE,
             answer: Some(due),
             drawn: None,
+            buffers: Vec::new(),
         }
     }
 
@@ -393,9 +424,7 @@ impl Surfaces {
             .screens
             .iter()
             .find_map(|(&name, screen)| match screen {
-                Screen::Shown(shown) if shown.answer.is_none() && !shown.shows(&wanted) => {
-                    Some(name)
-                }
+                Screen::Shown(shown) if shown.due(&wanted) => Some(name),
                 _ => None,
             });
         let Some(name) = due else {
@@ -424,7 +453,7 @@ impl Surfaces {
         };
         let size = shown.fit.buffer(scale)?;
         let picture = paint::number(&wanted.label, wanted.colour, size);
-        let buffer = shm::buffer(&self.shm, &picture, queue).map_err(|err| {
+        let buffer = shm::buffer(&self.shm, &picture, name, queue).map_err(|err| {
             eprintln!("auto-clicker: no memory for the countdown's buffer: {err}");
             Missing::Memory
         })?;
@@ -439,6 +468,7 @@ impl Surfaces {
             .damage_buffer(0, 0, size.width as i32, size.height as i32);
         shown.surface.commit();
         shown.drawn = Some((wanted.clone(), scale, shown.fit));
+        shown.buffers.push(buffer);
         Ok(())
     }
 
@@ -457,6 +487,12 @@ impl Surfaces {
 }
 
 impl Shown {
+    /// Whether it is to be drawn now: answered, not showing `wanted`, and
+    /// with room for another buffer.
+    fn due(&self, wanted: &Wanted) -> bool {
+        self.answer.is_none() && !self.shows(wanted) && self.buffers.len() < LIVE
+    }
+
     /// Whether it shows `wanted` at its scale and size now.
     fn shows(&self, wanted: &Wanted) -> bool {
         let scale = if self.scale.is_some() {
@@ -477,7 +513,7 @@ dispatch_to!(ZwlrLayerShellV1, (), ignore);
 dispatch_to!(WpViewporter, (), ignore);
 dispatch_to!(WpViewport, (), ignore);
 dispatch_to!(WpFractionalScaleManagerV1, (), ignore);
-dispatch_to!(WlBuffer, (), buffer_event);
+dispatch_to!(WlBuffer, u32, buffer_event);
 dispatch_to!(ZwlrLayerSurfaceV1, u32, layer_event);
 dispatch_to!(WpFractionalScaleV1, u32, fraction_event);
 
@@ -499,11 +535,17 @@ impl Client {
     }
 
     /// A buffer the compositor is done with is destroyed: the memory goes
-    /// with it.
-    fn buffer_event(&mut self, arrived: Arrived<'_, WlBuffer, ()>) {
-        if let wl_buffer::Event::Release = arrived.event {
-            arrived.proxy.destroy();
+    /// with it, and its screen may draw again.
+    fn buffer_event(&mut self, arrived: Arrived<'_, WlBuffer, u32>) {
+        let wl_buffer::Event::Release = arrived.event else {
+            return;
+        };
+        if let Some(surfaces) = &mut self.surfaces
+            && let Some(Screen::Shown(shown)) = surfaces.screens.get_mut(arrived.data)
+        {
+            shown.buffers.retain(|buffer| buffer != arrived.proxy);
         }
+        arrived.proxy.destroy();
     }
 
     /// The compositor's answer, which is acknowledged, or the surface

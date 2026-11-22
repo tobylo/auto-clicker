@@ -12,7 +12,8 @@ use tokio::time::timeout;
 
 use super::*;
 use crate::client::fake::{
-    A, B, BELOW, BOUND, C, Display, Fake, Ids, Name, OVERLAY, Offer, Place, RIGHT, release, removed,
+    A, B, BELOW, BOUND, C, Display, Fake, Ids, LEFT, Message, Name, OVERLAY, Offer, Place, RIGHT,
+    release, removed,
 };
 use crate::display::fit::Missing;
 
@@ -163,6 +164,27 @@ fn last_buffer(fake: &Fake, name: Name) -> (u32, u32) {
     (buffer.width, buffer.height)
 }
 
+/// Reads until the screen `name`'s surface has had `count` buffers
+/// attached, releases each but the last, and reads until the client
+/// destroyed them.
+async fn release_shown(fake: &mut Fake, name: Name, count: usize) {
+    let output = fake.ids(name);
+    let attached = |fake: &Fake| fake.shell.on(output).unwrap().attached.clone();
+    timeout(BOUND, fake.until(|fake| attached(fake).len() >= count))
+        .await
+        .unwrap();
+    let attached = attached(fake);
+    let (_, shown) = attached.split_last().unwrap();
+    fake.send(shown.iter().map(|&buffer| release(buffer)).collect())
+        .await;
+    let gone = |fake: &Fake| {
+        shown
+            .iter()
+            .all(|buffer| fake.shell.destroyed.contains(buffer))
+    };
+    timeout(BOUND, fake.until(gone)).await.unwrap();
+}
+
 /// Waits until the client closed `fake`'s connection.
 async fn closes(fake: &mut Fake) {
     let closed = timeout(AT_ONCE, fake.closed()).await;
@@ -207,6 +229,10 @@ async fn a_tray_countdown_shows_on_every_screen_follows_the_seconds_and_goes() {
         harness.shows(&[(A, drawn("5")), (B, drawn("5"))]).await;
         harness.set(Activity::StartingIn(4));
         harness.shows(&[(A, drawn("4")), (B, drawn("4"))]).await;
+        // The compositor is done with the first buffers, as it is once the
+        // next is shown.
+        release_shown(&mut fake, A, 2).await;
+        release_shown(&mut fake, B, 2).await;
         // Ten is wider: each surface is asked for its new size first.
         harness.set(Activity::RecordingIn(10));
         harness
@@ -688,6 +714,114 @@ async fn a_buffer_the_compositor_released_is_destroyed() {
         let destroyed = timeout(BOUND, fake.until(|fake| !fake.shell.destroyed.is_empty())).await;
         assert!(destroyed.is_ok());
         assert_eq!(fake.shell.destroyed, [buffer]);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn one_screen_that_never_ends_its_update_leaves_the_others_showing() {
+    local(async {
+        let harness = Harness::new().await;
+        harness.set(Activity::StartingIn(5));
+        let mut fake = timeout(BOUND, harness.display.accept()).await.unwrap();
+        let callback = fake.until_sync().await;
+        for offer in [Offer::Manager, Offer::Output(A), Offer::Output(B)] {
+            fake.offer(offer).await;
+        }
+        for offer in Offer::display() {
+            fake.offer(offer).await;
+        }
+        fake.answer(callback).await;
+        let callback = fake.until_sync().await;
+        fake.screen(A, LEFT).await;
+        // B gives its size and never says its update ended.
+        let Ids { xdg, .. } = fake.ids(B);
+        let size = [RIGHT.width, RIGHT.height].map(i32::cast_unsigned);
+        let words = size.to_vec();
+        fake.send(vec![Message {
+            object: xdg,
+            opcode: 1,
+            words,
+        }])
+        .await;
+        fake.answer(callback).await;
+        answer(&mut fake, A).await;
+        harness.shows(&[(A, drawn("5"))]).await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_answer_read_after_its_deadline_shows_nothing() {
+    local(async {
+        let harness = Harness::new().await;
+        harness.set(Activity::StartingIn(5));
+        let mut fake = harness.connected().await;
+        answer(&mut fake, A).await;
+        let output = fake.ids(B);
+        timeout(BOUND, fake.until(|fake| asked(fake, output)))
+            .await
+            .unwrap();
+        let surface = fake.shell.on(output).unwrap().clone();
+        fake.send(vec![surface.configure(9)]).await;
+        // The thread is held past the deadline, so the display wakes to
+        // the answer and the deadline at once.
+        std::thread::sleep(ANSWER + Duration::from_millis(200));
+        harness
+            .shows(&[(A, drawn("5")), (B, Showing::Missing(Missing::Late))])
+            .await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_screen_holds_two_buffers_until_the_compositor_releases_one() {
+    local(async {
+        let harness = Harness::new().await;
+        harness.set(Activity::StartingIn(5));
+        let mut fake = harness.connected().await;
+        answer(&mut fake, A).await;
+        answer(&mut fake, B).await;
+        harness.set(Activity::StartingIn(4));
+        harness.shows(&[(A, drawn("4")), (B, drawn("4"))]).await;
+        // Neither screen's buffers are released: the next second waits
+        // for one, on B until its release and on A for longer.
+        harness.set(Activity::StartingIn(3));
+        release_shown(&mut fake, B, 2).await;
+        harness.shows(&[(A, drawn("4")), (B, drawn("3"))]).await;
+        let attached = |fake: &Fake| fake.shell.on(fake.ids(A)).unwrap().attached.len();
+        assert_eq!(attached(&fake), 2);
+        release_shown(&mut fake, A, 2).await;
+        harness.shows(&[(A, drawn("3")), (B, drawn("3"))]).await;
+        timeout(BOUND, fake.until(|fake| attached(fake) == 3))
+            .await
+            .unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_screen_that_changes_size_is_tried_again() {
+    local(async {
+        let harness = Harness::new().await;
+        harness.set(Activity::StartingIn(5));
+        let mut fake = timeout(BOUND, harness.display.accept()).await.unwrap();
+        let tall = Place {
+            height: 20_000,
+            ..RIGHT
+        };
+        let names = timeout(BOUND, start_with(&mut fake, &[tall, LEFT]))
+            .await
+            .unwrap();
+        let shown = [
+            (names[0], Showing::Missing(Missing::Size)),
+            (names[1], Showing::Asked),
+        ];
+        harness.shows(&shown).await;
+        fake.screen(names[0], RIGHT).await;
+        harness
+            .shows(&[(names[0], Showing::Asked), (names[1], Showing::Asked)])
+            .await;
     })
     .await;
 }

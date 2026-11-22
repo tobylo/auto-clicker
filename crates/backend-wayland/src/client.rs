@@ -315,13 +315,7 @@ impl Link {
     /// Connects over `stream`, binds the outputs and reads the first
     /// layout, which is `None` while it is not whole.
     pub(crate) async fn start(stream: UnixStream) -> Result<(Link, Settled), NoScreens> {
-        let mut link = Link::over(stream)?;
-        let queue = link.queue.handle();
-        let registry = link.connection.display().get_registry(&queue, ());
-        link.client.registry = Some(registry.clone());
-        link.connection.display().sync(&queue, Mark::Globals);
-        link.until(|client| client.globals_known).await?;
-        link.client.bind_offered(&registry, &queue)?;
+        let mut link = Link::bound(stream).await?;
         link.until(|client| client.settled.is_some()).await?;
         let first = link.client.settled.take().unwrap_or_default();
         Ok((
@@ -331,6 +325,20 @@ impl Link {
                 ..first
             },
         ))
+    }
+
+    /// Connects over `stream` and binds the outputs, without waiting for
+    /// any of them to describe itself: the on-screen display reads each
+    /// screen once its own update ended.
+    pub(crate) async fn bound(stream: UnixStream) -> Result<Link, NoScreens> {
+        let mut link = Link::over(stream)?;
+        let queue = link.queue.handle();
+        let registry = link.connection.display().get_registry(&queue, ());
+        link.client.registry = Some(registry.clone());
+        link.connection.display().sync(&queue, Mark::Globals);
+        link.until(|client| client.globals_known).await?;
+        link.client.bind_offered(&registry, &queue)?;
+        Ok(link)
     }
 
     /// A connection over `stream`, nothing sent yet.

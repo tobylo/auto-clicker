@@ -20,10 +20,11 @@ use crate::client::Client;
 /// The anonymous file's name, which only `/proc` shows.
 const NAME: &str = "auto-clicker-on-screen";
 
-/// `picture` in a new buffer.
+/// `picture` in a new buffer for the screen `name`.
 pub(crate) fn buffer(
     shm: &WlShm,
     picture: &Picture,
+    name: u32,
     queue: &QueueHandle<Client>,
 ) -> io::Result<WlBuffer> {
     let too_large = || io::Error::new(io::ErrorKind::InvalidInput, "the buffer is too large");
@@ -47,7 +48,7 @@ pub(crate) fn buffer(
         stride,
         wl_shm::Format::Argb8888,
         queue,
-        (),
+        name,
     );
     pool.destroy();
     Ok(buffer)
