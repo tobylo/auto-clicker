@@ -1,6 +1,7 @@
 //! The test window: fullscreen, optionally holding a persistent pointer
-//! lock, printing everything it hears. Motion is summed and printed at most
-//! every 100 ms, so a 1 kHz mouse does not flood the pipe.
+//! lock, printing everything it hears. Motion is summed and printed only
+//! when it changed, once per wake (which a moving mouse brings about every
+//! millisecond), not per event.
 
 use wayland_client::globals::GlobalList;
 use wayland_client::protocol::wl_output::{self, WlOutput};

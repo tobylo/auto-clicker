@@ -12,7 +12,7 @@
 
 - **Go on Plasma, niri and Hyprland.** On all three, a fullscreen game keeps its keyboard focus, its keys, its clicks at the display's place and its locked pointer while the countdown and the badge appear, change and go. This held natively and under XWayland, for test windows and for Minecraft played by hand, and at the settings measured the frame rate did not change. No desktop is refused by name (O01 decision 8): each offers `zwlr_layer_shell_v1` version 5 to an ordinary program.
 - **The invariants O1 to O8 and the defaults stand.** The badge cost Minecraft no frames that could be measured, at vsync on and a 120 fps cap. Two costs the brief did not name, both from source: while any surface of ours shows on a screen, the game on that screen is no longer scanned out directly, and Hyprland stops tearing there (point 6). Given both, the owner kept the badges on by default (2026-11-22, O01 decision 2).
-- **The countdown is drawn with one sample per pixel, or by filling its rectangles.** The digits and their outline lie on whole pixels, so one sample is exact. Drawn the tray icon's way (16 samples per pixel), the largest common screens take 41 to 257 ms per draw on the daemon's one thread (point 11).
+- **The countdown is drawn with one sample per pixel, or by filling its rectangles.** The digits and their outline lie on whole pixels, so one sample is exact. Drawn the tray icon's way (16 samples per pixel), the largest common screens take 41 to 257 ms per draw of "88" on the daemon's one thread; one sample takes 6 to 29 ms, and 10 to 50 ms for "99m", the widest label (point 11).
 - **Buffers:** the size is round(logical × scale / 120) from `wp_fractional_scale_v1`, shown at the logical size through `wp_viewporter`. This was sharp at 1.25 on Plasma and niri. Shared memory is an anonymous file from `memfd_create` (rustix with `fs`, already in the daemon), written with `pwrite`: no `mmap`, no `unsafe` and no crate beyond `wayland-protocols-wlr`. The daemon grows by 148,912 bytes.
 - **A possible flaw on Hyprland, not confirmed:** an X11 test window that holds the pointer by warping it counted an extra motion of 2 to 27 px when a surface of ours appeared, changed its buffer or went. The window's counting then could count moves twice when several queued before its warp landed, so a short stall at those moments would look the same. The counting is fixed, and the effect is to be measured again on Hyprland before anything is reported upstream. Minecraft, which reads raw motion, showed nothing. The owner kept the display available on Hyprland either way (2026-11-22, O01 decision 8).
 
@@ -154,15 +154,15 @@ W02's `hm replay 300 0 3440 1440`, which puts the pointer at 300 random places a
 
 - **Memory:** the `show` process idled at 3.0 MiB connected with nothing shown, 3.2 MiB with the badge, and 4.2 MiB after a countdown. The image buffers are kept by the allocator; O01b frees or reuses them.
 - **Wakeups (Plasma):** the badge, shown for 60 s, woke the process 0 times and used 0 CPU ticks. A 10 s countdown with the badge woke it 33 times (about 3 a second: the command, and the compositor's answers to a new buffer on each screen) and used 14 ticks, which is the drawing.
-- **One draw of the countdown "88"** (release build, `o01-probe draw W H SCALE`):
+- **One draw of the countdown** (release build, `o01-probe draw W H SCALE [SECONDS]`), as "88" and as "99m", the widest label (about 1.5 times as wide):
 
-| Screen | Buffer | 16 samples a pixel (the tray's way): dev box / laptop | 1 sample a pixel: dev box / laptop |
-| --- | --- | --- | --- |
-| 3440x1440 at 1 | 619x540 | 41.3 / 63.5 ms | 5.7 / 6.1 ms |
-| 2048x1280 at 1.25 | 688x600 | 49.9 / 78.8 ms | 6.9 ms / – |
-| 3840x2160 at 1 | 929x810 | 93.0 / 143.5 ms | 12.3 / 14.0 ms |
-| 3840x2160 at 1.5 | 1394x1215 | 204.6 ms / – | 28.9 ms / – |
-| 5120x2880 at 1 | 1238x1080 | 164.6 / 256.7 ms | 23.3 / 25.7 ms |
+| Screen | "88": buffer | "88", 16 samples a pixel (the tray's way): dev box / laptop | "88", 1 sample: dev box / laptop | "99m": buffer, 1 sample, dev box |
+| --- | --- | --- | --- | --- |
+| 3440x1440 at 1 | 619x540 | 41.3 / 63.5 ms | 5.7 / 6.1 ms | 914x540, 10.1 ms |
+| 2048x1280 at 1.25 | 688x600 | 49.9 / 78.8 ms | 6.9 ms / – | 1016x600, 11.5 ms |
+| 3840x2160 at 1 | 929x810 | 93.0 / 143.5 ms | 12.3 / 14.0 ms | 1372x810, 21.2 ms |
+| 3840x2160 at 1.5 | 1394x1215 | 204.6 ms / – | 28.9 ms / – | 2058x1215, 50.1 ms |
+| 5120x2880 at 1 | 1238x1080 | 164.6 / 256.7 ms | 23.3 / 25.7 ms | 1829x1080, 37.8 ms |
 
   Every screen is drawn in turn on the daemon's one thread. One sample a pixel is exact for whole-pixel rectangles. Filling the rectangles row by row would cost about a memset per buffer (not measured). The badge's rounded tile keeps 16 samples: 40x40 to 80x80 px take 0.04 to 0.4 ms.
 - **Binary size:** a copy of main (fb75789) with `wayland-protocols-wlr` 0.3.12 and rustix (`std`, `fs`) as dependencies of `backend-wayland`, and a layer surface with a viewport, a fractional scale and an shm buffer actually made on a path the daemon reaches. Release daemon: 6,396,392 bytes before, 6,545,304 bytes after, so +148,912 bytes. Cargo.lock gained no new package, only the two dependency lines in `backend-wayland`'s entry.

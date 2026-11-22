@@ -229,7 +229,8 @@ fn surface(state: &mut State, heard: Heard<WlSurface, u64, State>) {
         }
         wl_surface::Event::Leave { .. } => say!("{picture:?} left an output"),
         wl_surface::Event::PreferredBufferScale { factor } => {
-            say!("{picture:?}: preferred buffer scale {factor}")
+            say!("{picture:?}: preferred buffer scale {factor}");
+            whole_scale(state, index, factor, heard.qh);
         }
         _ => {}
     }
@@ -239,5 +240,18 @@ fn buffer(_: &mut State, heard: Heard<WlBuffer, (), State>) {
     // Each draw makes a new buffer; the old one goes once released.
     if let wl_buffer::Event::Release = heard.event {
         heard.proxy.destroy();
+    }
+}
+
+/// Without fractional scaling, the compositor's whole preferred scale sets
+/// the buffer's; with it, the fractional one does and this is only logged.
+fn whole_scale(state: &mut State, index: usize, factor: i32, qh: &QueueHandle<State>) {
+    if state.globals.fractions.is_some() {
+        return;
+    }
+    let scale = u32::try_from(factor).unwrap_or(1).clamp(1, 16) * 120;
+    if state.shown[index].scale != scale {
+        state.shown[index].scale = scale;
+        state.draw(index, qh);
     }
 }

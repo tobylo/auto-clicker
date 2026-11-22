@@ -310,6 +310,9 @@ fn buffer_size(shown: &Shown, fractional: bool) -> ((u32, u32), i32) {
 /// Binds the display's globals; `None` names the first one missing.
 pub fn bind(globals: &GlobalList, qh: &QueueHandle<State>) -> Result<Globals, String> {
     let missing = |name: &'static str| move |_| format!("no {name}");
+    // A fractional scale is only usable through a viewport, which gives the
+    // larger buffer back its logical size: without one, use neither.
+    let viewporter: Option<WpViewporter> = globals.bind(qh, 1..=1, ()).ok();
     Ok(Globals {
         compositor: globals
             .bind(qh, 4..=6, ())
@@ -318,10 +321,14 @@ pub fn bind(globals: &GlobalList, qh: &QueueHandle<State>) -> Result<Globals, St
         shell: globals
             .bind(qh, 1..=4, ())
             .map_err(missing("zwlr_layer_shell_v1"))?,
+        // Version 3: each output's update ends with `wl_output.done`, the
+        // only completion event this display listens for.
         outputs: globals
-            .bind(qh, 2..=3, ())
-            .map_err(missing("zxdg_output_manager_v1"))?,
-        viewporter: globals.bind(qh, 1..=1, ()).ok(),
-        fractions: globals.bind(qh, 1..=1, ()).ok(),
+            .bind(qh, 3..=3, ())
+            .map_err(missing("zxdg_output_manager_v1 version 3"))?,
+        fractions: viewporter
+            .as_ref()
+            .and_then(|_| globals.bind(qh, 1..=1, ()).ok()),
+        viewporter,
     })
 }

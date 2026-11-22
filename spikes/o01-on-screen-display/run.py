@@ -295,6 +295,8 @@ def run_free(run):
 def plan():
     """The run the command line asks for, aimed at the chosen output."""
     kind, scenario = sys.argv[1], sys.argv[2]
+    if kind.endswith("free") and scenario not in ("control", "number", "badge", "both"):
+        sys.exit(f"a free window takes control, number, badge or both, not {scenario}")
     layout = outputs()
     name = sys.argv[3] if len(sys.argv) > 3 else next(iter(layout))
     ox, oy, ow, oh = layout[name]
@@ -317,7 +319,29 @@ def await_lock(run):
     run.devices.move(1, 0)
     if run.kind.startswith("probe") and not run.window.wait_for("pointer lock: locked", 5):
         raise NotStarted("the window never locked the pointer; nothing injected")
+    if run.kind.startswith("xlib") and not said(run.window, "grabbed=True"):
+        raise NotStarted("the X11 window never grabbed the pointer; nothing injected")
     time.sleep(0.5)
+
+
+def said(window, text):
+    """Whether the window printed `text` in any line so far."""
+    return any(text in line for line in list(window.seen))
+
+
+def fullscreen(window):
+    """Whether the probe's window was last configured fullscreen."""
+    configured = [line for line in list(window.seen) if "window configured" in line]
+    return bool(configured) and "fullscreen=true" in configured[-1]
+
+
+def check_started(run):
+    """Refuses a probe window that is not fullscreen, and an SDL window
+    refused relative mode."""
+    if run.kind.startswith("probe") and not fullscreen(run.window):
+        raise NotStarted("the window is not fullscreen; nothing injected")
+    if said(run.window, "relative mode: False"):
+        raise NotStarted("the window was refused relative mode; nothing injected")
 
 
 def start_window(run):
@@ -331,8 +355,7 @@ def start_window(run):
     fullscreen_by_command()
     time.sleep(0.5)
     run.devices.place(*run.target, run.box)
-    if any("relative mode: False" in line for line in list(run.window.seen)):
-        raise NotStarted("the window was refused relative mode; nothing injected")
+    check_started(run)
     if run.locked:
         await_lock(run)
 
@@ -343,13 +366,15 @@ def write_trace(run, display):
         trace.write("\n".join("display " + line for line in (display.seen if display else [])) + "\n")
 
 
-def display_worked(display):
-    """Whether the display drew, is still running and printed no error."""
+def display_worked(display, screen):
+    """Whether the display drew on `screen`, kept its surfaces there, is
+    still running and printed no error."""
     if not display or not display.alive():
         return False
-    seen = list(display.seen)
-    drew = any(" drew " in line for line in seen)
-    return drew and not any(" ended: " in line or " no buffer" in line for line in seen)
+    drew = said(display, f" on {screen}: buffer")
+    closed = said(display, f" on {screen} (closed by the compositor)")
+    failed = said(display, " ended: ") or said(display, " no buffer")
+    return drew and not (closed or failed)
 
 
 def shown(run, display):
@@ -359,7 +384,7 @@ def shown(run, display):
     refused = any("relative mode: False" in line for line in list(run.window.seen))
     if run.aborted or refused:
         return False
-    return run.scenario == "control" or display_worked(display)
+    return run.scenario == "control" or display_worked(display, run.name)
 
 
 def judge(run, before, sent, display):

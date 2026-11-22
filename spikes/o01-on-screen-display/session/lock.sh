@@ -5,7 +5,7 @@
 # gives up after 2 s, so a dead display cannot block.
 cd /tmp/o01a || exit 1
 export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
-say() { timeout 2 bash -c 'echo "$1" > /tmp/o01a/ctl' _ "$1" || echo "the display did not take: $1"; }
+say() { timeout 2 bash -c 'echo "$1" > /tmp/o01a/ctl' _ "$1" || { echo "the display did not take: $1"; return 1; }; }
 case $CMD in
 start)
   # A FIFO left means a display may still run on it: stop that one first,
@@ -18,6 +18,9 @@ lock)
   sid=$(loginctl list-sessions --no-legend | awk '$4=="seat0"{print $1}'); loginctl lock-session "$sid"; sleep 2; loginctl show-session "$sid" -p LockedHint ;;
 send) say "$WHAT"; sleep 0.5; tail -3 lock-probe.log ;;
 stop)
-  say quit; sleep 0.5
-  rm -f ctl; grep -v preferred lock-probe.log | tail -25 ;;
+  # The FIFO goes only once the display has quit; otherwise it stays, so a
+  # later stop can try again and a start still refuses.
+  say quit && sleep 0.5 && ! pgrep -f "o01-probe show" >/dev/null && rm -f ctl
+  [ -e ctl ] && echo "the display has not quit; /tmp/o01a/ctl kept"
+  grep -v preferred lock-probe.log | tail -25 ;;
 esac

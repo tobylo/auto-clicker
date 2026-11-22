@@ -9,7 +9,7 @@ Evidence for [docs/decisions/0005-on-screen-display.md](../../docs/decisions/000
   - `outputs` lists each screen's name, logical size and place.
   - `show` is the display: one layer-shell surface per screen and picture, on the overlay layer, with no keyboard interactivity and an empty input region. It is drawn into shared memory from an anonymous file, at the fractional scale through a viewport. It takes commands on stdin: `number N`, `badge`, `both N`, `pattern` (one-pixel stripes), `none`, `stats` and `quit`.
   - `window locked|free [OUTPUT]` is a fullscreen test window that holds a persistent pointer lock (or not) and prints what it hears.
-  - `draw W H SCALE` times one draw of the countdown for a screen of that size.
+  - `draw W H SCALE [SECONDS]` times one draw of the countdown for a screen of that size: "88" by default, `5940` for "99m", the widest.
   - Every line printed starts with seconds on `CLOCK_MONOTONIC`.
 - `run.py WINDOW SCENARIO [OUTPUT]` drives one case: a test window, the display above it, and virtual devices (`uinput.py`) that inject only into that window. It injects nothing more once the window's latest lines say it lost focus or its lock, releases and destroys its devices on every way out, and calls a case VOID when the display never drew or ended with an error. WINDOW is `probe-`, `sdl-`, `x11-` or `xlib-` with `locked` or `free`. SCENARIO is `control`, `number`, `badge`, `both`, `appear`, `swap`, `remove` or `badge-remove`. `ONE_WAY=1` makes every move (+1, 0), so merged moves keep their sum. `FULLSCREEN_CMD` runs a command once the window has focus (niri's `fullscreen-window` for an X11 window under xwayland-satellite). `TRACE=FILE` appends every line the window and the display printed.
 - `sdlwin.py` is an SDL 3 test window, with the Wayland or X11 driver.
@@ -32,7 +32,7 @@ ONE_WAY=1 python3 run.py probe-locked control
 ONE_WAY=1 python3 run.py probe-locked number
 ```
 
-Elsewhere than the session's own machine, copy `target/release/o01-probe` and the Python files to `/tmp/o01a` there, and feed it a script from `session/` with `ssh … bash -s`.
+Elsewhere than the session's own machine, copy the Python files to `/tmp/o01a` and the probe to `/tmp/o01a/target/release/o01-probe` there (where the scripts look for it), and feed it a script from `session/` with `ssh … bash -s`.
 
 Each run injects input into its own test window only, and only once that window has keyboard focus (and, for the probe's window, the lock). Run it only on a screen nobody is using.
 

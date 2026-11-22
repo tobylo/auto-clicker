@@ -2,8 +2,10 @@
 //!
 //!   o01-probe globals             list the display's globals and versions
 //!   o01-probe outputs             each output's name, logical size and place
-//!   o01-probe draw W H SCALE      times drawing the number "88" for a screen
-//!                                 W x H logical px at SCALE, without a display
+//!   o01-probe draw W H SCALE [SECONDS]
+//!                                 times drawing the countdown ("88", or the
+//!                                 label for SECONDS: 5940 gives "99m") for a
+//!                                 screen W x H logical px at SCALE
 //!   o01-probe show                the display; commands on stdin, one a line:
 //!                                 `number N`, `badge`, `both N`, `pattern`,
 //!                                 `none`, `stats`, `quit`
@@ -169,10 +171,11 @@ fn draw(args: &[String]) -> Result<(), String> {
     let number = |index: usize| {
         args.get(index)
             .and_then(|word| word.parse::<f64>().ok())
-            .ok_or("usage: draw W H SCALE")
+            .ok_or("usage: draw W H SCALE [SECONDS]")
     };
     let (width, height, scale) = (number(0)? as u32, number(1)? as u32, number(2)?);
-    let picture = Picture::Number(88);
+    // "88" by default; 5940 s gives "99m", the widest label.
+    let picture = Picture::Number(number(3).map_or(88, |seconds| seconds as u64));
     let logical = paint::logical_size(picture, (width, height));
     let buffer = (
         (f64::from(logical.0) * scale).round() as u32,
