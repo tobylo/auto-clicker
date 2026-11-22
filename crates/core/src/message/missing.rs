@@ -1,6 +1,7 @@
 //! Why a part the desktop gives is missing: the screen layout, the
-//! pointer's position in recordings (W01), or the on-screen display (O01). The backends give these values
-//! through the platform; the tray and the settings window only word them.
+//! pointer's position in recordings (W01), or the on-screen display (O01).
+//! The backends give these values through the platform; the tray and the
+//! settings window only word them.
 
 use std::fmt;
 
