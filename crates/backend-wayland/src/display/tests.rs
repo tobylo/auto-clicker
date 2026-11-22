@@ -13,7 +13,7 @@ use tokio::time::timeout;
 use super::*;
 use crate::client::fake::{
     A, B, BELOW, BOUND, C, Display, Fake, Ids, LEFT, Message, Name, OVERLAY, Offer, Place, RIGHT,
-    release, removed,
+    SHELL, release, removed,
 };
 use crate::display::fit::Missing;
 
@@ -455,6 +455,14 @@ async fn a_closed_surface_or_a_late_answer_on_one_screen_leaves_the_other_showin
             ])
             .await;
         gone(&mut fake, A).await;
+        // Its buffer goes with it.
+        let freed = |fake: &Fake| {
+            let buffers = surface.attached.iter();
+            buffers
+                .clone()
+                .all(|buffer| fake.shell.destroyed.contains(buffer))
+        };
+        timeout(BOUND, fake.until(freed)).await.unwrap();
         // A tick of the seconds tries neither again.
         harness.set(Activity::StartingIn(4));
         assert!(!harness.connects().await);
@@ -629,6 +637,27 @@ async fn a_layout_connection_that_offers_it_all_can_show() {
         assert_eq!(harness.on_screen.found(), Ok(()));
     })
     .await;
+}
+
+#[tokio::test]
+async fn a_global_withdrawn_while_the_first_globals_are_heard_is_not_used() {
+    let (link, mut fake) = Fake::pair();
+    let (started, ()) = timeout(BOUND, async {
+        tokio::join!(Link::start(link), async {
+            let callback = fake.until_sync().await;
+            fake.offer(Offer::Manager).await;
+            for offer in Offer::display() {
+                fake.offer(offer).await;
+            }
+            fake.send(vec![removed(SHELL)]).await;
+            fake.answer(callback).await;
+            fake.round_trip().await;
+        })
+    })
+    .await
+    .unwrap();
+    let (link, _) = started.unwrap();
+    assert_eq!(found(Ok(&link)), Err(NoOnScreen::NoLayerShell));
 }
 
 #[tokio::test]

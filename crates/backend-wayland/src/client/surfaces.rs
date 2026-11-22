@@ -85,6 +85,23 @@ impl Offered {
         slot.get_or_insert(global);
     }
 
+    /// The global `name` went: one withdrawn while the connection's first
+    /// globals are heard is not used.
+    pub(crate) fn removed(&mut self, name: u32) {
+        let slots = [
+            &mut self.compositor,
+            &mut self.shm,
+            &mut self.shell,
+            &mut self.viewporter,
+            &mut self.fractions,
+        ];
+        for slot in slots {
+            if slot.is_some_and(|global| global.name == name) {
+                *slot = None;
+            }
+        }
+    }
+
     /// Whether the display can show: layer-shell, shared memory and
     /// surfaces new enough. The viewport and the fractional scale are
     /// optional, together.
@@ -164,6 +181,8 @@ struct Shown {
 }
 
 impl Shown {
+    /// Destroys its objects, its buffers last: with the surface gone,
+    /// nothing shows them, and the compositor frees their memory.
     fn destroy(self) {
         if let Some((viewport, fraction)) = self.scale {
             fraction.destroy();
@@ -171,6 +190,9 @@ impl Shown {
         }
         self.layer.destroy();
         self.surface.destroy();
+        for buffer in self.buffers {
+            buffer.destroy();
+        }
     }
 }
 
@@ -464,6 +486,7 @@ impl Surfaces {
 
     /// The screen `name` went, and its surface with it.
     fn forget(&mut self, name: u32) {
+        self.sizes.remove(&name);
         if let Some(Screen::Shown(shown)) = self.screens.remove(&name) {
             shown.destroy();
         }
@@ -510,10 +533,9 @@ impl Client {
         }
     }
 
-    /// The global `name` went: an output's surface goes with it. The
-    /// display's globals are read once, as the connection is made, so one
-    /// that goes later is not noted.
+    /// The global `name` went: an output's surface goes with it.
     pub(crate) fn surface_global_removed(&mut self, name: u32) {
+        self.display_globals.removed(name);
         if let Some(surfaces) = &mut self.surfaces {
             surfaces.forget(name);
         }
