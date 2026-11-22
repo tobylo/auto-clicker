@@ -69,6 +69,8 @@ pub(crate) struct Shell {
     /// Each region's rectangles added.
     pub(crate) regions: BTreeMap<u32, Vec<[u32; 4]>>,
     pub(crate) buffers: BTreeMap<u32, Buffer>,
+    /// Each buffer destroyed, by id.
+    pub(crate) destroyed: Vec<u32>,
     kinds: BTreeMap<u32, Kind>,
 }
 
@@ -85,6 +87,7 @@ impl Shell {
             Some(Kind::Region) => self.note_region(request),
             Some(Kind::Pool) => self.note_pool(request),
             Some(Kind::Viewport) => self.note_viewport(request),
+            Some(Kind::Buffer) if request.opcode == 0 => self.destroyed.push(request.object),
             _ => {}
         }
     }
@@ -280,5 +283,14 @@ impl Surface {
             opcode: 0,
             words: [object, 1].into_iter().chain(string("refused")).collect(),
         }
+    }
+}
+
+/// `wl_buffer.release` on `buffer`: the compositor is done with it.
+pub(crate) fn release(buffer: u32) -> Message {
+    Message {
+        object: buffer,
+        opcode: 0,
+        words: Vec::new(),
     }
 }

@@ -12,7 +12,7 @@ use tokio::time::timeout;
 
 use super::*;
 use crate::client::fake::{
-    A, B, BELOW, BOUND, C, Display, Fake, Ids, Name, OVERLAY, Offer, Place, RIGHT, removed,
+    A, B, BELOW, BOUND, C, Display, Fake, Ids, Name, OVERLAY, Offer, Place, RIGHT, release, removed,
 };
 use crate::display::fit::Missing;
 
@@ -63,6 +63,11 @@ impl Harness {
 
     /// The same, the display's globals offered at start or not.
     async fn offering(offered: bool) -> Harness {
+        Harness::listened_by(offered, NonZeroU32::new(std::process::id())).await
+    }
+
+    /// The same, the display's listener found at start being `compositor`.
+    async fn listened_by(offered: bool, compositor: Option<NonZeroU32>) -> Harness {
         let display = Display::new();
         let (link, mut fake) = Fake::pair();
         fake.display = offered;
@@ -72,7 +77,6 @@ impl Harness {
         .await
         .unwrap();
         let (link, first) = started.unwrap();
-        let compositor = NonZeroU32::new(std::process::id());
         let wayland = Wayland::of(compositor, Some(display.path.clone()), first, Ok(link));
         let on_screen = OnScreen::of(&wayland);
         let (views, shown) = watch::channel(view(Activity::Idle, true));
@@ -597,4 +601,93 @@ async fn an_old_compositor_cannot_show() {
     .unwrap();
     let (link, _) = started.unwrap();
     assert_eq!(found(Ok(&link)), Err(NoOnScreen::NoLayerShell));
+}
+
+#[tokio::test]
+async fn a_screen_change_heard_while_it_showed_does_not_bring_a_lost_connection_back() {
+    local(async {
+        let mut harness = Harness::new().await;
+        let layout = harness
+            .wayland
+            .watch(LayoutSignal::default(), LayoutSignal::default());
+        let _layout = tokio::task::spawn_local(layout);
+        harness.set(Activity::StartingIn(5));
+        let mut fake = harness.connected().await;
+        answer(&mut fake, A).await;
+        // The layout changes while the number shows.
+        let before = harness.wayland.layout();
+        harness.layout.send(vec![removed(B)]).await;
+        timeout(BOUND, harness.layout.round_trip()).await.unwrap();
+        let heard = timeout(BOUND, async {
+            while harness.wayland.layout() == before {
+                yield_now().await;
+            }
+        })
+        .await;
+        assert!(heard.is_ok(), "the layout did not change");
+        drop(fake);
+        harness.set(Activity::StartingIn(4));
+        assert!(
+            !harness.connects().await,
+            "connected again on an old change"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_layouts_connection_made_again_says_anew_whether_the_display_can_show() {
+    local(async {
+        let harness = Harness::offering(false).await;
+        assert_eq!(harness.on_screen.found(), Err(NoOnScreen::NoLayerShell));
+        let (changed, again) = (LayoutSignal::default(), LayoutSignal::default());
+        let layout = harness.wayland.watch(changed, again.clone());
+        let _layout = tokio::task::spawn_local(layout);
+        // A new KWin: the layout's connection is made again, to a display
+        // that offers layer-shell now.
+        again.changed();
+        let mut fake = timeout(BOUND, harness.display.accept()).await.unwrap();
+        fake.display = true;
+        timeout(BOUND, fake.start_with_two()).await.unwrap();
+        let found = timeout(BOUND, async {
+            while harness.on_screen.found().is_err() {
+                yield_now().await;
+            }
+        })
+        .await;
+        assert!(found.is_ok(), "{:?}", harness.on_screen.found());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_display_another_process_listens_on_is_refused_at_once_and_not_retried() {
+    local(async {
+        let harness = Harness::listened_by(true, NonZeroU32::new(1)).await;
+        harness.set(Activity::StartingIn(5));
+        let mut fake = timeout(BOUND, harness.display.accept()).await.unwrap();
+        closes(&mut fake).await;
+        harness.shows(&[]).await;
+        harness.set(Activity::StartingIn(4));
+        assert!(!harness.connects().await, "tried again on a tick");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_buffer_the_compositor_released_is_destroyed() {
+    local(async {
+        let harness = Harness::new().await;
+        harness.set(Activity::StartingIn(5));
+        let mut fake = harness.connected().await;
+        answer(&mut fake, A).await;
+        let surface = fake.shell.on(fake.ids(A)).unwrap().clone();
+        let buffer = *surface.attached.last().unwrap();
+        assert!(fake.shell.destroyed.is_empty());
+        fake.send(vec![release(buffer)]).await;
+        let destroyed = timeout(BOUND, fake.until(|fake| !fake.shell.destroyed.is_empty())).await;
+        assert!(destroyed.is_ok());
+        assert_eq!(fake.shell.destroyed, [buffer]);
+    })
+    .await;
 }

@@ -169,18 +169,16 @@ impl Watcher {
 
     /// One countdown: a connection that shows it until nothing should; one
     /// that fails or is lost is made again only once the layout's signal
-    /// says the screens changed since the last one was set up.
+    /// says the screens changed after the failure (O3): a change heard
+    /// before it was the connection's own to hear.
     async fn countdown(&mut self) {
         loop {
-            self.layout.borrow_and_update();
             let ended = match self.connect().await {
-                Some(Ok(link)) => {
-                    self.layout.borrow_and_update();
-                    self.show(link).await
-                }
+                Some(Ok(link)) => self.show(link).await,
                 Some(Err(())) => Ended::Failed,
                 None => Ended::Gone,
             };
+            self.layout.borrow_and_update();
             self.inner.screens.borrow_mut().clear();
             if matches!(ended, Ended::Gone) || !self.screens_change().await {
                 return;

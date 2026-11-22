@@ -4,7 +4,7 @@
 
 mod shell;
 
-pub(crate) use shell::{COMPOSITOR, FRACTIONS, OVERLAY, SHELL, SHM, Shell, VIEWPORTER};
+pub(crate) use shell::{COMPOSITOR, FRACTIONS, OVERLAY, SHELL, SHM, Shell, VIEWPORTER, release};
 
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;

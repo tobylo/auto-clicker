@@ -513,12 +513,11 @@ impl Client {
             return;
         };
         let name = *arrived.data;
+        // Only the screen's live surface gets events: the library drops
+        // those of an object destroyed, as a surface that went is.
         let Some(Screen::Shown(shown)) = surfaces.screens.get_mut(&name) else {
             return;
         };
-        if shown.layer != *arrived.proxy {
-            return;
-        }
         match arrived.event {
             zwlr_layer_surface_v1::Event::Configure { serial, .. } => {
                 arrived.proxy.ack_configure(serial);
@@ -538,13 +537,7 @@ impl Client {
             return;
         };
         if let Some(Screen::Shown(shown)) = surfaces.screens.get_mut(arrived.data) {
-            let ours = shown
-                .scale
-                .as_ref()
-                .is_some_and(|(_, fraction)| fraction == arrived.proxy);
-            if ours {
-                shown.preferred = scale;
-            }
+            shown.preferred = scale;
         }
     }
 }
