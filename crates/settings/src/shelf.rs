@@ -118,22 +118,22 @@ impl Selection {
     /// The arrow keys moved the selection `by` rows (Home and End by as
     /// many as there are), selecting that row alone or, with Shift
     /// (`extend`), the rows from the anchor to it. With no row to move
-    /// from, it starts at the first.
+    /// from, it moves from just above the first: Down and Home reach the
+    /// first, End the last.
     pub fn step(&mut self, view: &RecordingsView, by: i32, extend: bool) {
         let Some(last) = view.listed.len().checked_sub(1) else {
             return;
         };
+        let by = isize::try_from(by).unwrap_or(isize::MAX);
         let to = match self
             .cursor
             .as_ref()
             .and_then(|cursor| position(view, cursor))
         {
-            Some(from) => {
-                let by = isize::try_from(by).unwrap_or(isize::MAX);
-                from.saturating_add_signed(by).min(last)
-            }
-            None => 0,
-        };
+            Some(from) => from.saturating_add_signed(by),
+            None => usize::try_from(by.saturating_sub(1)).unwrap_or(0),
+        }
+        .min(last);
         let file = view.listed[to].file.clone();
         if extend {
             self.range(view, &file);
@@ -348,6 +348,13 @@ mod tests {
         let mut none = Selection::default();
         none.step(&view(&[], None), 1, false);
         assert_eq!(none, Selection::default());
+        // With no row to move from, End reaches the last and Up the first.
+        let mut ended = Selection::default();
+        ended.step(&list, 5, false);
+        assert_eq!(days(&ended), [11]);
+        let mut up = Selection::default();
+        up.step(&list, -1, false);
+        assert_eq!(days(&up), [15]);
     }
 
     #[test]

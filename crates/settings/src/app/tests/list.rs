@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use auto_clicker_core::controller::{Activity, Listed};
 use auto_clicker_core::window::{
-    Answer, Ask, Deletion, Files, Outcome, RecordingsView, Removal, Request, Update, WindowView,
-    parse,
+    Answer, Ask, Deletion, Files, Outcome, RecordingAction, RecordingsView, Removal, Request,
+    Update, WindowView, parse,
 };
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, VecModel};
@@ -131,8 +131,31 @@ pub fn the_list_keeps_the_row_the_arrows_reached_in_view() {
     list.set_cursor(0);
     slint::platform::update_timers_and_animations();
     click(ROW / 2.0);
+    // The cursor on the last row, scrolled away from with the wheel: End
+    // leaves the cursor where it is, and still shows its row.
+    list.set_cursor(29);
+    slint::platform::update_timers_and_animations();
+    let position = LogicalPosition::new(50.0, 150.0);
+    window.dispatch_event(WindowEvent::PointerScrolled {
+        position,
+        delta_x: 0.0,
+        delta_y: 10_000.0,
+    });
+    slint::platform::update_timers_and_animations();
+    click(ROW / 2.0);
+    let list_weak = list.as_weak();
+    list.on_step(move |_, _| {
+        if let Some(list) = list_weak.upgrade() {
+            list.set_cursor(29);
+        }
+    });
+    window.dispatch_event(WindowEvent::KeyPressed {
+        text: Key::End.into(),
+    });
+    slint::platform::update_timers_and_animations();
+    click(bottom);
 
-    assert_eq!(*hit.borrow(), [10, 29, 0]);
+    assert_eq!(*hit.borrow(), [10, 29, 0, 0, 29]);
 }
 
 /// A file made at `minute` past 18:00 on 2026-11-09.
@@ -175,6 +198,10 @@ fn marked(window: &SettingsWindow) -> Vec<bool> {
 fn opened() -> (SettingsWindow, Rc<RefCell<App>>, BufReader<UnixStream>) {
     let window = SettingsWindow::new().unwrap();
     let (link, other) = Link::pair().unwrap();
+    // A request that never comes fails the test instead of hanging it.
+    other
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
     let app = App::start(&window, link, ',');
     (window, app, BufReader::new(other))
 }
@@ -191,7 +218,7 @@ fn may(window: &SettingsWindow) -> (bool, bool, bool) {
 /// Rename and both plays take the one recording selected alone, and a
 /// delete every one selected; nothing goes while something runs.
 pub fn the_actions_follow_the_selection() {
-    let (window, app, _read) = opened();
+    let (window, app, mut read) = opened();
     let update = |shown: WindowView| app.borrow_mut().update(Update::View(Box::new(shown)));
     update(listing(&[3, 2, 1, 0], 2));
     let may = || may(&window);
@@ -211,6 +238,14 @@ pub fn the_actions_follow_the_selection() {
     assert_eq!(window.get_recording_cursor(), 1);
     window.invoke_select_all_recordings();
     assert_eq!(window.get_selected_count(), 4);
+    // Play takes the one selected alone.
+    window.invoke_press_recording(2, false, false);
+    window.invoke_play_recording();
+    let play = Ask::Recording {
+        file: file(1),
+        action: RecordingAction::Play,
+    };
+    assert_eq!(sent(&mut read).ask, play);
     // Nothing while something runs.
     let mut running = listing(&[3, 2, 1, 0], 2);
     running.activity = Activity::Clicking;

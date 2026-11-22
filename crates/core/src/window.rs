@@ -192,14 +192,17 @@ pub struct Files(Vec<FileName>);
 
 impl Files {
     /// `files`, unless there are none, more than [`WINDOW_RECORDINGS`], or
-    /// one twice.
+    /// one twice. The count is checked first, so a long list is refused
+    /// before it is searched for repeats.
     pub fn new(files: Vec<FileName>) -> Option<Files> {
-        let counted = (1..=WINDOW_RECORDINGS).contains(&files.len());
+        if !(1..=WINDOW_RECORDINGS).contains(&files.len()) {
+            return None;
+        }
         let once = files
             .iter()
             .enumerate()
             .all(|(at, file)| !files[..at].contains(file));
-        (counted && once).then_some(Files(files))
+        once.then_some(Files(files))
     }
 
     pub fn as_slice(&self) -> &[FileName] {

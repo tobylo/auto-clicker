@@ -38,25 +38,32 @@ export component RecordingList inherits FocusScope {
         root.show(root.cursor);
     }
 
+    // Moves the selection `by` rows and shows the row it reached, even
+    // when that row was the cursor already and scrolled out of view.
+    function move(by: int, extend: bool) {
+        root.step(by, extend);
+        root.show(root.cursor);
+    }
+
     key-pressed(event) => {
         if event.modifiers.control && (event.text == "a" || event.text == "A") {
             root.select-all();
             return accept;
         }
         if event.text == Key.UpArrow {
-            root.step(-1, event.modifiers.shift);
+            root.move(-1, event.modifiers.shift);
             return accept;
         }
         if event.text == Key.DownArrow {
-            root.step(1, event.modifiers.shift);
+            root.move(1, event.modifiers.shift);
             return accept;
         }
         if event.text == Key.Home {
-            root.step(-root.rows.length, event.modifiers.shift);
+            root.move(-root.rows.length, event.modifiers.shift);
             return accept;
         }
         if event.text == Key.End {
-            root.step(root.rows.length, event.modifiers.shift);
+            root.move(root.rows.length, event.modifiers.shift);
             return accept;
         }
         reject
