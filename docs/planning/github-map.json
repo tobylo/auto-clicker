@@ -6,7 +6,8 @@
     "M1 \u2014 Auto clicker": 2,
     "M2 \u2014 Record and playback": 3,
     "M3 \u2014 Settings window": 4,
-    "M4 \u2014 Portal backend": 5
+    "M4 \u2014 Portal backend": 5,
+    "M5 \u2014 Windows": 6
   },
   "tasks": [
     {
@@ -203,6 +204,76 @@
       "code": "O01c",
       "issue_number": 100,
       "url": "https://github.com/tobylo/auto-clicker/issues/100"
+    },
+    {
+      "code": "G5",
+      "issue_number": 107,
+      "url": "https://github.com/tobylo/auto-clicker/issues/107"
+    },
+    {
+      "code": "WN01",
+      "issue_number": 108,
+      "url": "https://github.com/tobylo/auto-clicker/issues/108"
+    },
+    {
+      "code": "X03",
+      "issue_number": 109,
+      "url": "https://github.com/tobylo/auto-clicker/issues/109"
+    },
+    {
+      "code": "WN02",
+      "issue_number": 110,
+      "url": "https://github.com/tobylo/auto-clicker/issues/110"
+    },
+    {
+      "code": "WN03",
+      "issue_number": 111,
+      "url": "https://github.com/tobylo/auto-clicker/issues/111"
+    },
+    {
+      "code": "WN04",
+      "issue_number": 112,
+      "url": "https://github.com/tobylo/auto-clicker/issues/112"
+    },
+    {
+      "code": "WN05",
+      "issue_number": 113,
+      "url": "https://github.com/tobylo/auto-clicker/issues/113"
+    },
+    {
+      "code": "WN06",
+      "issue_number": 114,
+      "url": "https://github.com/tobylo/auto-clicker/issues/114"
+    },
+    {
+      "code": "WN07",
+      "issue_number": 115,
+      "url": "https://github.com/tobylo/auto-clicker/issues/115"
+    },
+    {
+      "code": "WN08",
+      "issue_number": 116,
+      "url": "https://github.com/tobylo/auto-clicker/issues/116"
+    },
+    {
+      "code": "WN09",
+      "issue_number": 117,
+      "url": "https://github.com/tobylo/auto-clicker/issues/117"
+    },
+    {
+      "code": "WN10",
+      "issue_number": 118,
+      "url": "https://github.com/tobylo/auto-clicker/issues/118"
+    },
+    {
+      "code": "WN11",
+      "issue_number": 119,
+      "url": "https://github.com/tobylo/auto-clicker/issues/119"
+    },
+    {
+      "code": "WN12",
+      "issue_number": 120,
+      "url": "https://github.com/tobylo/auto-clicker/issues/120"
     }
   ]
 }

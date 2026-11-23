@@ -1,6 +1,6 @@
 # M5: Run on Windows 11
 
-- Milestone M5, scope gate G5. Investigation X03, slices WN01 to WN12 (issue numbers in [github-map.json](../github-map.json)).
+- Milestone M5, scope gate G5 (#107). Investigation X03 (#109), slices WN01 (#108) and WN02 to WN12 (#110 to #120); [github-map.json](../github-map.json) maps the codes.
 - On Windows this brief replaces map D1's tray, D7's paths, file calls and input reader, and D12's layer-shell surfaces; everything else in the map holds on both systems.
 - Maturity: mapped and settled 2026-11-23, before the spike. X03 may change any slice's open questions; a change to a decision below comes back to the owner.
 - Diagram: [what stays, what Windows adds, and a hotkey click with a kill mid-hold](https://prlens.dev/c/IqawE6ShSVjC6_CUfjrqQg).
