@@ -85,11 +85,50 @@ fn on_screen(section: &str) -> OnScreenSettings {
 }
 
 #[test]
-fn the_countdown_shows_on_the_screen_unless_switched_off() {
-    assert!(parse("version = 1\n").on_screen.countdown);
-    assert!(on_screen("").countdown);
+fn everything_shows_on_the_screen_in_the_top_left_unless_set_otherwise() {
+    let all = OnScreenSettings {
+        countdown: true,
+        clicking: true,
+        recording: true,
+        playback: true,
+        corner: Corner::TopLeft,
+    };
+    assert_eq!(parse("version = 1\n").on_screen, all);
+    assert_eq!(on_screen(""), all);
     assert!(on_screen("countdown = true").countdown);
     assert!(!on_screen("countdown = false").countdown);
+    // Each switch turns its own part off, and nothing else.
+    let off = |key: &str| on_screen(&format!("{key} = false"));
+    assert_eq!(
+        off("clicking"),
+        OnScreenSettings {
+            clicking: false,
+            ..all
+        }
+    );
+    assert_eq!(
+        off("recording"),
+        OnScreenSettings {
+            recording: false,
+            ..all
+        }
+    );
+    assert_eq!(
+        off("playback"),
+        OnScreenSettings {
+            playback: false,
+            ..all
+        }
+    );
+    assert!(on_screen("clicking = true").clicking);
+}
+
+#[test]
+fn each_corner_is_read_by_its_name() {
+    for corner in Corner::ALL {
+        let section = format!("corner = \"{}\"", corner.word());
+        assert_eq!(on_screen(&section).corner, corner, "{section}");
+    }
 }
 
 #[test]
@@ -97,7 +136,27 @@ fn an_on_screen_value_that_is_not_true_or_false_is_refused_at_its_line() {
     for (section, says) in [
         ("countdown = \"no\"", "boolean"),
         ("countdown = 0", "boolean"),
+        ("clicking = \"yes\"", "boolean"),
+        ("recording = 1", "boolean"),
+        ("playback = \"off\"", "boolean"),
         ("badge = true", "unknown field"),
+    ] {
+        let (line, reason) = invalid(&format!("version = 1\n[on_screen]\n{section}\n"));
+        assert_eq!(line, Some(3), "{section}");
+        assert!(reason.contains(says), "{section}: {reason}");
+    }
+}
+
+#[test]
+fn an_unknown_corner_is_refused_at_its_line_with_the_names() {
+    let names = "`top_left`, `top_right`, `bottom_left`, `bottom_right`";
+    for (section, says) in [
+        ("corner = \"middle\"", names),
+        ("corner = \"Top_Left\"", names),
+        ("corner = \"top-left\"", names),
+        ("corner = \"\"", names),
+        // Not a word at all, as for any other word in the file.
+        ("corner = 1", "string"),
     ] {
         let (line, reason) = invalid(&format!("version = 1\n[on_screen]\n{section}\n"));
         assert_eq!(line, Some(3), "{section}");

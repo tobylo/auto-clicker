@@ -59,7 +59,7 @@ pub enum Problem {
     CurrentUnkept(Quoted),
     /// Recordings keep movement only: they get no positions.
     NoPositions(NoPositions),
-    /// The countdown cannot show on the screen.
+    /// The on-screen display cannot show.
     NoOnScreen(NoOnScreen),
 }
 
@@ -83,7 +83,7 @@ impl fmt::Display for Problem {
             ),
             Problem::NoPositions(why) => write!(f, "Recordings keep movement only: {why}"),
             Problem::NoOnScreen(why) => {
-                write!(f, "The countdown cannot show on the screen: {why}")
+                write!(f, "The on-screen display cannot show: {why}")
             }
         }
     }

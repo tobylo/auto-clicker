@@ -3,8 +3,8 @@
 //! daemon checks what it gets; the window only reads numbers out of text.
 
 use auto_clicker_core::config::{
-    ButtonName, ClickerDraft, CountDraft, Draft, HotkeysDraft, InputDraft, IntervalDraft, ModeName,
-    OnScreenDraft, PlaybackDraft, PositionDraft, RouteName,
+    ButtonName, ClickerDraft, Corner, CountDraft, Draft, HotkeysDraft, InputDraft, IntervalDraft,
+    ModeName, OnScreenDraft, PlaybackDraft, PositionDraft, RouteName,
 };
 use auto_clicker_core::controller::Hotkey;
 use auto_clicker_core::input::Key;
@@ -31,6 +31,9 @@ const BUTTONS: [ButtonName; 5] = [
 /// The routes in the order the window lists them.
 const ROUTES: [RouteName; 3] = [RouteName::Auto, RouteName::Kernel, RouteName::Portal];
 
+/// The corners in the order the window lists them.
+const CORNERS: [Corner; 4] = Corner::ALL;
+
 /// What the window's fields hold, as the window's widgets take it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fields {
@@ -53,6 +56,11 @@ pub struct Fields {
     pub speed_text: String,
     pub plays_forever: bool,
     pub plays_text: String,
+    pub show_countdown: bool,
+    pub badge_clicking: bool,
+    pub badge_recording: bool,
+    pub badge_playback: bool,
+    pub badge_corner: i32,
 }
 
 /// A fixed point picked on the screens, and the screens it was picked on.
@@ -125,18 +133,21 @@ impl Fields {
             speed_text: decimal_text(draft.playback.speed, decimal),
             plays_forever,
             plays_text,
+            show_countdown: draft.on_screen.countdown,
+            badge_clicking: draft.on_screen.clicking,
+            badge_recording: draft.on_screen.recording,
+            badge_playback: draft.on_screen.playback,
+            badge_corner: place(&CORNERS, draft.on_screen.corner),
         }
     }
 
     /// The draft these fields give, with the hotkeys of `hotkeys` (which
-    /// only a capture changes), `on_screen` as the daemon sent it (the
-    /// window has no field for it yet), and the screens of `picked` while
-    /// the fields hold its point; which field cannot be read, if one
-    /// cannot. A decimal is read with a point or a comma.
+    /// only a capture changes) and the screens of `picked` while the fields
+    /// hold its point; which field cannot be read, if one cannot. A decimal
+    /// is read with a point or a comma.
     pub fn to_draft(
         &self,
         hotkeys: &HotkeysDraft,
-        on_screen: OnScreenDraft,
         picked: Option<&Picked>,
     ) -> Result<Draft, Unreadable> {
         let interval = match self.interval_unit {
@@ -172,7 +183,13 @@ impl Fields {
                 speed: decimal(&self.speed_text, Unreadable::Speed)?,
                 repeat: count_draft(self.plays_forever, &self.plays_text, Unreadable::Plays)?,
             },
-            on_screen,
+            on_screen: OnScreenDraft {
+                countdown: self.show_countdown,
+                clicking: self.badge_clicking,
+                recording: self.badge_recording,
+                playback: self.badge_playback,
+                corner: chosen(&CORNERS, self.badge_corner, Corner::TopLeft),
+            },
         })
     }
 }

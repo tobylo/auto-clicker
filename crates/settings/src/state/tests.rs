@@ -22,6 +22,7 @@ pub(crate) fn view(settings: Draft, answer: Option<Answer>) -> WindowView {
             toggle_playback: Hotkey::Bound(config.hotkeys.toggle_playback),
         },
         no_recording: None,
+        no_on_screen: None,
         problems: Vec::new(),
         recordings: Default::default(),
         screens: Err(NoScreens::NoDisplay),
@@ -124,7 +125,7 @@ fn the_fields_fill_when_the_saved_settings_change_and_only_then() {
 }
 
 #[test]
-fn a_save_keeps_the_on_screen_section_the_daemon_sent() {
+fn a_save_sends_the_on_screen_switches_and_corner_the_fields_hold() {
     let mut state = State::default();
     let mut sent = defaults();
     sent.on_screen.countdown = false;
@@ -136,7 +137,17 @@ fn a_save_keeps_the_on_screen_section_the_daemon_sent() {
             .unwrap(),
     );
     assert_eq!(settings, sent);
-    assert!(!settings.on_screen.countdown);
+    // What the fields changed is what is saved.
+    let mut fields = Fields::from_draft(&sent, '.');
+    fields.badge_recording = false;
+    fields.badge_corner = 3;
+    let mut state = State::default();
+    state.view(&view(sent.clone(), None));
+    let (settings, ..) = save_of(state.save(&fields).unwrap().unwrap());
+    let mut expected = sent.on_screen;
+    expected.recording = false;
+    expected.corner = auto_clicker_core::config::Corner::BottomRight;
+    assert_eq!(settings.on_screen, expected);
 }
 
 #[test]

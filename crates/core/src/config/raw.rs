@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde::de::{self, MapAccess, Visitor};
 use toml::Spanned;
 
+use super::Corner;
 use super::names::{ButtonName, ModeName, RouteName};
 use crate::clicker::{Position, Repeat};
 use crate::input::{AbsolutePosition, Key};
@@ -39,6 +40,10 @@ pub(super) struct RawConfig {
 #[serde(deny_unknown_fields)]
 pub(super) struct RawOnScreen {
     pub(super) countdown: Option<bool>,
+    pub(super) clicking: Option<bool>,
+    pub(super) recording: Option<bool>,
+    pub(super) playback: Option<bool>,
+    pub(super) corner: Option<Corner>,
 }
 
 /// `[playback]`: how a recording plays.

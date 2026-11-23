@@ -78,6 +78,7 @@ fn view() -> WindowView {
             toggle_playback: shown(config.hotkeys.toggle_playback),
         },
         no_recording: None,
+        no_on_screen: None,
         problems: Vec::new(),
         recordings: Default::default(),
         screens: Err(auto_clicker_core::message::NoScreens::NoDisplay),

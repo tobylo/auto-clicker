@@ -44,7 +44,7 @@ impl Said<'_> {
     }
 
     /// Why the on-screen display cannot show.
-    fn no_on_screen(&self, why: NoOnScreen) -> SharedString {
+    pub fn no_on_screen(&self, why: NoOnScreen) -> SharedString {
         let t = self.texts;
         match why {
             NoOnScreen::NoDisplay => t.invoke_no_screens_no_display(),

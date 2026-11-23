@@ -23,6 +23,7 @@ use super::*;
 use crate::ui::SettingsWindow;
 
 mod list;
+mod on_screen;
 
 /// A platform giving every window a software window of its own.
 struct Headless;
@@ -61,6 +62,7 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
     list::the_list_keeps_the_row_the_arrows_reached_in_view();
     list::the_actions_follow_the_selection();
     list::a_delete_asks_once_and_sends_the_selection_whole();
+    on_screen::the_group_shows_the_switches_saves_them_and_says_why_it_cannot_show();
 }
 
 /// A refusal, a failure and an unavailable, as a note.
@@ -233,7 +235,7 @@ fn no_positions(said: &Said<'_>) {
     }
 }
 
-/// Why the countdown cannot show on the screen, each reason in Swedish.
+/// Why the on-screen display cannot show, each reason in Swedish.
 fn no_on_screen(said: &Said<'_>) {
     let reasons = [
         (
@@ -256,7 +258,7 @@ fn no_on_screen(said: &Said<'_>) {
     for (why, swedish) in reasons {
         assert_eq!(
             said.problem(&Problem::NoOnScreen(why)),
-            format!("Nedräkningen kan inte visas på skärmen: {swedish}")
+            format!("Skärmvisningen kan inte visas: {swedish}")
         );
     }
 }

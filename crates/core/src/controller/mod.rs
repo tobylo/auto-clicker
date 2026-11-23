@@ -1130,10 +1130,10 @@ impl<P: Platform> Controller<P> {
         }
     }
 
-    /// Why the countdown cannot show on the screen, while it is switched
-    /// on: with it off, nothing would show anyway.
+    /// Why the on-screen display cannot show, while any of its parts is
+    /// switched on: with all off, nothing would show anyway.
     fn no_on_screen(&self) -> Option<NoOnScreen> {
-        if !self.config.on_screen.countdown {
+        if !self.config.on_screen.any() {
             return None;
         }
         self.platform.on_screen().err()

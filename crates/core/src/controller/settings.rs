@@ -279,6 +279,7 @@ impl<P: Platform> Controller<P> {
                 toggle_playback: self.shown_hotkey(Action::TogglePlayback),
             },
             no_recording: self.no_recording(),
+            no_on_screen: self.platform.on_screen().err(),
             problems: self.problems(),
             recordings: self.shelf.window_view(),
             screens: self.platform.layout(),

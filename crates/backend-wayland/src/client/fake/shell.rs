@@ -28,6 +28,8 @@ pub(crate) struct Surface {
     pub(crate) keyboard: Option<u32>,
     pub(crate) exclusive: Option<i32>,
     pub(crate) anchor: Option<u32>,
+    /// Top, right, bottom and left.
+    pub(crate) margin: Option<[i32; 4]>,
     /// The region set as its input region; `Some(0)` for none set at all.
     pub(crate) input: Option<u32>,
     pub(crate) viewport: Option<u32>,
@@ -206,6 +208,7 @@ impl Shell {
             0 => surface.size = Some((words[0], words[1])),
             1 => surface.anchor = Some(words[0]),
             2 => surface.exclusive = Some(words[0].cast_signed()),
+            3 => surface.margin = Some([0, 1, 2, 3].map(|i| words[i].cast_signed())),
             4 => surface.keyboard = Some(words[0]),
             6 => surface.acked.push(words[0]),
             7 => surface.layer_destroyed = true,

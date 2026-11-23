@@ -1,9 +1,16 @@
-//! The countdown drawn into a buffer: the digits in the job's colour with a
-//! thin white outline, and every other pixel fully transparent. The digits
-//! and the outline are rectangles on whole pixels, so each is filled row by
-//! row, with no sampling (decision 6 of the brief).
+//! What the display draws into a buffer.
+//!
+//! - **The countdown:** the digits in the job's colour with a thin white
+//!   outline, and every other pixel fully transparent. The digits and the
+//!   outline are rectangles on whole pixels, so each is filled row by row,
+//!   with no sampling (decision 6 of the brief).
+//! - **The badge:** a tile with rounded corners in the job's colour and a
+//!   white mark, each pixel sampled 4 by 4 times, as the tray icon's tile
+//!   is: at its size, a fraction of a millisecond (0005).
 
-use auto_clicker_core::digits::{Label, Rect, Rgb, Size};
+use auto_clicker_core::badge::{self, Badge};
+use auto_clicker_core::digits::{Label, Point, Rect, Rgb, Size};
+use auto_clicker_core::tile::{self, Tile};
 
 use super::fit::Fit;
 
@@ -30,6 +37,40 @@ pub(crate) fn number(label: &Label, colour: Rgb, size: Fit) -> Picture {
     }
     for rect in &lit {
         picture.fill(rect, [b, g, r, 0xff]);
+    }
+    picture
+}
+
+/// `badge` filling a buffer of `size`, square: its tile, and the mark on it.
+pub(crate) fn badge(badge: Badge, size: Fit) -> Picture {
+    let mut picture = Picture::clear(size.width, size.height);
+    // At most BADGE_MOST: exact as floats.
+    let side = size.width.min(size.height) as f32;
+    let shape = Tile::new(side);
+    let colour = |point: Point| {
+        let unit = Point {
+            x: point.x / side,
+            y: point.y / side,
+        };
+        if !shape.contains(point) {
+            None
+        } else if badge.mark.contains(unit) {
+            Some(badge::MARK)
+        } else {
+            Some(badge.tile)
+        }
+    };
+    let stride = size.width as usize * 4;
+    for y in 0..size.height {
+        for x in 0..size.width {
+            let corner = Point {
+                x: x as f32,
+                y: y as f32,
+            };
+            let start = y as usize * stride + x as usize * 4;
+            let pixel = tile::sample(corner, colour).premultiplied_bgra();
+            picture.bytes[start..start + 4].copy_from_slice(&pixel);
+        }
     }
     picture
 }
@@ -78,15 +119,19 @@ impl Picture {
 
 #[cfg(test)]
 mod tests {
-    use auto_clicker_core::digits::{CLICKING, Point, RECORDING};
+    use auto_clicker_core::badge::Mark;
+    use auto_clicker_core::config::Corner;
+    use auto_clicker_core::digits::{CLICKING, RECORDING};
 
     use super::*;
+    use crate::display::fit::Place;
 
     fn size(width: u32, height: u32, characters: u32) -> Fit {
         Fit {
             width,
             height,
             characters,
+            place: Place::Middle,
         }
     }
 
@@ -168,6 +213,65 @@ mod tests {
             for x in 0..4 {
                 let expected = if y >= 1 { WHITE } else { [0; 4] };
                 assert_eq!(at(&picture, x, y), expected, "({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn the_badge_is_its_tile_with_the_mark_and_clear_round_the_corners() {
+        let clicking = Badge {
+            mark: Mark::Pointer,
+            tile: CLICKING,
+        };
+        let recording = Badge {
+            mark: Mark::Dot,
+            tile: RECORDING,
+        };
+        let playing = Badge {
+            mark: Mark::Triangle,
+            tile: CLICKING,
+        };
+        for side in [40, 50, 64] {
+            let fit = Fit::badge(Corner::TopLeft, (1920, 1080)).unwrap();
+            let fit = Fit {
+                width: side,
+                height: side,
+                ..fit
+            };
+            for badge in [clicking, recording, playing] {
+                let picture = super::badge(badge, fit);
+                assert_eq!(picture.bytes.len(), (side * side * 4) as usize);
+                let Rgb(r, g, b) = badge.tile;
+                let last = side - 1;
+                // The corners are clear, the edges' middles the tile's
+                // colour, the middle the mark's white.
+                for (x, y) in [(0, 0), (last, 0), (0, last), (last, last)] {
+                    assert_eq!(at(&picture, x, y), [0; 4], "{badge:?} at {side}");
+                }
+                for (x, y) in [(1, side / 2), (side / 2, 1), (last - 1, side / 2)] {
+                    assert_eq!(at(&picture, x, y), [b, g, r, 0xff], "{badge:?} at {side}");
+                }
+                let middle = if badge.mark == Mark::Pointer {
+                    (side * 2 / 5, side * 9 / 20)
+                } else {
+                    (side / 2, side / 2)
+                };
+                assert_eq!(
+                    at(&picture, middle.0, middle.1),
+                    [0xff; 4],
+                    "{badge:?} at {side}"
+                );
+                // Some pixels on the rounded corners are partly covered,
+                // premultiplied: no channel past the alpha.
+                let partial = picture
+                    .bytes
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|p| p[3] > 0 && p[3] < 0xff)
+                    .inspect(|p| assert!(p[..3].iter().all(|&c| c <= p[3]), "{p:?}"))
+                    .count();
+                assert!(partial >= 8, "{badge:?} at {side}: {partial}");
             }
         }
     }

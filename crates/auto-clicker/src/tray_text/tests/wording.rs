@@ -254,7 +254,7 @@ fn every_reason_recordings_keep_movement_only_reads_as_written() {
 }
 
 #[test]
-fn every_reason_the_countdown_cannot_show_reads_as_written() {
+fn every_reason_the_on_screen_display_cannot_show_reads_as_written() {
     use auto_clicker_core::message::NoOnScreen;
 
     let rows = [
@@ -281,8 +281,8 @@ fn every_reason_the_countdown_cannot_show_reads_as_written() {
     ];
     for (why, english, swedish) in rows {
         let problem = Problem::NoOnScreen(why);
-        let english = format!("The countdown cannot show on the screen: {english}");
-        let swedish = format!("Nedräkningen kan inte visas på skärmen: {swedish}");
+        let english = format!("The on-screen display cannot show: {english}");
+        let swedish = format!("Skärmvisningen kan inte visas: {swedish}");
         assert_eq!(
             (problem.to_string(), problem::swedish(&problem)),
             (english, swedish)

@@ -8,7 +8,7 @@ use std::time::Duration;
 use toml::Spanned;
 
 use super::check;
-use super::raw::{RawClicker, RawConfig, RawPlayback};
+use super::raw::{RawClicker, RawConfig, RawOnScreen, RawPlayback};
 use super::{Config, InputSettings, OnScreenSettings};
 use crate::clicker::{ClickerSettings, Interval, Mode};
 use crate::playback::{PlaybackSettings, Speed};
@@ -60,13 +60,18 @@ pub(super) fn validate(raw: RawConfig) -> Result<Config, Invalid> {
         fixed_screens,
         input,
         playback: playback(&raw.playback, defaults.playback)?,
-        on_screen: OnScreenSettings {
-            countdown: raw
-                .on_screen
-                .countdown
-                .unwrap_or(defaults.on_screen.countdown),
-        },
+        on_screen: on_screen(&raw.on_screen, defaults.on_screen),
     })
+}
+
+fn on_screen(raw: &RawOnScreen, defaults: OnScreenSettings) -> OnScreenSettings {
+    OnScreenSettings {
+        countdown: raw.countdown.unwrap_or(defaults.countdown),
+        clicking: raw.clicking.unwrap_or(defaults.clicking),
+        recording: raw.recording.unwrap_or(defaults.recording),
+        playback: raw.playback.unwrap_or(defaults.playback),
+        corner: raw.corner.unwrap_or(defaults.corner),
+    }
 }
 
 fn playback(raw: &RawPlayback, defaults: PlaybackSettings) -> Result<PlaybackSettings, Invalid> {

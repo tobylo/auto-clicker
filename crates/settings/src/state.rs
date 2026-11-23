@@ -380,8 +380,7 @@ impl State {
         fields: &Fields,
         agreed: Agreed,
     ) -> Option<Result<Request, Unreadable>> {
-        let on_screen = self.saved.as_ref()?.on_screen;
-        let draft = fields.to_draft(self.hotkeys.as_ref()?, on_screen, self.picked.as_ref());
+        let draft = fields.to_draft(self.hotkeys.as_ref()?, self.picked.as_ref());
         Some(draft.map(|settings| {
             let ask = Ask::Save {
                 settings,

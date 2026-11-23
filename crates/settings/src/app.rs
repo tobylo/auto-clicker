@@ -170,6 +170,11 @@ impl App {
                 .map(|why| said.no_recording(why))
                 .unwrap_or_default(),
         );
+        w.set_on_screen_why(
+            view.no_on_screen
+                .map(|why| said.no_on_screen(why))
+                .unwrap_or_default(),
+        );
         let problems: Vec<SharedString> = view.problems.iter().map(|p| said.problem(p)).collect();
         w.set_problems(problems.join("\n").into());
         if relisted {
@@ -202,6 +207,11 @@ impl App {
         w.set_speed_text(fields.speed_text.as_str().into());
         w.set_plays_forever(fields.plays_forever);
         w.set_plays_text(fields.plays_text.as_str().into());
+        w.set_show_countdown(fields.show_countdown);
+        w.set_badge_clicking(fields.badge_clicking);
+        w.set_badge_recording(fields.badge_recording);
+        w.set_badge_playback(fields.badge_playback);
+        w.set_badge_corner(fields.badge_corner);
     }
 
     /// What the fields hold now.
@@ -225,6 +235,11 @@ impl App {
             speed_text: w.get_speed_text().to_string(),
             plays_forever: w.get_plays_forever(),
             plays_text: w.get_plays_text().to_string(),
+            show_countdown: w.get_show_countdown(),
+            badge_clicking: w.get_badge_clicking(),
+            badge_recording: w.get_badge_recording(),
+            badge_playback: w.get_badge_playback(),
+            badge_corner: w.get_badge_corner(),
         }
     }
 

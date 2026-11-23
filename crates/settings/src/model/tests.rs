@@ -36,6 +36,13 @@ fn drafts() -> Vec<Draft> {
                 speed: 0.25,
                 repeat: CountDraft::UntilStopped,
             };
+            d.on_screen = OnScreenDraft {
+                countdown: false,
+                clicking: false,
+                recording: false,
+                playback: false,
+                corner: Corner::BottomRight,
+            };
         }),
         draft(|d| {
             d.clicker.mode = ModeName::DoubleClick;
@@ -48,7 +55,15 @@ fn drafts() -> Vec<Draft> {
             };
             d.playback.speed = 4.0;
             d.playback.repeat = CountDraft::Times(u64::from(u32::MAX));
+            d.on_screen.clicking = false;
+            d.on_screen.corner = Corner::TopRight;
         }),
+        draft(|d| {
+            d.on_screen.countdown = false;
+            d.on_screen.recording = false;
+            d.on_screen.corner = Corner::BottomLeft;
+        }),
+        draft(|d| d.on_screen.playback = false),
         draft(|d| d.clicker.position = picked_at(10, 20)),
     ]
 }
@@ -87,9 +102,7 @@ fn a_picked_point_keeps_its_screens_only_while_the_fields_hold_it() {
     let position = |change: fn(&mut Fields)| {
         let mut fields = Fields::from_draft(&shown, '.');
         change(&mut fields);
-        let read = fields
-            .to_draft(&shown.hotkeys, shown.on_screen, picked.as_ref())
-            .unwrap();
+        let read = fields.to_draft(&shown.hotkeys, picked.as_ref()).unwrap();
         read.clicker.position
     };
     let typed = |x, y| PositionDraft::Fixed {
@@ -118,7 +131,7 @@ fn the_fields_give_back_the_draft_they_show_in_either_language() {
         for shown in drafts() {
             let fields = Fields::from_draft(&shown, decimal);
             assert_eq!(
-                fields.to_draft(&shown.hotkeys, shown.on_screen, Picked::of(&shown).as_ref()),
+                fields.to_draft(&shown.hotkeys, Picked::of(&shown).as_ref()),
                 Ok(shown.clone()),
                 "{fields:?}"
             );
@@ -136,7 +149,7 @@ fn decimals_show_with_the_languages_separator_and_read_with_either() {
         fields.speed_text = written.to_owned();
         assert_eq!(
             fields
-                .to_draft(&shown.hotkeys, shown.on_screen, None)
+                .to_draft(&shown.hotkeys, None)
                 .unwrap()
                 .playback
                 .speed,
@@ -151,7 +164,7 @@ fn the_hotkeys_come_from_the_captures_not_the_fields() {
     let shown = draft(|_| {});
     let captured = draft(|d| d.hotkeys.toggle_recording = "Ctrl+F9".to_owned()).hotkeys;
     let saved = Fields::from_draft(&shown, '.')
-        .to_draft(&captured, shown.on_screen, None)
+        .to_draft(&captured, None)
         .unwrap();
     assert_eq!(saved.hotkeys, captured);
 }
@@ -172,15 +185,13 @@ fn the_key_is_a_name_in_any_case_or_a_code_after_a_hash() {
     ];
     for (written, code) in keys {
         fields.key_text = written.to_owned();
-        let read = fields
-            .to_draft(&shown.hotkeys, shown.on_screen, None)
-            .unwrap();
+        let read = fields.to_draft(&shown.hotkeys, None).unwrap();
         assert_eq!(read.clicker.key, code, "{written}");
     }
     for unreadable in ["", "no such key", "113", "#70000", "#-1", "#"] {
         fields.key_text = unreadable.to_owned();
         assert_eq!(
-            fields.to_draft(&shown.hotkeys, shown.on_screen, None),
+            fields.to_draft(&shown.hotkeys, None),
             Err(Unreadable::Key),
             "{unreadable}"
         );
@@ -225,7 +236,7 @@ fn text_that_cannot_be_read_is_named() {
         let mut fields = base.clone();
         change(&mut fields);
         assert_eq!(
-            fields.to_draft(&shown.hotkeys, shown.on_screen, None),
+            fields.to_draft(&shown.hotkeys, None),
             Err(field),
             "{fields:?}"
         );
@@ -238,9 +249,7 @@ fn a_count_beyond_what_the_config_takes_goes_to_the_daemon_to_refuse() {
     let mut fields = Fields::from_draft(&shown, '.');
     fields.repeat_forever = false;
     fields.repeat_text = "5000000000".to_owned();
-    let read = fields
-        .to_draft(&shown.hotkeys, shown.on_screen, None)
-        .unwrap();
+    let read = fields.to_draft(&shown.hotkeys, None).unwrap();
     assert_eq!(read.clicker.repeat, CountDraft::Times(5_000_000_000));
 }
 
@@ -254,9 +263,7 @@ fn a_choice_no_widget_gives_falls_back_and_numbers_stay_in_range() {
     fields.position_x = 70_000;
     fields.position_y = -5;
     fields.jitter = -1;
-    let read = fields
-        .to_draft(&shown.hotkeys, shown.on_screen, None)
-        .unwrap();
+    let read = fields.to_draft(&shown.hotkeys, None).unwrap();
     assert_eq!(read.clicker.mode, ModeName::Click);
     assert_eq!(read.clicker.button, ButtonName::Left);
     assert_eq!(
@@ -301,4 +308,76 @@ fn a_captured_hotkey_replaces_its_actions_only() {
         let replaced: Vec<usize> = (0..3).filter(|i| texts[*i] == "F13").collect();
         assert_eq!(replaced, [usize::try_from(action).unwrap()]);
     }
+}
+
+/// A change to the fields.
+type Change = fn(&mut Fields);
+
+#[test]
+fn each_on_screen_field_gives_its_own_switch_and_the_corner_its_place() {
+    let shown = draft(|_| {});
+    let all = shown.on_screen;
+    let cases: [(Change, OnScreenDraft); 7] = [
+        (
+            |f| f.show_countdown = false,
+            OnScreenDraft {
+                countdown: false,
+                ..all
+            },
+        ),
+        (
+            |f| f.badge_clicking = false,
+            OnScreenDraft {
+                clicking: false,
+                ..all
+            },
+        ),
+        (
+            |f| f.badge_recording = false,
+            OnScreenDraft {
+                recording: false,
+                ..all
+            },
+        ),
+        (
+            |f| f.badge_playback = false,
+            OnScreenDraft {
+                playback: false,
+                ..all
+            },
+        ),
+        // The corners in the window's order; an index no widget gives is
+        // the default corner.
+        (
+            |f| f.badge_corner = 1,
+            OnScreenDraft {
+                corner: Corner::TopRight,
+                ..all
+            },
+        ),
+        (
+            |f| f.badge_corner = 3,
+            OnScreenDraft {
+                corner: Corner::BottomRight,
+                ..all
+            },
+        ),
+        (|f| f.badge_corner = 9, all),
+    ];
+    for (change, expected) in cases {
+        let mut fields = Fields::from_draft(&shown, '.');
+        change(&mut fields);
+        let read = fields.to_draft(&shown.hotkeys, None).unwrap().on_screen;
+        assert_eq!(read, expected, "{fields:?}");
+    }
+    for corner in Corner::ALL {
+        let fields = Fields::from_draft(&draft(|d| d.on_screen.corner = corner), '.');
+        let read = fields.to_draft(&shown.hotkeys, None).unwrap().on_screen;
+        assert_eq!(read.corner, corner);
+    }
+    // The default corner, not the one shown.
+    let mut fields = Fields::from_draft(&draft(|d| d.on_screen.corner = Corner::BottomLeft), '.');
+    fields.badge_corner = 9;
+    let read = fields.to_draft(&shown.hotkeys, None).unwrap().on_screen;
+    assert_eq!(read.corner, Corner::TopLeft);
 }

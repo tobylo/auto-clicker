@@ -80,9 +80,11 @@ async fn an_answer_that_never_ends_is_read_only_to_the_limit() {
         let (mut stream, _) = listener.accept().await.unwrap();
         while stream.write_all(&[b'1'; 16]).await.is_ok() {}
     });
-    // Unreadable as soon as the limit is passed, well before the deadline
-    // ends an ask that reads on.
-    let asked = timeout(DEADLINE / 2, ask(&dir.socket(), ours)).await;
+    // Unreadable once the limit is passed: an ask that read on would end
+    // at its deadline with no answer instead. The bound only keeps a test
+    // that hangs from hanging the run; 25 ms, half the deadline, failed
+    // once on a loaded machine.
+    let asked = timeout(Duration::from_secs(5), ask(&dir.socket(), ours)).await;
     assert_eq!(asked, Ok(Err(Failure::Unreadable)));
 }
 

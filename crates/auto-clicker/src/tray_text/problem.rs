@@ -28,10 +28,7 @@ pub(super) fn swedish(problem: &Problem) -> String {
             format!("Inspelningar sparar bara rörelser: {}", no_positions(*why))
         }
         Problem::NoOnScreen(why) => {
-            format!(
-                "Nedräkningen kan inte visas på skärmen: {}",
-                no_on_screen(*why)
-            )
+            format!("Skärmvisningen kan inte visas: {}", no_on_screen(*why))
         }
     }
 }
