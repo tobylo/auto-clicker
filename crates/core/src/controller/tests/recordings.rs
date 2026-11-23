@@ -779,3 +779,40 @@ async fn loop_and_speed_round_trip_through_the_config_file() {
     })
     .await;
 }
+
+/// A temporary file a save of `target` in `dir` by process `pid` left, last
+/// written `ago`.
+fn left_temp(dir: &std::path::Path, target: &str, pid: u32, ago: Duration) -> PathBuf {
+    let path = dir.join(format!(".{target}.{pid}.0123456789abcdef.tmp"));
+    fs::write(&path, b"half").unwrap();
+    let then = std::time::SystemTime::now() - ago;
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(then)
+        .unwrap();
+    path
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_start_removes_what_saves_that_crashed_an_hour_ago_left() {
+    local(async {
+        let (shared, files) = shared_with(&["18:00:00"]);
+        let recordings = folder(&shared);
+        let state = TempDir::new();
+        let state_dir = state_file(&state).parent().unwrap().to_path_buf();
+        fs::create_dir_all(&state_dir).unwrap();
+        let hours = |n: u64| Duration::from_secs(n * 60 * 60);
+        let old = left_temp(&recordings, files[0].as_str(), 7, hours(2));
+        let fresh = left_temp(&recordings, files[0].as_str(), 8, Duration::ZERO);
+        let old_state = left_temp(&state_dir, "current-recording", 7, hours(2));
+
+        let s = setup(shared, config(0), &state, false).await;
+
+        assert!(!old.exists() && !old_state.exists());
+        assert!(fresh.exists());
+        assert_eq!(s.tray().len(), 1);
+    })
+    .await;
+}

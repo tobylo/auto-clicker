@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::future::{Future, pending};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -51,8 +50,11 @@ impl Drop for TempDir {
 
 /// Whether file permissions bind this process. They do not for root (CI
 /// containers often run as root), so tests that rely on a denied open skip
-/// there. Probed by opening a file nobody may read.
+/// there. Probed by opening a file nobody may read. Unix only: Windows has
+/// no mode bits.
+#[cfg(unix)]
 pub(crate) fn permissions_apply() -> bool {
+    use std::os::unix::fs::PermissionsExt;
     let dir = TempDir::new();
     let probe = dir.path().join("probe");
     fs::write(&probe, b"").unwrap();

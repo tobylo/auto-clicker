@@ -1,10 +1,14 @@
+use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use super::*;
 use crate::recording::tests::sample;
 use crate::recording::{load, save};
-use crate::test_support::{TempDir, permissions_apply};
+use crate::test_support::TempDir;
+#[cfg(unix)]
+use crate::test_support::permissions_apply;
 
 /// A folder holding the sample recording; its file and path.
 fn saved(dir: &TempDir) -> (FileName, PathBuf) {
@@ -63,6 +67,7 @@ fn a_rename_of_a_file_gone_or_invalid_changes_nothing() {
     assert_eq!(dir.entries(), [gone.as_str()]);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_rename_that_cannot_write_leaves_the_old_file_whole() {
     let dir = TempDir::new();
@@ -140,6 +145,20 @@ fn deleting_all_takes_every_recording_and_nothing_else() {
 }
 
 #[test]
+fn a_delete_also_removes_what_crashed_saves_left() {
+    let dir = TempDir::new();
+    let files = saved_many(&dir, 2);
+    let temp = format!(".{}.7.0123456789abcdef.tmp", files[0]);
+    fs::write(dir.path().join(&temp), b"a copy").unwrap();
+    fs::write(dir.path().join(".notes.tmp"), b"keep").unwrap();
+
+    let removed = delete(dir.path(), Doomed::These(&files[..1]), 8).unwrap();
+
+    assert_eq!(removed.deleted, 1);
+    assert_eq!(dir.entries(), [".notes.tmp", files[1].as_str()]);
+}
+
+#[test]
 fn a_file_that_cannot_be_removed_leaves_the_rest_going_and_the_first_are_named() {
     let dir = TempDir::new();
     let files = saved_many(&dir, 2);
@@ -187,6 +206,7 @@ fn a_file_that_cannot_be_removed_leaves_the_rest_going_and_the_first_are_named()
     assert_eq!((all.deleted, all.failed.len()), (0, 2));
 }
 
+#[cfg(unix)]
 #[test]
 fn a_delete_that_is_not_allowed_is_a_failure_not_a_file_gone() {
     let dir = TempDir::new();
@@ -213,6 +233,7 @@ fn a_delete_that_is_not_allowed_is_a_failure_not_a_file_gone() {
     assert_eq!((path.exists(), removed.deleted), (true, 0));
 }
 
+#[cfg(unix)]
 #[test]
 fn a_folder_that_cannot_be_opened_deletes_nothing() {
     let dir = TempDir::new();
@@ -228,6 +249,7 @@ fn a_folder_that_cannot_be_opened_deletes_nothing() {
     assert!(path.exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn a_symlink_in_the_folders_place_is_refused() {
     let dir = TempDir::new();

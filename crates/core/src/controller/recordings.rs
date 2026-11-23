@@ -18,7 +18,8 @@ use std::sync::Arc;
 use super::{Controller, LISTED_RECORDINGS, Listed, Platform, State};
 use crate::message::{ChangeFailure, Problem, Quoted, Titled};
 use crate::recording::{
-    ChangeError, Changed, CurrentFile, Doomed, FileName, Removed, delete, list, rename,
+    ChangeError, Changed, CurrentFile, Doomed, FileName, Removed, delete, list, remove_stale,
+    rename,
 };
 use crate::window::{
     Deletion, MAX_FAILURES, NotDeleted, Outcome, RecordingAction, RecordingOutcome, RecordingsView,
@@ -80,6 +81,26 @@ impl Shelf {
 }
 
 impl<P: Platform> Controller<P> {
+    /// Removes the temporary files saves left when they crashed: beside the
+    /// recordings, the config and the current-recording file. Only those an
+    /// hour old or more go, so a save still running in another session
+    /// keeps its file. One that cannot be removed is logged and left.
+    pub(super) fn remove_stale_temps(&self) {
+        let recordings = self.platform.recordings_dir().map(|dir| remove_stale(&dir));
+        let found = [
+            ("recordings", recordings.unwrap_or(Ok(0))),
+            ("config", self.settings.file.remove_stale_temps()),
+            ("state", self.shelf.file.remove_stale_temps()),
+        ];
+        for (folder, result) in found {
+            if let Err(err) = result {
+                eprintln!(
+                    "auto-clicker: could not clear old temporary files in the {folder} folder: {err}"
+                );
+            }
+        }
+    }
+
     /// The current recording is kept in `file`: reads it now. One that
     /// cannot be read leaves the newest current, and says why as a problem
     /// until a recording is chosen, made or played.

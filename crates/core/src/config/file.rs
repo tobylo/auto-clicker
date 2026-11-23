@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::read::read_config;
 use super::{Config, render};
-use crate::fs::{Place, Unsynced, atomic_save};
+use crate::fs::{Place, STALE_TEMP_AGE, Unsynced, atomic_save, remove_stale_temps, sync_dir};
 
 /// The config file and what the daemon last saw in it.
 #[derive(Debug)]
@@ -100,6 +100,19 @@ impl ConfigFile {
         })
     }
 
+    /// Removes the temporary files that saves of this file left when they
+    /// crashed at least [`STALE_TEMP_AGE`] ago: beside the file, or beside
+    /// the file a link at its path points to. Returns how many it removed.
+    ///
+    /// # Errors
+    /// The directory cannot be read, or the link leads nowhere.
+    pub fn remove_stale_temps(&self) -> io::Result<usize> {
+        let Some(path) = self.path.as_deref() else {
+            return Ok(0);
+        };
+        remove_stale_temps(directory_of(&target_of(path)?), STALE_TEMP_AGE)
+    }
+
     /// Why the file is not as the daemon last saw it, if it is not.
     fn stale(&self, path: &Path) -> Option<Stale> {
         let now = match read_config(path) {
@@ -163,7 +176,7 @@ fn flush_path(dir: &Path) -> io::Result<()> {
         .take_while(|dir| !dir.as_os_str().is_empty());
     // The root is in no directory.
     for entry in named.filter(|dir| dir.parent().is_some()) {
-        std::fs::File::open(directory_of(entry))?.sync_all()?;
+        sync_dir(directory_of(entry))?;
     }
     Ok(())
 }

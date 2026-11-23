@@ -1,11 +1,10 @@
 //! Reading the config file without blocking or reading without end.
 
-use std::fs::OpenOptions;
 use std::io::{self, Read};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use super::Problem;
+use crate::fs::{Link, open_read};
 
 /// The largest config file read: far more than any real one needs.
 pub(super) const MAX_SIZE: u64 = 64 * 1024;
@@ -16,11 +15,7 @@ pub(super) const MAX_SIZE: u64 = 64 * 1024;
 /// and reads only from a regular file, checked on the opened handle, so a
 /// device such as `/dev/zero` is never read. Reads at most [`MAX_SIZE`] bytes.
 pub(super) fn read_config(path: &Path) -> Result<Option<Vec<u8>>, Problem> {
-    let file = match OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
-    {
+    let file = match open_read(path, Link::Follow) {
         Ok(file) => file,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(Problem::Read(err)),

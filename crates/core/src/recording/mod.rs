@@ -44,7 +44,7 @@ pub use library::{FileName, Found, Listing, LoadError, MAX_FILE_BYTES, list, loa
 pub use manage::{ChangeError, Changed, Doomed, Removed, delete, rename};
 pub use recorder::{Ending, KeyInput, Recorder, Taken};
 pub use source::PointerSource;
-pub use store::{recordings_dir, save};
+pub use store::{recordings_dir, remove_stale, save};
 pub use tap::{RecordingFeed, RecordingSlot};
 
 use crate::input::Held;

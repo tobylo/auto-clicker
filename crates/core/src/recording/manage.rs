@@ -9,14 +9,12 @@
 
 use std::cell::Cell;
 use std::fmt;
-use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::Path;
 
 use super::library::{FileName, LoadError, MAX_FILE_BYTES, load_in};
-use super::store::{held_path, named, open_folder};
 use super::{InvalidRecording, check_name};
-use crate::fs::{Place, atomic_save_with};
+use crate::fs::Folder;
 use crate::message::{ChangeFailure, Quoted, Step, Unplayable};
 
 /// Why a recording was not changed. Nothing was.
@@ -98,7 +96,6 @@ fn rename_capped(
         other => ChangeError::Unreadable(other),
     })?;
     let renamed = recording.renamed(name).map_err(ChangeError::Refused)?;
-    let path = held_path(&folder).join(file.as_str());
     let over = Cell::new(false);
     let write = |out: &mut dyn Write| {
         let over = &over;
@@ -108,13 +105,9 @@ fn rename_capped(
             over,
         })
     };
-    match atomic_save_with(&path, write, Place::Replace) {
+    match folder.replace(file.as_str(), write) {
         Ok(Ok(())) => Ok(Changed::Synced),
-        Ok(Err(unsynced)) => Ok(Changed::Unsynced(named(
-            &folder,
-            dir,
-            &unsynced.into_error(),
-        ))),
+        Ok(Err(unsynced)) => Ok(Changed::Unsynced(folder.named(dir, &unsynced.into_error()))),
         Err(err) if too_large(over.get(), &err) => Err(ChangeError::TooLarge),
         Err(err) => Err(failed(&folder, dir, Step::Written, &err)),
     }
@@ -180,8 +173,10 @@ pub struct Removed {
 
 /// Deletes the recordings `doomed` in `dir`, for good. A file that cannot
 /// be removed (one already gone included) does not stop the others; the
-/// first `keep` of them are named, with why. The folder is flushed once,
-/// after, when anything was removed.
+/// first `keep` of them are named, with why. Any temporary file a save
+/// left in the folder goes too, so no copy of a deleted recording stays
+/// behind under a hidden name. The folder is flushed once, after, when
+/// anything was removed.
 ///
 /// # Errors
 /// [`ChangeError::Missing`] when there is no recordings folder, and
@@ -201,18 +196,21 @@ pub fn delete(dir: &Path, doomed: Doomed<'_>, keep: usize) -> Result<Removed, Ch
             Err(_) => removed.more_failed = removed.more_failed.saturating_add(1),
         }
     }
-    if removed.deleted > 0 {
-        removed.unsynced = folder.sync_all().err();
+    // Best effort: a folder that cannot be read now was read above, and a
+    // temporary file left now is removed at the next start.
+    let swept = folder.remove_temps().unwrap_or(0);
+    if removed.deleted > 0 || swept > 0 {
+        removed.unsynced = folder.sync().err();
     }
     Ok(removed)
 }
 
 /// Every file with a recording's name in the open `folder`. Read whole
 /// before any is removed, so removing one never moves what is read next.
-fn every(folder: &File, dir: &Path) -> Result<Vec<FileName>, ChangeError> {
-    let unread = |err: io::Error| ChangeError::Failed(named(folder, dir, &err));
+fn every(folder: &Folder, dir: &Path) -> Result<Vec<FileName>, ChangeError> {
+    let unread = |err: io::Error| ChangeError::Failed(folder.named(dir, &err));
     let mut files = Vec::new();
-    for entry in fs::read_dir(held_path(folder)).map_err(unread)? {
+    for entry in folder.entries().map_err(unread)? {
         let name = entry.map_err(unread)?.file_name();
         if let Some(file) = name.to_str().and_then(FileName::parse) {
             files.push(file);
@@ -222,17 +220,17 @@ fn every(folder: &File, dir: &Path) -> Result<Vec<FileName>, ChangeError> {
 }
 
 /// Removes `file` from the open `folder`.
-fn remove(folder: &File, dir: &Path, file: &FileName) -> Result<(), ChangeError> {
-    match fs::remove_file(held_path(folder).join(file.as_str())) {
+fn remove(folder: &Folder, dir: &Path, file: &FileName) -> Result<(), ChangeError> {
+    match folder.remove_file(file.as_str()) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Err(ChangeError::Missing),
         Err(err) => Err(failed(folder, dir, Step::Deleted, &err)),
     }
 }
 
-/// Opens the recordings folder, refusing a symlink in its place.
-fn open(dir: &Path) -> Result<File, ChangeError> {
-    open_folder(dir).map_err(|err| match err.kind() {
+/// Opens the recordings folder, refusing a link in its place.
+fn open(dir: &Path) -> Result<Folder, ChangeError> {
+    Folder::open(dir).map_err(|err| match err.kind() {
         io::ErrorKind::NotFound => ChangeError::Missing,
         _ => ChangeError::Failed(err),
     })
@@ -240,10 +238,10 @@ fn open(dir: &Path) -> Result<File, ChangeError> {
 
 /// `err`, from a file that could not be through `step`, naming the folder
 /// by its path rather than by the handle it was reached through.
-fn failed(folder: &File, dir: &Path, step: Step, err: &io::Error) -> ChangeError {
+fn failed(folder: &Folder, dir: &Path, step: Step, err: &io::Error) -> ChangeError {
     ChangeError::NotDone {
         step,
-        err: named(folder, dir, err),
+        err: folder.named(dir, err),
     }
 }
 

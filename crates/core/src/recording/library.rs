@@ -6,16 +6,15 @@
 //! [`Recording::from_json`].
 
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Read};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use super::header;
-use super::store::{held_path, open_folder};
 use super::{InvalidRecording, Recording};
+use crate::fs::Folder;
 use crate::message::Unplayable;
 
 /// The largest recording file that is read. An hour of fast mouse movement
@@ -185,9 +184,9 @@ pub struct Listing {
 /// not, comes from the same read of the folder.
 ///
 /// # Errors
-/// The folder is a symlink or cannot be read.
+/// The folder is a link or cannot be read.
 pub fn list(dir: &Path, limit: usize, asked: Option<&FileName>) -> io::Result<Listing> {
-    let folder = match open_folder(dir) {
+    let folder = match Folder::open(dir) {
         Ok(folder) => folder,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Listing::default()),
         Err(err) => return Err(err),
@@ -195,7 +194,7 @@ pub fn list(dir: &Path, limit: usize, asked: Option<&FileName>) -> io::Result<Li
     let mut newest = Vec::new();
     let mut total: usize = 0;
     let mut holds = false;
-    for entry in fs::read_dir(held_path(&folder))? {
+    for entry in folder.entries()? {
         let name = entry?.file_name();
         let Some(file) = name.to_str().and_then(FileName::parse) else {
             continue;
@@ -230,19 +229,19 @@ fn keep_newest(names: &mut Vec<FileName>, limit: usize) {
 }
 
 /// Reads and checks the recording `name` in `dir`. The file is opened once,
-/// and what was opened is what is checked and read: a symlink, a FIFO or a
+/// and what was opened is what is checked and read: a link, a FIFO or a
 /// folder under that name is refused without waiting on it.
 ///
 /// # Errors
 /// See [`LoadError`].
 pub fn load(dir: &Path, name: &FileName) -> Result<Recording, LoadError> {
-    let folder = open_folder(dir).map_err(missing_or)?;
+    let folder = Folder::open(dir).map_err(missing_or)?;
     load_in(&folder, name)
 }
 
 /// [`load`] from the open recordings folder `folder`.
-pub(super) fn load_in(folder: &File, name: &FileName) -> Result<Recording, LoadError> {
-    let file = open_in(folder, name).map_err(missing_or)?;
+pub(super) fn load_in(folder: &Folder, name: &FileName) -> Result<Recording, LoadError> {
+    let file = folder.open_file(name.as_str()).map_err(missing_or)?;
     let bytes = read_capped(file, MAX_FILE_BYTES)?;
     Recording::from_json(&bytes).map_err(LoadError::Invalid)
 }
@@ -253,15 +252,6 @@ fn missing_or(err: io::Error) -> LoadError {
         io::ErrorKind::NotFound => LoadError::Missing,
         _ => LoadError::Unreadable(err),
     }
-}
-
-/// Opens the file `name` in the open folder `folder` for reading, without
-/// following a symlink and without waiting on a FIFO.
-pub(super) fn open_in(folder: &File, name: &FileName) -> io::Result<File> {
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(held_path(folder).join(name.as_str()))
 }
 
 /// Everything in `file`, which must be a regular file of at most `cap`
@@ -287,6 +277,8 @@ fn read_capped(file: File, cap: u64) -> Result<Vec<u8>, LoadError> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use crate::recording::save;
     use crate::recording::tests::sample;
@@ -512,22 +504,28 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_folder_lists_nothing_and_a_symlink_is_an_error() {
+    fn a_missing_folder_lists_nothing_and_a_file_in_its_place_is_an_error() {
         let root = TempDir::new();
         assert_eq!(
             list(&root.path().join("none"), 10, None).unwrap(),
             Listing::default()
         );
+        let file = root.path().join("2026-11-09_18-04-05.123.json");
+        fs::write(&file, b"").unwrap();
+        let err = list(&file, 10, None).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotADirectory, "{err}");
+    }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_folder_is_an_error() {
+        let root = TempDir::new();
         let real = root.path().join("real");
         fs::create_dir(&real).unwrap();
         fs::write(real.join("2026-11-09_18-04-05.123.json"), b"").unwrap();
         let link = root.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let err = list(&link, 10, None).unwrap_err();
-        assert_eq!(err.raw_os_error(), Some(libc::ENOTDIR), "{err}");
-        // A file in the folder's place is an error too, not an empty list.
-        let err = list(&real.join("2026-11-09_18-04-05.123.json"), 10, None).unwrap_err();
         assert_eq!(err.raw_os_error(), Some(libc::ENOTDIR), "{err}");
     }
 
@@ -565,6 +563,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_folder_in_a_files_place_is_refused() {
+        let dir = TempDir::new();
+        let folder = name("2026-01-03_00-00-00.000.json");
+        fs::create_dir(dir.path().join(folder.as_str())).unwrap();
+        let err = load(dir.path(), &folder).unwrap_err();
+        assert!(matches!(err, LoadError::Unreadable(_)), "{err:?}");
+    }
+
+    #[cfg(unix)]
     #[test]
     fn a_symlink_a_fifo_or_a_folder_in_a_files_place_is_refused_at_once() {
         let dir = TempDir::new();
@@ -605,6 +613,11 @@ mod tests {
             LoadError::TooLarge.to_string(),
             "the file is larger than 256 MiB"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_cap_holds_for_what_is_read_and_only_files_are_read() {
         // The cap holds for what is read: procfs files claim a size of 0.
         let status = File::open("/proc/self/status").unwrap();
         assert_eq!(status.metadata().unwrap().len(), 0);
