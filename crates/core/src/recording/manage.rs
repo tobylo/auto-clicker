@@ -174,10 +174,11 @@ pub struct Removed {
 /// Deletes the recordings `doomed` in `dir`, for good. A file that cannot
 /// be removed (one already gone included) does not stop the others; the
 /// first `keep` of them are named, with why. The temporary files saves of
-/// a doomed recording left go with it, so no copy of it stays behind under
-/// a hidden name; one that cannot be removed fails that recording. Those
-/// of any other file stay: a save running in another session keeps its
-/// own. The folder is flushed once, after, when anything was removed.
+/// a doomed recording left go first, so no copy of it stays behind under a
+/// hidden name: when one cannot be removed, the recording stays too, so
+/// deleting it again can finish the job. Those of any other recording stay:
+/// a save running in another session keeps its own. The folder is flushed
+/// once, after, when anything was removed.
 ///
 /// # Errors
 /// [`ChangeError::Missing`] when there is no recordings folder, and
@@ -185,12 +186,14 @@ pub struct Removed {
 /// removed then.
 pub fn delete(dir: &Path, doomed: Doomed<'_>, keep: usize) -> Result<Removed, ChangeError> {
     let folder = open(dir)?;
-    let unread = |err: io::Error| ChangeError::Failed(folder.named(dir, &err));
-    let temps = folder.temps().map_err(unread)?;
     let files = match doomed {
         Doomed::These(files) => files.to_vec(),
         Doomed::All => every(&folder, dir)?,
     };
+    // Read after the doomed are chosen, so a recording saved meanwhile is
+    // not doomed without its temporary files.
+    let unread = |err: io::Error| ChangeError::Failed(folder.named(dir, &err));
+    let temps = folder.temps().map_err(unread)?;
     let mut removed = Removed::default();
     let mut changed = false;
     for file in files {
@@ -208,31 +211,39 @@ pub fn delete(dir: &Path, doomed: Doomed<'_>, keep: usize) -> Result<Removed, Ch
     Ok(removed)
 }
 
-/// Removes `file` and the temporary files `temps` holds for it, all of
-/// them even when one fails. Says whether anything was removed, and the
-/// first failure: the file's own, or else a temporary file's.
+/// Removes the temporary files `temps` holds for `file`, all of them even
+/// when one fails, then `file` itself if they all went. A rename names its
+/// temporary file after the file; a save after the name it tried first, so
+/// a plain name and its `-1` to `-9` share those. Says whether anything
+/// was removed, and the first failure.
 fn remove_with_temps(
     folder: &Folder,
     dir: &Path,
     file: &FileName,
     temps: &[Temp],
 ) -> (bool, Result<(), ChangeError>) {
-    let mut outcome = remove(folder, dir, file);
-    let mut gone = outcome.is_ok();
-    for temp in temps.iter().filter(|temp| temp.target() == file.as_str()) {
+    let first_choice = file.first_choice();
+    let mut gone = false;
+    let mut kept = None;
+    let ours = |temp: &&Temp| temp.target() == file.as_str() || temp.target() == first_choice;
+    for temp in temps.iter().filter(ours) {
         match folder.remove_file(temp.name()) {
             Ok(()) => gone = true,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => {
-                if outcome.is_ok() {
-                    let kept =
-                        io::Error::new(err.kind(), format!("a hidden copy of it was kept: {err}"));
-                    outcome = Err(failed(folder, dir, Step::Deleted, &kept));
-                }
+                kept.get_or_insert(err);
             }
         }
     }
-    (gone, outcome)
+    if let Some(err) = kept {
+        let kept = io::Error::new(
+            err.kind(),
+            format!("a hidden copy of it could not be removed, so it was kept: {err}"),
+        );
+        return (gone, Err(failed(folder, dir, Step::Deleted, &kept)));
+    }
+    let outcome = remove(folder, dir, file);
+    (gone || outcome.is_ok(), outcome)
 }
 
 /// Every file with a recording's name in the open `folder`. Read whole

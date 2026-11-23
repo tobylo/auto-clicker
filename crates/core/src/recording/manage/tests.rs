@@ -209,8 +209,33 @@ fn a_hidden_copy_another_program_holds_fails_its_recordings_deletion() {
     let (file, err) = &removed.failed[0];
     assert_eq!(file, &files[0]);
     let text = format!("{err:?}");
-    assert!(text.contains("a hidden copy of it was kept"), "{text}");
-    assert!(copy.exists());
+    assert!(
+        text.contains("a hidden copy of it could not be removed"),
+        "{text}"
+    );
+    // Kept whole, so deleting it again finishes the job.
+    assert!(copy.exists() && dir.path().join(files[0].as_str()).exists());
+    let again = delete(dir.path(), Doomed::All, 8).unwrap();
+    assert_eq!((again.deleted, again.failed.len()), (1, 0));
+    assert_eq!(dir.entries(), Vec::<String>::new());
+}
+
+#[test]
+fn a_delete_removes_the_copies_saves_and_renames_under_a_second_name_left() {
+    let dir = TempDir::new();
+    let files = saved_many(&dir, 2);
+    // The second save of the same moment took `-1`; its temporary file is
+    // named after the plain name it tried first.
+    assert!(files[1].as_str().ends_with("-1.json"), "{}", files[1]);
+    // And one a rename of the `-1` file left, named after it.
+    for copy in [temp_of(files[0].as_str(), 7), temp_of(files[1].as_str(), 7)] {
+        fs::write(dir.path().join(&copy), b"a copy").unwrap();
+    }
+
+    let removed = delete(dir.path(), Doomed::These(&files[1..]), 8).unwrap();
+
+    assert_eq!(removed.deleted, 1);
+    assert_eq!(dir.entries(), [files[0].to_string()]);
 }
 
 #[test]
