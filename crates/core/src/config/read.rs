@@ -39,3 +39,20 @@ fn invalid(reason: &str) -> Problem {
         reason: reason.to_owned(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TempDir;
+
+    #[test]
+    fn a_folder_in_the_files_place_is_not_read() {
+        let dir = TempDir::new();
+        let refused = read_config(dir.path()).map(drop);
+        assert!(
+            matches!(&refused, Err(Problem::Invalid { line: None, reason })
+                if reason == "the path is not a regular file"),
+            "{refused:?}"
+        );
+    }
+}

@@ -144,18 +144,73 @@ fn deleting_all_takes_every_recording_and_nothing_else() {
     assert!(empty.failed.is_empty(), "{empty:?}");
 }
 
+/// The name of a temporary file a save of `target` left.
+fn temp_of(target: &str, pid: u32) -> String {
+    format!(".{target}.{pid}.0123456789abcdef.tmp")
+}
+
 #[test]
-fn a_delete_also_removes_what_crashed_saves_left() {
+fn a_delete_also_removes_what_saves_of_its_recordings_left_and_nothing_else() {
     let dir = TempDir::new();
     let files = saved_many(&dir, 2);
-    let temp = format!(".{}.7.0123456789abcdef.tmp", files[0]);
-    fs::write(dir.path().join(&temp), b"a copy").unwrap();
-    fs::write(dir.path().join(".notes.tmp"), b"keep").unwrap();
+    let doomed = temp_of(files[0].as_str(), 7);
+    // Another session saving a new recording, and a copy of the one kept.
+    let saving = temp_of("2030-01-01_00-00-00.000.json", 8);
+    let kept = temp_of(files[1].as_str(), 9);
+    for name in [&doomed, &saving, &kept, &".notes.tmp".to_owned()] {
+        fs::write(dir.path().join(name), b"a copy").unwrap();
+    }
 
     let removed = delete(dir.path(), Doomed::These(&files[..1]), 8).unwrap();
 
+    assert_eq!((removed.deleted, removed.failed.len()), (1, 0));
+    let mut left = vec![".notes.tmp".to_owned(), files[1].to_string(), saving, kept];
+    left.sort();
+    assert_eq!(dir.entries(), left);
+}
+
+#[test]
+fn a_delete_of_all_keeps_what_a_save_still_running_writes() {
+    let dir = TempDir::new();
+    let files = saved_many(&dir, 2);
+    let saving = temp_of("2030-01-01_00-00-00.000.json", 8);
+    for name in [
+        temp_of(files[0].as_str(), 7),
+        temp_of(files[1].as_str(), 7),
+        saving.clone(),
+    ] {
+        fs::write(dir.path().join(name), b"a copy").unwrap();
+    }
+
+    let removed = delete(dir.path(), Doomed::All, 8).unwrap();
+
+    assert_eq!(removed.deleted, 2);
+    assert_eq!(dir.entries(), [saving]);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_hidden_copy_another_program_holds_fails_its_recordings_deletion() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let dir = TempDir::new();
+    let files = saved_many(&dir, 2);
+    let copy = dir.path().join(temp_of(files[0].as_str(), 7));
+    fs::write(&copy, b"a copy").unwrap();
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&copy)
+        .unwrap();
+
+    let removed = delete(dir.path(), Doomed::These(&files), 8).unwrap();
+
+    drop(held);
     assert_eq!(removed.deleted, 1);
-    assert_eq!(dir.entries(), [".notes.tmp", files[1].as_str()]);
+    let (file, err) = &removed.failed[0];
+    assert_eq!(file, &files[0]);
+    let text = format!("{err:?}");
+    assert!(text.contains("a hidden copy of it was kept"), "{text}");
+    assert!(copy.exists());
 }
 
 #[test]

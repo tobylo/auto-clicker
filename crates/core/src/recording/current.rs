@@ -270,7 +270,6 @@ mod tests {
     }
 
     /// `current`'s read, which must end within a few seconds.
-    #[cfg(unix)]
     fn read_at_once(current: &CurrentFile) -> io::Result<Option<FileName>> {
         let current = current.clone();
         let (send, received) = std::sync::mpsc::channel();
@@ -282,7 +281,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_symlink_a_fifo_or_a_folder_is_refused_at_once() {
+    fn a_symlink_or_a_fifo_is_refused_at_once() {
         let dir = TempDir::new();
         let (current, path) = in_dir(&dir);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -301,9 +300,15 @@ mod tests {
             read.unwrap_err().to_string() == "it is not a regular file"
         };
         assert!(not_a_file(read_at_once(&current)));
-        fs::remove_file(&path).unwrap();
-        fs::create_dir(&path).unwrap();
-        assert!(not_a_file(read_at_once(&current)));
+    }
+
+    #[test]
+    fn a_folder_in_the_files_place_is_refused() {
+        let dir = TempDir::new();
+        let (current, path) = in_dir(&dir);
+        fs::create_dir_all(&path).unwrap();
+        let err = read_at_once(&current).unwrap_err();
+        assert_eq!(err.to_string(), "it is not a regular file");
     }
 
     #[cfg(unix)]

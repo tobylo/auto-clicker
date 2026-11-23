@@ -27,18 +27,14 @@ pub(super) fn temp_name(name: &OsStr) -> OsString {
     temp
 }
 
-/// Whether `name` is one [`temp_name`] makes.
-pub(super) fn is_temp_name(name: &str) -> bool {
-    let inner = name
-        .strip_prefix(PREFIX)
-        .and_then(|rest| rest.strip_suffix(SUFFIX));
-    let parts = inner.and_then(|inner| {
-        let (rest, random) = inner.rsplit_once('.')?;
-        let (target, pid) = rest.rsplit_once('.')?;
-        Some((target, pid, random))
-    });
-    parts
-        .is_some_and(|(target, pid, random)| !target.is_empty() && is_pid(pid) && is_random(random))
+/// The name of the file the temporary file `name` was written for, if
+/// `name` is one [`temp_name`] makes.
+pub(super) fn target_of(name: &str) -> Option<&str> {
+    let inner = name.strip_prefix(PREFIX)?.strip_suffix(SUFFIX)?;
+    let (rest, random) = inner.rsplit_once('.')?;
+    let (target, pid) = rest.rsplit_once('.')?;
+    let valid = !target.is_empty() && is_pid(pid) && is_random(random);
+    valid.then_some(target)
 }
 
 /// A process id: 1 to 10 decimal digits.
@@ -54,49 +50,109 @@ fn is_random(text: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// Removes the temporary files in `dir` that are at least `age` old: what
-/// a save that crashed left. A missing folder holds none. Returns how many
-/// it removed; one it cannot remove is left for the next start.
+/// A temporary file a save left in a folder.
+#[derive(Debug)]
+pub struct Temp {
+    name: String,
+    target: String,
+    changed_ago: Option<Duration>,
+}
+
+impl Temp {
+    /// Its file name in the folder.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The name of the file it was written for.
+    pub fn target(&self) -> &str {
+        &self.target
+    }
+
+    /// Whether it was last changed at least `age` ago. A time in the future
+    /// is not.
+    fn is_older_than(&self, age: Duration) -> bool {
+        self.changed_ago.is_some_and(|ago| ago >= age)
+    }
+}
+
+/// The temporary files in `dir`: the regular files (not links) named as
+/// [`temp_name`] names them.
 ///
 /// # Errors
-/// The folder cannot be read.
+/// The folder, or an entry in it, cannot be read: never taken as "none".
+pub(super) fn list(dir: &Path) -> io::Result<Vec<Temp>> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        let Some(target) = target_of(&name).map(ToOwned::to_owned) else {
+            continue;
+        };
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            // Removed since the folder was read: nothing to remove.
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
+        if metadata.file_type().is_file() {
+            let changed_ago = metadata.modified().ok().and_then(|at| at.elapsed().ok());
+            found.push(Temp {
+                name,
+                target,
+                changed_ago,
+            });
+        }
+    }
+    Ok(found)
+}
+
+/// Removes the temporary files in `dir` that are at least `age` old: what
+/// a save that crashed left. A missing folder holds none. Returns how many
+/// it removed.
+///
+/// # Errors
+/// The folder cannot be read, or a file could not be removed (the first
+/// such error; the others are still tried).
 pub fn remove_stale_temps(dir: &Path, age: Duration) -> io::Result<usize> {
-    match remove_in(dir, age, |path| fs::remove_file(path)) {
+    let remove = |path: &Path| fs::remove_file(path);
+    match remove_stale_in(dir, age, remove) {
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(0),
         found => found,
     }
 }
 
-/// Removes, with `remove`, the regular files in `dir` named as temporary
-/// files and last changed at least `age` ago. Returns how many it removed.
-pub(super) fn remove_in(
+/// Removes, with `remove`, the temporary files in `dir` last changed at
+/// least `age` ago. Returns how many it removed, or the first failure
+/// after trying them all; one already gone is no failure.
+pub(super) fn remove_stale_in(
     dir: &Path,
     age: Duration,
     remove: impl Fn(&Path) -> io::Result<()>,
 ) -> io::Result<usize> {
     let mut removed: usize = 0;
-    for entry in fs::read_dir(dir)?.flatten() {
-        if is_stale_temp(&entry, age) && remove(&entry.path()).is_ok() {
-            removed = removed.saturating_add(1);
+    let mut failure = None;
+    for temp in list(dir)?.iter().filter(|temp| temp.is_older_than(age)) {
+        let path = dir.join(temp.name());
+        match remove(&path) {
+            Ok(()) => removed = removed.saturating_add(1),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                failure.get_or_insert_with(|| not_removed(&path, &err));
+            }
         }
     }
-    Ok(removed)
+    failure.map_or(Ok(removed), Err)
 }
 
-/// Whether `entry` is named as a temporary file and is stale.
-fn is_stale_temp(entry: &fs::DirEntry, age: Duration) -> bool {
-    let named = entry.file_name().to_str().is_some_and(is_temp_name);
-    named && is_stale(entry, age)
-}
-
-/// Whether `entry` is a regular file (not a link) last changed at least
-/// `age` ago. A time in the future is not stale.
-fn is_stale(entry: &fs::DirEntry, age: Duration) -> bool {
-    let Ok(metadata) = entry.metadata() else {
-        return false;
-    };
-    let changed_ago = metadata.modified().ok().and_then(|at| at.elapsed().ok());
-    metadata.file_type().is_file() && changed_ago.is_some_and(|ago| ago >= age)
+/// `err`, saying which temporary file it kept.
+pub(super) fn not_removed(path: &Path, err: &io::Error) -> io::Error {
+    io::Error::new(
+        err.kind(),
+        format!("could not remove {}: {err}", path.display()),
+    )
 }
 
 #[cfg(test)]
@@ -109,7 +165,7 @@ mod tests {
         let name = temp_name(OsStr::new("config.toml"));
         let name = name.to_str().unwrap();
         assert!(name.starts_with(".config.toml."), "{name}");
-        assert!(is_temp_name(name), "{name}");
+        assert!(target_of(name).is_some(), "{name}");
     }
 
     #[test]
@@ -136,10 +192,10 @@ mod tests {
             ".notes.tmp",
         ];
         for name in valid {
-            assert!(is_temp_name(name), "{name}");
+            assert!(target_of(name).is_some(), "{name}");
         }
         for name in invalid {
-            assert!(!is_temp_name(name), "{name}");
+            assert!(target_of(name).is_none(), "{name}");
         }
     }
 
@@ -181,6 +237,51 @@ mod tests {
 
         assert_eq!(removed, 1);
         assert_eq!(dir.entries(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_temp_file_that_cannot_be_removed_is_reported_and_one_already_gone_is_not() {
+        let dir = TempDir::new();
+        let names = [
+            ".a.json.1.0123456789abcdef.tmp",
+            ".b.json.1.0123456789abcdef.tmp",
+            ".c.json.1.0123456789abcdef.tmp",
+        ];
+        for name in names {
+            fs::write(dir.path().join(name), b"half").unwrap();
+        }
+        let held = dir.path().join(names[1]);
+        // Removed by someone else meanwhile: no failure.
+        let gone = dir.path().join(names[2]);
+
+        let swept = remove_stale_in(dir.path(), Duration::ZERO, |path| {
+            if path == held {
+                return Err(io::Error::other("held"));
+            }
+            fs::remove_file(path)?;
+            if path == gone {
+                return Err(io::ErrorKind::NotFound.into());
+            }
+            Ok(())
+        });
+
+        let err = swept.unwrap_err();
+        let text = err.to_string();
+        assert!(text.starts_with("could not remove "), "{text}");
+        assert!(text.ends_with(&format!("{}: held", names[1])), "{text}");
+        assert_eq!(dir.entries(), [names[1]]);
+    }
+
+    #[test]
+    fn a_temp_file_names_the_file_it_was_for() {
+        let dir = TempDir::new();
+        fs::write(dir.path().join(".a.b.json.7.0123456789abcdef.tmp"), b"").unwrap();
+        fs::write(dir.path().join("a.b.json"), b"").unwrap();
+
+        let temps = list(dir.path()).unwrap();
+
+        let found: Vec<(&str, &str)> = temps.iter().map(|t| (t.name(), t.target())).collect();
+        assert_eq!(found, [(".a.b.json.7.0123456789abcdef.tmp", "a.b.json")]);
     }
 
     #[test]

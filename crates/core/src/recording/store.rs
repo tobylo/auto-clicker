@@ -66,10 +66,12 @@ fn save_in(checked: &Folder, recording: &Recording) -> io::Result<String> {
 /// place is refused.
 ///
 /// # Errors
-/// The folder is a link or cannot be read.
+/// The folder is a link or cannot be read, or a file could not be removed.
 pub fn remove_stale(dir: &Path) -> io::Result<usize> {
     match Folder::open(dir) {
-        Ok(folder) => folder.remove_temps(STALE_TEMP_AGE),
+        Ok(folder) => folder
+            .remove_temps(STALE_TEMP_AGE)
+            .map_err(|err| folder.named(dir, &err)),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(0),
         Err(err) => Err(err),
     }

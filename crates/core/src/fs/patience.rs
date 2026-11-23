@@ -166,8 +166,12 @@ mod tests {
             tries.set(tries.get() + 1);
             Err(io::ErrorKind::NotFound.into())
         });
+        let done = patience.retry_when(Path::new("x"), is_shared, || {
+            tries.set(tries.get() + 1);
+            Ok("done")
+        });
         assert_eq!(missing.unwrap_err().kind(), io::ErrorKind::NotFound);
-        assert_eq!(tries.get(), 1);
+        assert_eq!((done.unwrap(), tries.get()), ("done", 2));
     }
 
     #[test]

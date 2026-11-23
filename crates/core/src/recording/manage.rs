@@ -11,11 +11,10 @@ use std::cell::Cell;
 use std::fmt;
 use std::io::{self, Write};
 use std::path::Path;
-use std::time::Duration;
 
 use super::library::{FileName, LoadError, MAX_FILE_BYTES, load_in};
 use super::{InvalidRecording, check_name};
-use crate::fs::Folder;
+use crate::fs::{Folder, Temp};
 use crate::message::{ChangeFailure, Quoted, Step, Unplayable};
 
 /// Why a recording was not changed. Nothing was.
@@ -174,36 +173,66 @@ pub struct Removed {
 
 /// Deletes the recordings `doomed` in `dir`, for good. A file that cannot
 /// be removed (one already gone included) does not stop the others; the
-/// first `keep` of them are named, with why. Any temporary file a save
-/// left in the folder goes too, so no copy of a deleted recording stays
-/// behind under a hidden name. The folder is flushed once, after, when
-/// anything was removed.
+/// first `keep` of them are named, with why. The temporary files saves of
+/// a doomed recording left go with it, so no copy of it stays behind under
+/// a hidden name; one that cannot be removed fails that recording. Those
+/// of any other file stay: a save running in another session keeps its
+/// own. The folder is flushed once, after, when anything was removed.
 ///
 /// # Errors
 /// [`ChangeError::Missing`] when there is no recordings folder, and
-/// [`ChangeError::Failed`] when it cannot be opened or, for
-/// [`Doomed::All`], read. Nothing was removed then.
+/// [`ChangeError::Failed`] when it cannot be opened or read. Nothing was
+/// removed then.
 pub fn delete(dir: &Path, doomed: Doomed<'_>, keep: usize) -> Result<Removed, ChangeError> {
     let folder = open(dir)?;
+    let unread = |err: io::Error| ChangeError::Failed(folder.named(dir, &err));
+    let temps = folder.temps().map_err(unread)?;
     let files = match doomed {
         Doomed::These(files) => files.to_vec(),
         Doomed::All => every(&folder, dir)?,
     };
     let mut removed = Removed::default();
+    let mut changed = false;
     for file in files {
-        match remove(&folder, dir, &file) {
+        let (gone, outcome) = remove_with_temps(&folder, dir, &file, &temps);
+        changed |= gone;
+        match outcome {
             Ok(()) => removed.deleted = removed.deleted.saturating_add(1),
             Err(err) if removed.failed.len() < keep => removed.failed.push((file, err)),
             Err(_) => removed.more_failed = removed.more_failed.saturating_add(1),
         }
     }
-    // Best effort: a folder that cannot be read now was read above, and a
-    // temporary file left now is removed at the next start.
-    let swept = folder.remove_temps(Duration::ZERO).unwrap_or(0);
-    if removed.deleted > 0 || swept > 0 {
+    if changed {
         removed.unsynced = folder.sync().err();
     }
     Ok(removed)
+}
+
+/// Removes `file` and the temporary files `temps` holds for it, all of
+/// them even when one fails. Says whether anything was removed, and the
+/// first failure: the file's own, or else a temporary file's.
+fn remove_with_temps(
+    folder: &Folder,
+    dir: &Path,
+    file: &FileName,
+    temps: &[Temp],
+) -> (bool, Result<(), ChangeError>) {
+    let mut outcome = remove(folder, dir, file);
+    let mut gone = outcome.is_ok();
+    for temp in temps.iter().filter(|temp| temp.target() == file.as_str()) {
+        match folder.remove_file(temp.name()) {
+            Ok(()) => gone = true,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                if outcome.is_ok() {
+                    let kept =
+                        io::Error::new(err.kind(), format!("a hidden copy of it was kept: {err}"));
+                    outcome = Err(failed(folder, dir, Step::Deleted, &kept));
+                }
+            }
+        }
+    }
+    (gone, outcome)
 }
 
 /// Every file with a recording's name in the open `folder`. Read whole

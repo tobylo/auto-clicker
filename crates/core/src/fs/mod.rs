@@ -28,7 +28,7 @@ use unix as sys;
 use windows as sys;
 
 use patience::{Op, Patience};
-pub use temps::remove_stale_temps;
+pub use temps::{Temp, remove_stale_temps};
 
 /// How old a temporary file must be before a start removes it: far longer
 /// than any save takes, so a save still running in another session keeps
@@ -305,14 +305,24 @@ impl Folder {
         Ok(placed.map(drop))
     }
 
-    /// Removes the temporary files saves left in the folder that are at
-    /// least `age` old: what a crash, or on Windows a temporary file another
-    /// program held, left behind. Returns how many it removed.
+    /// The temporary files saves left in the folder: what a crash, or on
+    /// Windows a temporary file another program held, left behind, and
+    /// those of saves still running.
     ///
     /// # Errors
-    /// The folder cannot be read.
+    /// The folder, or an entry in it, cannot be read.
+    pub fn temps(&self) -> io::Result<Vec<Temp>> {
+        temps::list(&self.path)
+    }
+
+    /// Removes the temporary files saves left in the folder that are at
+    /// least `age` old. Returns how many it removed.
+    ///
+    /// # Errors
+    /// The folder cannot be read, or a file could not be removed (the first
+    /// such error; the others are still tried).
     pub fn remove_temps(&self, age: Duration) -> io::Result<usize> {
-        temps::remove_in(&self.path, age, |path| {
+        temps::remove_stale_in(&self.path, age, |path| {
             self.patience
                 .retry(path, Op::Change, || fs::remove_file(path))
         })

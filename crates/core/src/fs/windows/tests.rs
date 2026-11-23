@@ -57,13 +57,11 @@ fn a_junction_in_place_of_the_folder_is_refused_and_nothing_is_written() {
 }
 
 #[test]
-fn a_held_folder_cannot_be_moved_deleted_or_replaced_by_a_junction() {
+fn a_held_folder_and_its_parent_cannot_be_moved_or_deleted() {
     let root = TempDir::new();
     let parent = root.path().join("auto-clicker");
     let dir = parent.join("recordings");
     fs::create_dir_all(&dir).unwrap();
-    let elsewhere = root.path().join("elsewhere");
-    fs::create_dir(&elsewhere).unwrap();
     let folder = Folder::open(&dir).unwrap();
 
     let moved = fs::rename(&dir, root.path().join("moved"));
@@ -77,7 +75,20 @@ fn a_held_folder_cannot_be_moved_deleted_or_replaced_by_a_junction() {
         .create_new(&names(&["a.json"]), |out| out.write_all(b"kept"))
         .unwrap();
     assert_eq!(fs::read(dir.join(written)).unwrap(), b"kept");
-    assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+}
+
+#[test]
+fn a_junction_that_leads_nowhere_is_refused_not_missing() {
+    let root = TempDir::new();
+    let gone = root.path().join("gone");
+    fs::create_dir(&gone).unwrap();
+    let link = root.path().join("recordings");
+    junction(&link, &gone);
+    fs::remove_dir(&gone).unwrap();
+
+    let err = Folder::open(&link).err().unwrap();
+
+    assert_eq!(err.kind(), io::ErrorKind::NotADirectory, "{err}");
 }
 
 #[test]
@@ -166,6 +177,25 @@ fn a_file_another_program_holds_is_busy_not_missing() {
     );
     drop(held);
     assert_eq!(fs::read(&path).unwrap(), b"old");
+    assert_eq!(root.entries(), ["config.toml"]);
+}
+
+#[test]
+fn a_file_let_go_within_the_wait_is_replaced() {
+    let root = TempDir::new();
+    let path = root.path().join("config.toml");
+    fs::write(&path, b"old").unwrap();
+    let held = hold(&path);
+    let release = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(40));
+        drop(held);
+    });
+
+    let replaced = super::super::atomic_write(&path, b"new");
+
+    release.join().unwrap();
+    replaced.unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"new");
     assert_eq!(root.entries(), ["config.toml"]);
 }
 

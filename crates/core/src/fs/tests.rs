@@ -300,7 +300,7 @@ fn a_private_folder_must_be_absolute_and_is_made_whole() {
 }
 
 #[test]
-fn a_file_opened_for_reading_follows_a_link_only_when_asked() {
+fn a_plain_file_is_read_whether_links_are_followed_or_not() {
     let dir = TempDir::new();
     let path = dir.path().join("config.toml");
     fs::write(&path, b"text").unwrap();
@@ -387,7 +387,10 @@ mod unix {
             .status()
             .unwrap();
         assert!(made.success());
-        let err = sync_dir(&fifo).unwrap_err();
+        let (send, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || send.send(sync_dir(&fifo)));
+        let synced = received.recv_timeout(Duration::from_secs(5));
+        let err = synced.expect("the flush waited on the FIFO").unwrap_err();
         assert_eq!(err.raw_os_error(), Some(libc::ENOTDIR), "{err}");
     }
 

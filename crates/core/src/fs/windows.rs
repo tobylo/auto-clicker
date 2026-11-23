@@ -86,13 +86,15 @@ pub(super) fn open_read(path: &Path, link: Link) -> io::Result<File> {
 /// Opens the folder `dir` and holds it, refusing it when it is a reparse
 /// point or not a folder.
 ///
-/// Its path is resolved once into one through no link, and the folder is
-/// opened at that path without letting anyone remove or rename it while it
-/// is held. Only then is `dir` checked: it must be no link itself, and
-/// still resolve to the held folder, so a link put in its place at any
-/// moment before the check is refused rather than followed. Names in the
-/// folder are joined to the resolved path from then on.
+/// `dir` is refused at once when it is a link, even one that leads
+/// nowhere. Its path is then resolved once into one through no link, and
+/// the folder is opened at that path without letting anyone remove or
+/// rename it while it is held. `dir` is checked again after: it must still
+/// be no link, and still resolve to the held folder, so a link put in its
+/// place meanwhile is refused rather than followed. Names in the folder are
+/// joined to the resolved path from then on.
 pub(super) fn open_dir(dir: &Path) -> io::Result<(File, PathBuf)> {
+    refuse_link(&fs::symlink_metadata(dir)?, dir)?;
     let resolved = fs::canonicalize(dir)?;
     let handle = OpenOptions::new()
         .read(true)
