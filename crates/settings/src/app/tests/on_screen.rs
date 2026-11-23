@@ -73,10 +73,13 @@ pub fn the_group_shows_the_switches_saves_them_and_says_why_it_cannot_show() {
         );
         let corner = Corner::ALL.iter().position(|c| *c == on_screen.corner);
         assert_eq!(usize::try_from(shown(&window).4).ok(), corner);
+        // Shown again once it can.
+        let mut able = view(defaults(), None);
+        able.settings.on_screen = on_screen;
+        app.borrow_mut().update(Update::View(Box::new(able)));
+        assert!(window.get_on_screen_possible(), "{on_screen:?}");
+        assert_eq!(window.get_on_screen_why(), "");
     }
-    // Shown again once it can.
-    update(view(settings, None));
-    assert!(window.get_on_screen_possible());
 }
 
 fn all_off() -> OnScreenSettings {
