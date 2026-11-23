@@ -6,10 +6,9 @@
 //! - **One more reader (O1).** What shows is the view's countdown or its
 //!   run's badge, each while `[on_screen]` switches it on, on every screen:
 //!   the display reads the view and nothing else, and tells the controller
-//!   nothing. Whether the
-//!   desktop can show it at all ([`OnScreen::found`]) is read from the
-//!   globals the layout's connection heard when it last connected, and a
-//!   change fires the layout's signal.
+//!   nothing. Whether the desktop can show it at all ([`OnScreen::found`])
+//!   is read from the globals the layout's connection heard when it last
+//!   connected, and a change fires the layout's signal.
 //! - **A connection of its own (O4), only while it shows (O5).** A show
 //!   opens one, to the listener found at start, within [`SETUP`]; each
 //!   screen's surface has [`ANSWER`] to be answered. When the countdown

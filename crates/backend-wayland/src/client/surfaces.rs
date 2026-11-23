@@ -162,7 +162,7 @@ pub(crate) enum Showing {
     /// Its surface shows this label, or this badge's mark.
     Drawn(String),
     /// It shows nothing, for this reason, until the screens change or the
-    /// next countdown.
+    /// next show.
     Missing(Missing),
 }
 
@@ -357,7 +357,7 @@ fn place(layer: &ZwlrLayerSurfaceV1, place: Place) {
         Corner::BottomRight => (Anchor::Bottom, Anchor::Right),
     };
     layer.set_anchor(vertical | horizontal);
-    // A margin on an edge it is not anchored to has no effect.
+    // A margin on an edge it is not anchored to has no effect. 24: exact.
     let margin = MARGIN as i32;
     layer.set_margin(margin, margin, margin, margin);
 }
