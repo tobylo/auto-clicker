@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::Recording;
-use crate::fs::{Folder, STALE_TEMP_AGE, remove_stale_temps};
+use crate::fs::{Folder, STALE_TEMP_AGE};
 
 /// How many names a save tries: the plain one, then `-1` to `-9`. Two
 /// recordings made in the same millisecond, or in the hour the clocks go
@@ -61,12 +61,18 @@ fn save_in(checked: &Folder, recording: &Recording) -> io::Result<String> {
 }
 
 /// Removes the temporary files that saves in `dir` left when they crashed
-/// at least [`STALE_TEMP_AGE`] ago; how many it removed.
+/// at least [`STALE_TEMP_AGE`] ago; how many it removed. Like every other
+/// change to the recordings, it works in the checked folder: a link in its
+/// place is refused.
 ///
 /// # Errors
-/// The folder cannot be read.
+/// The folder is a link or cannot be read.
 pub fn remove_stale(dir: &Path) -> io::Result<usize> {
-    remove_stale_temps(dir, STALE_TEMP_AGE)
+    match Folder::open(dir) {
+        Ok(folder) => folder.remove_temps(STALE_TEMP_AGE),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(0),
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(test)]
@@ -75,7 +81,7 @@ mod tests {
 
     use super::*;
     use crate::recording::tests::sample;
-    use crate::test_support::TempDir;
+    use crate::test_support::{TempDir, old_temp};
 
     #[cfg(unix)]
     #[test]
@@ -200,18 +206,38 @@ mod tests {
         assert_eq!(fs::read(&first).unwrap(), before);
     }
 
+    const TEMP: &str = ".2026-11-09_18-04-05.123.json.7.0123456789abcdef.tmp";
+
     #[test]
     fn a_start_removes_only_old_temporary_files() {
         let dir = TempDir::new();
         let saved = save(dir.path(), &sample()).unwrap();
-        let fresh = dir
-            .path()
-            .join(".2026-11-09_18-04-05.123.json.7.0123456789abcdef.tmp");
+        let fresh = dir.path().join(TEMP);
         fs::write(&fresh, b"half").unwrap();
+        let old = dir.path().join(TEMP.replace(".7.", ".8."));
+        old_temp(&old);
 
         let removed = remove_stale(dir.path()).unwrap();
+        let none = remove_stale(&dir.path().join("none")).unwrap();
 
-        assert_eq!(removed, 0);
-        assert!(saved.exists() && fresh.exists());
+        assert_eq!((removed, none), (1, 0));
+        assert!(saved.exists() && fresh.exists() && !old.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_start_never_removes_through_a_link_in_the_folders_place() {
+        let root = TempDir::new();
+        let elsewhere = root.path().join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        let behind = elsewhere.join(TEMP);
+        old_temp(&behind);
+        let link = root.path().join("recordings");
+        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+
+        let err = remove_stale(&link).unwrap_err();
+
+        assert_eq!(err.raw_os_error(), Some(libc::ENOTDIR), "{err}");
+        assert!(behind.exists());
     }
 }

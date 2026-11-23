@@ -102,7 +102,8 @@ fn a_crash_after_writing_leaves_the_old_file_whole_and_a_temp_the_next_start_rem
 
     let folder = Folder::open(dir.path()).unwrap();
     assert_eq!(fs::read(&path).unwrap(), b"old");
-    assert_eq!(folder.remove_temps().unwrap(), 1);
+    assert_eq!(folder.remove_temps(Duration::from_secs(3600)).unwrap(), 0);
+    assert_eq!(folder.remove_temps(Duration::ZERO).unwrap(), 1);
     assert_eq!(dir.entries(), ["recording.json"]);
 }
 
@@ -219,6 +220,26 @@ fn a_folder_reads_and_removes_its_files_by_name() {
 
     assert_eq!((read.as_str(), listed), ("text", 1));
     assert_eq!(gone.kind(), io::ErrorKind::NotFound);
+    assert_eq!(dir.entries(), Vec::<String>::new());
+}
+
+#[test]
+fn a_name_in_a_folder_is_one_plain_component() {
+    let dir = TempDir::new();
+    let folder = Folder::open(dir.path()).unwrap();
+    let outside = ["../x.json", "a/b.json", "", ".", "..", "/x.json", "a/"];
+    for name in outside {
+        let kinds = [
+            folder.open_file(name).err().map(|err| err.kind()),
+            folder.remove_file(name).err().map(|err| err.kind()),
+            folder.replace(name, |_| Ok(())).err().map(|err| err.kind()),
+            folder
+                .create_new(&names(&[name]), |_| Ok(()))
+                .err()
+                .map(|err| err.kind()),
+        ];
+        assert_eq!(kinds, [Some(io::ErrorKind::InvalidInput); 4], "{name:?}");
+    }
     assert_eq!(dir.entries(), Vec::<String>::new());
 }
 

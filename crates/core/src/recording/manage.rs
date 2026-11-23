@@ -11,6 +11,7 @@ use std::cell::Cell;
 use std::fmt;
 use std::io::{self, Write};
 use std::path::Path;
+use std::time::Duration;
 
 use super::library::{FileName, LoadError, MAX_FILE_BYTES, load_in};
 use super::{InvalidRecording, check_name};
@@ -198,7 +199,7 @@ pub fn delete(dir: &Path, doomed: Doomed<'_>, keep: usize) -> Result<Removed, Ch
     }
     // Best effort: a folder that cannot be read now was read above, and a
     // temporary file left now is removed at the next start.
-    let swept = folder.remove_temps().unwrap_or(0);
+    let swept = folder.remove_temps(Duration::ZERO).unwrap_or(0);
     if removed.deleted > 0 || swept > 0 {
         removed.unsynced = folder.sync().err();
     }

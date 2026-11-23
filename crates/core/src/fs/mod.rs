@@ -12,7 +12,7 @@
 
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 mod patience;
@@ -182,6 +182,19 @@ impl Folder {
         Ok(folder)
     }
 
+    /// The path of the file `name` in the folder. A name is one plain path
+    /// component: anything that could reach outside the folder is refused.
+    fn join(&self, name: &str) -> io::Result<PathBuf> {
+        let mut parts = Path::new(name).components();
+        match (parts.next(), parts.next()) {
+            (Some(Component::Normal(part)), None) if part == name => Ok(self.path.join(name)),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{name:?} is not a file name"),
+            )),
+        }
+    }
+
     /// The path names in the folder are joined to: on Linux one that goes
     /// through the open folder, on Windows the folder's resolved path.
     pub fn path(&self) -> &Path {
@@ -191,7 +204,7 @@ impl Folder {
     /// Opens the file `name` in the folder for reading, refusing a link and
     /// without waiting on a FIFO.
     pub fn open_file(&self, name: &str) -> io::Result<File> {
-        let path = self.path.join(name);
+        let path = self.join(name)?;
         self.patience
             .retry(&path, Op::Read, || sys::open_read(&path, Link::Refuse))
     }
@@ -203,7 +216,7 @@ impl Folder {
 
     /// Removes the file `name` from the folder.
     pub fn remove_file(&self, name: &str) -> io::Result<()> {
-        let path = self.path.join(name);
+        let path = self.join(name)?;
         self.patience
             .retry(&path, Op::Change, || fs::remove_file(&path))
     }
@@ -233,7 +246,7 @@ impl Folder {
         let first = names.first().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "no name to write the file at")
         })?;
-        let path = self.path.join(first);
+        let path = self.join(first)?;
         let placed = write_then_place(
             Beside {
                 dir: &self.path,
@@ -254,7 +267,7 @@ impl Folder {
     /// Puts `temp` in place under the first of `names` that is free.
     fn place_at_first_free(&self, temp: &Path, names: &[String]) -> io::Result<PathBuf> {
         for name in names {
-            let path = self.path.join(name);
+            let path = self.join(name)?;
             match put(temp, &path, Place::New, &self.patience) {
                 Ok(()) => return Ok(path),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
@@ -279,7 +292,7 @@ impl Folder {
         name: &str,
         write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
     ) -> io::Result<Result<(), Unsynced>> {
-        let path = self.path.join(name);
+        let path = self.join(name)?;
         let placed = write_then_place(
             Beside {
                 dir: &self.path,
@@ -292,14 +305,14 @@ impl Folder {
         Ok(placed.map(drop))
     }
 
-    /// Removes every temporary file a save left in the folder, however
-    /// new: what a crash, or on Windows a temporary file another program
-    /// held, left behind. Returns how many it removed.
+    /// Removes the temporary files saves left in the folder that are at
+    /// least `age` old: what a crash, or on Windows a temporary file another
+    /// program held, left behind. Returns how many it removed.
     ///
     /// # Errors
     /// The folder cannot be read.
-    pub fn remove_temps(&self) -> io::Result<usize> {
-        temps::remove_in(&self.path, Duration::ZERO, |path| {
+    pub fn remove_temps(&self, age: Duration) -> io::Result<usize> {
+        temps::remove_in(&self.path, age, |path| {
             self.patience
                 .retry(path, Op::Change, || fs::remove_file(path))
         })

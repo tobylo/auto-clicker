@@ -62,11 +62,17 @@ pub(super) fn sync_open_dir(_dir: &File) -> io::Result<()> {
 /// (a symbolic link or a junction) without following it. Windows has no
 /// FIFOs at a file path, so nothing here can block.
 pub(super) fn open_read(path: &Path, link: Link) -> io::Result<File> {
+    // Backup semantics opens a folder too, as Linux does, so a folder or a
+    // junction in a file's place reaches the checks rather than failing as
+    // "access denied"; callers read only a regular file.
+    let no_follow = match link {
+        Link::Follow => 0,
+        Link::Refuse => FILE_FLAG_OPEN_REPARSE_POINT,
+    };
     let mut options = OpenOptions::new();
-    options.read(true);
-    if link == Link::Refuse {
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | no_follow);
     let file = options.open(path)?;
     if link == Link::Refuse && is_reparse_point(&file.metadata()?) {
         return Err(io::Error::other(format!(

@@ -227,14 +227,16 @@ mod tests {
             .unwrap();
         let fresh = path.with_file_name(".current-recording.7.0123456789abcdef.tmp");
         fs::write(&fresh, b"half").unwrap();
+        let old = path.with_file_name(".current-recording.8.0123456789abcdef.tmp");
+        crate::test_support::old_temp(&old);
 
         let removed = (
             current.remove_stale_temps().unwrap(),
             CurrentFile::none().remove_stale_temps().unwrap(),
         );
 
-        assert_eq!(removed, (0, 0));
-        assert!(fresh.exists());
+        assert_eq!(removed, (1, 0));
+        assert!(fresh.exists() && !old.exists());
     }
 
     #[test]

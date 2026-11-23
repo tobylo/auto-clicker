@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use super::*;
-use crate::test_support::TempDir;
 #[cfg(unix)]
 use crate::test_support::permissions_apply;
+use crate::test_support::{TempDir, old_temp};
 
 fn changed() -> Config {
     Config {
@@ -227,12 +227,32 @@ fn a_start_removes_only_old_temporary_files_beside_the_config() {
     let (_dir, path, file) = loaded_with(Some("version = 1\n"));
     let fresh = path.with_file_name(".config.toml.7.0123456789abcdef.tmp");
     fs::write(&fresh, b"half").unwrap();
+    let old = path.with_file_name(".config.toml.8.0123456789abcdef.tmp");
+    old_temp(&old);
 
     let removed = (
         file.remove_stale_temps().unwrap(),
         ConfigFile::none().remove_stale_temps().unwrap(),
     );
 
-    assert_eq!(removed, (0, 0));
-    assert!(fresh.exists());
+    assert_eq!(removed, (1, 0));
+    assert!(fresh.exists() && !old.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_config_has_its_old_temporary_files_removed_beside_its_target() {
+    let (dir, path, _) = loaded_with(None);
+    let dotfiles = dir.path().join("dotfiles");
+    fs::create_dir(&dotfiles).unwrap();
+    let real = dotfiles.join("config.toml");
+    fs::write(&real, "version = 1\n").unwrap();
+    fs::create_dir(path.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&real, &path).unwrap();
+    let old = dotfiles.join(".config.toml.8.0123456789abcdef.tmp");
+    old_temp(&old);
+    let file = Config::load(&path).file;
+
+    assert_eq!(file.remove_stale_temps().unwrap(), 1);
+    assert!(!old.exists());
 }
