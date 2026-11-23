@@ -6,7 +6,7 @@ GitHub owns live status. This file records how planning work maps onto the track
 
 - **Repository issues** in `tobylo/auto-clicker`; no Project drafts.
 - **One Project:** [Auto Clicker — Delivery](https://github.com/users/tobylo/projects/4) (user project 4). Every issue is on it.
-- **Milestones** carry the delivery scope: M0 Foundation, M1 Auto clicker, M2 Record and playback, M3 Settings window, M4 Portal backend. Version 1.0 is M0 to M4. Each milestone has a scope-gate issue (Kind Epic) that lists its tasks and its exit criteria.
+- **Milestones** carry the delivery scope: M0 Foundation, M1 Auto clicker, M2 Record and playback, M3 Settings window, M4 Portal backend, M5 Windows. Version 1.0 is M0 to M4. Each milestone has a scope-gate issue (Kind Epic) that lists its tasks and its exit criteria.
 - **Decomposition** uses native sub-issues. A milestone's tasks are sub-issues of its scope gate. A task later refined into slices becomes a Feature and its slices are its sub-issues.
 - **Blocking** uses native `blocked_by` relations, repeated as a `Blocked by:` line in the body. Parentage never implies blocking.
 - **Follow-up duties.** When one issue gives another a duty (a spike's result changes a task, say), the duty becomes an acceptance criterion in the owning issue's body, not only a comment.
@@ -44,6 +44,7 @@ Kind:
 | `area:ui` | Settings window |
 | `area:packaging` | PKGBUILD, udev, systemd, install docs |
 | `area:platform` | Compositor and desktop integration (KWin, portals) |
+| `area:windows` | The Windows backend, its test VM and install |
 
 ## Issue body
 
