@@ -337,6 +337,44 @@ async fn a_screen_that_failed_during_the_countdown_is_tried_again_for_the_badge(
 }
 
 #[tokio::test]
+async fn a_screen_in_the_middle_of_an_update_takes_the_badge_only_once_it_ends() {
+    local(async {
+        let harness = Harness::new().await;
+        harness.set(Activity::StartingIn(2));
+        let mut fake = harness.connected().await;
+        answer(&mut fake, A).await;
+        answer(&mut fake, B).await;
+        let numbers = [A, B].map(|name| surface_id(&fake, name));
+        // B gives a new size and has not said its update ended; A's next
+        // configure, acked once read, shows the client read B's size first.
+        let Ids { xdg, .. } = fake.ids(B);
+        let size = [BELOW.width, BELOW.height].map(i32::cast_unsigned);
+        let on_a = fake.shell.on(fake.ids(A)).unwrap().clone();
+        let resizing = Message {
+            object: xdg,
+            opcode: 1,
+            words: size.to_vec(),
+        };
+        fake.send(vec![resizing, on_a.configure(8)]).await;
+        let output = fake.ids(A);
+        let read = |fake: &Fake| fake.shell.on(output).unwrap().acked.contains(&8);
+        timeout(BOUND, fake.until(read)).await.unwrap();
+        harness.set(Activity::Clicking);
+        answer_anew(&mut fake, A, numbers[0]).await;
+        // B's number goes, and nothing is drawn there at the number's size.
+        gone(&mut fake, B).await;
+        harness.shows(&[(A, drawn("pointer"))]).await;
+        fake.screen(B, BELOW).await;
+        answer_anew(&mut fake, B, numbers[1]).await;
+        assert_eq!(last_buffer(&fake, B), (BADGE, BADGE));
+        harness
+            .shows(&[(A, drawn("pointer")), (B, drawn("pointer"))])
+            .await;
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_connection_lost_during_the_countdown_comes_back_for_the_badge() {
     local(async {
         let harness = Harness::new().await;

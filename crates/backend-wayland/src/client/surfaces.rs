@@ -282,8 +282,9 @@ impl Link {
             .replace(wanted.clone())
             .is_some_and(|was| !was.same_kind(&wanted))
         {
-            // The next show: a screen that showed nothing is tried again.
-            surfaces.screens_changed();
+            // The next show: every screen is asked anew once its size is
+            // known, one that showed nothing included.
+            surfaces.next_show();
         }
         let sizes = client.gather.sizes();
         surfaces.resized(&sizes);
@@ -541,6 +542,18 @@ impl Surfaces {
         shown.drawn = Some((wanted.clone(), scale, shown.fit));
         shown.buffers.push(buffer);
         Ok(())
+    }
+
+    /// Another kind of show: every surface goes, so none keeps the place
+    /// and size of what showed before, and every screen is asked anew,
+    /// one that showed nothing included. A screen whose size is not known
+    /// yet, such as one in the middle of an update, waits without one.
+    fn next_show(&mut self) {
+        for screen in std::mem::take(&mut self.screens).into_values() {
+            if let Screen::Shown(shown) = screen {
+                shown.destroy();
+            }
+        }
     }
 
     /// The screens came or went: each that showed nothing is tried again.

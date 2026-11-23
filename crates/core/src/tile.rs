@@ -27,10 +27,6 @@ impl Tile {
         }
     }
 
-    pub fn side(&self) -> f32 {
-        self.side
-    }
-
     /// Whether `point` lies on the tile, inside its rounded corners.
     pub fn contains(&self, Point { x, y }: Point) -> bool {
         let far = self.side - self.radius;
@@ -179,6 +175,9 @@ mod tests {
         assert_eq!(half.colour, red);
         // Each channel scaled by the alpha, rounded.
         assert_eq!(half.premultiplied_bgra(), [0x22, 0x22, 0x77, 0x7f]);
+        // The top half of a pixel lower down: its samples follow its row.
+        let top = sample(Point { x: 0.0, y: 2.0 }, |p| (p.y < 2.5).then_some(red));
+        assert_eq!(top.alpha, 0x7f);
         let none = sample(Point { x: 0.0, y: 0.0 }, |_| None);
         assert_eq!(none.premultiplied_bgra(), [0; 4]);
     }
