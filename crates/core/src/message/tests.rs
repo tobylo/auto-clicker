@@ -452,7 +452,7 @@ fn recording_changes_read_as_before() {
 }
 
 #[test]
-fn why_the_countdown_cannot_show_on_the_screen_reads_in_english() {
+fn why_the_on_screen_display_cannot_show_reads_in_english() {
     let lead = "The on-screen display cannot show: ";
     assert_english(&[
         (

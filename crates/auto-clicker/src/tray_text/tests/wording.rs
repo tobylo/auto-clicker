@@ -254,7 +254,7 @@ fn every_reason_recordings_keep_movement_only_reads_as_written() {
 }
 
 #[test]
-fn every_reason_the_countdown_cannot_show_reads_as_written() {
+fn every_reason_the_on_screen_display_cannot_show_reads_as_written() {
     use auto_clicker_core::message::NoOnScreen;
 
     let rows = [
