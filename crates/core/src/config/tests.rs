@@ -84,7 +84,6 @@ fn every_option_is_read() {
         [on_screen]
         countdown = false
         clicking = false
-        recording = true
         playback = false
         corner = "bottom_right"
         "#,
@@ -117,9 +116,9 @@ fn every_option_is_read() {
         on_screen: OnScreenSettings {
             countdown: false,
             clicking: false,
-            recording: true,
             playback: false,
             corner: Corner::BottomRight,
+            ..OnScreenSettings::default()
         },
     };
     assert_eq!(config, expected);

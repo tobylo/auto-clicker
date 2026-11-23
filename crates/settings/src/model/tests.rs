@@ -310,65 +310,69 @@ fn a_captured_hotkey_replaces_its_actions_only() {
     }
 }
 
+/// A change to the fields.
+type Change = fn(&mut Fields);
+
 #[test]
 fn each_on_screen_field_gives_its_own_switch_and_the_corner_its_place() {
     let shown = draft(|_| {});
-    let read = |change: fn(&mut Fields)| {
+    let all = shown.on_screen;
+    let cases: [(Change, OnScreenDraft); 7] = [
+        (
+            |f| f.show_countdown = false,
+            OnScreenDraft {
+                countdown: false,
+                ..all
+            },
+        ),
+        (
+            |f| f.badge_clicking = false,
+            OnScreenDraft {
+                clicking: false,
+                ..all
+            },
+        ),
+        (
+            |f| f.badge_recording = false,
+            OnScreenDraft {
+                recording: false,
+                ..all
+            },
+        ),
+        (
+            |f| f.badge_playback = false,
+            OnScreenDraft {
+                playback: false,
+                ..all
+            },
+        ),
+        // The corners in the window's order; an index no widget gives is
+        // the default corner.
+        (
+            |f| f.badge_corner = 1,
+            OnScreenDraft {
+                corner: Corner::TopRight,
+                ..all
+            },
+        ),
+        (
+            |f| f.badge_corner = 3,
+            OnScreenDraft {
+                corner: Corner::BottomRight,
+                ..all
+            },
+        ),
+        (|f| f.badge_corner = 9, all),
+    ];
+    for (change, expected) in cases {
         let mut fields = Fields::from_draft(&shown, '.');
         change(&mut fields);
-        fields.to_draft(&shown.hotkeys, None).unwrap().on_screen
-    };
-    let all = shown.on_screen;
-    assert_eq!(
-        read(|f| f.show_countdown = false),
-        OnScreenDraft {
-            countdown: false,
-            ..all
-        }
-    );
-    assert_eq!(
-        read(|f| f.badge_clicking = false),
-        OnScreenDraft {
-            clicking: false,
-            ..all
-        }
-    );
-    assert_eq!(
-        read(|f| f.badge_recording = false),
-        OnScreenDraft {
-            recording: false,
-            ..all
-        }
-    );
-    assert_eq!(
-        read(|f| f.badge_playback = false),
-        OnScreenDraft {
-            playback: false,
-            ..all
-        }
-    );
-    // The corners in the window's order.
-    let corner = |index: i32| {
-        let mut fields = Fields::from_draft(&shown, '.');
-        fields.badge_corner = index;
-        fields
-            .to_draft(&shown.hotkeys, None)
-            .unwrap()
-            .on_screen
-            .corner
-    };
-    assert_eq!([0, 1, 2, 3].map(corner), Corner::ALL);
+        let read = fields.to_draft(&shown.hotkeys, None).unwrap().on_screen;
+        assert_eq!(read, expected, "{fields:?}");
+    }
     for corner in Corner::ALL {
         let fields = Fields::from_draft(&draft(|d| d.on_screen.corner = corner), '.');
-        assert_eq!(
-            fields
-                .to_draft(&shown.hotkeys, None)
-                .unwrap()
-                .on_screen
-                .corner,
-            corner
-        );
+        let read = fields.to_draft(&shown.hotkeys, None).unwrap().on_screen;
+        assert_eq!(read.corner, corner);
     }
-    // An index no widget gives is the default corner.
-    assert_eq!(corner(9), Corner::TopLeft);
 }

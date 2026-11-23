@@ -41,6 +41,7 @@ fn every_option() -> Vec<Named> {
     configs.extend(clicker_values());
     configs.extend(other_sections());
     configs.extend(playback_values());
+    configs.extend(on_screen_values());
     configs
 }
 
@@ -193,6 +194,12 @@ fn playback_values() -> Vec<Named> {
                 ..d()
             },
         ),
+    ]
+}
+
+fn on_screen_values() -> Vec<Named> {
+    let d = Config::default;
+    vec![
         (
             "no countdown on the screen",
             Config {
