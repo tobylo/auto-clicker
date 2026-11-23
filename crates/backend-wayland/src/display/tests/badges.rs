@@ -379,15 +379,22 @@ async fn a_connection_lost_during_the_countdown_comes_back_for_the_badge() {
     local(async {
         let harness = Harness::new().await;
         harness.set(Activity::StartingIn(3));
-        drop(harness.connected().await);
-        // A tick is no new show.
+        let mut fake = harness.connected().await;
+        answer(&mut fake, A).await;
+        drop(fake);
+        // The loss is seen; then a tick is no new show.
+        harness.shows(&[]).await;
         harness.set(Activity::StartingIn(2));
         assert!(!harness.connects().await, "tried again on a tick");
         harness.set(Activity::Recording);
         let mut fake = harness.connected().await;
         answer(&mut fake, A).await;
+        harness
+            .shows(&[(A, drawn("dot")), (B, Showing::Asked)])
+            .await;
         // Lost again while the badge shows: it waits for the next show.
         drop(fake);
+        harness.shows(&[]).await;
         harness.set(Activity::Recording);
         assert!(
             !harness.connects().await,
@@ -423,6 +430,28 @@ async fn the_badge_is_drawn_once_and_again_only_at_a_new_scale() {
         assert_eq!(surface.destination, Some((40, 40)));
         let more = timeout(AT_ONCE, fake.until(|fake| attached(fake) > 2)).await;
         assert!(more.is_err(), "drawn again at the same scale");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_new_corner_moves_the_badge_on_a_surface_of_its_own() {
+    local(async {
+        let harness = Harness::new().await;
+        harness
+            .views
+            .send_replace(view_with(Activity::Clicking, all_on(Corner::TopLeft)));
+        let mut fake = harness.connected().await;
+        answer(&mut fake, A).await;
+        let before = surface_id(&fake, A);
+        // A save while it shows: the same badge, in another corner.
+        harness
+            .views
+            .send_replace(view_with(Activity::Clicking, all_on(Corner::BottomRight)));
+        answer_anew(&mut fake, A, before).await;
+        let surface = fake.shell.on(fake.ids(A)).unwrap();
+        assert_eq!(surface.anchor, Some(2 | 8));
+        assert_eq!(live(&fake, A), 1);
     })
     .await;
 }

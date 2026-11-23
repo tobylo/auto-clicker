@@ -375,4 +375,9 @@ fn each_on_screen_field_gives_its_own_switch_and_the_corner_its_place() {
         let read = fields.to_draft(&shown.hotkeys, None).unwrap().on_screen;
         assert_eq!(read.corner, corner);
     }
+    // The default corner, not the one shown.
+    let mut fields = Fields::from_draft(&draft(|d| d.on_screen.corner = Corner::BottomLeft), '.');
+    fields.badge_corner = 9;
+    let read = fields.to_draft(&shown.hotkeys, None).unwrap().on_screen;
+    assert_eq!(read.corner, Corner::TopLeft);
 }
