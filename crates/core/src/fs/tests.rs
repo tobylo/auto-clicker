@@ -175,6 +175,47 @@ fn create_writes_the_first_free_name_and_never_replaces() {
 }
 
 #[test]
+fn a_create_that_fails_for_another_reason_than_a_taken_name_says_so() {
+    let dir = TempDir::new();
+    fs::write(dir.path().join("a.json"), b"kept").unwrap();
+    // Longer than any file system allows one name to be.
+    let too_long = format!("{}.json", "a".repeat(300));
+    let folder = Folder::open(dir.path()).unwrap();
+
+    let err = folder
+        .create_new(&names(&["a.json", &too_long, "a-2.json"]), |out| {
+            out.write_all(b"new")
+        })
+        .unwrap_err();
+
+    assert_ne!(err.kind(), io::ErrorKind::AlreadyExists, "{err}");
+    assert_eq!(dir.entries(), ["a.json"]);
+}
+
+#[test]
+fn a_start_keeps_a_temp_file_younger_than_an_hour() {
+    let dir = TempDir::new();
+    let young = dir.path().join(".a.json.1.0123456789abcdef.tmp");
+    let old = dir.path().join(".a.json.2.0123456789abcdef.tmp");
+    let now = std::time::SystemTime::now();
+    for (path, ago) in [(&young, 59 * 60), (&old, 61 * 60)] {
+        fs::write(path, b"half").unwrap();
+        let at = now - Duration::from_secs(ago);
+        File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    }
+
+    let removed = remove_stale_temps(dir.path(), STALE_TEMP_AGE).unwrap();
+
+    assert_eq!(removed, 1);
+    assert_eq!(dir.entries(), [".a.json.1.0123456789abcdef.tmp"]);
+}
+
+#[test]
 fn a_failed_create_leaves_no_file_behind() {
     let dir = TempDir::new();
     let folder = Folder::open(dir.path()).unwrap();
