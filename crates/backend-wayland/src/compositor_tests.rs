@@ -89,39 +89,66 @@ async fn the_running_compositor_gives_cursor_positions_while_recording() {
         .await;
 }
 
-#[tokio::test]
-#[ignore = "needs a running Wayland compositor with layer-shell; shows a countdown on every screen for a few seconds"]
-async fn the_running_compositor_shows_the_countdown_on_every_screen_and_removes_it() {
-    use std::sync::Arc;
-    use std::time::Duration;
+/// The display's view while `activity` runs, the badges in `corner`.
+fn on_screen_view(
+    activity: auto_clicker_core::controller::Activity,
+    corner: auto_clicker_core::config::Corner,
+) -> auto_clicker_core::controller::View {
+    use auto_clicker_core::config::{Config, OnScreenSettings};
+    use auto_clicker_core::controller::{Hotkey, Routes, View};
 
-    use auto_clicker_core::config::Config;
-    use auto_clicker_core::controller::{Activity, Hotkey, Routes, View};
-    use tokio::task::{LocalSet, yield_now};
-    use tokio::time::timeout;
+    let config = Config::default();
+    View {
+        activity,
+        routes: Routes::default(),
+        settings: config.clicker,
+        hotkey: Hotkey::Bound(config.hotkeys.toggle_clicking),
+        record_hotkey: Hotkey::Bound(config.hotkeys.toggle_recording),
+        no_recording: None,
+        play_hotkey: Hotkey::Bound(config.hotkeys.toggle_playback),
+        playback: config.playback,
+        on_screen: OnScreenSettings {
+            corner,
+            ..config.on_screen
+        },
+        recordings: std::sync::Arc::from([]),
+        current: None,
+        playing: None,
+        notice: None,
+        problems: Vec::new(),
+    }
+}
 
+/// Waits up to 2 s until each of `screens` screens shows `text`.
+async fn every_screen_shows(on_screen: &OnScreen, screens: usize, text: &str) {
     use crate::client::Showing;
 
-    fn view(activity: Activity) -> View {
-        let config = Config::default();
-        View {
-            activity,
-            routes: Routes::default(),
-            settings: config.clicker,
-            hotkey: Hotkey::Bound(config.hotkeys.toggle_clicking),
-            record_hotkey: Hotkey::Bound(config.hotkeys.toggle_recording),
-            no_recording: None,
-            play_hotkey: Hotkey::Bound(config.hotkeys.toggle_playback),
-            playback: config.playback,
-            on_screen: config.on_screen,
-            recordings: Arc::from([]),
-            current: None,
-            playing: None,
-            notice: None,
-            problems: Vec::new(),
+    let all_drawn = || {
+        let now = on_screen.screens();
+        now.len() == screens && now.values().all(|s| *s == Showing::Drawn(text.to_owned()))
+    };
+    let drawn = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !all_drawn() {
+            tokio::task::yield_now().await;
         }
-    }
+    })
+    .await;
+    assert!(drawn.is_ok(), "{text}: {:?}", on_screen.screens());
+    eprintln!("{text} on {screens} screens");
+}
 
+#[tokio::test]
+#[ignore = "needs a running Wayland compositor with layer-shell; shows a countdown, then each badge in each corner, on every screen for about 20 seconds"]
+async fn the_running_compositor_shows_the_countdown_and_the_badges_on_every_screen_and_removes_them()
+ {
+    use std::time::Duration;
+
+    use auto_clicker_core::config::Corner;
+    use auto_clicker_core::controller::Activity;
+    use tokio::task::{LocalSet, yield_now};
+    use tokio::time::{sleep, timeout};
+
+    let view = |activity| on_screen_view(activity, Corner::TopLeft);
     LocalSet::new()
         .run_until(async {
             let wayland =
@@ -134,22 +161,23 @@ async fn the_running_compositor_shows_the_countdown_on_every_screen_and_removes_
             // Twelve to nine: across a change of the surfaces' size.
             for seconds in (9..=12).rev() {
                 views.send_replace(view(Activity::StartingIn(seconds)));
-                let text = seconds.to_string();
-                let all_drawn = || {
-                    let now = on_screen.screens();
-                    now.len() == screens && now.values().all(|s| *s == Showing::Drawn(text.clone()))
-                };
-                let drawn = timeout(Duration::from_secs(2), async {
-                    while !all_drawn() {
-                        yield_now().await;
-                    }
-                })
-                .await;
-                assert!(drawn.is_ok(), "{seconds}: {:?}", on_screen.screens());
-                eprintln!("{seconds} on {screens} screens");
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                every_screen_shows(&on_screen, screens, &seconds.to_string()).await;
+                sleep(Duration::from_secs(1)).await;
             }
-            views.send_replace(view(Activity::Clicking));
+            // The run begins: the number gives way to the badge, then each
+            // badge in each corner.
+            for (activity, text) in [
+                (Activity::Clicking, "pointer"),
+                (Activity::Recording, "dot"),
+                (Activity::Playing, "triangle"),
+            ] {
+                for corner in Corner::ALL {
+                    views.send_replace(on_screen_view(activity, corner));
+                    every_screen_shows(&on_screen, screens, text).await;
+                    sleep(Duration::from_secs(1)).await;
+                }
+            }
+            views.send_replace(view(Activity::Idle));
             let gone = timeout(Duration::from_secs(1), async {
                 while !on_screen.screens().is_empty() {
                     yield_now().await;

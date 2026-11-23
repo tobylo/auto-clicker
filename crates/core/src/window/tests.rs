@@ -66,6 +66,7 @@ fn view() -> WindowView {
             toggle_playback: Hotkey::Desktop(Some("Meta+P".to_owned())),
         },
         no_recording: Some(NoRecording::Keyboards(Unavailable::NoPermission)),
+        no_on_screen: Some(NoOnScreen::NoLayerShell),
         problems: vec![Problem::Unlisted(Quoted::new("a problem"))],
         recordings: RecordingsView {
             listed: vec![listed(1, Some("Farm loop")), listed(0, None)],

@@ -1,11 +1,12 @@
-//! How large the countdown is on a screen, and its buffer at the screen's
-//! scale, with the bounds of O8: a surface's side and a buffer's side have a
-//! fixed limit, so a buffer holds 64 MiB at most, and each size is computed
-//! with checked arithmetic. Past a bound, the screen shows nothing, with the
-//! reason.
+//! How large the countdown or the badge is on a screen and where it sits,
+//! and its buffer at the screen's scale, with the bounds of O8: a surface's
+//! side and a buffer's side have a fixed limit, so a buffer holds 64 MiB at
+//! most (a badge's far less), and each size is computed with checked
+//! arithmetic. Past a bound, the screen shows nothing, with the reason.
 
 use std::fmt;
 
+use auto_clicker_core::config::Corner;
 use auto_clicker_core::digits::Label;
 
 /// The characters' height, as a share of the screen's logical height.
@@ -22,6 +23,14 @@ pub(crate) const PAD: f32 = 0.25;
 pub(crate) const MAX_SIDE: u32 = 4096;
 /// A fractional scale's unit: `wp_fractional_scale_v1` speaks in 120ths.
 pub(crate) const WHOLE: u32 = 120;
+/// The badge's side, in logical pixels (O01 decision 15).
+pub(crate) const BADGE: u32 = 40;
+/// The badge's distance from the corner's two edges, in logical pixels.
+pub(crate) const MARGIN: u32 = 24;
+/// The longest side of a badge's buffer, in pixels: a scale of 6.4. Each of
+/// its pixels takes 16 samples, so a compositor that names an absurd scale
+/// cannot hold the daemon's thread drawing it.
+pub(crate) const BADGE_MOST: u32 = 256;
 
 /// Why a screen shows nothing: kept in the display's state for that
 /// screen, and logged (O3, O8).
@@ -55,14 +64,25 @@ impl fmt::Display for Missing {
     }
 }
 
-/// The countdown's size on one screen, in logical pixels.
+/// Where a surface sits on its screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Place {
+    /// In the middle, where the compositor centres a surface without an
+    /// anchor: the countdown.
+    Middle,
+    /// In a corner, [`MARGIN`] from its two edges: the badge.
+    Corner(Corner),
+}
+
+/// What shows on one screen: its size in logical pixels, and its place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Fit {
-    /// The surface: the label and its padding.
+    /// The surface: the label and its padding, or the badge.
     pub(crate) width: u32,
     pub(crate) height: u32,
-    /// The characters' height.
+    /// The characters' height; the badge's side for a badge.
     pub(crate) characters: u32,
+    pub(crate) place: Place,
 }
 
 impl Fit {
@@ -93,8 +113,33 @@ impl Fit {
                 width,
                 height,
                 characters,
+                place: Place::Middle,
             }),
             _ => Err(Missing::Size),
+        }
+    }
+
+    /// The badge in `corner` of a screen `width` by `height` logical
+    /// pixels: always [`BADGE`] square, so a screen's new size keeps its
+    /// surface; nothing on a screen too small to hold it and its margins.
+    pub(crate) fn badge(corner: Corner, (width, height): (i32, i32)) -> Result<Fit, Missing> {
+        let room = i64::from(BADGE + 2 * MARGIN);
+        if i64::from(width) < room || i64::from(height) < room {
+            return Err(Missing::Size);
+        }
+        Ok(Fit {
+            width: BADGE,
+            height: BADGE,
+            characters: BADGE,
+            place: Place::Corner(corner),
+        })
+    }
+
+    /// The longest side its buffer may have.
+    fn most(&self) -> u32 {
+        match self.place {
+            Place::Middle => MAX_SIDE,
+            Place::Corner(_) => BADGE_MOST,
         }
     }
 
@@ -102,9 +147,10 @@ impl Fit {
     /// `wp_fractional_scale_v1` says, with the characters' height in its
     /// pixels.
     pub(crate) fn buffer(&self, scale: u32) -> Result<Fit, Missing> {
+        let most = self.most();
         let scaled = |side: u32| {
             let side = side.checked_mul(scale)?.checked_add(WHOLE / 2)? / WHOLE;
-            (1..=MAX_SIDE).contains(&side).then_some(side)
+            (1..=most).contains(&side).then_some(side)
         };
         match (
             scaled(self.width),
@@ -115,6 +161,7 @@ impl Fit {
                 width,
                 height,
                 characters,
+                place: self.place,
             }),
             _ => Err(Missing::Buffer),
         }
@@ -198,7 +245,44 @@ mod tests {
             width: MAX_SIDE,
             height: MAX_SIDE,
             characters: 1,
+            place: Place::Middle,
         };
         assert_eq!(square.buffer(WHOLE), Ok(square));
+    }
+
+    #[test]
+    fn a_badge_is_the_same_size_on_every_screen_in_its_corner() {
+        for corner in Corner::ALL {
+            for screen in [(1920, 1080), (3440, 1440), (1080, 1920), (88, 88)] {
+                let badge = Fit::badge(corner, screen).unwrap();
+                assert_eq!((badge.width, badge.height), (BADGE, BADGE), "{screen:?}");
+                assert_eq!(badge.place, Place::Corner(corner));
+            }
+        }
+        // A screen that cannot hold it and its margins, or has no size.
+        for screen in [(87, 1080), (1920, 87), (0, 0), (-1, 1080), (i32::MIN, 1)] {
+            assert_eq!(
+                Fit::badge(Corner::TopLeft, screen),
+                Err(Missing::Size),
+                "{screen:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_badges_buffer_follows_the_scale_up_to_its_own_limit() {
+        let badge = Fit::badge(Corner::TopLeft, (1920, 1080)).unwrap();
+        let at = |scale| badge.buffer(scale).map(|fit| (fit.width, fit.height));
+        assert_eq!(at(WHOLE), Ok((40, 40)));
+        assert_eq!(at(150), Ok((50, 50)));
+        assert_eq!(at(192), Ok((64, 64)));
+        // 6.4 is the most; past it, nothing, where a countdown would show.
+        assert_eq!(at(768), Ok((256, 256)));
+        // 40 x 769 / 120 rounds to 256, 40 x 770 / 120 to 257.
+        assert_eq!(at(769), Ok((256, 256)));
+        assert_eq!(at(770), Err(Missing::Buffer));
+        assert_eq!(at(WHOLE * 10), Err(Missing::Buffer));
+        assert_eq!(at(u32::MAX), Err(Missing::Buffer));
+        assert_eq!(badge.buffer(768).unwrap().place, badge.place);
     }
 }

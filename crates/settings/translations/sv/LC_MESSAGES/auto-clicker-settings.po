@@ -197,6 +197,39 @@ msgstr "Tills den stoppas"
 msgid "Delay before a start from the tray, seconds"
 msgstr "Fördröjning före en start från fältet, sekunder"
 
+msgid "On the screen"
+msgstr "På skärmen"
+
+msgid "Nothing can show on the screen: {}"
+msgstr "Inget kan visas på skärmen: {}"
+
+msgid "The countdown before a start from the tray, in the middle"
+msgstr "Nedräkningen före en start från fältet, i mitten"
+
+msgid "A badge while clicking"
+msgstr "En symbol medan programmet klickar"
+
+msgid "A badge while recording"
+msgstr "En symbol medan programmet spelar in"
+
+msgid "A badge while playing a recording"
+msgstr "En symbol medan programmet spelar upp en inspelning"
+
+msgid "The badges' corner"
+msgstr "Symbolernas hörn"
+
+msgid "Top left"
+msgstr "Uppe till vänster"
+
+msgid "Top right"
+msgstr "Uppe till höger"
+
+msgid "Bottom left"
+msgstr "Nere till vänster"
+
+msgid "Bottom right"
+msgstr "Nere till höger"
+
 msgid "Hotkeys"
 msgstr "Snabbtangenter"
 
@@ -469,8 +502,8 @@ msgstr "Hyprlands socket hör till en annan Wayland-display"
 msgid "the Wayland display gave no pointer position; see the log"
 msgstr "Wayland-displayen gav ingen pekarposition; se loggen"
 
-msgid "The countdown cannot show on the screen: {}"
-msgstr "Nedräkningen kan inte visas på skärmen: {}"
+msgid "The on-screen display cannot show: {}"
+msgstr "Skärmvisningen kan inte visas: {}"
 
 msgid "the desktop does not tell the program its screens' sizes (no xdg-output)"
 msgstr "skrivbordet berättar inte skärmarnas storlek för programmet (inget xdg-output)"

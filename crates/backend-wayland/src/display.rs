@@ -1,27 +1,33 @@
 //! The on-screen display: a tray start's countdown in the middle of every
-//! screen, above the game (O01b, brief invariants O1 to O8).
+//! screen, and a badge in a corner of every screen while clicking,
+//! recording or playing, above the game (O01b, O01c, brief invariants O1 to
+//! O8).
 //!
-//! - **One more reader (O1).** What shows is the view's countdown, while
-//!   `[on_screen] countdown` is on, on every screen: the display reads the
-//!   view and nothing else, and tells the controller nothing. Whether the
+//! - **One more reader (O1).** What shows is the view's countdown or its
+//!   run's badge, each while `[on_screen]` switches it on, on every screen:
+//!   the display reads the view and nothing else, and tells the controller
+//!   nothing. Whether the
 //!   desktop can show it at all ([`OnScreen::found`]) is read from the
 //!   globals the layout's connection heard when it last connected, and a
 //!   change fires the layout's signal.
-//! - **A connection of its own (O4), only while it shows (O5).** A countdown
+//! - **A connection of its own (O4), only while it shows (O5).** A show
 //!   opens one, to the listener found at start, within [`SETUP`]; each
-//!   screen's surface has [`ANSWER`] to be answered. When the number goes,
-//!   the connection is dropped, and the compositor removes every surface
-//!   with it: nothing waits on a removal (O2, O7), and nothing of the
-//!   display stays while idle.
+//!   screen's surface has [`ANSWER`] to be answered. When the countdown
+//!   gives way to the badge, the number's surfaces go and the badge's come
+//!   on the same connection. When nothing should show, the connection is
+//!   dropped, and the compositor removes every surface with it: nothing
+//!   waits on a removal (O2, O7), and nothing of the display stays while
+//!   idle.
 //! - **Never in the way (O2).** It is polled with the layout's watcher on
 //!   the daemon's thread and never waits on the controller; a stop is seen
 //!   between two screens' drawings.
 //! - **Failures keep their meaning (O3).** A screen whose surface was
 //!   closed, answered late or is past a bound shows nothing, with its reason,
-//!   until the screens change or the next countdown; the others keep
-//!   theirs. A failed or lost connection is tried again only when the
-//!   layout's signal says the screens changed, or at the next countdown:
-//!   never on a tick of the seconds, and never on a timer.
+//!   until the screens change or the next show; the others keep theirs. A
+//!   failed or lost connection is tried again only when the layout's signal
+//!   says the screens changed, or at the next show (a countdown, or the
+//!   badge that follows one): never on a tick of the seconds, and never on
+//!   a timer.
 
 pub(crate) mod fit;
 pub(crate) mod paint;
@@ -34,6 +40,7 @@ use std::pin::pin;
 use std::rc::Rc;
 use std::time::Duration;
 
+use auto_clicker_core::badge;
 use auto_clicker_core::controller::{LayoutWatch, View};
 use auto_clicker_core::digits::{self, Label};
 use auto_clicker_core::message::{NoOnScreen, NoScreens};
@@ -94,6 +101,7 @@ impl OnScreen {
             inner: Rc::clone(&self.0),
             layout: self.0.display.layout_changes.subscribe(),
             views,
+            read: None,
         };
         Box::pin(watcher.run())
     }
@@ -117,21 +125,26 @@ pub(crate) fn found(link: Result<&Link, NoScreens>) -> Result<(), NoOnScreen> {
     }
 }
 
-/// What should show while `view` holds: the countdown's label in the job's
-/// colour while it is switched on; nothing otherwise, a hotkey's start
-/// included, which waits for its keys and does not count down.
+/// What should show while `view` holds: a tray start's countdown in the
+/// job's colour, or a run's badge in its corner, each while it is switched
+/// on; nothing otherwise, a start waiting for its keys or its devices
+/// included.
 fn wanted(view: &View) -> Option<Wanted> {
-    if !view.on_screen.countdown {
-        return None;
+    let on_screen = &view.on_screen;
+    if let Some((seconds, colour)) = digits::countdown(view.activity) {
+        return on_screen.countdown.then(|| Wanted::Countdown {
+            label: Label::of(seconds),
+            colour,
+        });
     }
-    let (seconds, colour) = digits::countdown(view.activity)?;
-    Some(Wanted {
-        label: Label::of(seconds),
-        colour,
+    let badge = badge::of(view.activity, on_screen)?;
+    Some(Wanted::Badge {
+        badge,
+        corner: on_screen.corner,
     })
 }
 
-/// Why a countdown's connection ended.
+/// Why a show's connection ended.
 enum Ended {
     /// Nothing should show any more, or the controller is gone.
     Gone,
@@ -145,6 +158,8 @@ struct Watcher {
     /// The layout's changes: after a failed or lost connection, the signal
     /// that the screens changed.
     layout: watch::Receiver<u64>,
+    /// What the view last said should show, as read.
+    read: Option<Wanted>,
 }
 
 impl Watcher {
@@ -153,7 +168,7 @@ impl Watcher {
         loop {
             let shows = self.wanted().is_some() && self.inner.display.on_screen.get().is_ok();
             if shows {
-                self.countdown().await;
+                self.display().await;
                 self.inner.screens.borrow_mut().clear();
             }
             if self.views.changed().await.is_err() {
@@ -164,14 +179,16 @@ impl Watcher {
 
     /// What should show now, the view marked as read.
     fn wanted(&mut self) -> Option<Wanted> {
-        wanted(&self.views.borrow_and_update())
+        self.read = wanted(&self.views.borrow_and_update());
+        self.read.clone()
     }
 
-    /// One countdown: a connection that shows it until nothing should; one
-    /// that fails or is lost is made again only once the layout's signal
-    /// says the screens changed after the failure (O3): a change heard
-    /// before it was the connection's own to hear.
-    async fn countdown(&mut self) {
+    /// One stretch of showing: a connection that shows what should until
+    /// nothing should; one that fails or is lost is made again only once
+    /// the layout's signal says the screens changed after the failure (O3),
+    /// or at the next show: a change heard before it was the connection's
+    /// own to hear, and a tick of the countdown is no new show.
+    async fn display(&mut self) {
         loop {
             let ended = match self.connect().await {
                 Some(Ok(link)) => self.show(link).await,
@@ -180,7 +197,7 @@ impl Watcher {
             };
             self.layout.borrow_and_update();
             self.inner.screens.borrow_mut().clear();
-            if matches!(ended, Ended::Gone) || !self.screens_change().await {
+            if matches!(ended, Ended::Gone) || !self.next_try().await {
                 return;
             }
         }
@@ -203,8 +220,8 @@ impl Watcher {
                 opened = &mut setup => {
                     return Some(opened.unwrap_or_else(|_| {
                         eprintln!(
-                            "auto-clicker: the Wayland display did not set up the countdown's \
-                             surfaces within {SETUP:?}"
+                            "auto-clicker: the Wayland display did not set up the on-screen \
+                             display's surfaces within {SETUP:?}"
                         );
                         Err(())
                     }));
@@ -252,15 +269,18 @@ impl Watcher {
         }
     }
 
-    /// Waits for the layout's signal; `false` once nothing should show
-    /// first.
-    async fn screens_change(&mut self) -> bool {
+    /// Waits for the layout's signal or the next show, such as the badge
+    /// after the countdown it failed during; `false` once nothing should
+    /// show first.
+    async fn next_try(&mut self) -> bool {
+        let failed = self.read.clone();
         loop {
             tokio::select! {
                 biased;
                 changed = self.views.changed() => {
-                    if changed.is_err() || self.wanted().is_none() {
-                        return false;
+                    let read = changed.ok().map(|()| self.wanted());
+                    if let Some(retry) = next_show(read, failed.as_ref()) {
+                        return retry;
                     }
                 }
                 changed = self.layout.changed() => return changed.is_ok(),
@@ -269,12 +289,26 @@ impl Watcher {
     }
 }
 
+/// What a view `read` after a failure while `failed` showed says: try
+/// again at the next show, give up once nothing should show or the
+/// controller is gone (`None` read), and wait on through a tick of the
+/// same show.
+fn next_show(read: Option<Option<Wanted>>, failed: Option<&Wanted>) -> Option<bool> {
+    match (read.flatten(), failed) {
+        (None, _) => Some(false),
+        (Some(now), Some(was)) if now.same_kind(was) => None,
+        (Some(_), _) => Some(true),
+    }
+}
+
 /// A connection to the display found at start, its outputs read and the
 /// display's globals bound; `Err` when that fails, as the log says.
 async fn open(display: &Shared) -> Result<Link, ()> {
     let stream = display.open_checked().await.map_err(drop)?;
     let mut link = Link::bound(stream).await.map_err(|why| {
-        eprintln!("auto-clicker: the countdown's connection to the Wayland display failed: {why}");
+        eprintln!(
+            "auto-clicker: the on-screen display's connection to the Wayland display failed: {why}"
+        );
     })?;
     if !link.open_surfaces() {
         eprintln!("auto-clicker: the Wayland display no longer offers layer-shell");

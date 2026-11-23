@@ -51,7 +51,12 @@ pub fn render(config: &Config) -> String {
     lines.value("speed", speed(config.playback.speed));
     lines.value("repeat", count(draft.playback.repeat));
     lines.section("on_screen");
-    lines.value("countdown", draft.on_screen.countdown.to_string());
+    let on_screen = &draft.on_screen;
+    lines.value("countdown", on_screen.countdown.to_string());
+    lines.value("clicking", on_screen.clicking.to_string());
+    lines.value("recording", on_screen.recording.to_string());
+    lines.value("playback", on_screen.playback.to_string());
+    lines.word("corner", on_screen.corner.word());
     text
 }
 

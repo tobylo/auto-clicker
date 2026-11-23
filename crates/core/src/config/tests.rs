@@ -83,6 +83,10 @@ fn every_option_is_read() {
 
         [on_screen]
         countdown = false
+        clicking = false
+        recording = true
+        playback = false
+        corner = "bottom_right"
         "#,
     );
     let expected = Config {
@@ -110,7 +114,13 @@ fn every_option_is_read() {
             speed: Speed::from_ratio(1.5).unwrap(),
             repeat: Repeat::Times(NonZeroU32::new(3).unwrap()),
         },
-        on_screen: OnScreenSettings { countdown: false },
+        on_screen: OnScreenSettings {
+            countdown: false,
+            clicking: false,
+            recording: true,
+            playback: false,
+            corner: Corner::BottomRight,
+        },
     };
     assert_eq!(config, expected);
 }

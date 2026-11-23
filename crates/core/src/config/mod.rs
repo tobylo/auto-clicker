@@ -37,6 +37,11 @@
 //! [on_screen]
 //! countdown = true              # a tray start's countdown in the middle of
 //!                               # every screen
+//! clicking = true               # a badge in a corner of every screen while
+//! recording = true              # clicking, recording or playing
+//! playback = true
+//! corner = "top_left"           # top_left, top_right, bottom_left or
+//!                               # bottom_right
 //! ```
 
 pub(crate) mod check;
@@ -99,11 +104,61 @@ pub struct Config {
 pub struct OnScreenSettings {
     /// A tray start's countdown, in the middle of every screen.
     pub countdown: bool,
+    /// A badge while clicking, in the corner of every screen.
+    pub clicking: bool,
+    /// A badge while recording.
+    pub recording: bool,
+    /// A badge while playing a recording.
+    pub playback: bool,
+    /// The corner the badges sit in.
+    pub corner: Corner,
+}
+
+impl OnScreenSettings {
+    /// Whether anything at all is switched on.
+    pub fn any(&self) -> bool {
+        self.countdown || self.clicking || self.recording || self.playback
+    }
 }
 
 impl Default for OnScreenSettings {
     fn default() -> Self {
-        OnScreenSettings { countdown: true }
+        OnScreenSettings {
+            countdown: true,
+            clicking: true,
+            recording: true,
+            playback: true,
+            corner: Corner::TopLeft,
+        }
+    }
+}
+
+/// A corner of the screen, as `corner` names it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Corner {
+    #[default]
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl Corner {
+    pub const ALL: [Corner; 4] = [
+        Corner::TopLeft,
+        Corner::TopRight,
+        Corner::BottomLeft,
+        Corner::BottomRight,
+    ];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            Corner::TopLeft => "top_left",
+            Corner::TopRight => "top_right",
+            Corner::BottomLeft => "bottom_left",
+            Corner::BottomRight => "bottom_right",
+        }
     }
 }
 

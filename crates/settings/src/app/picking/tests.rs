@@ -31,6 +31,7 @@ fn view(activity: Activity, screens: Result<Layout, NoScreens>) -> WindowView {
             toggle_playback: shown(config.hotkeys.toggle_playback),
         },
         no_recording: None,
+        no_on_screen: None,
         problems: Vec::new(),
         recordings: Default::default(),
         screens,

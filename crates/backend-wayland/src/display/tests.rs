@@ -5,7 +5,7 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use auto_clicker_core::config::Config;
+use auto_clicker_core::config::{Config, OnScreenSettings};
 use auto_clicker_core::controller::{Activity, Hotkey, LayoutSignal, Routes};
 use tokio::task::{JoinHandle, LocalSet};
 use tokio::time::timeout;
@@ -17,6 +17,7 @@ use crate::client::fake::{
 };
 use crate::display::fit::Missing;
 
+mod badges;
 mod ends;
 
 /// Well under [`SETUP`] and [`ANSWER`]: a stop that waits either out
@@ -24,11 +25,18 @@ mod ends;
 const AT_ONCE: Duration = Duration::from_millis(300);
 
 /// The view while `activity` runs, the countdown on the screen switched on
-/// or off.
+/// or off, the badges on in the top left.
 fn view(activity: Activity, countdown: bool) -> View {
+    let on_screen = OnScreenSettings {
+        countdown,
+        ..OnScreenSettings::default()
+    };
+    view_with(activity, on_screen)
+}
+
+/// The view while `activity` runs, `on_screen` switching each part.
+fn view_with(activity: Activity, on_screen: OnScreenSettings) -> View {
     let config = Config::default();
-    let mut on_screen = config.on_screen;
-    on_screen.countdown = countdown;
     View {
         activity,
         routes: Routes::default(),
@@ -215,15 +223,17 @@ fn drawn(text: &str) -> Showing {
 }
 
 #[tokio::test]
-async fn nothing_of_the_display_exists_until_a_countdown_from_the_tray() {
+async fn nothing_of_the_display_exists_while_idle_or_while_a_start_waits() {
     local(async {
         let harness = Harness::new().await;
         assert!(!harness.connects().await, "connected while idle");
-        // A hotkey's start waits for its keys and does not count down.
+        // A hotkey's start waits for its keys and does not count down, and
+        // no start shows anything while it waits for the devices.
         for activity in [
             Activity::WaitingForRelease,
             Activity::Opening,
-            Activity::Clicking,
+            Activity::PlayWaitingForRelease,
+            Activity::PlayOpening,
         ] {
             harness.set(activity);
             assert!(!harness.connects().await, "connected for {activity:?}");
@@ -269,8 +279,9 @@ async fn a_tray_countdown_shows_on_every_screen_follows_the_seconds_and_goes() {
         answer(&mut fake, A).await;
         answer(&mut fake, B).await;
         harness.shows(&[(A, drawn("10")), (B, drawn("10"))]).await;
-        // The run begins: the connection closes, and every surface with it.
-        harness.set(Activity::Recording);
+        // The run begins once the devices open, which shows nothing: the
+        // connection closes, and every surface with it.
+        harness.set(Activity::Opening);
         closes(&mut fake).await;
         harness.shows(&[]).await;
     })
@@ -307,7 +318,7 @@ async fn each_surface_is_on_the_overlay_layer_and_takes_no_input() {
 
 #[tokio::test]
 async fn a_cancelled_countdown_removes_the_number_at_once() {
-    for cancel in [Activity::Idle, Activity::Clicking] {
+    for cancel in [Activity::Idle, Activity::Opening, Activity::PlayOpening] {
         local(async {
             let harness = Harness::new().await;
             harness.set(Activity::StartingIn(5));
@@ -331,7 +342,7 @@ async fn an_answer_after_the_countdown_ended_shows_nothing() {
             .await
             .unwrap();
         let surface = fake.shell.on(output).unwrap().clone();
-        harness.set(Activity::Clicking);
+        harness.set(Activity::Idle);
         // The answer comes after: the connection is closed, nothing drawn,
         // every request read until it closed.
         let _ = fake.stream.try_write(&surface.configure(1).bytes());
@@ -350,7 +361,7 @@ async fn a_display_that_never_answers_its_setup_is_left_at_once_when_the_countdo
         let mut fake = timeout(BOUND, harness.display.accept()).await.unwrap();
         // The client's first round trip, never answered.
         timeout(BOUND, fake.until_sync()).await.unwrap();
-        harness.set(Activity::Clicking);
+        harness.set(Activity::Idle);
         closes(&mut fake).await;
     })
     .await;

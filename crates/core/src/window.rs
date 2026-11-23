@@ -21,7 +21,7 @@ use crate::config::{Draft, InputDraft, Refusal, Stale};
 use crate::controller::{Activity, Hotkey, Listed, NoRecording, Routes, WINDOW_RECORDINGS};
 use crate::hotkeys::{Action, Binding, Capture};
 use crate::message::{
-    ChangeFailure, Failure, NoScreens, Notice, Problem, Quoted, Titled, Unavailability,
+    ChangeFailure, Failure, NoOnScreen, NoScreens, Notice, Problem, Quoted, Titled, Unavailability,
 };
 use crate::recording::{FileName, Layout, Rect};
 
@@ -250,6 +250,9 @@ pub struct WindowView {
     /// Why no recording can start, whatever the activity; `None` when one
     /// can.
     pub no_recording: Option<NoRecording>,
+    /// Why the on-screen display cannot show, whatever its switches say;
+    /// `None` when it can.
+    pub no_on_screen: Option<NoOnScreen>,
     /// What is wrong now, as the tray lists it.
     pub problems: Vec<Problem>,
     pub recordings: RecordingsView,

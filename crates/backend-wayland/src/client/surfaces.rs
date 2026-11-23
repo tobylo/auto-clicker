@@ -1,5 +1,6 @@
 //! The on-screen display's objects on its own connection (O01's O4): a
-//! layer-shell surface per screen on the overlay layer, asking for no
+//! layer-shell surface per screen on the overlay layer, in the middle for
+//! the countdown or anchored to a corner for the badge, asking for no
 //! keyboard and with an empty input region (O6), each drawn into a buffer
 //! in shared memory at the screen's fractional scale.
 //!
@@ -13,6 +14,8 @@
 
 use std::collections::BTreeMap;
 
+use auto_clicker_core::badge::{Badge, Mark};
+use auto_clicker_core::config::Corner;
 use auto_clicker_core::digits::{Label, Rgb};
 use auto_clicker_core::recording::MAX_OUTPUTS;
 use tokio::time::Instant;
@@ -35,11 +38,11 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{
     Layer, ZwlrLayerShellV1,
 };
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
-    self, KeyboardInteractivity, ZwlrLayerSurfaceV1,
+    self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1,
 };
 
 use super::{Arrived, Client, Global, Link};
-use crate::display::fit::{Fit, Missing, WHOLE};
+use crate::display::fit::{Fit, MARGIN, Missing, Place, WHOLE};
 use crate::display::{ANSWER, NAMESPACE, paint, shm};
 
 pub(crate) const COMPOSITOR: &str = "wl_compositor";
@@ -113,11 +116,42 @@ impl Offered {
     }
 }
 
-/// What should show on every screen: the label, in the job's colour.
+/// What should show on every screen.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Wanted {
-    pub(crate) label: Label,
-    pub(crate) colour: Rgb,
+pub(crate) enum Wanted {
+    /// A tray start's countdown in the middle: the label, in the job's
+    /// colour.
+    Countdown { label: Label, colour: Rgb },
+    /// A run's badge, in the corner.
+    Badge { badge: Badge, corner: Corner },
+}
+
+impl Wanted {
+    /// What it shows, in a word: the label, or the badge's mark.
+    pub(crate) fn text(&self) -> &str {
+        match self {
+            Wanted::Countdown { label, .. } => label.text(),
+            Wanted::Badge { badge, .. } => match badge.mark {
+                Mark::Pointer => "pointer",
+                Mark::Dot => "dot",
+                Mark::Triangle => "triangle",
+            },
+        }
+    }
+
+    /// Whether `other` is the same kind of show: another second of the
+    /// countdown is, the badge after the countdown is not.
+    pub(crate) fn same_kind(&self, other: &Wanted) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
+
+    /// Its size and place on a screen `size` logical pixels large.
+    fn fit(&self, size: (i32, i32)) -> Result<Fit, Missing> {
+        match self {
+            Wanted::Countdown { label, .. } => Fit::of(label, size),
+            Wanted::Badge { corner, .. } => Fit::badge(*corner, size),
+        }
+    }
 }
 
 /// One screen as the display holds it.
@@ -125,7 +159,7 @@ pub(crate) struct Wanted {
 pub(crate) enum Showing {
     /// Its surface waits for the compositor's answer.
     Asked,
-    /// Its surface shows this label.
+    /// Its surface shows this label, or this badge's mark.
     Drawn(String),
     /// It shows nothing, for this reason, until the screens change or the
     /// next countdown.
@@ -243,7 +277,14 @@ impl Link {
         let Some(surfaces) = &mut client.surfaces else {
             return false;
         };
-        surfaces.wanted = Some(wanted.clone());
+        if surfaces
+            .wanted
+            .replace(wanted.clone())
+            .is_some_and(|was| !was.same_kind(&wanted))
+        {
+            // The next show: a screen that showed nothing is tried again.
+            surfaces.screens_changed();
+        }
         let sizes = client.gather.sizes();
         surfaces.resized(&sizes);
         for (index, (&name, bound)) in client.outputs.iter().enumerate() {
@@ -254,7 +295,7 @@ impl Link {
             let Some(&size) = sizes.get(&name) else {
                 continue;
             };
-            match Fit::of(&wanted.label, size) {
+            match wanted.fit(size) {
                 Ok(fit) => {
                     let output = &bound.output;
                     surfaces.ask(Asking { name, output, fit }, &queue, now);
@@ -291,7 +332,7 @@ impl Link {
         let showing = |screen: &Screen| match screen {
             Screen::Missing(missing) => Showing::Missing(*missing),
             Screen::Shown(shown) => match (&shown.drawn, shown.answer) {
-                (Some((wanted, ..)), None) => Showing::Drawn(wanted.label.text().to_owned()),
+                (Some((wanted, ..)), None) => Showing::Drawn(wanted.text().to_owned()),
                 _ => Showing::Asked,
             },
         };
@@ -300,6 +341,25 @@ impl Link {
             .map(|(&name, screen)| (name, showing(screen)))
             .collect()
     }
+}
+
+/// Places `layer` as `place` says: with no anchor, the compositor centres
+/// it; in a corner, it is anchored to the corner's two edges, [`MARGIN`]
+/// from each.
+fn place(layer: &ZwlrLayerSurfaceV1, place: Place) {
+    let Place::Corner(corner) = place else {
+        return;
+    };
+    let (vertical, horizontal) = match corner {
+        Corner::TopLeft => (Anchor::Top, Anchor::Left),
+        Corner::TopRight => (Anchor::Top, Anchor::Right),
+        Corner::BottomLeft => (Anchor::Bottom, Anchor::Left),
+        Corner::BottomRight => (Anchor::Bottom, Anchor::Right),
+    };
+    layer.set_anchor(vertical | horizontal);
+    // A margin on an edge it is not anchored to has no effect.
+    let margin = MARGIN as i32;
+    layer.set_margin(margin, margin, margin, margin);
 }
 
 fn bind<I: Proxy + 'static>(
@@ -322,9 +382,13 @@ impl Surfaces {
             Some(Screen::Missing(before)) if before == missing => {}
             Some(Screen::Shown(shown)) => {
                 shown.destroy();
-                eprintln!("auto-clicker: the countdown shows on screen {name} no more: {missing}");
+                eprintln!(
+                    "auto-clicker: the on-screen display shows on screen {name} no more: {missing}"
+                );
             }
-            _ => eprintln!("auto-clicker: the countdown cannot show on screen {name}: {missing}"),
+            _ => eprintln!(
+                "auto-clicker: the on-screen display cannot show on screen {name}: {missing}"
+            ),
         }
     }
 
@@ -359,7 +423,7 @@ impl Surfaces {
         self.screens.insert(name, Screen::Shown(Box::new(shown)));
     }
 
-    /// The surface `asking` says, on the overlay layer and centred, taking
+    /// The surface `asking` says, on the overlay layer in its place, taking
     /// no input; its answer due at `due`.
     fn create(&self, asking: Asking<'_>, queue: &QueueHandle<Client>, due: Instant) -> Shown {
         let Asking { name, output, fit } = asking;
@@ -379,7 +443,9 @@ impl Surfaces {
         );
         layer.set_size(fit.width, fit.height);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-        // Above everything, moving nothing: no anchor, so centred.
+        place(&layer, fit.place);
+        // Above everything, moving nothing, and placed on the screen's
+        // edges whatever other surfaces keep for themselves.
         layer.set_exclusive_zone(-1);
         let scale = self.scaling.as_ref().map(|(viewporter, fractions)| {
             (
@@ -454,9 +520,12 @@ impl Surfaces {
             WHOLE
         };
         let size = shown.fit.buffer(scale)?;
-        let picture = paint::number(&wanted.label, wanted.colour, size);
+        let picture = match wanted {
+            Wanted::Countdown { label, colour } => paint::number(label, *colour, size),
+            Wanted::Badge { badge, .. } => paint::badge(*badge, size),
+        };
         let buffer = shm::buffer(&self.shm, &picture, name, queue).map_err(|err| {
-            eprintln!("auto-clicker: no memory for the countdown's buffer: {err}");
+            eprintln!("auto-clicker: no memory for the on-screen display's buffer: {err}");
             Missing::Memory
         })?;
         let Fit { width, height, .. } = shown.fit;

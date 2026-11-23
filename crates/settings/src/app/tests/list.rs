@@ -183,7 +183,7 @@ fn listing(minutes: &[u32], more: u64) -> WindowView {
 }
 
 /// The next request the window sent.
-fn sent(read: &mut BufReader<UnixStream>) -> Request {
+pub(super) fn sent(read: &mut BufReader<UnixStream>) -> Request {
     let mut line = Vec::new();
     read.read_until(b'\n', &mut line).unwrap();
     parse(&line[..line.len() - 1]).unwrap()
@@ -199,7 +199,7 @@ fn marked(window: &SettingsWindow) -> Vec<bool> {
 }
 
 /// A window over a new link, its app, and the link's other end.
-fn opened() -> (SettingsWindow, Rc<RefCell<App>>, BufReader<UnixStream>) {
+pub(super) fn opened() -> (SettingsWindow, Rc<RefCell<App>>, BufReader<UnixStream>) {
     let window = SettingsWindow::new().unwrap();
     let (link, other) = Link::pair().unwrap();
     // A request that never comes fails the test instead of hanging it.

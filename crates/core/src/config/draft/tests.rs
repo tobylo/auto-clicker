@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::clicker::Jitter;
-use crate::config::{ButtonName, HotkeyRoute, OutputRoute, render};
+use crate::config::{ButtonName, Corner, HotkeyRoute, OutputRoute, render};
 use crate::input::{Button, Key};
 use crate::playback::Speed;
 use crate::recording::Layout;
@@ -196,7 +196,46 @@ fn playback_values() -> Vec<Named> {
         (
             "no countdown on the screen",
             Config {
-                on_screen: OnScreenSettings { countdown: false },
+                on_screen: OnScreenSettings {
+                    countdown: false,
+                    ..OnScreenSettings::default()
+                },
+                ..d()
+            },
+        ),
+        (
+            "no badges, bottom right",
+            Config {
+                on_screen: OnScreenSettings {
+                    clicking: false,
+                    recording: false,
+                    playback: false,
+                    corner: Corner::BottomRight,
+                    ..OnScreenSettings::default()
+                },
+                ..d()
+            },
+        ),
+        (
+            "only the recording badge, top right",
+            Config {
+                on_screen: OnScreenSettings {
+                    countdown: false,
+                    clicking: false,
+                    playback: false,
+                    corner: Corner::TopRight,
+                    ..OnScreenSettings::default()
+                },
+                ..d()
+            },
+        ),
+        (
+            "bottom left",
+            Config {
+                on_screen: OnScreenSettings {
+                    corner: Corner::BottomLeft,
+                    ..OnScreenSettings::default()
+                },
                 ..d()
             },
         ),
@@ -317,6 +356,12 @@ fn names_spell_as_the_file_does() {
         assert_eq!(
             serde_json::to_string(&button).unwrap(),
             format!("\"{}\"", button.word())
+        );
+    }
+    for corner in Corner::ALL {
+        assert_eq!(
+            serde_json::to_string(&corner).unwrap(),
+            format!("\"{}\"", corner.word())
         );
     }
     for route in [RouteName::Kernel, RouteName::Portal] {
