@@ -17,6 +17,20 @@ fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+# A jq first on PATH for the gate: it fails when its arguments contain
+# $FAIL_JQ_ON, if set, and otherwise runs the real one. The pattern and the
+# real jq reach it through the environment, so no text of theirs becomes
+# shell code.
+REAL_JQ="$(command -v jq)"
+export REAL_JQ
+mkdir "$work/bin"
+cat >"$work/bin/jq" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n "${FAIL_JQ_ON:-}" && "$*" == *"$FAIL_JQ_ON"* ]]; then exit 5; fi
+exec "$REAL_JQ" "$@"
+EOF
+chmod +x "$work/bin/jq"
+
 # A fresh copy of every file the gate reads, in $work/tree.
 fresh_tree() {
     local tree="$work/tree" path
@@ -37,14 +51,21 @@ edit_facts() {
     jq "$1" "$file" >"$work/facts.json" && mv "$work/facts.json" "$file"
 }
 
-# Puts a jq first on PATH that fails whenever its filter mentions $1, and
-# otherwise runs the real one.
+# Makes the gate's jq fail whenever its arguments contain $1.
 failing_jq() {
-    local real
-    real="$(command -v jq)"
-    mkdir -p "$work/bin"
-    printf '#!/usr/bin/env bash\ncase "$*" in *%s*) exit 5 ;; esac\nexec "%s" "$@"\n' "$1" "$real" >"$work/bin/jq"
-    chmod +x "$work/bin/jq"
+    export FAIL_JQ_ON="$1"
+}
+
+# Points docs/facts.json's install link through a linked directory.
+link_guide_directory() {
+    ln -s guide "$work/tree/docs/linked"
+    edit_facts '.links.install = "docs/linked/install.md"'
+}
+
+# Puts a NUL byte inside a key of the copy of docs/facts.json.
+put_nul_in_facts() {
+    local file="$work/tree/docs/facts.json"
+    sed 's/"version"/"ver\x00sion"/' "$file" >"$work/facts.json" && mv "$work/facts.json" "$file"
 }
 
 # Replaces the copy of docs/guide/install.md with a link to README.md.
@@ -67,14 +88,15 @@ truncate_facts() {
 failures=0
 
 # Runs case $1 after the change in "${@:4}", expecting outcome $2 (pass or
-# fail) with every |-separated text in $3 in the output.
+# fail) with every |-separated text in $3 in the output, and none of those
+# that start with !.
 case_() {
     local name="$1" want="$2" texts="$3" output got text
     shift 3
     fresh_tree
     "$@"
     if output="$(PATH="$work/bin:$PATH" "$here/check-facts.sh" "$work/tree" 2>&1)"; then got=pass; else got=fail; fi
-    rm -rf "$work/bin"
+    unset FAIL_JQ_ON
     if [[ "$got" != "$want" ]]; then
         echo "FAIL $name: expected $want, got $got" >&2
         echo "$output" >&2
@@ -83,7 +105,14 @@ case_() {
     fi
     IFS='|' read -ra wanted <<<"$texts"
     for text in "${wanted[@]}"; do
-        if [[ "$output" != *"$text"* ]]; then
+        if [[ "$text" == '!'* ]]; then
+            if [[ "$output" == *"${text#!}"* ]]; then
+                echo "FAIL $name: output has \"${text#!}\"" >&2
+                echo "$output" >&2
+                failures=$((failures + 1))
+                return
+            fi
+        elif [[ "$output" != *"$text"* ]]; then
             echo "FAIL $name: output lacks \"$text\"" >&2
             echo "$output" >&2
             failures=$((failures + 1))
@@ -150,15 +179,23 @@ case_ path_outside fail "must be a path in this repository" \
     edit_facts '.links.guide = "../README.md"'
 case_ path_missing fail "docs/guide/gone.md, which is not a file in the repository" \
     edit_facts '.links.guide = "docs/guide/gone.md"'
-case_ jq_fails_on_commands fail "" failing_jq 'select(.status'
-case_ jq_fails_on_command_lines fail "" failing_jq '.command // empty'
-case_ jq_fails_on_hotkeys fail "" failing_jq 'hotkeys.modifiers as'
-case_ jq_fails_on_paths fail "" failing_jq '.links[]'
-case_ jq_fails_on_quotes fail "" failing_jq 'source.quote'
+# Each fails one query only: the shape check, which would say "not valid
+# JSON", still runs.
+jq_failed="jq failed reading docs/facts.json|!not valid JSON"
+case_ jq_fails_on_commands fail "$jq_failed" failing_jq 'select(.status'
+case_ jq_fails_on_command_lines fail "$jq_failed|!README.md's commands" failing_jq '.command // empty'
+case_ jq_fails_on_hotkeys fail "$jq_failed|!hotkey table" failing_jq 'hotkeys.modifiers as'
+case_ jq_fails_on_paths fail "$jq_failed" failing_jq '.links[]'
+case_ jq_fails_on_quotes fail "$jq_failed" failing_jq 'source.quote'
+case_ nothing_available pass "matches README.md" \
+    edit_facts '.platforms[0] |= (.status = "soon" | .lines = [] | del(.readme) | del(.note))'
+case_ nul_in_file fail "not valid JSON" put_nul_in_facts
 if ln -s README.md "$work/probe" 2>/dev/null && [[ -L "$work/probe" ]]; then
     case_ path_is_a_link fail "docs/guide/install.md, which is not a file" link_install_guide
+    case_ path_through_a_linked_directory fail "docs/linked/install.md, which is not a file" \
+        link_guide_directory
 else
-    echo "skip path_is_a_link: this system makes no symbolic links"
+    echo "skip path_is_a_link, path_through_a_linked_directory: this system makes no symbolic links"
 fi
 case_ quote_missing fail "figure idle-memory: docs/planning/map.md does not contain" \
     edit_facts '.figures[2].source.quote = "idles at 9.9 MiB"'

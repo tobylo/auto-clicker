@@ -12,17 +12,24 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="${1:-$here/..}"
 readme="$root/README.md"
 
-# The file is read once; every check reads this copy, the one the shape check
-# passed.
-if ! facts_json="$(cat "$root/docs/facts.json")"; then
+# The file is copied once; every check reads this copy, byte for byte the one
+# the shape check passed.
+snapshot="$(mktemp)"
+trap 'rm -f -- "$snapshot"' EXIT
+if ! cp "$root/docs/facts.json" "$snapshot"; then
     echo "docs/facts.json cannot be read" >&2
     exit 1
 fi
 
 # jq on the facts, without the CR a native Windows jq ends each line with.
-# Fails when jq does.
+# Fails, saying so, when jq does.
 facts_query() {
-    jq "$@" <<<"$facts_json" | tr -d '\r'
+    local out
+    if ! out="$(jq "$@" "$snapshot")"; then
+        echo "jq failed reading docs/facts.json" >&2
+        return 1
+    fi
+    printf '%s\n' "${out//$'\r'/}"
 }
 
 shape() {
@@ -100,6 +107,7 @@ same() {
 commands_match() {
     local rows id heading from_readme from_file failed=0
     rows="$(facts_query -r '.platforms[] | select(.status == "available") | "\(.id)\t\(.readme)"')" || return 1
+    [[ -n "$rows" ]] || return 0
     while IFS=$'\t' read -r id heading; do
         if ! from_readme="$(readme_commands "$heading")"; then
             echo "README.md has no single heading \"$heading\" (platform $id)" >&2
@@ -124,12 +132,24 @@ hotkeys_match() {
     same "README.md's hotkey table" "$from_readme" "docs/facts.json's hotkeys" "$from_file"
 }
 
-# Every path the file names is a regular file in the repository, not a link.
+# Whether $1, a relative path, is a regular file under the root with no
+# symbolic link anywhere along it.
+file_in_repository() {
+    local prefix="$root" part parts
+    IFS='/' read -ra parts <<<"$1"
+    for part in "${parts[@]}"; do
+        prefix="$prefix/$part"
+        [[ -L "$prefix" ]] && return 1
+    done
+    [[ -f "$prefix" ]]
+}
+
+# Every path the file names is a regular file in the repository.
 paths_are_files() {
     local paths path failed=0
     paths="$(facts_query -r '.links[], (.platforms[].note.link // empty), .figures[].source.path')" || return 1
     while IFS= read -r path; do
-        if [[ ! -f "$root/$path" || -L "$root/$path" ]]; then
+        if ! file_in_repository "$path"; then
             echo "docs/facts.json names $path, which is not a file in the repository" >&2
             failed=1
         fi
