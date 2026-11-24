@@ -262,6 +262,26 @@ fn a_temp_file_is_renamed_after_each_name_before_it_is_tried_there() {
 }
 
 #[test]
+fn placing_under_a_name_no_file_system_takes_is_an_error_not_a_taken_name() {
+    let dir = TempDir::new();
+    let folder = Folder::open(dir.path()).unwrap();
+    let (mut temp, file) = create_temp(Beside {
+        dir: folder.path(),
+        path: &folder.path().join("a.json"),
+    })
+    .unwrap();
+    fill(file, |out| out.write_all(b"new")).unwrap();
+    let too_long = format!("{}.json", "a".repeat(300));
+
+    let err = folder
+        .place_if_free(&mut temp, false, &too_long)
+        .unwrap_err();
+
+    assert_ne!(err.kind(), io::ErrorKind::AlreadyExists, "{err}");
+    assert!(temp.exists());
+}
+
+#[test]
 fn a_failed_create_leaves_no_file_behind() {
     let dir = TempDir::new();
     let folder = Folder::open(dir.path()).unwrap();
