@@ -49,6 +49,13 @@ fn the_file_has_its_one_shape() {
     facts();
 }
 
+/// So the code blocks, headings and cells the other tests read are what
+/// GitHub shows.
+#[test]
+fn the_readme_is_plain_markdown_after_its_icon() {
+    readme::plain(README).unwrap_or_else(|e| panic!("{e}"));
+}
+
 #[test]
 fn each_available_platforms_commands_are_its_readme_sections() {
     for platform in facts().platforms {

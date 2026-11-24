@@ -58,7 +58,7 @@ What the program will do and why is in the [map](docs/planning/map.md); the work
 
 Bug reports and ideas are welcome as [issues](https://github.com/tobylo/auto-clicker/issues). The program installs only from this repository, and a pull request from outside is merged only by the maintainer, so it may wait a while or be turned down.
 
-The [project page](https://tobylo.github.io/auto-clicker-site/) shows the install commands, hotkeys, measured figures and platform status from [`docs/facts.json`](docs/facts.json), read at a commit its repository pins. A test (`crates/core/tests/facts`) fails when the file's commands or hotkeys differ from this README as GitHub shows it, so change both together; the page shows the change once its pin moves to a commit of `main` that has it.
+The [project page](https://tobylo.github.io/auto-clicker-site/) shows the install commands, hotkeys, measured figures and platform status from [`docs/facts.json`](docs/facts.json), read at a commit its repository pins. A test (`crates/core/tests/facts`) fails when the file's commands or hotkeys differ from this README as GitHub shows it, so change both together, and keep this README plain Markdown after its icon (no HTML, images or footnotes) so the test reads what GitHub shows; the page shows the change once its pin moves to a commit of `main` that has it.
 
 Report a security problem privately, with "Report a vulnerability" under the repository's [Security tab](https://github.com/tobylo/auto-clicker/security), not in a public issue.
 
