@@ -164,6 +164,12 @@ case_ readme_indented_block_added fail "indented line under \"Install\"" \
     edit_readme '/^The icon appears in the tray\.$/a\
 \
 \    echo indented'
+case_ readme_space_tab_indented_line fail "indented line under \"Install\"" \
+    edit_readme 's/^The icon appears in the tray\.$/&\
+\
+ \techo stray/'
+case_ readme_indented_fences fail "indented line under \"Install\"" \
+    edit_readme 's/^```/    ```/'
 case_ readme_heading_twice fail "no single heading \"Install\"" \
     edit_readme 's/^## Documentation$/## Install/'
 case_ readme_heading_renamed fail "no single heading \"Install\"" \

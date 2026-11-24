@@ -71,28 +71,28 @@ shape() {
 
 # The lines of every code block under the README heading $1 (any level), up to
 # the next heading, blank lines left out. Fails unless exactly one heading has
-# that text. A block opens with ``` or ~~~ (three or more) and closes with at
-# least as many of the same character; lines inside one are never headings.
-# Outside them, the section may have no indented line, which Markdown could
-# show as a code block of its own (exit 4).
+# that text (exit 3). The README is held to a strict form, so nothing hinges
+# on how Markdown reads indentation: a block opens with ``` or ~~~ (three or
+# more) at the start of a line and closes with at least as many of the same
+# character at the start of a line, and lines inside one are never headings.
+# Outside blocks, a line in the section that starts with a space or a tab and
+# has text is refused (exit 4), since Markdown could show it as code.
 readme_commands() {
     awk -v want="$1" '
         { sub(/\r$/, "") }
-        !fence && match($0, /^[ \t]*(```+|~~~+)/) {
+        !fence && match($0, /^(```+|~~~+)/) {
             fence = substr($0, RSTART, RLENGTH)
-            sub(/^[ \t]+/, "", fence)
             next
         }
         fence {
             line = $0
-            sub(/^[ \t]+/, "", line)
             sub(/[ \t]+$/, "", line)
             mark = substr(fence, 1, 1)
             if (index(line, fence) == 1 && line ~ ("^[" mark "]+$")) { fence = ""; next }
             if (in_section && $0 != "") print
             next
         }
-        in_section && /^(    |\t)/ { indented = 1 }
+        in_section && /^[ \t]+[^ \t]/ { indented = 1 }
         /^#+[ \t]/ {
             heading = $0
             sub(/^#+[ \t]+/, "", heading)
@@ -138,7 +138,7 @@ commands_match() {
     while IFS=$'\t' read -r id heading; do
         from_readme="$(readme_commands "$heading")" || {
             case $? in
-                4) echo "README.md has an indented line under \"$heading\"; put commands in fenced blocks" >&2 ;;
+                4) echo "README.md has an indented line under \"$heading\"; write its code blocks at the start of the line" >&2 ;;
                 *) echo "README.md has no single heading \"$heading\" (platform $id)" >&2 ;;
             esac
             failed=1
