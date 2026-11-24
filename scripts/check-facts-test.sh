@@ -68,6 +68,12 @@ put_nul_in_facts() {
     sed 's/"version"/"ver\x00sion"/' "$file" >"$work/facts.json" && mv "$work/facts.json" "$file"
 }
 
+# Replaces the copy of docs/facts.json with a link to a copy of it.
+link_facts() {
+    mv "$work/tree/docs/facts.json" "$work/tree/facts-elsewhere.json"
+    ln -s ../facts-elsewhere.json "$work/tree/docs/facts.json"
+}
+
 # Replaces the copy of docs/guide/install.md with a link to README.md.
 link_install_guide() {
     rm "$work/tree/docs/guide/install.md"
@@ -179,9 +185,9 @@ case_ path_outside fail "must be a path in this repository" \
     edit_facts '.links.guide = "../README.md"'
 case_ path_missing fail "docs/guide/gone.md, which is not a file in the repository" \
     edit_facts '.links.guide = "docs/guide/gone.md"'
-# Each fails one query only: the shape check, which would say "not valid
-# JSON", still runs.
-jq_failed="jq failed reading docs/facts.json|!not valid JSON"
+# Each fails one query only: the shape check, which would say it could not
+# run, still runs.
+jq_failed="jq failed reading docs/facts.json|!shape check could not run"
 case_ jq_fails_on_commands fail "$jq_failed" failing_jq 'select(.status'
 case_ jq_fails_on_command_lines fail "$jq_failed|!README.md's commands" failing_jq '.command // empty'
 case_ jq_fails_on_hotkeys fail "$jq_failed|!hotkey table" failing_jq 'hotkeys.modifiers as'
@@ -192,6 +198,7 @@ case_ nothing_available pass "matches README.md" \
 case_ nul_in_file fail "not valid JSON" put_nul_in_facts
 if ln -s README.md "$work/probe" 2>/dev/null && [[ -L "$work/probe" ]]; then
     case_ path_is_a_link fail "docs/guide/install.md, which is not a file" link_install_guide
+    case_ facts_is_a_link fail "docs/facts.json is not a file in the repository" link_facts
     case_ path_through_a_linked_directory fail "docs/linked/install.md, which is not a file" \
         link_guide_directory
 else

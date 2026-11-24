@@ -12,20 +12,35 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="${1:-$here/..}"
 readme="$root/README.md"
 
-# The file is copied once; every check reads this copy, byte for byte the one
-# the shape check passed.
-snapshot="$(mktemp)"
-trap 'rm -f -- "$snapshot"' EXIT
-if ! cp "$root/docs/facts.json" "$snapshot"; then
-    echo "docs/facts.json cannot be read" >&2
+# Whether $1, a relative path, is a regular file under the root with no
+# symbolic link anywhere along it.
+file_in_repository() {
+    local prefix="$root" part parts
+    IFS='/' read -ra parts <<<"$1"
+    for part in "${parts[@]}"; do
+        prefix="$prefix/$part"
+        [[ -L "$prefix" ]] && return 1
+    done
+    [[ -f "$prefix" ]]
+}
+
+# jq parses the file once, and every check reads what it parsed, printed
+# again as compact JSON: the document the shape check passed. jq refuses
+# bytes that are not JSON, and never prints a NUL.
+if ! file_in_repository docs/facts.json; then
+    echo "docs/facts.json is not a file in the repository" >&2
+    exit 1
+fi
+if ! facts_json="$(jq -c . "$root/docs/facts.json")"; then
+    echo "docs/facts.json is not valid JSON" >&2
     exit 1
 fi
 
-# jq on the facts, without the CR a native Windows jq ends each line with.
-# Fails, saying so, when jq does.
+# jq on the parsed facts, without the CR a native Windows jq ends each line
+# with. Fails, saying so, when jq does.
 facts_query() {
     local out
-    if ! out="$(jq "$@" "$snapshot")"; then
+    if ! out="$(jq "$@" <<<"$facts_json")"; then
         echo "jq failed reading docs/facts.json" >&2
         return 1
     fi
@@ -35,7 +50,7 @@ facts_query() {
 shape() {
     local problems
     if ! problems="$(facts_query -r -f "$here/facts-shape.jq")"; then
-        echo "docs/facts.json is not valid JSON" >&2
+        echo "the shape check could not run" >&2
         return 1
     fi
     if [[ -n "$problems" ]]; then
@@ -130,18 +145,6 @@ hotkeys_match() {
     fi
     from_file="$(facts_query -r '.hotkeys.modifiers as $m | .hotkeys.bindings[] | "\($m)+\(.key)"')" || return 1
     same "README.md's hotkey table" "$from_readme" "docs/facts.json's hotkeys" "$from_file"
-}
-
-# Whether $1, a relative path, is a regular file under the root with no
-# symbolic link anywhere along it.
-file_in_repository() {
-    local prefix="$root" part parts
-    IFS='/' read -ra parts <<<"$1"
-    for part in "${parts[@]}"; do
-        prefix="$prefix/$part"
-        [[ -L "$prefix" ]] && return 1
-    done
-    [[ -f "$prefix" ]]
 }
 
 # Every path the file names is a regular file in the repository.
