@@ -135,7 +135,9 @@ mod tests {
     fn a_call_held_up_past_the_deadline_is_busy_not_missing() {
         let tries = Cell::new(0_u32);
         let started = Instant::now();
-        let err = Patience::lasting(Duration::from_millis(50))
+        // Long enough that no stall of the runner between the first failure
+        // and its first pause uses it all up.
+        let err = Patience::lasting(Duration::from_millis(500))
             .retry_when(Path::new("held.json"), is_shared, || -> io::Result<()> {
                 tries.set(tries.get() + 1);
                 Err(shared())
@@ -148,8 +150,8 @@ mod tests {
             "{text}"
         );
         assert!(text.ends_with("try again (sharing violation)"), "{text}");
-        // Tried again, with pauses: 10, 20, then the 20 ms left.
-        assert!((2..=5).contains(&tries.get()), "{}", tries.get());
+        // Tried again, with pauses: 10, 20, 40, 80, 160, then the 190 ms left.
+        assert!((2..=8).contains(&tries.get()), "{}", tries.get());
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 
