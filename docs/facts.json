@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "links": {
+    "guide": "docs/guide/README.md",
+    "install": "docs/guide/install.md"
+  },
+  "platforms": [
+    {
+      "id": "arch",
+      "label": "Arch / CachyOS",
+      "system": "Linux",
+      "status": "available",
+      "scope": "CachyOS or Arch Linux, with Plasma, niri or Hyprland",
+      "readme": "Install",
+      "lines": [
+        { "command": "sudo pacman -Syu" },
+        { "command": "sudo pacman -S --needed base-devel git" },
+        { "command": "git clone https://github.com/tobylo/auto-clicker.git ~/auto-clicker" },
+        { "command": "cd ~/auto-clicker/packaging/arch && makepkg -sif" },
+        { "command": "sudo usermod -aG input NAME", "guideOnly": true },
+        { "remark": "restart the computer, then:" },
+        { "command": "systemctl --user enable --now auto-clicker" },
+        { "remark": "the icon appears in the tray" }
+      ],
+      "note": {
+        "text": "Recording macros needs the input group, and so do hotkeys on niri and Hyprland, which also need a bar with a tray.",
+        "link": "docs/guide/install.md",
+        "linkText": "Read the install guide first"
+      }
+    },
+    {
+      "id": "windows",
+      "label": "Windows",
+      "system": "Windows",
+      "status": "soon",
+      "scope": "Windows 11",
+      "lines": []
+    }
+  ],
+  "hotkeys": {
+    "modifiers": "Ctrl+Shift",
+    "bindings": [
+      { "key": "F6", "name": "Click", "does": "Start or stop: fast clicks, a held button, or a repeated key." },
+      { "key": "F7", "name": "Record", "does": "Mouse and keys with their timing. Press again to save." },
+      { "key": "F8", "name": "Replay", "does": "Play it back at ¼× to 4×, once, N times or until stopped." }
+    ]
+  },
+  "figures": [
+    {
+      "id": "fastest-interval",
+      "value": "10",
+      "unit": "ms",
+      "label": "fastest stable interval",
+      "basis": "measured",
+      "detail": "Release build on niri 26.04, 2026-11-09: 1000 of 1000 clicks received; the shortest interval the program allows",
+      "source": { "path": "docs/planning/map.md", "quote": "**Fastest stable interval: 10 ms** (C02, 2026-11-09, niri 26.04" }
+    },
+    {
+      "id": "idle-cpu",
+      "value": "0",
+      "unit": "ticks",
+      "label": "CPU while idle, 60 s",
+      "basis": "measured",
+      "detail": "Release build on niri 26.04, 2026-11-10, with the tray icon shown and hotkeys read",
+      "source": { "path": "docs/planning/map.md", "quote": "60 s with the tray icon shown, hotkeys read and logind followed): 0 CPU ticks" }
+    },
+    {
+      "id": "idle-memory",
+      "value": "7.2",
+      "unit": "MiB",
+      "label": "memory while idle",
+      "basis": "measured",
+      "detail": "Release build on Plasma 6.8.2, 2026-11-11: 7.0 to 7.2 MiB resident",
+      "source": { "path": "docs/planning/map.md", "quote": "Measured 2026-11-11 on Plasma 6.8.2 on the laptop, release builds of the daemon and the window made separately (as the package builds them): the daemon idles at 7.0 to 7.2 MiB" }
+    },
+    {
+      "id": "network",
+      "value": "none",
+      "unit": "",
+      "label": "network connections",
+      "basis": "rule",
+      "detail": "The program opens no network socket",
+      "source": { "path": "AGENTS.md", "quote": "Until an updater exists, the program opens no network sockets." }
+    }
+  ]
+}
