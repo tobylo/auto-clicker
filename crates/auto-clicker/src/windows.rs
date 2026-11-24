@@ -126,7 +126,49 @@ fn open_log() {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+
+    /// Set in the child process the next test starts.
+    const CHILD: &str = "AUTO_CLICKER_TEST_CHILD";
+
+    #[test]
+    fn a_daemon_that_may_run_logs_that_windows_is_not_supported_yet() {
+        if std::env::var_os(CHILD).is_some() {
+            assert_eq!(run(), ExitCode::FAILURE);
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "auto-clicker-test-{}-{:016x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "windows::tests::a_daemon_that_may_run_logs_that_windows_is_not_supported_yet",
+                "--exact",
+            ])
+            .env(CHILD, "1")
+            .env("LOCALAPPDATA", &dir)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        let log: PathBuf = ["auto-clicker", "logs", "auto-clicker.log"]
+            .iter()
+            .collect();
+        let text = std::fs::read_to_string(dir.join(log)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(status.success());
+        assert_eq!(
+            text,
+            "auto-clicker: Windows is not supported yet; this build does nothing\n"
+        );
+    }
 
     #[test]
     fn only_a_process_known_not_to_be_elevated_starts() {

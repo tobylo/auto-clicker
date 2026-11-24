@@ -82,3 +82,34 @@ fn the_rotated_file_is_named_after_the_log() {
         Path::new("logs/auto-clicker.log.1")
     );
 }
+
+/// Set in the child process the next test starts: the path of its log.
+const CHILD_LOG: &str = "AUTO_CLICKER_TEST_LOG";
+
+#[test]
+fn once_a_file_is_opened_lines_and_panics_go_there() {
+    if let Some(path) = std::env::var_os(CHILD_LOG) {
+        to_file(Path::new(&path)).unwrap();
+        line(format_args!("auto-clicker: a line"));
+        panic!("a panic");
+    }
+    let dir = TempDir::new();
+    let path = dir.path().join("logs").join("auto-clicker.log");
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "log::tests::once_a_file_is_opened_lines_and_panics_go_there",
+            "--exact",
+        ])
+        .env(CHILD_LOG, &path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(!status.success());
+    let text = read(&path);
+    assert!(text.starts_with("auto-clicker: a line\n"), "{text}");
+    assert!(
+        text.contains("auto-clicker: panicked at") && text.contains("a panic"),
+        "{text}"
+    );
+}
