@@ -9,7 +9,9 @@ use crate::clicker::{INTERVAL_FLOOR, INTERVAL_MAX, Interval, Jitter, Mode, Posit
 use crate::hotkeys::{Binding, Bindings};
 use crate::input::{AbsolutePosition, Button, Key};
 use crate::playback::{PlaybackSettings, Speed};
-use crate::test_support::{TempDir, permissions_apply};
+use crate::test_support::TempDir;
+#[cfg(unix)]
+use crate::test_support::permissions_apply;
 
 fn parse(text: &str) -> Config {
     Config::parse(text).unwrap_or_else(|err| panic!("{text:?}: {err:?}"))
@@ -497,6 +499,7 @@ fn an_invalid_file_gives_the_defaults_reports_it_and_is_left_alone() {
     assert_eq!((loaded.config, left_alone), (Config::default(), expected));
 }
 
+#[cfg(unix)]
 #[test]
 fn an_unreadable_file_is_a_read_error_not_a_missing_one() {
     use std::os::unix::fs::PermissionsExt;
@@ -519,6 +522,7 @@ fn an_unreadable_file_is_a_read_error_not_a_missing_one() {
 
 /// Loads `path` on another thread, failing if that takes longer than a few
 /// seconds: a load that blocks must fail the test, not hang it.
+#[cfg(unix)]
 fn load_within_bound(path: PathBuf) -> Loaded {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -537,6 +541,7 @@ fn reason_of(loaded: &Loaded) -> Option<&str> {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn only_a_regular_file_is_read() {
     let dir = TempDir::new();
@@ -591,6 +596,7 @@ fn a_file_that_is_not_text_is_invalid() {
 
 // The path
 
+#[cfg(unix)]
 #[test]
 fn the_path_follows_xdg_config_home_then_home() {
     let xdg = Some("/xdg/auto-clicker/config.toml");

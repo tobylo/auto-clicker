@@ -530,8 +530,9 @@ impl<P: Platform> Controller<P> {
     /// Runs until [`Message::Quit`], or until every sender of the inbox is
     /// gone. A run still going then ends with the shutdown signal and is
     /// waited for, so nothing stays pressed; a recording is stopped and
-    /// saved.
+    /// saved. It starts by removing what crashed saves left.
     pub async fn run(mut self) {
+        self.remove_stale_temps();
         self.list_recordings();
         self.start_layout_watch();
         self.start_reader();

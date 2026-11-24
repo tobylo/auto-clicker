@@ -2,12 +2,17 @@
 //! user's word.
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use super::*;
-use crate::test_support::{TempDir, permissions_apply};
+#[cfg(unix)]
+use crate::test_support::permissions_apply;
+use crate::test_support::{TempDir, old_temp};
 
 fn changed() -> Config {
     Config {
@@ -107,6 +112,7 @@ fn without_a_config_directory_nothing_is_saved() {
 
 /// Runs `body` with `dir`'s mode set to `mode`, and restores it; `None`
 /// when the mode does not apply (root ignores it).
+#[cfg(unix)]
 fn with_mode<T>(dir: &Path, mode: u32, body: impl FnOnce() -> T) -> Option<T> {
     let set = |mode| fs::set_permissions(dir, fs::Permissions::from_mode(mode)).unwrap();
     set(mode);
@@ -115,6 +121,7 @@ fn with_mode<T>(dir: &Path, mode: u32, body: impl FnOnce() -> T) -> Option<T> {
     permissions_apply().then_some(result)
 }
 
+#[cfg(unix)]
 #[test]
 fn a_failed_write_leaves_the_file_and_what_was_seen() {
     let (_dir, path, mut file) = loaded_with(Some("version = 1\n"));
@@ -128,6 +135,7 @@ fn a_failed_write_leaves_the_file_and_what_was_seen() {
     file.save(&changed(), false).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn a_file_in_place_but_not_flushed_counts_as_saved_and_says_so() {
     let (_dir, path, mut file) = loaded_with(Some("version = 1\n"));
@@ -145,6 +153,7 @@ fn a_file_in_place_but_not_flushed_counts_as_saved_and_says_so() {
     ));
 }
 
+#[cfg(unix)]
 #[test]
 fn the_directorys_entry_is_flushed_on_every_save_not_only_the_first() {
     let (dir, path, mut file) = loaded_with(Some("version = 1\n"));
@@ -156,6 +165,7 @@ fn the_directorys_entry_is_flushed_on_every_save_not_only_the_first() {
     assert_eq!(Config::parse(&read(&path)).ok(), Some(changed()));
 }
 
+#[cfg(unix)]
 #[test]
 fn every_directory_on_the_path_is_flushed_on_every_save() {
     let dir = TempDir::new();
@@ -173,6 +183,7 @@ fn every_directory_on_the_path_is_flushed_on_every_save() {
     assert_eq!(Config::parse(&read(&path)).ok(), Some(changed()));
 }
 
+#[cfg(unix)]
 #[test]
 fn a_config_that_is_a_link_is_saved_through_it() {
     let (dir, path, _) = loaded_with(None);
@@ -194,6 +205,7 @@ fn a_config_that_is_a_link_is_saved_through_it() {
     assert_eq!(fs::read_dir(&dotfiles).unwrap().count(), 1);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_link_that_leads_nowhere_is_not_replaced() {
     let (dir, path, _) = loaded_with(None);
@@ -208,4 +220,39 @@ fn a_link_that_leads_nowhere_is_not_replaced() {
             .file_type()
             .is_symlink()
     );
+}
+
+#[test]
+fn a_start_removes_only_old_temporary_files_beside_the_config() {
+    let (_dir, path, file) = loaded_with(Some("version = 1\n"));
+    let fresh = path.with_file_name(".config.toml.7.0123456789abcdef.tmp");
+    fs::write(&fresh, b"half").unwrap();
+    let old = path.with_file_name(".config.toml.8.0123456789abcdef.tmp");
+    old_temp(&old);
+
+    let removed = (
+        file.remove_stale_temps().unwrap(),
+        ConfigFile::none().remove_stale_temps().unwrap(),
+    );
+
+    assert_eq!(removed, (1, 0));
+    assert!(fresh.exists() && !old.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_config_has_its_old_temporary_files_removed_beside_its_target() {
+    let (dir, path, _) = loaded_with(None);
+    let dotfiles = dir.path().join("dotfiles");
+    fs::create_dir(&dotfiles).unwrap();
+    let real = dotfiles.join("config.toml");
+    fs::write(&real, "version = 1\n").unwrap();
+    fs::create_dir(path.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&real, &path).unwrap();
+    let old = dotfiles.join(".config.toml.8.0123456789abcdef.tmp");
+    old_temp(&old);
+    let file = Config::load(&path).file;
+
+    assert_eq!(file.remove_stale_temps().unwrap(), 1);
+    assert!(!old.exists());
 }

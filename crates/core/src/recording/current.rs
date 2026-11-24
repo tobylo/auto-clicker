@@ -4,13 +4,14 @@
 //! recording never rewrites the config file.
 
 use std::ffi::OsString;
-use std::fs::{DirBuilder, File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Read};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::PathBuf;
 
 use super::library::FileName;
-use crate::fs::atomic_write;
+use crate::fs::{
+    Link, STALE_TEMP_AGE, atomic_write, create_private_dir_all, open_read, remove_stale_temps,
+};
 
 /// How much of the file is read: more than a recording's file name and a
 /// newline, so a longer file reads as no file name.
@@ -51,7 +52,7 @@ impl CurrentFile {
     /// The recording kept; `Ok(None)` when none is, or there is nowhere to
     /// keep one.
     ///
-    /// The file is opened without following a symlink and without waiting
+    /// The file is opened without following a link and without waiting
     /// on a FIFO, and must be a regular file holding one recording's file
     /// name.
     ///
@@ -61,11 +62,7 @@ impl CurrentFile {
         let Some(path) = &self.0 else {
             return Ok(None);
         };
-        let file = match OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-        {
+        let file = match open_read(path, Link::Refuse) {
             Ok(file) => file,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err),
@@ -74,7 +71,7 @@ impl CurrentFile {
     }
 
     /// Keeps `file` as the current recording, atomically, creating the
-    /// directory (mode 0700) when it is missing. Does nothing when there is
+    /// directory (private to its owner) when it is missing. Does nothing when there is
     /// nowhere to keep it.
     ///
     /// # Errors
@@ -84,9 +81,21 @@ impl CurrentFile {
             return Ok(());
         };
         if let Some(dir) = path.parent() {
-            DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+            create_private_dir_all(dir)?;
         }
         atomic_write(path, format!("{file}\n").as_bytes())
+    }
+
+    /// Removes the temporary files that writes of this file left when they
+    /// crashed at least [`STALE_TEMP_AGE`] ago; how many it removed.
+    ///
+    /// # Errors
+    /// Its directory cannot be read.
+    pub fn remove_stale_temps(&self) -> io::Result<usize> {
+        match self.0.as_deref() {
+            Some(path) => remove_stale_temps(path, STALE_TEMP_AGE),
+            None => Ok(0),
+        }
     }
 }
 
@@ -116,10 +125,9 @@ fn invalid(why: &str) -> io::Error {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     use super::*;
-    use crate::test_support::{TempDir, permissions_apply};
+    use crate::test_support::TempDir;
 
     fn name(text: &str) -> FileName {
         FileName::parse(text).unwrap()
@@ -130,6 +138,7 @@ mod tests {
         (CurrentFile::at(path.clone()), path)
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_path_follows_xdg_state_home_then_home() {
         let os = |text: &str| Some(OsString::from(text));
@@ -170,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn a_written_recording_reads_back_from_a_private_file() {
+    fn a_written_recording_reads_back() {
         let dir = TempDir::new();
         let (current, path) = in_dir(&dir);
         assert_eq!(current.read().unwrap(), None);
@@ -190,10 +199,44 @@ mod tests {
             fs::read(&path).unwrap(),
             b"2026-11-10_07-00-00.000-1.json\n"
         );
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_file_and_its_directory_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new();
+        let (current, path) = in_dir(&dir);
+
+        current
+            .write(&name("2026-11-09_18-04-05.123.json"))
+            .unwrap();
+
         let mode =
             |path: &std::path::Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!((mode(path.parent().unwrap()), mode(&path)), (0o700, 0o600));
-        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_start_removes_only_old_temporary_files() {
+        let dir = TempDir::new();
+        let (current, path) = in_dir(&dir);
+        current
+            .write(&name("2026-11-09_18-04-05.123.json"))
+            .unwrap();
+        let fresh = path.with_file_name(".current-recording.7.0123456789abcdef.tmp");
+        fs::write(&fresh, b"half").unwrap();
+        let old = path.with_file_name(".current-recording.8.0123456789abcdef.tmp");
+        crate::test_support::old_temp(&old);
+
+        let removed = (
+            current.remove_stale_temps().unwrap(),
+            CurrentFile::none().remove_stale_temps().unwrap(),
+        );
+
+        assert_eq!(removed, (1, 0));
+        assert!(fresh.exists() && !old.exists());
     }
 
     #[test]
@@ -236,8 +279,9 @@ mod tests {
             .expect("the read waited")
     }
 
+    #[cfg(unix)]
     #[test]
-    fn a_symlink_a_fifo_or_a_folder_is_refused_at_once() {
+    fn a_symlink_or_a_fifo_is_refused_at_once() {
         let dir = TempDir::new();
         let (current, path) = in_dir(&dir);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -256,13 +300,22 @@ mod tests {
             read.unwrap_err().to_string() == "it is not a regular file"
         };
         assert!(not_a_file(read_at_once(&current)));
-        fs::remove_file(&path).unwrap();
-        fs::create_dir(&path).unwrap();
-        assert!(not_a_file(read_at_once(&current)));
     }
 
     #[test]
+    fn a_folder_in_the_files_place_is_refused() {
+        let dir = TempDir::new();
+        let (current, path) = in_dir(&dir);
+        fs::create_dir_all(&path).unwrap();
+        let err = read_at_once(&current).unwrap_err();
+        assert_eq!(err.to_string(), "it is not a regular file");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_file_that_cannot_be_read_is_an_error() {
+        use crate::test_support::permissions_apply;
+        use std::os::unix::fs::PermissionsExt;
         let dir = TempDir::new();
         let (current, path) = in_dir(&dir);
         current

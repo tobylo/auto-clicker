@@ -44,7 +44,7 @@ pub(super) struct Settings {
     /// The settings in the config file: what the window shows. The
     /// controller's own `config` is what it runs with.
     saved: Config,
-    file: ConfigFile,
+    pub(super) file: ConfigFile,
     opener: WindowOpener,
     openings: mpsc::UnboundedReceiver<WindowLink>,
     window: Option<WindowLink>,

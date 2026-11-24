@@ -6,11 +6,11 @@
 //! which must pass the same check a whole recording's name does. Anything
 //! else has no name to show; a load still reads the whole file as before.
 
-use std::fs::File;
 use std::io::Read;
 
-use super::library::{FileName, open_in};
+use super::library::FileName;
 use super::{VERSION, VERSION_HYPRLAND, VERSION_POSITIONS, check_name};
+use crate::fs::Folder;
 
 /// How much of a file is read for its name. The name is at most 200
 /// characters; written as `\u` escapes of surrogate pairs, the longest
@@ -20,8 +20,8 @@ const HEADER_BYTES: u64 = 4096;
 /// The name in the header of the recording `file` in the open folder
 /// `folder`; `None` when the file is not a regular file, cannot be read,
 /// or does not start as a recording this program writes.
-pub(super) fn name(folder: &File, file: &FileName) -> Option<String> {
-    let opened = open_in(folder, file).ok()?;
+pub(super) fn name(folder: &Folder, file: &FileName) -> Option<String> {
+    let opened = folder.open_file(file.as_str()).ok()?;
     if !opened.metadata().ok()?.is_file() {
         return None;
     }
@@ -53,7 +53,6 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::recording::store::open_folder;
     use crate::recording::tests::sample;
     use crate::recording::{VERSION, save};
     use crate::test_support::TempDir;
@@ -97,23 +96,34 @@ mod tests {
         let dir = TempDir::new();
         let saved = save(dir.path(), &sample()).unwrap();
         let file = FileName::parse(saved.file_name().unwrap().to_str().unwrap()).unwrap();
-        let folder = open_folder(dir.path()).unwrap();
+        let folder = Folder::open(dir.path()).unwrap();
         assert_eq!(name(&folder, &file).as_deref(), Some(sample().name()));
 
-        let link = FileName::parse("2026-01-01_00-00-00.000.json").unwrap();
-        std::os::unix::fs::symlink(&saved, dir.path().join(link.as_str())).unwrap();
         let folder_in_place = FileName::parse("2026-01-02_00-00-00.000.json").unwrap();
         fs::create_dir(dir.path().join(folder_in_place.as_str())).unwrap();
+        let missing = FileName::parse("2026-01-04_00-00-00.000.json").unwrap();
+        for file in [folder_in_place, missing] {
+            assert_eq!(name(&folder, &file), None, "{file}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_or_a_fifo_shows_no_name_at_once() {
+        let dir = TempDir::new();
+        let saved = save(dir.path(), &sample()).unwrap();
+        let link = FileName::parse("2026-01-01_00-00-00.000.json").unwrap();
+        std::os::unix::fs::symlink(&saved, dir.path().join(link.as_str())).unwrap();
         let fifo = FileName::parse("2026-01-03_00-00-00.000.json").unwrap();
         let made = std::process::Command::new("mkfifo")
             .arg(dir.path().join(fifo.as_str()))
             .status()
             .unwrap();
         assert!(made.success());
-        let missing = FileName::parse("2026-01-04_00-00-00.000.json").unwrap();
-        for file in [link, folder_in_place, fifo, missing] {
+        let folder = std::sync::Arc::new(Folder::open(dir.path()).unwrap());
+        for file in [link, fifo] {
             // At once: a FIFO is never waited on.
-            let held = folder.try_clone().unwrap();
+            let held = std::sync::Arc::clone(&folder);
             let (send, received) = std::sync::mpsc::channel();
             let asked = file.clone();
             std::thread::spawn(move || send.send(name(&held, &asked)));

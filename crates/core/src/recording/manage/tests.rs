@@ -1,10 +1,14 @@
+use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use super::*;
 use crate::recording::tests::sample;
 use crate::recording::{load, save};
-use crate::test_support::{TempDir, permissions_apply};
+use crate::test_support::TempDir;
+#[cfg(unix)]
+use crate::test_support::permissions_apply;
 
 /// A folder holding the sample recording; its file and path.
 fn saved(dir: &TempDir) -> (FileName, PathBuf) {
@@ -63,6 +67,7 @@ fn a_rename_of_a_file_gone_or_invalid_changes_nothing() {
     assert_eq!(dir.entries(), [gone.as_str()]);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_rename_that_cannot_write_leaves_the_old_file_whole() {
     let dir = TempDir::new();
@@ -139,6 +144,101 @@ fn deleting_all_takes_every_recording_and_nothing_else() {
     assert!(empty.failed.is_empty(), "{empty:?}");
 }
 
+/// The name of a temporary file a save of `target` left.
+fn temp_of(target: &str, pid: u32) -> String {
+    format!(".{target}.{pid}.0123456789abcdef.tmp")
+}
+
+#[test]
+fn a_delete_also_removes_what_saves_of_its_recordings_left_and_nothing_else() {
+    let dir = TempDir::new();
+    let files = saved_many(&dir, 2);
+    let doomed = temp_of(files[0].as_str(), 7);
+    // Another session saving a new recording, and a copy of the one kept.
+    let saving = temp_of("2030-01-01_00-00-00.000.json", 8);
+    let kept = temp_of(files[1].as_str(), 9);
+    for name in [&doomed, &saving, &kept, &".notes.tmp".to_owned()] {
+        fs::write(dir.path().join(name), b"a copy").unwrap();
+    }
+
+    let removed = delete(dir.path(), Doomed::These(&files[..1]), 8).unwrap();
+
+    assert_eq!((removed.deleted, removed.failed.len()), (1, 0));
+    let mut left = vec![".notes.tmp".to_owned(), files[1].to_string(), saving, kept];
+    left.sort();
+    assert_eq!(dir.entries(), left);
+}
+
+#[test]
+fn a_delete_of_all_keeps_what_a_save_still_running_writes() {
+    let dir = TempDir::new();
+    let files = saved_many(&dir, 2);
+    let saving = temp_of("2030-01-01_00-00-00.000.json", 8);
+    for name in [
+        temp_of(files[0].as_str(), 7),
+        temp_of(files[1].as_str(), 7),
+        saving.clone(),
+    ] {
+        fs::write(dir.path().join(name), b"a copy").unwrap();
+    }
+
+    let removed = delete(dir.path(), Doomed::All, 8).unwrap();
+
+    assert_eq!(removed.deleted, 2);
+    assert_eq!(dir.entries(), [saving]);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_hidden_copy_another_program_holds_fails_its_recordings_deletion() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let dir = TempDir::new();
+    let files = saved_many(&dir, 2);
+    let copy = dir.path().join(temp_of(files[0].as_str(), 7));
+    fs::write(&copy, b"a copy").unwrap();
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&copy)
+        .unwrap();
+
+    let removed = delete(dir.path(), Doomed::These(&files), 8).unwrap();
+
+    drop(held);
+    assert_eq!(removed.deleted, 1);
+    let (file, err) = &removed.failed[0];
+    assert_eq!(file, &files[0]);
+    let text = format!("{err:?}");
+    assert!(
+        text.contains("a hidden copy of it could not be removed"),
+        "{text}"
+    );
+    // Kept whole, so deleting it again finishes the job.
+    assert!(copy.exists() && dir.path().join(files[0].as_str()).exists());
+    let again = delete(dir.path(), Doomed::All, 8).unwrap();
+    assert_eq!((again.deleted, again.failed.len()), (1, 0));
+    assert_eq!(dir.entries(), Vec::<String>::new());
+}
+
+#[test]
+fn a_delete_of_a_second_name_leaves_the_plain_names_temp_files() {
+    let dir = TempDir::new();
+    let files = saved_many(&dir, 2);
+    assert!(files[1].as_str().ends_with("-1.json"), "{}", files[1]);
+    // What a save or a rename of the `-1` file left, and a rename of the
+    // plain one running in another session.
+    let own = temp_of(files[1].as_str(), 7);
+    let other = temp_of(files[0].as_str(), 8);
+    for name in [&own, &other] {
+        fs::write(dir.path().join(name), b"a copy").unwrap();
+    }
+
+    let removed = delete(dir.path(), Doomed::These(&files[1..]), 8).unwrap();
+
+    assert_eq!(removed.deleted, 1);
+    assert_eq!(dir.entries(), [other, files[0].to_string()]);
+}
+
 #[test]
 fn a_file_that_cannot_be_removed_leaves_the_rest_going_and_the_first_are_named() {
     let dir = TempDir::new();
@@ -187,6 +287,7 @@ fn a_file_that_cannot_be_removed_leaves_the_rest_going_and_the_first_are_named()
     assert_eq!((all.deleted, all.failed.len()), (0, 2));
 }
 
+#[cfg(unix)]
 #[test]
 fn a_delete_that_is_not_allowed_is_a_failure_not_a_file_gone() {
     let dir = TempDir::new();
@@ -213,6 +314,7 @@ fn a_delete_that_is_not_allowed_is_a_failure_not_a_file_gone() {
     assert_eq!((path.exists(), removed.deleted), (true, 0));
 }
 
+#[cfg(unix)]
 #[test]
 fn a_folder_that_cannot_be_opened_deletes_nothing() {
     let dir = TempDir::new();
@@ -228,6 +330,7 @@ fn a_folder_that_cannot_be_opened_deletes_nothing() {
     assert!(path.exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn a_symlink_in_the_folders_place_is_refused() {
     let dir = TempDir::new();
