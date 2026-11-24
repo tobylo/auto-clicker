@@ -44,11 +44,12 @@ jobs:
 
   # The same gates on Windows (M5, WN03): every crate builds there, the Linux
   # ones empty. Git for Windows' bash runs the script, with its own `timeout`,
-  # all but the test gate: that bash enables the backup privilege of the
-  # runner's administrator account, every process it starts inherits it, and
-  # with it a file another program holds opens anyway, which a core test
-  # checks it does not. PowerShell runs the tests, as the program runs:
-  # without that privilege.
+  # all but the test gate, which PowerShell runs. Started from that bash on
+  # this runner, a core test sees a file another program holds open anyway
+  # (fs::windows::tests::a_file_another_program_holds_is_busy_not_missing);
+  # started from PowerShell, it passes. The suspected cause: the MSYS2
+  # runtime enables the administrator's backup privilege, and every process
+  # bash starts inherits it.
   windows:
     runs-on: windows-2025
     timeout-minutes: 60
