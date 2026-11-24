@@ -11,6 +11,8 @@ use std::io;
 use std::path::Path;
 use std::time::Duration;
 
+use super::patience::{Op, Patience};
+
 const PREFIX: &str = ".";
 const SUFFIX: &str = ".tmp";
 const RANDOM_DIGITS: usize = 16;
@@ -146,7 +148,9 @@ pub(super) fn list(dir: &Path) -> io::Result<Vec<Temp>> {
 /// Removes the temporary files that saves of `file` left beside it and that
 /// are at least `age` old: what a save that crashed left. Files of any
 /// other name stay, so a folder shared with other programs keeps theirs. A
-/// missing folder holds none. Returns how many it removed.
+/// file another program holds for a moment is waited for, within one
+/// budget for the sweep. A missing folder holds none. Returns how many it
+/// removed.
 ///
 /// # Errors
 /// The folder cannot be read, or a file could not be removed (the first
@@ -157,7 +161,8 @@ pub fn remove_stale_temps(file: &Path, age: Duration) -> io::Result<usize> {
     };
     let dir = super::parent_dir(file)?;
     let ours = |name: &OsStr| is_temp_of(name, target);
-    let remove = |path: &Path| fs::remove_file(path);
+    let patience = Patience::new();
+    let remove = |path: &Path| patience.retry(path, Op::Change, || fs::remove_file(path));
     match remove_stale_where(dir, age, ours, remove) {
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(0),
         found => found,

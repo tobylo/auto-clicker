@@ -58,9 +58,11 @@ fn a_failure_at_any_step_before_the_placing_leaves_the_old_file_whole() {
     let dir = TempDir::new();
     let path = dir.path().join("recording.json");
     fs::write(&path, b"old").unwrap();
+    let patience = Patience::new();
     let beside = Beside {
         dir: dir.path(),
         path: &path,
+        patience: &patience,
     };
     let unplaced =
         |_: &mut PathBuf| -> io::Result<PathBuf> { panic!("placed after a failed write") };
@@ -116,6 +118,7 @@ fn a_crash_after_writing_leaves_the_old_file_whole_and_a_temp_the_next_start_rem
     let (temp, file) = create_temp(Beside {
         dir: dir.path(),
         path: &path,
+        patience: &Patience::new(),
     })
     .unwrap();
     fill(file, |out| out.write_all(b"new")).unwrap();
@@ -246,6 +249,7 @@ fn a_temp_file_is_renamed_after_each_name_before_it_is_tried_there() {
     let (mut temp, file) = create_temp(Beside {
         dir: folder.path(),
         path: &folder.path().join("a.json"),
+        patience: &Patience::new(),
     })
     .unwrap();
     fill(file, |out| out.write_all(b"new")).unwrap();
@@ -268,6 +272,7 @@ fn placing_under_a_name_no_file_system_takes_is_an_error_not_a_taken_name() {
     let (mut temp, file) = create_temp(Beside {
         dir: folder.path(),
         path: &folder.path().join("a.json"),
+        patience: &Patience::new(),
     })
     .unwrap();
     fill(file, |out| out.write_all(b"new")).unwrap();

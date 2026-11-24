@@ -57,19 +57,24 @@ fn a_junction_in_place_of_the_folder_is_refused_and_nothing_is_written() {
 }
 
 #[test]
-fn a_held_folder_and_its_parent_cannot_be_moved_or_deleted() {
+fn a_held_folder_and_its_ancestors_cannot_be_moved_or_deleted() {
     let root = TempDir::new();
-    let parent = root.path().join("auto-clicker");
+    let parent = root.path().join("data").join("auto-clicker");
     let dir = parent.join("recordings");
     fs::create_dir_all(&dir).unwrap();
     let folder = Folder::open(&dir).unwrap();
 
     let moved = fs::rename(&dir, root.path().join("moved"));
     let parent_moved = fs::rename(&parent, root.path().join("parent-moved"));
+    let grandparent_moved = fs::rename(root.path().join("data"), root.path().join("data-moved"));
     let deleted = fs::remove_dir(&dir);
 
     assert!(moved.is_err(), "the held folder was moved");
     assert!(parent_moved.is_err(), "the held folder's parent was moved");
+    assert!(
+        grandparent_moved.is_err(),
+        "the held folder's grandparent was moved"
+    );
     assert!(deleted.is_err(), "the held folder was deleted");
     let written = folder
         .create_new(&names(&["a.json"]), |out| out.write_all(b"kept"))

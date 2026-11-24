@@ -173,9 +173,11 @@ mod tests {
 
     #[test]
     fn time_before_the_first_hold_up_does_not_count() {
-        let patience = Patience::lasting(Duration::from_millis(50));
+        // Margins wide enough that a runner pausing this thread for a while
+        // between the two tries does not use up the budget.
+        let patience = Patience::lasting(Duration::from_secs(2));
         // A large file being written, before anything is held up.
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(2100));
         let tries = Cell::new(0_u32);
         let placed = patience.retry_when(Path::new("held.json"), is_shared, || {
             tries.set(tries.get() + 1);

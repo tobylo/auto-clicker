@@ -89,7 +89,11 @@ pub fn atomic_save(path: &Path, contents: &[u8], place: Place) -> io::Result<Res
     let dir = parent_dir(path)?;
     let patience = Patience::new();
     let placed = write_then_place(
-        Beside { dir, path },
+        Beside {
+            dir,
+            path,
+            patience: &patience,
+        },
         |out| out.write_all(contents),
         |temp| put(temp, path, place, &patience).map(|()| path.to_path_buf()),
         || sys::sync_dir(dir),
@@ -148,11 +152,12 @@ pub struct Folder {
 impl Folder {
     /// Opens `dir`, refusing a link in its place.
     pub fn open(dir: &Path) -> io::Result<Folder> {
-        let (handle, path) = sys::open_dir(dir)?;
+        let patience = Patience::new();
+        let (handle, path) = patience.retry(dir, Op::Read, || sys::open_dir(dir))?;
         Ok(Folder {
             handle,
             path,
-            patience: Patience::new(),
+            patience,
         })
     }
 
@@ -253,6 +258,7 @@ impl Folder {
             Beside {
                 dir: &self.path,
                 path: &path,
+                patience: &self.patience,
             },
             write,
             |temp| self.place_at_first_free(temp, names),
@@ -329,6 +335,7 @@ impl Folder {
             Beside {
                 dir: &self.path,
                 path: &path,
+                patience: &self.patience,
             },
             write,
             |temp| put(temp, &path, Place::Replace, &self.patience).map(|()| path.clone()),
@@ -380,11 +387,14 @@ fn put(temp: &Path, path: &Path, place: Place, patience: &Patience) -> io::Resul
     }
 }
 
-/// Where a temporary file goes: in `dir`, named after `path`, its target.
+/// Where a temporary file goes: in `dir`, named after `path`, its target;
+/// and the wait, within one operation's `patience`, for a file another
+/// program holds.
 #[derive(Clone, Copy)]
 struct Beside<'a> {
     dir: &'a Path,
     path: &'a Path,
+    patience: &'a Patience,
 }
 
 /// The steps every save shares: write a temporary file beside the target
@@ -401,7 +411,7 @@ fn write_then_place(
     let (mut temp, file) = create_temp(beside)?;
     let placed = match fill(file, write).and_then(|()| place(&mut temp)) {
         Ok(placed) => placed,
-        Err(err) => return Err(remove_temp(&temp, err)),
+        Err(err) => return Err(remove_temp(&temp, err, beside.patience)),
     };
     Ok(match sync() {
         Ok(()) => Ok(placed),
@@ -418,10 +428,11 @@ fn fill(file: File, write: impl FnOnce(&mut dyn Write) -> io::Result<()>) -> io:
     file.sync_all()
 }
 
-/// Removes the temporary file after `err`; the write's error stays the one
+/// Removes the temporary file after `err`, waiting out another program
+/// that holds it within `patience`; the write's error stays the one
 /// reported, with the file it left if removing fails too.
-fn remove_temp(temp: &Path, err: io::Error) -> io::Error {
-    match fs::remove_file(temp) {
+fn remove_temp(temp: &Path, err: io::Error, patience: &Patience) -> io::Error {
+    match patience.retry(temp, Op::Change, || fs::remove_file(temp)) {
         Ok(()) => err,
         Err(cleanup) => io::Error::new(
             err.kind(),
