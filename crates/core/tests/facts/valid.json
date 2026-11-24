@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "links": { "guide": "docs/guide/README.md", "install": "docs/guide/install.md" },
+  "platforms": [
+    {
+      "id": "first",
+      "label": "First",
+      "system": "Linux",
+      "status": "available",
+      "scope": "One system",
+      "readme": "Install",
+      "lines": [
+        { "command": "one" },
+        { "command": "two" },
+        { "remark": "then:" },
+        { "command": "three" },
+        { "command": "four", "guideOnly": true }
+      ],
+      "note": { "text": "A note.", "link": "docs/guide/install.md", "linkText": "Read more" }
+    },
+    { "id": "second", "label": "Second", "system": "Windows", "status": "soon", "scope": "Another system", "lines": [] }
+  ],
+  "hotkeys": {
+    "modifiers": "Ctrl+Shift",
+    "bindings": [
+      { "key": "F6", "name": "Click", "does": "Clicks." },
+      { "key": "F7", "name": "Record", "does": "Records." }
+    ]
+  },
+  "figures": [
+    {
+      "id": "fastest-interval",
+      "value": "10",
+      "unit": "ms",
+      "label": "fastest stable interval",
+      "basis": "measured",
+      "detail": "Measured once.",
+      "source": { "path": "docs/planning/map.md", "quote": "10 ms" }
+    },
+    {
+      "id": "network",
+      "value": "none",
+      "unit": "",
+      "label": "network connections",
+      "basis": "rule",
+      "detail": "A rule.",
+      "source": { "path": "AGENTS.md", "quote": "no network sockets" }
+    }
+  ]
+}

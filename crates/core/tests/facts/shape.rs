@@ -374,11 +374,14 @@ mod tests {
 
     use super::parse;
 
-    const PINNED: &str = include_str!("../../../../docs/facts.json");
+    /// A valid file that stays as it is, whatever docs/facts.json says: an
+    /// available platform (whose fifth line is left to the guide) and one
+    /// that is soon.
+    const VALID: &str = include_str!("valid.json");
 
     /// The problems with docs/facts.json after `change`, as one text.
     fn problems_after(change: impl FnOnce(&mut Value)) -> String {
-        let mut facts: Value = serde_json::from_str(PINNED).unwrap();
+        let mut facts: Value = serde_json::from_str(VALID).unwrap();
         change(&mut facts);
         match parse(&facts.to_string()) {
             Ok(_) => String::new(),
@@ -396,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_the_file() {
+    fn accepts_a_valid_file() {
         assert_eq!(problems_after(|_| {}), "");
     }
 
@@ -560,7 +563,7 @@ mod tests {
 
     #[test]
     fn refuses_more_than_one_value() {
-        let twice = format!("{PINNED}{PINNED}");
+        let twice = format!("{VALID}{VALID}");
         let problems = parse(&twice).err().unwrap().join("\n");
         assert!(problems.contains("trailing characters"), "{problems}");
     }

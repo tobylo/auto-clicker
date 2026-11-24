@@ -4,7 +4,11 @@
 //! outer pipes), these are the blocks and cells GitHub renders. Where the
 //! check reads, only plain Markdown is accepted (see `is_plain`).
 
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+
+/// The fence languages GitHub shows as code. Others it may draw instead, as
+/// a diagram, a map or mathematics.
+const LITERAL: [&str; 7] = ["", "fish", "sh", "bash", "shell", "console", "text"];
 
 /// Each event, with whether it shows as plain Markdown: it is plain and so is
 /// every container around it (a table inside a footnote is not).
@@ -31,26 +35,29 @@ fn events(markdown: &str) -> impl Iterator<Item = (Event<'_>, bool)> {
 /// tables, rules and breaks. Anything else is refused where the check reads:
 /// HTML can hide text or show text the parser does not read as such, an
 /// image shows something other than its alt text, and a footnote's definition
-/// moves to the foot of the page.
+/// moves to the foot of the page. A fenced block is plain only in a language
+/// GitHub shows as code.
 fn is_plain(event: &Event<'_>) -> bool {
     match event {
-        Event::Start(tag) => matches!(
-            tag,
-            Tag::Paragraph
-                | Tag::Heading { .. }
-                | Tag::BlockQuote(_)
-                | Tag::CodeBlock(_)
-                | Tag::List(_)
-                | Tag::Item
-                | Tag::Emphasis
-                | Tag::Strong
-                | Tag::Strikethrough
-                | Tag::Link { .. }
-                | Tag::Table(_)
-                | Tag::TableHead
-                | Tag::TableRow
-                | Tag::TableCell
-        ),
+        Event::Start(tag) => {
+            matches!(
+                tag,
+                Tag::Paragraph
+                    | Tag::Heading { .. }
+                    | Tag::BlockQuote(_)
+                    | Tag::CodeBlock(CodeBlockKind::Indented)
+                    | Tag::List(_)
+                    | Tag::Item
+                    | Tag::Emphasis
+                    | Tag::Strong
+                    | Tag::Strikethrough
+                    | Tag::Link { .. }
+                    | Tag::Table(_)
+                    | Tag::TableHead
+                    | Tag::TableRow
+                    | Tag::TableCell
+            ) || matches!(tag, Tag::CodeBlock(CodeBlockKind::Fenced(info)) if LITERAL.contains(&info.as_ref()))
+        }
         Event::End(_)
         | Event::Text(_)
         | Event::Code(_)
@@ -163,7 +170,7 @@ impl Section<'_> {
         }
         if self.not_plain {
             return Err(format!(
-                "README.md has HTML, an image or a footnote at \"{}\"; write that section in plain Markdown",
+                "README.md has more than plain Markdown at \"{}\" (HTML, an image, a footnote or a fence GitHub may draw); write that section in plain Markdown",
                 self.want
             ));
         }
@@ -180,7 +187,7 @@ pub fn hotkey_column(markdown: &str) -> Result<Vec<String>, String> {
         .collect();
     match hotkeys.as_slice() {
         [table] if table.not_plain => Err(
-            "README.md's hotkey table has HTML, an image or a footnote; write it in plain Markdown"
+            "README.md's hotkey table has more than plain Markdown (HTML, an image or a footnote); write it in plain Markdown"
                 .into(),
         ),
         [table] => Ok(table
@@ -350,34 +357,41 @@ mod tests {
     fn refuses_more_than_plain_markdown_at_the_section() {
         refused(
             &INSTALL.replace("Run:", "<!--\n```\nhidden\n```\n-->"),
-            "a footnote at \"Install\"",
+            "more than plain Markdown at \"Install\"",
         );
         refused(
             &INSTALL.replace("Run:", "<pre>shown</pre>"),
-            "a footnote at \"Install\"",
+            "more than plain Markdown at \"Install\"",
         );
         refused(
             &INSTALL.replace("Run:", "Run <!-- x -->:"),
-            "a footnote at \"Install\"",
+            "more than plain Markdown at \"Install\"",
         );
         refused(
             &INSTALL.replace("Run:", "![a](b.svg)"),
-            "an image or a footnote",
+            "more than plain Markdown at",
         );
         refused(
             &INSTALL.replace("## Install", "## Install![](b.svg)"),
-            "an image or a footnote",
+            "more than plain Markdown at",
         );
         let footnote = "Run[^1]:\n\n[^1]: note\n\n    ## Notes\n\n```\nhidden\n```";
-        refused(&INSTALL.replace("Run:", footnote), "an image or a footnote");
+        refused(
+            &INSTALL.replace("Run:", footnote),
+            "more than plain Markdown at",
+        );
         let sub = "### Notes <img src=\"x.svg\">\n\n```\na\n```";
-        refused(&INSTALL.replace("Run:", sub), "an image or a footnote");
+        refused(&INSTALL.replace("Run:", sub), "more than plain Markdown at");
         refused(
             &INSTALL.replace("Run:", "### Notes ![](x.svg)"),
-            "an image or a footnote",
+            "more than plain Markdown at",
         );
         let wrapped = "# Title\n\n[^x]:\n    ## Install\n\n    ```\n    a\n    b\n    ```\n";
-        refused(wrapped, "an image or a footnote");
+        refused(wrapped, "more than plain Markdown at");
+        for fence in ["mermaid", "math", "geojson"] {
+            let markdown = INSTALL.replace("```fish", &format!("```{fence}"));
+            refused(&markdown, "more than plain Markdown at");
+        }
         let before = format!("<!-- a comment -->\n\n{INSTALL}<details></details>\n");
         assert_eq!(commands(&before), ["a", "b"]);
     }
@@ -404,12 +418,17 @@ mod tests {
             err("<!--\n| Hotkey | Does |\n| --- | --- |\n| A | x |\n-->\n")
                 .contains("has 0 tables")
         );
-        let not_plain =
-            |cell: &str| err(&HOTKEYS.replace("| B |", cell)).contains("has HTML, an image");
+        let not_plain = |cell: &str| {
+            err(&HOTKEYS.replace("| B |", cell))
+                .contains("hotkey table has more than plain Markdown")
+        };
         assert!(not_plain("| <b>B</b> |"));
         assert!(not_plain("| ![B](b.svg) |"));
         let indented: String = HOTKEYS.lines().map(|l| format!("    {l}\n")).collect();
         let wrapped = format!("[^x]:\n{indented}");
-        assert!(err(&wrapped).contains("has HTML, an image"), "{wrapped}");
+        assert!(
+            err(&wrapped).contains("hotkey table has more than plain Markdown"),
+            "{wrapped}"
+        );
     }
 }
