@@ -89,10 +89,6 @@ deny_check() {
     fi
 }
 
-# The project page's facts (docs/facts.json) against the README and the
-# records they cite, and the cases that check the check.
-gate facts scripts/check-facts.sh
-gate facts-cases scripts/check-facts-test.sh
 gate cargo-config no_cargo_config
 gate fmt cargo fmt --all --check
 gate deny deny_check

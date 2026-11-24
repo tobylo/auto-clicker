@@ -30,4 +30,7 @@ libc = "0.2.191"
 nix = { version = "0.29.0", default-features = false, features = ["fs"] }
 
 [dev-dependencies]
+# Reads README.md as GitHub renders it, for the project page's facts test
+# (tests/facts). Already in the tree through Slint's markdown support.
+pulldown-cmark = { version = "0.13.6", default-features = false }
 tokio = { version = "1.54.1", features = ["rt", "test-util", "sync", "macros", "time"] }
