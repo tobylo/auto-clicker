@@ -68,10 +68,22 @@ put_nul_in_facts() {
     sed 's/"version"/"ver\x00sion"/' "$file" >"$work/facts.json" && mv "$work/facts.json" "$file"
 }
 
+# Makes the copy of docs/facts.json two JSON values: the file, then itself.
+two_facts_values() {
+    local file="$work/tree/docs/facts.json"
+    cat "$file" "$file" >"$work/facts.json" && mv "$work/facts.json" "$file"
+}
+
 # Replaces the copy of docs/facts.json with a link to a copy of it.
 link_facts() {
     mv "$work/tree/docs/facts.json" "$work/tree/facts-elsewhere.json"
     ln -s ../facts-elsewhere.json "$work/tree/docs/facts.json"
+}
+
+# Replaces the copy of README.md with a link to a copy of it.
+link_readme() {
+    mv "$work/tree/README.md" "$work/tree/README-elsewhere.md"
+    ln -s README-elsewhere.md "$work/tree/README.md"
 }
 
 # Replaces the copy of docs/guide/install.md with a link to README.md.
@@ -148,6 +160,10 @@ case_ readme_tilde_block_added fail "echo tilde" \
 ~~~fish\
 echo tilde\
 ~~~'
+case_ readme_indented_block_added fail "indented line under \"Install\"" \
+    edit_readme '/^The icon appears in the tray\.$/a\
+\
+\    echo indented'
 case_ readme_heading_twice fail "no single heading \"Install\"" \
     edit_readme 's/^## Documentation$/## Install/'
 case_ readme_heading_renamed fail "no single heading \"Install\"" \
@@ -196,8 +212,12 @@ case_ jq_fails_on_quotes fail "$jq_failed" failing_jq 'source.quote'
 case_ nothing_available pass "matches README.md" \
     edit_facts '.platforms[0] |= (.status = "soon" | .lines = [] | del(.readme) | del(.note))'
 case_ nul_in_file fail "not valid JSON" put_nul_in_facts
+case_ two_json_values fail "one value, and nothing else" two_facts_values
+case_ nul_in_readme fail "README.md contains a NUL byte" \
+    edit_readme 's/git clone/git clo\x00ne/' 
 if ln -s README.md "$work/probe" 2>/dev/null && [[ -L "$work/probe" ]]; then
     case_ path_is_a_link fail "docs/guide/install.md, which is not a file" link_install_guide
+    case_ readme_is_a_link fail "README.md is not a file in the repository" link_readme
     case_ facts_is_a_link fail "docs/facts.json is not a file in the repository" link_facts
     case_ path_through_a_linked_directory fail "docs/linked/install.md, which is not a file" \
         link_guide_directory

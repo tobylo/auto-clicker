@@ -27,12 +27,21 @@ file_in_repository() {
 # jq parses the file once, and every check reads what it parsed, printed
 # again as compact JSON: the document the shape check passed. jq refuses
 # bytes that are not JSON, and never prints a NUL.
-if ! file_in_repository docs/facts.json; then
-    echo "docs/facts.json is not a file in the repository" >&2
+for input in docs/facts.json README.md; do
+    if ! file_in_repository "$input"; then
+        echo "$input is not a file in the repository" >&2
+        exit 1
+    fi
+done
+if ! facts_json="$(jq -cs 'if length == 1 then .[0] else error("not one JSON value") end' \
+    "$root/docs/facts.json")"; then
+    echo "docs/facts.json is not valid JSON: one value, and nothing else" >&2
     exit 1
 fi
-if ! facts_json="$(jq -c . "$root/docs/facts.json")"; then
-    echo "docs/facts.json is not valid JSON" >&2
+# A shell string drops NUL bytes, so a README with one would compare as
+# something it does not say.
+if ! tr -d '\000' <"$readme" | cmp -s - "$readme"; then
+    echo "README.md contains a NUL byte" >&2
     exit 1
 fi
 
@@ -64,6 +73,8 @@ shape() {
 # the next heading, blank lines left out. Fails unless exactly one heading has
 # that text. A block opens with ``` or ~~~ (three or more) and closes with at
 # least as many of the same character; lines inside one are never headings.
+# Outside them, the section may have no indented line, which Markdown could
+# show as a code block of its own (exit 4).
 readme_commands() {
     awk -v want="$1" '
         { sub(/\r$/, "") }
@@ -81,13 +92,14 @@ readme_commands() {
             if (in_section && $0 != "") print
             next
         }
+        in_section && /^(    |\t)/ { indented = 1 }
         /^#+[ \t]/ {
             heading = $0
             sub(/^#+[ \t]+/, "", heading)
             in_section = (heading == want)
             if (in_section) found++
         }
-        END { if (found != 1) exit 3 }
+        END { if (found != 1) exit 3; if (indented) exit 4 }
     ' "$readme"
 }
 
@@ -124,11 +136,14 @@ commands_match() {
     rows="$(facts_query -r '.platforms[] | select(.status == "available") | "\(.id)\t\(.readme)"')" || return 1
     [[ -n "$rows" ]] || return 0
     while IFS=$'\t' read -r id heading; do
-        if ! from_readme="$(readme_commands "$heading")"; then
-            echo "README.md has no single heading \"$heading\" (platform $id)" >&2
+        from_readme="$(readme_commands "$heading")" || {
+            case $? in
+                4) echo "README.md has an indented line under \"$heading\"; put commands in fenced blocks" >&2 ;;
+                *) echo "README.md has no single heading \"$heading\" (platform $id)" >&2 ;;
+            esac
             failed=1
             continue
-        fi
+        }
         from_file="$(facts_query -r --arg id "$id" \
             '.platforms[] | select(.id == $id) | .lines[] | .command // empty')" || return 1
         same "README.md's commands under \"$heading\"" "$from_readme" \
