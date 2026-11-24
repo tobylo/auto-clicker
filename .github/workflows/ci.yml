@@ -43,7 +43,12 @@ jobs:
         run: scripts/gates.sh
 
   # The same gates on Windows (M5, WN03): every crate builds there, the Linux
-  # ones empty. Git for Windows' bash runs the script, with its own `timeout`.
+  # ones empty. Git for Windows' bash runs the script, with its own `timeout`,
+  # all but the test gate: that bash enables the backup privilege of the
+  # runner's administrator account, every process it starts inherits it, and
+  # with it a file another program holds opens anyway, which a core test
+  # checks it does not. PowerShell runs the tests, as the program runs:
+  # without that privilege.
   windows:
     runs-on: windows-2025
     timeout-minutes: 60
@@ -66,3 +71,8 @@ jobs:
         run: cargo install --locked cargo-deny@0.20.2
       - name: Gates
         run: scripts/gates.sh
+        env:
+          GATES_TEST_APART: 1
+      - name: Test
+        shell: pwsh
+        run: cargo test --workspace --locked

@@ -93,6 +93,12 @@ gate cargo-config no_cargo_config
 gate fmt cargo fmt --all --check
 gate deny deny_check
 gate clippy cargo clippy --workspace --all-targets --locked -- -D warnings
+# CI on Windows runs this gate in a step of its own, outside Git for Windows'
+# bash, and sets GATES_TEST_APART=1 (ci.yml says why).
+if [[ "${GATES_TEST_APART:-}" == 1 ]]; then
+    echo "=== ALL GATES PASSED BUT test, which the caller runs"
+    exit 0
+fi
 gate test cargo test --workspace --locked
 
 echo "=== ALL GATES PASSED"
