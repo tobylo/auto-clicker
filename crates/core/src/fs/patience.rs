@@ -135,8 +135,8 @@ mod tests {
     fn a_call_held_up_past_the_deadline_is_busy_not_missing() {
         let tries = Cell::new(0_u32);
         let started = Instant::now();
-        // Long enough that no stall of the runner between the first failure
-        // and its first pause uses it all up.
+        // Long enough that only a runner stalled for half a second between
+        // the first failure and its first pause would use it all up.
         let err = Patience::lasting(Duration::from_millis(500))
             .retry_when(Path::new("held.json"), is_shared, || -> io::Result<()> {
                 tries.set(tries.get() + 1);
