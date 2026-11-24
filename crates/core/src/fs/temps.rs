@@ -241,7 +241,7 @@ mod tests {
             ".config.toml.12345678901.0123456789abcdef.tmp",
             ".config.toml.42.0123456789abcde.tmp",
             ".config.toml.42.0123456789abcdef0.tmp",
-            ".config.toml.42.0123456789ABCDEF.tmp",
+            ".config.toml.43.0123456789ABCDEF.tmp",
             ".config.toml.42.0123456789abcdeg.tmp",
             ".42.0123456789abcdef.tmp",
             ".config.toml.42.0123456789abcdef.TMP",
@@ -262,9 +262,10 @@ mod tests {
         fs::write(&temp, b"half").unwrap();
         fs::write(dir.path().join("config.toml"), b"kept").unwrap();
         fs::write(dir.path().join(".notes.tmp"), b"kept").unwrap();
-        // Its own name, but not quite a temporary file's.
+        // Its own name, but not quite a temporary file's (another process
+        // id, as Windows names ignore case).
         fs::write(
-            dir.path().join(".config.toml.42.0123456789ABCDEF.tmp"),
+            dir.path().join(".config.toml.43.0123456789ABCDEF.tmp"),
             b"kept",
         )
         .unwrap();
@@ -287,7 +288,7 @@ mod tests {
             dir.entries(),
             [
                 ".config.toml.1.0123456789abcdef.tmp",
-                ".config.toml.42.0123456789ABCDEF.tmp",
+                ".config.toml.43.0123456789ABCDEF.tmp",
                 ".notes.md.42.0123456789abcdef.tmp",
                 ".notes.tmp",
                 "config.toml"
