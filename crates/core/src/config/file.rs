@@ -102,7 +102,8 @@ impl ConfigFile {
 
     /// Removes the temporary files that saves of this file left when they
     /// crashed at least [`STALE_TEMP_AGE`] ago: beside the file, or beside
-    /// the file a link at its path points to. Returns how many it removed.
+    /// the file a link at its path points to, and only those named after
+    /// it. Returns how many it removed.
     ///
     /// # Errors
     /// The directory cannot be read, or the link leads nowhere.
@@ -110,7 +111,7 @@ impl ConfigFile {
         let Some(path) = self.path.as_deref() else {
             return Ok(0);
         };
-        remove_stale_temps(directory_of(&target_of(path)?), STALE_TEMP_AGE)
+        remove_stale_temps(&target_of(path)?, STALE_TEMP_AGE)
     }
 
     /// Why the file is not as the daemon last saw it, if it is not.

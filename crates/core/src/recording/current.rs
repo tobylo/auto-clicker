@@ -92,8 +92,8 @@ impl CurrentFile {
     /// # Errors
     /// Its directory cannot be read.
     pub fn remove_stale_temps(&self) -> io::Result<usize> {
-        match self.0.as_deref().and_then(std::path::Path::parent) {
-            Some(dir) => remove_stale_temps(dir, STALE_TEMP_AGE),
+        match self.0.as_deref() {
+            Some(path) => remove_stale_temps(path, STALE_TEMP_AGE),
             None => Ok(0),
         }
     }

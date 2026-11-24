@@ -37,6 +37,20 @@ pub(super) fn target_of(name: &str) -> Option<&str> {
     valid.then_some(target)
 }
 
+/// Whether `name` is one [`temp_name`] makes for the file named `target`,
+/// whatever bytes that name holds.
+fn is_temp_of(name: &OsStr, target: &OsStr) -> bool {
+    let rest = name
+        .as_encoded_bytes()
+        .strip_prefix(PREFIX.as_bytes())
+        .and_then(|rest| rest.strip_prefix(target.as_encoded_bytes()))
+        .and_then(|rest| rest.strip_prefix(b"."))
+        .and_then(|rest| std::str::from_utf8(rest).ok())
+        .and_then(|rest| rest.strip_suffix(SUFFIX))
+        .and_then(|rest| rest.split_once('.'));
+    rest.is_some_and(|(pid, random)| is_pid(pid) && is_random(random))
+}
+
 /// A process id: 1 to 10 decimal digits.
 fn is_pid(text: &str) -> bool {
     (1..=10).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_digit())
@@ -50,12 +64,51 @@ fn is_random(text: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// A regular file in a folder whose name a test accepted.
+struct Found {
+    name: OsString,
+    changed_ago: Option<Duration>,
+}
+
+impl Found {
+    /// Whether it was last changed at least `age` ago. A time in the future
+    /// is not.
+    fn is_older_than(&self, age: Duration) -> bool {
+        self.changed_ago.is_some_and(|ago| ago >= age)
+    }
+}
+
+/// The regular files (not links) in `dir` whose names `ours` accepts.
+///
+/// # Errors
+/// The folder, or an entry in it, cannot be read: never taken as "none".
+fn find(dir: &Path, ours: impl Fn(&OsStr) -> bool) -> io::Result<Vec<Found>> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if !ours(&name) {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            // Removed since the folder was read: nothing to remove.
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
+        if metadata.file_type().is_file() {
+            let changed_ago = metadata.modified().ok().and_then(|at| at.elapsed().ok());
+            found.push(Found { name, changed_ago });
+        }
+    }
+    Ok(found)
+}
+
 /// A temporary file a save left in a folder.
 #[derive(Debug)]
 pub struct Temp {
     name: String,
     target: String,
-    changed_ago: Option<Duration>,
 }
 
 impl Temp {
@@ -68,12 +121,11 @@ impl Temp {
     pub fn target(&self) -> &str {
         &self.target
     }
+}
 
-    /// Whether it was last changed at least `age` ago. A time in the future
-    /// is not.
-    fn is_older_than(&self, age: Duration) -> bool {
-        self.changed_ago.is_some_and(|ago| ago >= age)
-    }
+/// Whether `name` is any temporary file's.
+fn is_any_temp(name: &OsStr) -> bool {
+    name.to_str().and_then(target_of).is_some()
 }
 
 /// The temporary files in `dir`: the regular files (not links) named as
@@ -82,60 +134,64 @@ impl Temp {
 /// # Errors
 /// The folder, or an entry in it, cannot be read: never taken as "none".
 pub(super) fn list(dir: &Path) -> io::Result<Vec<Temp>> {
-    let mut found = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
-            continue;
-        };
-        let Some(target) = target_of(&name).map(ToOwned::to_owned) else {
-            continue;
-        };
-        let metadata = match entry.metadata() {
-            Ok(metadata) => metadata,
-            // Removed since the folder was read: nothing to remove.
-            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(err),
-        };
-        if metadata.file_type().is_file() {
-            let changed_ago = metadata.modified().ok().and_then(|at| at.elapsed().ok());
-            found.push(Temp {
-                name,
-                target,
-                changed_ago,
-            });
-        }
-    }
-    Ok(found)
+    let found = find(dir, is_any_temp)?;
+    let temps = found.into_iter().filter_map(|found| {
+        let name = found.name.into_string().ok()?;
+        let target = target_of(&name)?.to_owned();
+        Some(Temp { name, target })
+    });
+    Ok(temps.collect())
 }
 
-/// Removes the temporary files in `dir` that are at least `age` old: what
-/// a save that crashed left. A missing folder holds none. Returns how many
-/// it removed.
+/// Removes the temporary files that saves of `file` left beside it and that
+/// are at least `age` old: what a save that crashed left. Files of any
+/// other name stay, so a folder shared with other programs keeps theirs. A
+/// missing folder holds none. Returns how many it removed.
 ///
 /// # Errors
 /// The folder cannot be read, or a file could not be removed (the first
 /// such error; the others are still tried).
-pub fn remove_stale_temps(dir: &Path, age: Duration) -> io::Result<usize> {
+pub fn remove_stale_temps(file: &Path, age: Duration) -> io::Result<usize> {
+    let Some(target) = file.file_name() else {
+        return Ok(0);
+    };
+    let dir = super::parent_dir(file)?;
+    let ours = |name: &OsStr| is_temp_of(name, target);
     let remove = |path: &Path| fs::remove_file(path);
-    match remove_stale_in(dir, age, remove) {
+    match remove_stale_where(dir, age, ours, remove) {
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(0),
         found => found,
     }
 }
 
-/// Removes, with `remove`, the temporary files in `dir` last changed at
+/// Removes, with `remove`, every temporary file in `dir` last changed at
 /// least `age` ago. Returns how many it removed, or the first failure
-/// after trying them all; one already gone is no failure.
+/// after trying them all.
 pub(super) fn remove_stale_in(
     dir: &Path,
     age: Duration,
     remove: impl Fn(&Path) -> io::Result<()>,
 ) -> io::Result<usize> {
+    remove_stale_where(dir, age, is_any_temp, remove)
+}
+
+/// Removes, with `remove`, the files in `dir` whose names `ours` accepts
+/// and that were last changed at least `age` ago. Returns how many it
+/// removed, or the first failure after trying them all; one already gone
+/// is no failure.
+fn remove_stale_where(
+    dir: &Path,
+    age: Duration,
+    ours: impl Fn(&OsStr) -> bool,
+    remove: impl Fn(&Path) -> io::Result<()>,
+) -> io::Result<usize> {
     let mut removed: usize = 0;
     let mut failure = None;
-    for temp in list(dir)?.iter().filter(|temp| temp.is_older_than(age)) {
-        let path = dir.join(temp.name());
+    for found in find(dir, ours)?
+        .iter()
+        .filter(|found| found.is_older_than(age))
+    {
+        let path = dir.join(&found.name);
         match remove(&path) {
             Ok(()) => removed = removed.saturating_add(1),
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -206,17 +262,36 @@ mod tests {
         fs::write(&temp, b"half").unwrap();
         fs::write(dir.path().join("config.toml"), b"kept").unwrap();
         fs::write(dir.path().join(".notes.tmp"), b"kept").unwrap();
-        fs::create_dir(dir.path().join(".x.1.0123456789abcdef.tmp")).unwrap();
+        // Its own name, but not quite a temporary file's.
+        fs::write(
+            dir.path().join(".config.toml.42.0123456789ABCDEF.tmp"),
+            b"kept",
+        )
+        .unwrap();
+        // Another program's file of the same form, for another file.
+        fs::write(
+            dir.path().join(".notes.md.42.0123456789abcdef.tmp"),
+            b"kept",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join(".config.toml.1.0123456789abcdef.tmp")).unwrap();
+        let config = dir.path().join("config.toml");
 
         assert_eq!(
-            remove_stale_temps(dir.path(), Duration::from_secs(3600)).unwrap(),
+            remove_stale_temps(&config, Duration::from_secs(3600)).unwrap(),
             0
         );
-        assert_eq!(remove_stale_temps(dir.path(), Duration::ZERO).unwrap(), 1);
+        assert_eq!(remove_stale_temps(&config, Duration::ZERO).unwrap(), 1);
 
         assert_eq!(
             dir.entries(),
-            [".notes.tmp", ".x.1.0123456789abcdef.tmp", "config.toml"]
+            [
+                ".config.toml.1.0123456789abcdef.tmp",
+                ".config.toml.42.0123456789ABCDEF.tmp",
+                ".notes.md.42.0123456789abcdef.tmp",
+                ".notes.tmp",
+                "config.toml"
+            ]
         );
     }
 
@@ -233,7 +308,8 @@ mod tests {
             .set_modified(two_hours_ago)
             .unwrap();
 
-        let removed = remove_stale_temps(dir.path(), Duration::from_secs(60 * 60)).unwrap();
+        let config = dir.path().join("config.toml");
+        let removed = remove_stale_temps(&config, Duration::from_secs(60 * 60)).unwrap();
 
         assert_eq!(removed, 1);
         assert_eq!(dir.entries(), Vec::<String>::new());
@@ -287,7 +363,7 @@ mod tests {
     #[test]
     fn a_missing_folder_holds_no_temp_files() {
         let dir = TempDir::new();
-        let missing = dir.path().join("missing");
+        let missing = dir.path().join("missing").join("config.toml");
         assert_eq!(remove_stale_temps(&missing, Duration::ZERO).unwrap(), 0);
     }
 
@@ -296,6 +372,20 @@ mod tests {
         let dir = TempDir::new();
         let file = dir.path().join("file");
         fs::write(&file, b"").unwrap();
-        assert!(remove_stale_temps(&file, Duration::ZERO).is_err());
+        let config = file.join("config.toml");
+        assert!(remove_stale_temps(&config, Duration::ZERO).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_temp_file_of_a_name_that_is_not_utf_8_is_removed() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = TempDir::new();
+        let config = dir.path().join(OsStr::from_bytes(b"conf\xffig.toml"));
+        let temp = dir.path().join(temp_name(config.file_name().unwrap()));
+        fs::write(&temp, b"half").unwrap();
+
+        assert_eq!(remove_stale_temps(&config, Duration::ZERO).unwrap(), 1);
+        assert!(!temp.exists());
     }
 }

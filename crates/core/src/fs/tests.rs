@@ -230,7 +230,7 @@ fn a_start_keeps_a_temp_file_younger_than_an_hour() {
             .unwrap();
     }
 
-    let removed = remove_stale_temps(dir.path(), STALE_TEMP_AGE).unwrap();
+    let removed = remove_stale_temps(&dir.path().join("a.json"), STALE_TEMP_AGE).unwrap();
 
     assert_eq!(removed, 1);
     assert_eq!(dir.entries(), [".a.json.1.0123456789abcdef.tmp"]);

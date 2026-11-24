@@ -5,11 +5,14 @@
 //! written, and while it does, a rename, a link, a removal or an open may
 //! fail with a sharing violation. That is transient: the call is tried
 //! again, after pauses that double, until one deadline shared by the whole
-//! operation, and then reported as busy, never as missing. Linux has no
-//! such failure, so there every call is made once.
+//! operation, and then reported as busy, never as missing. The deadline
+//! starts the first time another program holds a file up, so time spent
+//! writing a large file never uses it up. Linux has no such failure, so
+//! there every call is made once.
 
 use std::io;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -35,20 +38,30 @@ pub(super) enum Op {
 /// One operation's deadline for calls other programs hold up.
 #[derive(Debug)]
 pub(super) struct Patience {
-    deadline: Instant,
+    budget: Duration,
+    /// Set the first time a call is held up: `budget` from then.
+    deadline: OnceLock<Instant>,
 }
 
 impl Patience {
-    /// A deadline [`BUDGET`] from now.
+    /// A wait of [`BUDGET`] in all.
     pub(super) fn new() -> Patience {
         Patience::lasting(BUDGET)
     }
 
     pub(super) fn lasting(budget: Duration) -> Patience {
-        let now = Instant::now();
         Patience {
-            deadline: now.checked_add(budget).unwrap_or(now),
+            budget,
+            deadline: OnceLock::new(),
         }
+    }
+
+    /// The deadline, starting it now if no call was held up before.
+    fn deadline(&self) -> Instant {
+        *self.deadline.get_or_init(|| {
+            let now = Instant::now();
+            now.checked_add(self.budget).unwrap_or(now)
+        })
     }
 
     /// `call`'s result, tried again while this system calls its failure
@@ -76,7 +89,7 @@ impl Patience {
                 Err(err) if transient(&err) => err,
                 done => return done,
             };
-            let left = self.deadline.saturating_duration_since(Instant::now());
+            let left = self.deadline().saturating_duration_since(Instant::now());
             if left.is_zero() {
                 return Err(busy(path, err));
             }
@@ -156,6 +169,23 @@ mod tests {
             },
         );
         assert_eq!((done.unwrap(), tries.get()), ("read", 3));
+    }
+
+    #[test]
+    fn time_before_the_first_hold_up_does_not_count() {
+        let patience = Patience::lasting(Duration::from_millis(50));
+        // A large file being written, before anything is held up.
+        thread::sleep(Duration::from_millis(100));
+        let tries = Cell::new(0_u32);
+        let placed = patience.retry_when(Path::new("held.json"), is_shared, || {
+            tries.set(tries.get() + 1);
+            if tries.get() < 2 {
+                Err(shared())
+            } else {
+                Ok("placed")
+            }
+        });
+        assert_eq!((placed.unwrap(), tries.get()), ("placed", 2));
     }
 
     #[test]
