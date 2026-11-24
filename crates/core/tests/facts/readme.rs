@@ -1,9 +1,8 @@
 //! What README.md shows, read by a Markdown parser with GitHub's extensions:
 //! the code blocks under a heading, and the hotkey table. Whatever form the
 //! Markdown takes (fences, indented blocks, quotes, lists, tables without
-//! outer pipes), these are the blocks and cells GitHub renders. HTML is
-//! refused where the check reads, since it can hide text or show some the
-//! parser does not see as a block.
+//! outer pipes), these are the blocks and cells GitHub renders. Where the
+//! check reads, only plain Markdown is accepted (see `is_plain`).
 
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
@@ -13,6 +12,43 @@ fn events(markdown: &str) -> Parser<'_> {
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS;
     Parser::new_ext(markdown, gfm)
+}
+
+/// Whether `event` is plain Markdown, which shows what it says where it says
+/// it: text, code, emphasis, links, lists, quotes, code blocks, headings,
+/// tables, rules and breaks. Anything else is refused where the check reads:
+/// HTML can hide text or show text the parser does not read as such, an
+/// image shows something other than its alt text, and a footnote's definition
+/// moves to the foot of the page.
+fn is_plain(event: &Event<'_>) -> bool {
+    match event {
+        Event::Start(tag) => matches!(
+            tag,
+            Tag::Paragraph
+                | Tag::Heading { .. }
+                | Tag::BlockQuote(_)
+                | Tag::CodeBlock(_)
+                | Tag::List(_)
+                | Tag::Item
+                | Tag::Emphasis
+                | Tag::Strong
+                | Tag::Strikethrough
+                | Tag::Link { .. }
+                | Tag::Table(_)
+                | Tag::TableHead
+                | Tag::TableRow
+                | Tag::TableCell
+        ),
+        Event::End(_)
+        | Event::Text(_)
+        | Event::Code(_)
+        | Event::SoftBreak
+        | Event::HardBreak
+        | Event::Rule
+        | Event::TaskListMarker(_)
+        | Event::FootnoteReference(_) => true,
+        _ => false,
+    }
 }
 
 /// The non-blank lines of every code block in the section under the one
@@ -32,26 +68,32 @@ pub fn section_commands(markdown: &str, heading: &str) -> Result<Vec<String>, St
 #[derive(Default)]
 struct Section<'w> {
     want: &'w str,
-    /// The heading being read: its level and text so far.
-    heading: Option<(HeadingLevel, String)>,
+    /// The heading being read: its level, its text so far, and whether it is
+    /// plain.
+    heading: Option<(HeadingLevel, String, bool)>,
     /// The wanted section's level, while inside it.
     open: Option<HeadingLevel>,
     /// The code block being read.
     code: Option<String>,
     found: usize,
-    html: bool,
+    /// Whether the wanted heading or its section has more than plain Markdown.
+    not_plain: bool,
     lines: Vec<String>,
 }
 
 impl Section<'_> {
     fn take(&mut self, event: Event<'_>) {
+        if !is_plain(&event) {
+            self.not_plain_here();
+        }
         match event {
             Event::Start(Tag::Heading { level, .. }) => self.start_heading(level),
             Event::End(TagEnd::Heading(_)) => self.end_heading(),
             Event::Start(Tag::CodeBlock(_)) => self.code = Some(String::new()),
             Event::End(TagEnd::CodeBlock) => self.end_code(),
             Event::Text(text) | Event::Code(text) => self.text(&text),
-            Event::Html(_) | Event::InlineHtml(_) => self.html |= self.open.is_some(),
+            // A heading over two lines (setext) reads as one line.
+            Event::SoftBreak => self.text(" "),
             _ => {}
         }
     }
@@ -60,20 +102,29 @@ impl Section<'_> {
         if self.open.is_some_and(|open| level <= open) {
             self.open = None;
         }
-        self.heading = Some((level, String::new()));
+        self.heading = Some((level, String::new(), true));
     }
 
     fn end_heading(&mut self) {
-        if let Some((level, text)) = self.heading.take()
+        if let Some((level, text, plain)) = self.heading.take()
             && text == self.want
         {
             self.found += 1;
             self.open = Some(level);
+            self.not_plain |= !plain;
+        }
+    }
+
+    fn not_plain_here(&mut self) {
+        if let Some((_, _, plain)) = &mut self.heading {
+            *plain = false;
+        } else if self.open.is_some() {
+            self.not_plain = true;
         }
     }
 
     fn text(&mut self, text: &str) {
-        if let Some((_, heading)) = &mut self.heading {
+        if let Some((_, heading, _)) = &mut self.heading {
             heading.push_str(text);
         } else if let Some(code) = &mut self.code {
             code.push_str(text);
@@ -95,9 +146,9 @@ impl Section<'_> {
                 self.found, self.want
             ));
         }
-        if self.html {
+        if self.not_plain {
             return Err(format!(
-                "README.md has HTML under \"{}\"; write that section in Markdown only",
+                "README.md has HTML, an image or a footnote at \"{}\"; write that section in plain Markdown",
                 self.want
             ));
         }
@@ -113,9 +164,10 @@ pub fn hotkey_column(markdown: &str) -> Result<Vec<String>, String> {
         .filter(|t| t.head == ["Hotkey", "Does"])
         .collect();
     match hotkeys.as_slice() {
-        [table] if table.html => {
-            Err("README.md's hotkey table has HTML; write it in Markdown only".into())
-        }
+        [table] if table.not_plain => Err(
+            "README.md's hotkey table has HTML, an image or a footnote; write it in plain Markdown"
+                .into(),
+        ),
         [table] => Ok(table
             .rows
             .iter()
@@ -132,7 +184,7 @@ pub fn hotkey_column(markdown: &str) -> Result<Vec<String>, String> {
 struct Table {
     head: Vec<String>,
     rows: Vec<Vec<String>>,
-    html: bool,
+    not_plain: bool,
 }
 
 /// Every table, with each cell's text.
@@ -154,6 +206,11 @@ struct Tables {
 
 impl Tables {
     fn take(&mut self, event: Event<'_>) {
+        if !is_plain(&event)
+            && let Some(table) = &mut self.table
+        {
+            table.not_plain = true;
+        }
         match event {
             Event::Start(Tag::Table(_)) => self.table = Some(Table::default()),
             Event::End(TagEnd::Table) => self.done.extend(self.table.take()),
@@ -163,7 +220,6 @@ impl Tables {
             Event::Start(Tag::TableCell) => self.cell = Some(String::new()),
             Event::End(TagEnd::TableCell) => self.end_cell(),
             Event::Text(text) | Event::Code(text) => self.text(&text),
-            Event::Html(_) | Event::InlineHtml(_) => self.html(),
             _ => {}
         }
     }
@@ -188,12 +244,6 @@ impl Tables {
     fn text(&mut self, text: &str) {
         if let Some(cell) = &mut self.cell {
             cell.push_str(text);
-        }
-    }
-
-    fn html(&mut self) {
-        if let Some(table) = &mut self.table {
-            table.html = true;
         }
     }
 }
@@ -259,6 +309,13 @@ mod tests {
     }
 
     #[test]
+    fn reads_a_heading_over_two_lines_as_one() {
+        let markdown = INSTALL.replace("## Install", "Install\nfrom source\n---");
+        let commands = section_commands(&markdown, "Install from source").unwrap();
+        assert_eq!(commands, ["a", "b"]);
+    }
+
+    #[test]
     fn needs_exactly_one_heading() {
         refused(
             &INSTALL.replace("## Next", "## Install"),
@@ -276,19 +333,29 @@ mod tests {
     }
 
     #[test]
-    fn refuses_html_in_the_section() {
+    fn refuses_more_than_plain_markdown_at_the_section() {
         refused(
             &INSTALL.replace("Run:", "<!--\n```\nhidden\n```\n-->"),
-            "HTML under \"Install\"",
+            "a footnote at \"Install\"",
         );
         refused(
             &INSTALL.replace("Run:", "<pre>shown</pre>"),
-            "HTML under \"Install\"",
+            "a footnote at \"Install\"",
         );
         refused(
             &INSTALL.replace("Run:", "Run <!-- x -->:"),
-            "HTML under \"Install\"",
+            "a footnote at \"Install\"",
         );
+        refused(
+            &INSTALL.replace("Run:", "![a](b.svg)"),
+            "an image or a footnote",
+        );
+        refused(
+            &INSTALL.replace("## Install", "## Install![](b.svg)"),
+            "an image or a footnote",
+        );
+        let footnote = "Run[^1]:\n\n[^1]: note\n\n    ## Notes\n\n```\nhidden\n```";
+        refused(&INSTALL.replace("Run:", footnote), "an image or a footnote");
         let before = format!("<!-- a comment -->\n\n{INSTALL}<details></details>\n");
         assert_eq!(commands(&before), ["a", "b"]);
     }
@@ -315,6 +382,9 @@ mod tests {
             err("<!--\n| Hotkey | Does |\n| --- | --- |\n| A | x |\n-->\n")
                 .contains("has 0 tables")
         );
-        assert!(err(&HOTKEYS.replace("| B |", "| <b>B</b> |")).contains("has HTML"));
+        let not_plain =
+            |cell: &str| err(&HOTKEYS.replace("| B |", cell)).contains("has HTML, an image");
+        assert!(not_plain("| <b>B</b> |"));
+        assert!(not_plain("| ![B](b.svg) |"));
     }
 }

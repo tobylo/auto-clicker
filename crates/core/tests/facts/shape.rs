@@ -154,9 +154,6 @@ impl Facts {
 
 impl Platform {
     fn platform_problems(&self, at: &str, p: &mut Problems) {
-        p.check(is_slug(&self.id), || {
-            format!("{at}: id must be lowercase words joined by -")
-        });
         p.texts(
             at,
             &[
@@ -258,9 +255,6 @@ impl Hotkeys {
 
 impl Figure {
     fn figure_problems(&self, at: &str, p: &mut Problems) {
-        p.check(is_slug(&self.id), || {
-            format!("{at}: id must be lowercase words joined by -")
-        });
         p.texts(
             at,
             &[
@@ -298,11 +292,16 @@ impl Problems {
         }
     }
 
-    /// `items` is a non-empty list of distinct ids, each with its problems.
+    /// `items` is a non-empty list of distinct ids, each a slug, and each item
+    /// with its own problems.
     fn list<T: Listed>(&mut self, name: &str, items: &[T]) {
         self.check(!items.is_empty(), || format!("{name} must not be empty"));
         for (i, item) in items.iter().enumerate() {
-            item.problems(&format!("{name} {}", i + 1), self);
+            let at = format!("{name} {}", i + 1);
+            self.check(is_slug(item.id()), || {
+                format!("{at}: id must be lowercase words joined by -")
+            });
+            item.problems(&at, self);
         }
         self.check(distinct(items.iter().map(Listed::id)), || {
             format!("{name}: each id appears once")
@@ -533,6 +532,19 @@ mod tests {
             "bindings must not be empty",
         );
         refuses(|f| f["links"] = json!({}), "links must not be empty");
+        refuses(
+            |f| f["platforms"] = json!([]),
+            "platforms must not be empty",
+        );
+        refuses(|f| f["figures"] = json!([]), "figures must not be empty");
+        refuses(
+            |f| f["platforms"][0]["id"] = json!("Arch"),
+            "platforms 1: id must be lowercase",
+        );
+        refuses(
+            |f| f["figures"][0]["id"] = json!("fast-"),
+            "figures 1: id must be lowercase",
+        );
         refuses(
             |f| f["links"]["Guide"] = json!("README.md"),
             "is not lowercase words",

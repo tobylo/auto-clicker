@@ -117,6 +117,18 @@ fn the_fastest_stable_interval_is_the_interval_floor() {
     assert_eq!(Duration::from_millis(millis), INTERVAL_FLOOR);
 }
 
+/// The two files the tests read with `include_str!`, which follows a link,
+/// are themselves what GitHub shows at their paths.
+#[test]
+fn the_facts_and_the_readme_are_files() {
+    for path in ["docs/facts.json", "README.md"] {
+        assert!(
+            is_file_in(&repository(), path),
+            "{path} is not a file in the repository"
+        );
+    }
+}
+
 #[test]
 fn every_path_is_a_file_in_the_repository_and_every_quote_is_in_its_source() {
     let facts = facts();
@@ -147,7 +159,9 @@ fn every_path_is_a_file_in_the_repository_and_every_quote_is_in_its_source() {
 
 #[test]
 fn a_path_is_a_file_only_with_no_link_along_it() {
+    // Made here, not found: create_dir fails on a path that is already there.
     let root = std::env::temp_dir().join(format!("auto-clicker-facts-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
     fs::create_dir_all(root.join("docs/guide")).unwrap();
     fs::write(root.join("docs/guide/install.md"), "x").unwrap();
     assert!(is_file_in(&root, "docs/guide/install.md"));
