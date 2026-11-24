@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# The Windows 11 test VM on the dev box. See docs/agents/windows-vm.md.
+#
+#   vm build                 build the VM from Microsoft's evaluation image
+#                            (replaces the current one only once it succeeds)
+#   vm start                 boot it (from the clean build, or the changes
+#                            kept since the last reset) and wait for SSH
+#   vm run [--elevated] [--timeout S] [--workdir DIR] -- COMMAND...
+#                            run COMMAND in tester's desktop; prints its output
+#                            and exits with its exit code
+#   vm screen [FILE.png]     capture the screen
+#   vm key KEYS...           press keys (QEMU names: ret, ctrl-alt-delete)
+#   vm push PATH [DIR]       copy a local file or folder into DIR in the VM
+#                            (default C:\work)
+#   vm ssh [COMMAND]         PowerShell over SSH, as tester (elevated)
+#   vm selftest              check the click, the screen and the network
+#   vm status                build, expiry, running or not
+#   vm stop                  shut Windows down and stop QEMU
+#   vm reset                 discard every change since the build
+set -euo pipefail
+
+LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+# shellcheck source=lib/common.sh
+source "$LIB/common.sh"
+# shellcheck source=lib/machine.sh
+source "$LIB/machine.sh"
+# shellcheck source=lib/build.sh
+source "$LIB/build.sh"
+# shellcheck source=lib/session.sh
+source "$LIB/session.sh"
+# shellcheck source=lib/selftest.sh
+source "$LIB/selftest.sh"
+
+usage() {
+    sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//' >&2
+    exit 2
+}
+
+main() {
+    local command="${1:-}"
+    (($#)) && shift
+    case "$command" in
+        build | start | stop | reset | status | ssh | push | run | screen | key | selftest) "cmd_$command" "$@" ;;
+        *) usage ;;
+    esac
+}
+
+main "$@"

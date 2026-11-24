@@ -1,0 +1,53 @@
+<#
+.SYNOPSIS
+One Windows Update pass: search, download and install what applies.
+
+.DESCRIPTION
+Run as SYSTEM by the scheduled task provision.ps1 registers, because the
+Windows Update Agent refuses to download or install from an SSH (network)
+logon. Writes C:\wn01\windows-update.json when done:
+  { "state": "done" | "reboot" | "failed", "installed": n, "error": "..." }
+"done" means nothing was left to install; "reboot" means updates were
+installed and Windows needs a restart before the next pass.
+#>
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$StatusPath = 'C:\wn01\windows-update.json'
+
+function Write-Status([hashtable] $Status) {
+    [IO.File]::WriteAllText("$StatusPath.tmp", ($Status | ConvertTo-Json -Compress))
+    Move-Item -LiteralPath "$StatusPath.tmp" -Destination $StatusPath -Force
+}
+
+function Install-Pending {
+    $session = New-Object -ComObject Microsoft.Update.Session
+    $found = $session.CreateUpdateSearcher().Search("IsInstalled=0 and IsHidden=0 and Type='Software'").Updates
+    if ($found.Count -eq 0) {
+        return @{ state = 'done'; installed = 0; error = $null }
+    }
+    $batch = New-Object -ComObject Microsoft.Update.UpdateColl
+    foreach ($update in $found) {
+        if (-not $update.EulaAccepted) { $update.AcceptEula() }
+        $null = $batch.Add($update)
+    }
+    $downloader = $session.CreateUpdateDownloader()
+    $downloader.Updates = $batch
+    $null = $downloader.Download()
+    $installer = $session.CreateUpdateInstaller()
+    $installer.Updates = $batch
+    $result = $installer.Install()
+    # ResultCode 2 is succeeded, 3 succeeded with errors.
+    if ($result.ResultCode -notin 2, 3) {
+        return @{ state = 'failed'; installed = 0; error = "install result code $($result.ResultCode)" }
+    }
+    return @{ state = 'reboot'; installed = $batch.Count; error = $null }
+}
+
+Remove-Item -LiteralPath $StatusPath -Force -ErrorAction SilentlyContinue
+try {
+    Write-Status (Install-Pending)
+} catch {
+    Write-Status @{ state = 'failed'; installed = 0; error = $_.Exception.Message }
+}

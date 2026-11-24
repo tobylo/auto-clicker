@@ -100,5 +100,7 @@ if [[ "${GATES_TEST_APART:-}" == 1 ]]; then
     exit 0
 fi
 gate test cargo test --workspace --locked
+# The Windows test VM's allowlist proxy (scripts/windows-vm/proxy.py).
+gate vm-proxy bounded 120 python3 -I -m unittest discover -s scripts/windows-vm -p 'test_*.py'
 
 echo "=== ALL GATES PASSED"

@@ -1,0 +1,10 @@
+# sshd for the Windows test VM: tester only, by the build's key only. The
+# dev box reaches port 22 through QEMU's forward on its own loopback.
+AllowUsers tester
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+
+Match Group administrators
+    AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys

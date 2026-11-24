@@ -1,0 +1,20 @@
+# Hosts the VM may reach only while `vm build` runs, on top of allow-run.txt:
+# Windows Update and activation, the Visual Studio Build Tools download (the
+# MSVC linker and Windows SDK the Rust toolchain needs), winget's Store source
+# and the device sign-in the Store's licensing asks for, the connectivity
+# check, and Microsoft's certificate revocation hosts. (The Store's own
+# download service ignores the proxy: the build opens the network for that
+# one step; see install_opengl_pack in lib/build.sh.)
+# A leading dot also allows every subdomain.
+.windowsupdate.com
+.update.microsoft.com
+.mp.microsoft.com
+.sls.microsoft.com
+aka.ms
+download.visualstudio.microsoft.com
+cdn.winget.microsoft.com
+login.live.com
+www.msftconnecttest.com
+crl.microsoft.com
+oneocsp.microsoft.com
+www.microsoft.com

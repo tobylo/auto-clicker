@@ -1,0 +1,13 @@
+# Hosts the VM may reach through the proxy during test runs: the Rust
+# toolchain's sources and crates.io, and the certificate revocation (OCSP and
+# CRL) hosts of the authorities that sign their certificates, which Windows'
+# TLS checks ask. A leading dot also allows every subdomain.
+static.rust-lang.org
+crates.io
+index.crates.io
+static.crates.io
+.globalsign.com
+.amazontrust.com
+.digicert.com
+.lencr.org
+.pki.goog
