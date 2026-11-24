@@ -59,10 +59,11 @@ fn a_full_file_that_cannot_be_moved_keeps_its_lines() {
     log.write_line("three\n");
     log.write_line("four\n");
     assert_eq!(read(&path), "one two\nthree\nfour\n");
-    // Once the way is clear, the next line starts a new file.
+    // Once the way is clear, the next line starts a new file, however short:
+    // the file is still past its cap.
     fs::remove_dir_all(rotated(&path)).unwrap();
-    log.write_line("five\n");
-    assert_eq!(read(&path), "five\n");
+    log.write_line("5\n");
+    assert_eq!(read(&path), "5\n");
     assert_eq!(read(&rotated(&path)), "one two\nthree\nfour\n");
 }
 
