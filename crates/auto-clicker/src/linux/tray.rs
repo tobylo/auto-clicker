@@ -8,7 +8,7 @@ use ksni::menu::{CheckmarkItem, StandardItem, SubMenu};
 use ksni::{MenuItem, ToolTip, TrayMethods};
 use tokio::sync::{mpsc, watch};
 
-use crate::{tray_icon, tray_text};
+use super::{tray_icon, tray_text};
 
 /// The tray's state: the latest view, and where menu choices go.
 pub struct Tray {

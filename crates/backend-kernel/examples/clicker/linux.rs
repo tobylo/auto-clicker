@@ -1,17 +1,4 @@
-//! Runs the clicker engine on the kernel backend with the settings of a
-//! config file, for the click-rate and idle-cost measurements
-//! (scripts/measure-clicker.py). Not part of the installed program.
-//!
-//! ```text
-//! cargo run --release --locked -p auto-clicker-backend-kernel --example clicker -- CONFIG [START_DELAY_MS [RUN_FOR_MS]]
-//! ```
-//!
-//! It prints `mouse <event node>` once the virtual devices exist, waits
-//! START_DELAY_MS (default 1000) for the compositor to add them, prints
-//! `start`, runs until the repeat count, Ctrl+C or SIGTERM, and prints how it
-//! ended. With RUN_FOR_MS, it also stops by itself that long after it
-//! started, so a run whose caller died cannot click on: the measurement
-//! script always passes it. Leave the mouse and keyboard alone while it runs.
+//! The clicker example on Linux, where the kernel backend is (main.rs).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -25,7 +12,8 @@ use auto_clicker_core::config::Config;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::Instant;
 
-fn main() -> ExitCode {
+/// Runs the clicker to its end.
+pub fn main() -> ExitCode {
     match try_main() {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {

@@ -7,7 +7,8 @@ repository.workspace = true
 license.workspace = true
 publish.workspace = true
 
-[dependencies]
+# Linux alone: on other systems the crate is empty (lib.rs).
+[target.'cfg(target_os = "linux")'.dependencies]
 auto-clicker-core = { path = "../core" }
 # The only crate that touches /dev/uinput and evdev. `tokio`: the hotkey
 # reader's event streams.
@@ -21,6 +22,6 @@ tokio = { version = "1.54.1", default-features = false, features = ["net", "macr
 [lints]
 workspace = true
 
-[dev-dependencies]
+[target.'cfg(target_os = "linux")'.dev-dependencies]
 fastrand = "2.5.0"
 tokio = { version = "1.54.1", features = ["rt", "time", "signal", "macros", "sync"] }

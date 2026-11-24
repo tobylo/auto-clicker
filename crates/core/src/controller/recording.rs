@@ -12,6 +12,7 @@ use tokio::time::Instant;
 use super::view::NoRecording;
 use super::{Controller, InputReader, Platform, State};
 use crate::hotkeys::{Binding, HotkeyStatus, Unavailable};
+use crate::log;
 use crate::message::{Hindrance, NoPositions, Notice, Quoted, SaveFailure, Saving, Start, Stop};
 use crate::recording::{Created, Ending, MAX_DURATION, Recorder, Recording, save};
 
@@ -245,6 +246,6 @@ fn not_recording(why: Hindrance) -> Notice {
 /// A recording that could not be saved: logged, and shown.
 fn failed(why: SaveFailure) -> Saving {
     let saving = Saving::Failed(why);
-    eprintln!("auto-clicker: {saving}");
+    log::line(format_args!("auto-clicker: {saving}"));
     saving
 }

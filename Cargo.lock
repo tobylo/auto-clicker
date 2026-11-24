@@ -312,6 +312,7 @@ dependencies = [
  "auto-clicker-backend-kwin",
  "auto-clicker-backend-portal",
  "auto-clicker-backend-wayland",
+ "auto-clicker-backend-windows",
  "auto-clicker-core",
  "fastrand",
  "futures-util",
@@ -380,6 +381,13 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
+]
+
+[[package]]
+name = "auto-clicker-backend-windows"
+version = "1.0.0"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

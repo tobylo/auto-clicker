@@ -13,7 +13,7 @@ use auto_clicker_core::playback::Fallback;
 use super::super::{details, notice, problem};
 use super::samples::*;
 use super::view;
-use crate::tray_text::Language;
+use crate::linux::tray_text::Language;
 use auto_clicker_core::controller::Activity;
 
 #[test]

@@ -8,6 +8,8 @@
 //! cargo test --locked -p auto-clicker --test instance -- --ignored --test-threads=1
 //! ```
 
+// Linux alone, as the crate it drives.
+#![cfg(target_os = "linux")]
 // clippy.toml exempts `#[test]` functions only; this whole file is test code.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

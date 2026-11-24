@@ -8,8 +8,8 @@ use auto_clicker_core::message::NoOnScreen;
 use auto_clicker_core::window::{Ask, Update, WindowView};
 
 use super::list::{opened, sent};
-use crate::state::tests::{defaults, view};
-use crate::ui::SettingsWindow;
+use crate::linux::state::tests::{defaults, view};
+use crate::linux::ui::SettingsWindow;
 
 /// The group's switches and corner as the window holds them.
 fn shown(window: &SettingsWindow) -> (bool, bool, bool, bool, i32) {

@@ -24,6 +24,13 @@ gate() {
     fi
 }
 
+# The deadlines below need GNU coreutils' `timeout`: on Windows, Git for
+# Windows' bash provides it, and Windows' own timeout.exe only waits.
+if ! timeout --version 2>/dev/null | grep -q coreutils; then
+    echo "GNU timeout (coreutils) is required; found: $(command -v timeout || echo none)" >&2
+    exit 1
+fi
+
 # No step may wait on a credential prompt.
 export GIT_TERMINAL_PROMPT=0
 
@@ -43,11 +50,12 @@ advisory_db_reachable() {
 
 # A Cargo config in the tree could replace crates.io with another registry,
 # which cargo-deny would still report as crates.io, or alias a cargo command
-# the gates run. The repository tracks no `.cargo` path at all, so this runs
-# before the first cargo command.
+# the gates run. The repository tracks no `.cargo` path at all, in any case,
+# since Windows reads `.CARGO` as `.cargo`, so this runs before the first
+# cargo command.
 no_cargo_config() {
     local found
-    found="$(git ls-files -- ':(glob)**/.cargo' ':(glob)**/.cargo/**')" || return 1
+    found="$(git ls-files -- ':(glob,icase)**/.cargo' ':(glob,icase)**/.cargo/**')" || return 1
     if [[ -n "$found" ]]; then
         echo "Cargo configuration is not allowed in the repository: $found" >&2
         return 1
@@ -85,6 +93,12 @@ gate cargo-config no_cargo_config
 gate fmt cargo fmt --all --check
 gate deny deny_check
 gate clippy cargo clippy --workspace --all-targets --locked -- -D warnings
+# CI on Windows runs this gate in a step of its own, outside Git for Windows'
+# bash, and sets GATES_TEST_APART=1 (ci.yml says why).
+if [[ "${GATES_TEST_APART:-}" == 1 ]]; then
+    echo "=== ALL GATES PASSED BUT test, which the caller runs"
+    exit 0
+fi
 gate test cargo test --workspace --locked
 
 echo "=== ALL GATES PASSED"

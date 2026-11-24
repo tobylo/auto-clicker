@@ -9,9 +9,9 @@
 [graph]
 # Optional dependencies are checked too, whether or not a feature enables them.
 all-features = true
-# The program runs on Linux only; crates that other systems alone pull in
-# (Windows clipboard and window crates, say) never reach a build.
-targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+# The systems the program builds for (map D13): crates that only another
+# system pulls in never reach a build.
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 
 [advisories]
 # Vulnerabilities always fail, whichever crate in the graph they are in;
@@ -42,6 +42,12 @@ exceptions = [
     # The tray's StatusNotifierItem client. The Unlicense dedicates the code to
     # the public domain, with no conditions at all.
     { crate = "ksni", allow = ["Unlicense"] },
+    # The Windows clipboard under winit, which the settings window uses. The
+    # Boost Software License 1.0 is permissive and asks no credit in a
+    # shipped program. cargo-deny merges features across its targets, so it
+    # sees these in the Windows graph before a Windows build has them (WN10).
+    { crate = "clipboard-win", allow = ["BSL-1.0"] },
+    { crate = "error-code", allow = ["BSL-1.0"] },
     # The settings window's toolkit, used under the Slint Royalty-free
     # License 2.0 (a desktop application, which shows AboutSlint), never
     # the GPL that is the other choice it offers.

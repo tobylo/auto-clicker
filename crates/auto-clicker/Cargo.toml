@@ -9,6 +9,9 @@ publish.workspace = true
 
 [dependencies]
 auto-clicker-core = { path = "../core" }
+
+# The daemon on Linux (src/linux/).
+[target.'cfg(target_os = "linux")'.dependencies]
 auto-clicker-backend-kernel = { path = "../backend-kernel" }
 auto-clicker-backend-portal = { path = "../backend-portal" }
 auto-clicker-backend-kwin = { path = "../backend-kwin" }
@@ -26,9 +29,13 @@ tokio = { version = "1.54.1", default-features = false, features = ["rt", "macro
 # purpose: ksni is built on it, so the tree carries one zbus.
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
+# The daemon on Windows (src/windows.rs): every Win32 call is in backend-windows.
+[target.'cfg(windows)'.dependencies]
+auto-clicker-backend-windows = { path = "../backend-windows" }
+
 [lints]
 workspace = true
 
-[dev-dependencies]
+[target.'cfg(target_os = "linux")'.dev-dependencies]
 auto-clicker-core = { path = "../core", features = ["fake"] }
 tokio = { version = "1.54.1", features = ["rt", "macros", "sync", "time", "test-util", "io-util"] }

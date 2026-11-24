@@ -14,6 +14,9 @@
 //! callers out; it is no boundary against other processes of the same user,
 //! which can load KWin scripts of their own.
 
+// Linux alone; on other systems the crate is empty (map D13, M5 brief decision 3).
+#![cfg(target_os = "linux")]
+
 mod dir;
 mod display;
 #[cfg(test)]
