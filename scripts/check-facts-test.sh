@@ -6,6 +6,14 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$here/.."
+
+# The cases change copies of a tree that passes, and copy only paths the gate
+# has checked are files in this repository.
+if ! "$here/check-facts.sh" >/dev/null; then
+    echo "scripts/check-facts.sh fails on this repository; fix that first" >&2
+    exit 1
+fi
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -29,6 +37,22 @@ edit_facts() {
     jq "$1" "$file" >"$work/facts.json" && mv "$work/facts.json" "$file"
 }
 
+# Puts a jq first on PATH that fails whenever its filter mentions $1, and
+# otherwise runs the real one.
+failing_jq() {
+    local real
+    real="$(command -v jq)"
+    mkdir -p "$work/bin"
+    printf '#!/usr/bin/env bash\ncase "$*" in *%s*) exit 5 ;; esac\nexec "%s" "$@"\n' "$1" "$real" >"$work/bin/jq"
+    chmod +x "$work/bin/jq"
+}
+
+# Replaces the copy of docs/guide/install.md with a link to README.md.
+link_install_guide() {
+    rm "$work/tree/docs/guide/install.md"
+    ln -s ../../README.md "$work/tree/docs/guide/install.md"
+}
+
 # Changes the copy of README.md with the sed script $1.
 edit_readme() {
     sed -i.bak -e "$1" "$work/tree/README.md" && rm "$work/tree/README.md.bak"
@@ -49,7 +73,8 @@ case_() {
     shift 3
     fresh_tree
     "$@"
-    if output="$("$here/check-facts.sh" "$work/tree" 2>&1)"; then got=pass; else got=fail; fi
+    if output="$(PATH="$work/bin:$PATH" "$here/check-facts.sh" "$work/tree" 2>&1)"; then got=pass; else got=fail; fi
+    rm -rf "$work/bin"
     if [[ "$got" != "$want" ]]; then
         echo "FAIL $name: expected $want, got $got" >&2
         echo "$output" >&2
@@ -82,6 +107,14 @@ case_ readme_block_added fail "echo stray" \
 ```fish\
 echo stray\
 ```'
+case_ readme_tilde_block_added fail "echo tilde" \
+    edit_readme '/^The icon appears in the tray\.$/a\
+\
+~~~fish\
+echo tilde\
+~~~'
+case_ readme_heading_twice fail "no single heading \"Install\"" \
+    edit_readme 's/^## Documentation$/## Install/'
 case_ readme_heading_renamed fail "no single heading \"Install\"" \
     edit_readme 's/^## Install$/## Installing/'
 case_ file_command_changed fail "systemctl --user enable auto-clicker" \
@@ -93,6 +126,12 @@ case_ fish_comment_is_not_a_heading fail "# a comment" \
 sudo pacman -Syu/'
 case_ readme_hotkey_changed fail "Ctrl+Alt+F6|Ctrl+Shift+F6|hotkey table" \
     edit_readme 's/^| Ctrl+Shift+F6 |/| Ctrl+Alt+F6 |/'
+case_ readme_hotkey_table_twice fail "no single table" \
+    edit_readme 's/^## Install$/| Hotkey | Does |\
+| --- | --- |\
+| Ctrl+Shift+F6 | Old |\
+\
+## Install/'
 case_ file_hotkey_changed fail "Ctrl+Shift+F9" \
     edit_facts '.hotkeys.bindings[2].key = "F9"'
 case_ not_json fail "not valid JSON" \
@@ -109,8 +148,18 @@ case_ guide_only_false fail "guideOnly may only be true" \
     edit_facts '.platforms[0].lines[4].guideOnly = false'
 case_ path_outside fail "must be a path in this repository" \
     edit_facts '.links.guide = "../README.md"'
-case_ path_missing fail "docs/guide/gone.md, which is not in the repository" \
+case_ path_missing fail "docs/guide/gone.md, which is not a file in the repository" \
     edit_facts '.links.guide = "docs/guide/gone.md"'
+case_ jq_fails_on_commands fail "" failing_jq 'select(.status'
+case_ jq_fails_on_command_lines fail "" failing_jq '.command // empty'
+case_ jq_fails_on_hotkeys fail "" failing_jq 'hotkeys.modifiers as'
+case_ jq_fails_on_paths fail "" failing_jq '.links[]'
+case_ jq_fails_on_quotes fail "" failing_jq 'source.quote'
+if ln -s README.md "$work/probe" 2>/dev/null && [[ -L "$work/probe" ]]; then
+    case_ path_is_a_link fail "docs/guide/install.md, which is not a file" link_install_guide
+else
+    echo "skip path_is_a_link: this system makes no symbolic links"
+fi
 case_ quote_missing fail "figure idle-memory: docs/planning/map.md does not contain" \
     edit_facts '.figures[2].source.quote = "idles at 9.9 MiB"'
 

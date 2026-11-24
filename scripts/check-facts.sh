@@ -2,25 +2,32 @@
 # Checks docs/facts.json, the facts the project page shows, against this
 # repository: its shape (scripts/facts-shape.jq), each available platform's
 # commands against the code blocks under its README heading, the hotkeys
-# against the README's table, and that every path it names exists and every
-# figure's source holds its quote. Prints both texts on a difference.
+# against the README's table, and that every path it names is a file here and
+# every figure's source holds its quote. Prints both texts on a difference.
 #
 # Usage: scripts/check-facts.sh [ROOT]   (ROOT defaults to this repository)
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="${1:-$here/..}"
-facts="$root/docs/facts.json"
 readme="$root/README.md"
 
-# jq, without the CR a native Windows jq ends each line with.
-jqr() {
-    jq "$@" | tr -d '\r'
+# The file is read once; every check reads this copy, the one the shape check
+# passed.
+if ! facts_json="$(cat "$root/docs/facts.json")"; then
+    echo "docs/facts.json cannot be read" >&2
+    exit 1
+fi
+
+# jq on the facts, without the CR a native Windows jq ends each line with.
+# Fails when jq does.
+facts_query() {
+    jq "$@" <<<"$facts_json" | tr -d '\r'
 }
 
 shape() {
     local problems
-    if ! problems="$(jqr -r -f "$here/facts-shape.jq" "$facts")"; then
+    if ! problems="$(facts_query -r -f "$here/facts-shape.jq")"; then
         echo "docs/facts.json is not valid JSON" >&2
         return 1
     fi
@@ -33,12 +40,25 @@ shape() {
 
 # The lines of every code block under the README heading $1 (any level), up to
 # the next heading, blank lines left out. Fails unless exactly one heading has
-# that text. Lines inside code blocks are never read as headings.
+# that text. A block opens with ``` or ~~~ (three or more) and closes with at
+# least as many of the same character; lines inside one are never headings.
 readme_commands() {
     awk -v want="$1" '
         { sub(/\r$/, "") }
-        /^[ \t]*```/ { fence = !fence; next }
-        fence { if (in_section && $0 != "") print; next }
+        !fence && match($0, /^[ \t]*(```+|~~~+)/) {
+            fence = substr($0, RSTART, RLENGTH)
+            sub(/^[ \t]+/, "", fence)
+            next
+        }
+        fence {
+            line = $0
+            sub(/^[ \t]+/, "", line)
+            sub(/[ \t]+$/, "", line)
+            mark = substr(fence, 1, 1)
+            if (index(line, fence) == 1 && line ~ ("^[" mark "]+$")) { fence = ""; next }
+            if (in_section && $0 != "") print
+            next
+        }
         /^#+[ \t]/ {
             heading = $0
             sub(/^#+[ \t]+/, "", heading)
@@ -50,10 +70,11 @@ readme_commands() {
 }
 
 # The first cell of each row of the README table headed "| Hotkey | Does |".
+# Fails unless exactly one table has that header.
 readme_hotkeys() {
     awk '
         { sub(/\r$/, "") }
-        /^\|[ \t]*Hotkey[ \t]*\|[ \t]*Does[ \t]*\|/ { table = 1; next }
+        /^\|[ \t]*Hotkey[ \t]*\|[ \t]*Does[ \t]*\|/ { tables++; table = 1; next }
         table && /^\|[ \t]*-/ { next }
         table && /^\|/ {
             split($0, cells, "|")
@@ -62,7 +83,8 @@ readme_hotkeys() {
             print cell
             next
         }
-        table { exit }
+        { table = 0 }
+        END { if (tables != 1) exit 3 }
     ' "$readme"
 }
 
@@ -76,56 +98,68 @@ same() {
 }
 
 commands_match() {
-    local id heading from_readme from_file failed=0
+    local rows id heading from_readme from_file failed=0
+    rows="$(facts_query -r '.platforms[] | select(.status == "available") | "\(.id)\t\(.readme)"')" || return 1
     while IFS=$'\t' read -r id heading; do
         if ! from_readme="$(readme_commands "$heading")"; then
             echo "README.md has no single heading \"$heading\" (platform $id)" >&2
             failed=1
             continue
         fi
-        from_file="$(jqr -r --arg id "$id" \
-            '.platforms[] | select(.id == $id) | .lines[] | .command // empty' "$facts")"
+        from_file="$(facts_query -r --arg id "$id" \
+            '.platforms[] | select(.id == $id) | .lines[] | .command // empty')" || return 1
         same "README.md's commands under \"$heading\"" "$from_readme" \
             "docs/facts.json's commands for $id" "$from_file" || failed=1
-    done < <(jqr -r '.platforms[] | select(.status == "available") | "\(.id)\t\(.readme)"' "$facts")
+    done <<<"$rows"
     return "$failed"
 }
 
 hotkeys_match() {
-    same "README.md's hotkey table" "$(readme_hotkeys)" \
-        "docs/facts.json's hotkeys" \
-        "$(jqr -r '.hotkeys.modifiers as $m | .hotkeys.bindings[] | "\($m)+\(.key)"' "$facts")"
+    local from_readme from_file
+    if ! from_readme="$(readme_hotkeys)"; then
+        echo "README.md has no single table headed \"| Hotkey | Does |\"" >&2
+        return 1
+    fi
+    from_file="$(facts_query -r '.hotkeys.modifiers as $m | .hotkeys.bindings[] | "\($m)+\(.key)"')" || return 1
+    same "README.md's hotkey table" "$from_readme" "docs/facts.json's hotkeys" "$from_file"
 }
 
-paths_exist() {
-    local path failed=0
+# Every path the file names is a regular file in the repository, not a link.
+paths_are_files() {
+    local paths path failed=0
+    paths="$(facts_query -r '.links[], (.platforms[].note.link // empty), .figures[].source.path')" || return 1
     while IFS= read -r path; do
-        if [[ ! -f "$root/$path" ]]; then
-            echo "docs/facts.json names $path, which is not in the repository" >&2
+        if [[ ! -f "$root/$path" || -L "$root/$path" ]]; then
+            echo "docs/facts.json names $path, which is not a file in the repository" >&2
             failed=1
         fi
-    done < <(jqr -r '.links[], (.platforms[].note.link // empty), .figures[].source.path' "$facts")
+    done <<<"$paths"
     return "$failed"
 }
 
 quotes_found() {
-    local id path quote failed=0
+    local rows id path quote failed=0
+    rows="$(facts_query -r '.figures[] | "\(.id)\t\(.source.path)\t\(.source.quote)"')" || return 1
     while IFS=$'\t' read -r id path quote; do
         if ! grep -qF -- "$quote" "$root/$path"; then
             echo "figure $id: $path does not contain \"$quote\"" >&2
             failed=1
         fi
-    done < <(jqr -r '.figures[] | "\(.id)\t\(.source.path)\t\(.source.quote)"' "$facts")
+    done <<<"$rows"
     return "$failed"
 }
 
-# Every check below reads fields the shape check has vouched for.
+# The checks below read only fields the shape check vouched for, and the
+# quotes only from paths that are files.
 shape
 failed=0
 commands_match || failed=1
 hotkeys_match || failed=1
-paths_exist || failed=1
-quotes_found || failed=1
+if paths_are_files; then
+    quotes_found || failed=1
+else
+    failed=1
+fi
 if [[ "$failed" == 1 ]]; then
     exit 1
 fi
