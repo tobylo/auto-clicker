@@ -1,0 +1,4 @@
+# Every text file keeps LF line endings in every checkout, Windows included:
+# bash cannot run a script with CRLF endings, and the window's .slint and .po
+# files and the tests that read them stay the same on both systems.
+* text=auto eol=lf

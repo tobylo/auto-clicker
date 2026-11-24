@@ -14,6 +14,8 @@
 //!
 //! One window at a time: the tests share the screen, so run them one by one.
 
+// Linux alone, as the crate it drives.
+#![cfg(target_os = "linux")]
 // clippy.toml exempts `#[test]` functions only; this whole file is test code.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

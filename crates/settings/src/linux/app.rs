@@ -13,13 +13,13 @@ use auto_clicker_core::window::{
 };
 use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use crate::link::Link;
-use crate::model::{Fields, Unreadable, hotkey_text, key_text};
-use crate::pick::Pick;
-use crate::said::Said;
-use crate::shelf::{self, Click, Selection};
-use crate::state::{self, Note, Question, State, Target};
-use crate::ui::{RecordingRow, SettingsWindow, Texts};
+use crate::linux::link::Link;
+use crate::linux::model::{Fields, Unreadable, hotkey_text, key_text};
+use crate::linux::pick::Pick;
+use crate::linux::said::Said;
+use crate::linux::shelf::{self, Click, Selection};
+use crate::linux::state::{self, Note, Question, State, Target};
+use crate::linux::ui::{RecordingRow, SettingsWindow, Texts};
 
 /// The window, its link to the daemon and its state.
 pub struct App {

@@ -1,11 +1,11 @@
 //! Where recordings are kept: `$XDG_DATA_HOME/auto-clicker/recordings/`, one
 //! file per recording, named after the time it was made.
 
-use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use super::Recording;
+use crate::dirs::data_dir;
 use crate::fs::{Folder, STALE_TEMP_AGE};
 
 /// How many names a save tries: the plain one, then `-1` to `-9`. Two
@@ -13,22 +13,10 @@ use crate::fs::{Folder, STALE_TEMP_AGE};
 /// back, would otherwise clash.
 const NAMES_TRIED: u32 = 10;
 
-/// The recordings directory: `$XDG_DATA_HOME/auto-clicker/recordings`, or
-/// `~/.local/share/auto-clicker/recordings` when `XDG_DATA_HOME` is unset or
-/// not absolute. `None` when neither gives an absolute directory.
+/// The recordings directory: `recordings` in the program's data folder
+/// ([`data_dir`]). `None` when there is no such folder.
 pub fn recordings_dir() -> Option<PathBuf> {
-    recordings_dir_from(std::env::var_os("XDG_DATA_HOME"), std::env::var_os("HOME"))
-}
-
-fn recordings_dir_from(xdg_data_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
-    let absolute = |dir: OsString| Some(PathBuf::from(dir)).filter(|dir| dir.is_absolute());
-    xdg_data_home
-        .and_then(absolute)
-        .or_else(|| {
-            home.and_then(absolute)
-                .map(|home| home.join(".local").join("share"))
-        })
-        .map(|dir| dir.join("auto-clicker").join("recordings"))
+    data_dir().map(|dir| dir.join("recordings"))
 }
 
 /// Saves `recording` in `dir`, creating the directory (private to its
@@ -85,33 +73,12 @@ mod tests {
     use crate::recording::tests::sample;
     use crate::test_support::{TempDir, old_temp};
 
-    #[cfg(unix)]
     #[test]
-    fn the_directory_follows_xdg_then_home() {
-        let os = |text: &str| Some(OsString::from(text));
-        let cases = [
-            (
-                os("/data"),
-                os("/home/u"),
-                Some("/data/auto-clicker/recordings"),
-            ),
-            (
-                None,
-                os("/home/u"),
-                Some("/home/u/.local/share/auto-clicker/recordings"),
-            ),
-            (
-                os("relative"),
-                os("/home/u"),
-                Some("/home/u/.local/share/auto-clicker/recordings"),
-            ),
-            (None, os("relative"), None),
-            (None, None, None),
-        ];
-        for (xdg, home, expected) in cases {
-            let found = recordings_dir_from(xdg.clone(), home.clone());
-            assert_eq!(found, expected.map(PathBuf::from), "{xdg:?} {home:?}");
-        }
+    fn recordings_are_in_the_data_folder() {
+        assert_eq!(
+            recordings_dir(),
+            data_dir().map(|dir| dir.join("recordings"))
+        );
     }
 
     #[test]

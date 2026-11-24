@@ -12,8 +12,8 @@ use auto_clicker_core::window::{RecordingOutcome, Removal};
 use slint::SharedString;
 
 use super::{Said, s};
-use crate::model::key_text;
-use crate::ui::Texts;
+use crate::linux::model::key_text;
+use crate::linux::ui::Texts;
 
 impl Said<'_> {
     pub fn recording(&self, outcome: &RecordingOutcome) -> SharedString {

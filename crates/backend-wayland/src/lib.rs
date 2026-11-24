@@ -17,6 +17,9 @@
 //! with no deadline, and the layout comes back (W5). Elsewhere nothing asks it to, and a lost
 //! connection leaves the layout unknown while the session lasts.
 
+// Linux alone; on other systems the crate is empty (map D13, M5 brief decision 3).
+#![cfg(target_os = "linux")]
+
 mod client;
 #[cfg(test)]
 mod compositor_tests;

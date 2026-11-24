@@ -20,6 +20,9 @@
 //!
 //! [`watcher`]: crate::watcher
 
+// Linux alone; on other systems the crate is empty (map D13, M5 brief decision 3).
+#![cfg(target_os = "linux")]
+
 mod ask;
 mod path;
 mod reply;

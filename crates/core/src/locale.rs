@@ -1,5 +1,7 @@
 //! Which language the program speaks: Swedish for a Swedish locale,
-//! English otherwise. The window and the tray both ask here.
+//! English otherwise. The window and the tray both ask here: on Linux from
+//! the locale variables, on Windows from the user's display languages,
+//! which the Windows backend reads.
 
 use std::ffi::OsString;
 
@@ -11,7 +13,9 @@ pub enum Language {
 }
 
 impl Language {
-    /// The language of the environment the program runs in.
+    /// The language of the environment the program runs in. Linux alone:
+    /// Windows keeps its language elsewhere ([`Language::from_tags`]).
+    #[cfg(unix)]
     pub fn of_environment() -> Language {
         Language::from_variables(|name| std::env::var_os(name))
     }
@@ -42,6 +46,16 @@ impl Language {
         }
     }
 
+    /// The language of the first of `tags` the program has text in, or
+    /// English when none is. The tags are language names as Windows lists
+    /// the user's display languages, most preferred first ("sv-SE",
+    /// "en-US"); case does not matter.
+    pub fn from_tags<'a>(tags: impl IntoIterator<Item = &'a str>) -> Language {
+        tags.into_iter()
+            .find_map(language_of_tag)
+            .unwrap_or(Language::English)
+    }
+
     /// The code the translations are filed under.
     pub fn code(self) -> &'static str {
         match self {
@@ -68,6 +82,19 @@ fn first_known(list: &str) -> Option<Language> {
             None
         }
     })
+}
+
+/// The language a language name ("sv-SE", "en", "sv-Latn-FI") is in,
+/// when the program has text in it: its first part decides.
+fn language_of_tag(tag: &str) -> Option<Language> {
+    let language = tag.split('-').next()?;
+    if language.eq_ignore_ascii_case("sv") {
+        Some(Language::Swedish)
+    } else if language.eq_ignore_ascii_case("en") {
+        Some(Language::English)
+    } else {
+        None
+    }
 }
 
 /// Whether a locale name ("en", "en_GB.UTF-8") is English.
@@ -119,6 +146,33 @@ mod tests {
             assert_eq!(language(&[("LANG", name)]), expected, "{name}");
         }
         assert_eq!(language(&[]), Language::English);
+    }
+
+    #[test]
+    fn the_first_windows_language_with_text_decides() {
+        for (tags, expected) in [
+            (&["sv-SE"][..], Language::Swedish),
+            (&["sv-FI"], Language::Swedish),
+            (&["sv"], Language::Swedish),
+            (&["SV-se"], Language::Swedish),
+            (&["sv-Latn-SE"], Language::Swedish),
+            (&["en-US"], Language::English),
+            (&["en-GB", "sv-SE"], Language::English),
+            (&["de-DE", "sv-SE", "en-US"], Language::Swedish),
+            (&["de-DE", "en-US", "sv-SE"], Language::English),
+            (&["de-DE"], Language::English),
+            (&["svx-SE"], Language::English),
+            (&["se-SE"], Language::English),
+            (&["sv_SE"], Language::English),
+            (&[""], Language::English),
+            (&[], Language::English),
+        ] {
+            assert_eq!(
+                Language::from_tags(tags.iter().copied()),
+                expected,
+                "{tags:?}"
+            );
+        }
     }
 
     #[test]

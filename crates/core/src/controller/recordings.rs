@@ -16,6 +16,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::{Controller, LISTED_RECORDINGS, Listed, Platform, State};
+use crate::log;
 use crate::message::{ChangeFailure, Problem, Quoted, Titled};
 use crate::recording::{
     ChangeError, Changed, CurrentFile, Doomed, FileName, Removed, delete, list, remove_stale,
@@ -94,9 +95,9 @@ impl<P: Platform> Controller<P> {
         ];
         for (folder, result) in found {
             if let Err(err) = result {
-                eprintln!(
+                log::line(format_args!(
                     "auto-clicker: could not clear old temporary files in the {folder} folder: {err}"
-                );
+                ));
             }
         }
     }

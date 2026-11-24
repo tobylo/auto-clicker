@@ -21,7 +21,7 @@ use auto_clicker_core::window::PICK_TIME;
 use auto_clicker_core::window::Spot;
 use slint::{CloseRequestResponse, ComponentHandle, Timer, TimerMode};
 
-use crate::ui::PickWindow;
+use crate::linux::ui::PickWindow;
 
 pub use place::{Screen, corner, hook, left_full_screen, monitors, place, units};
 

@@ -22,7 +22,7 @@ use i_slint_backend_winit::winit::monitor::MonitorHandle;
 use i_slint_backend_winit::winit::window::{Fullscreen, WindowAttributes};
 
 use super::Monitor;
-use crate::ui::PickWindow;
+use crate::linux::ui::PickWindow;
 
 /// A monitor an overlay goes on.
 pub type Screen = MonitorHandle;
@@ -251,11 +251,12 @@ mod tests {
                 monitor: "HDMI-A-1",
             },
         ];
-        let matched: Vec<(&str, Rect)> = crate::pick::targets(from_origin(monitors), &screens)
-            .unwrap()
-            .into_iter()
-            .map(|target| (target.monitor, target.on))
-            .collect();
+        let matched: Vec<(&str, Rect)> =
+            crate::linux::pick::targets(from_origin(monitors), &screens)
+                .unwrap()
+                .into_iter()
+                .map(|target| (target.monitor, target.on))
+                .collect();
         assert_eq!(
             matched,
             [

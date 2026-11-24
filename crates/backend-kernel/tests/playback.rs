@@ -15,6 +15,8 @@
 //! real keyboard while playback presses the same key. What they print goes
 //! in the user guide (docs/guide/playback.md). Neither needs the `input` group.
 
+// Linux alone, as the crate it drives.
+#![cfg(target_os = "linux")]
 // clippy.toml exempts `#[test]` functions only; this whole file is test code.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

@@ -24,6 +24,13 @@ gate() {
     fi
 }
 
+# The deadlines below need GNU coreutils' `timeout`: on Windows, Git for
+# Windows' bash provides it, and Windows' own timeout.exe only waits.
+if ! timeout --version 2>/dev/null | grep -q coreutils; then
+    echo "GNU timeout (coreutils) is required; found: $(command -v timeout || echo none)" >&2
+    exit 1
+fi
+
 # No step may wait on a credential prompt.
 export GIT_TERMINAL_PROMPT=0
 

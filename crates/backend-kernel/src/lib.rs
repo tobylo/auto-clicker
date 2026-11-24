@@ -4,6 +4,9 @@
 //! out an [`Input`] over its backend and never the bare backend, so every
 //! press goes through the pressed set that releases it.
 
+// Linux alone; on other systems the crate is empty (map D13, M5 brief decision 3).
+#![cfg(target_os = "linux")]
+
 mod clock;
 mod devices;
 mod error;

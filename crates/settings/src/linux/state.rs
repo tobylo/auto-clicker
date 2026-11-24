@@ -12,7 +12,7 @@ use auto_clicker_core::window::{
     Removal, Request, Since, Spot, WindowView,
 };
 
-use crate::model::{Fields, Picked, Unreadable, with_hotkey};
+use crate::linux::model::{Fields, Picked, Unreadable, with_hotkey};
 
 /// What a capture is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

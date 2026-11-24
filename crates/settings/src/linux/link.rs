@@ -114,7 +114,10 @@ mod tests {
         }
         let (ours, theirs) = UnixStream::pair().unwrap();
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["link::tests::the_socket_leaves_standard_input", "--exact"])
+            .args([
+                "linux::link::tests::the_socket_leaves_standard_input",
+                "--exact",
+            ])
             .env(CHILD, "1")
             .stdin(std::os::fd::OwnedFd::from(theirs))
             .stdout(std::process::Stdio::null())

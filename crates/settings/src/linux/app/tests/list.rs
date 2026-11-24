@@ -16,9 +16,9 @@ use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, VecModel};
 
 use super::super::App;
-use crate::link::Link;
-use crate::state::tests::{defaults, view};
-use crate::ui::SettingsWindow;
+use crate::linux::link::Link;
+use crate::linux::state::tests::{defaults, view};
+use crate::linux::ui::SettingsWindow;
 
 /// The recordings list alone in a window: `ui/tests/recordings.slint`.
 mod alone {

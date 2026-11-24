@@ -596,25 +596,10 @@ fn a_file_that_is_not_text_is_invalid() {
 
 // The path
 
-#[cfg(unix)]
 #[test]
-fn the_path_follows_xdg_config_home_then_home() {
-    let xdg = Some("/xdg/auto-clicker/config.toml");
-    let fallback = Some("/home/me/.config/auto-clicker/config.toml");
-    let cases = [
-        (Some("/xdg"), Some("/home/me"), xdg),
-        (None, Some("/home/me"), fallback),
-        (Some(""), Some("/home/me"), fallback),
-        (Some("relative"), Some("/home/me"), fallback),
-        (None, Some("relative"), None),
-        (None, None, None),
-    ];
-    for (xdg_config_home, home, expected) in cases {
-        let path = config_path_from(xdg_config_home.map(Into::into), home.map(Into::into));
-        assert_eq!(
-            path,
-            expected.map(PathBuf::from),
-            "{xdg_config_home:?} {home:?}"
-        );
-    }
+fn the_file_is_in_the_config_folder() {
+    assert_eq!(
+        config_path(),
+        config_dir().map(|dir| dir.join("config.toml"))
+    );
 }

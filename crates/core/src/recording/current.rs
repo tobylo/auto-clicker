@@ -1,14 +1,14 @@
 //! Which recording the playback hotkey plays, kept across restarts in
-//! `$XDG_STATE_HOME/auto-clicker/current-recording`: one line, the
+//! `current-recording` in the program's state folder: one line, the
 //! recording's file name. It is state, not a setting, so choosing a
 //! recording never rewrites the config file.
 
-use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::PathBuf;
 
 use super::library::FileName;
+use crate::dirs::state_dir;
 use crate::fs::{
     Link, STALE_TEMP_AGE, atomic_write, create_private_dir_all, open_read, remove_stale_temps,
 };
@@ -23,11 +23,10 @@ const MAX_BYTES: u64 = 64;
 pub struct CurrentFile(Option<PathBuf>);
 
 impl CurrentFile {
-    /// `$XDG_STATE_HOME/auto-clicker/current-recording`, or
-    /// `~/.local/state/auto-clicker/current-recording` when
-    /// `XDG_STATE_HOME` is unset or not absolute.
+    /// `current-recording` in the program's state folder ([`state_dir`]);
+    /// nowhere when there is no such folder.
     pub fn of_environment() -> CurrentFile {
-        CurrentFile::from_env(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"))
+        CurrentFile(state_dir().map(|dir| dir.join("current-recording")))
     }
 
     /// At `path`.
@@ -38,15 +37,6 @@ impl CurrentFile {
     /// Nowhere: nothing is read or kept.
     pub fn none() -> CurrentFile {
         CurrentFile(None)
-    }
-
-    fn from_env(xdg_state_home: Option<OsString>, home: Option<OsString>) -> CurrentFile {
-        let absolute = |dir: OsString| Some(PathBuf::from(dir)).filter(|dir| dir.is_absolute());
-        let dir = xdg_state_home.and_then(absolute).or_else(|| {
-            home.and_then(absolute)
-                .map(|home| home.join(".local").join("state"))
-        });
-        CurrentFile(dir.map(|dir| dir.join("auto-clicker").join("current-recording")))
     }
 
     /// The recording kept; `Ok(None)` when none is, or there is nowhere to
@@ -138,44 +128,14 @@ mod tests {
         (CurrentFile::at(path.clone()), path)
     }
 
-    #[cfg(unix)]
     #[test]
-    fn the_path_follows_xdg_state_home_then_home() {
-        let os = |text: &str| Some(OsString::from(text));
-        let at = |text: &str| CurrentFile::at(PathBuf::from(text));
-        let cases = [
-            (
-                os("/state"),
-                os("/home/u"),
-                at("/state/auto-clicker/current-recording"),
-            ),
-            (
-                os("relative"),
-                os("/home/u"),
-                at("/home/u/.local/state/auto-clicker/current-recording"),
-            ),
-            (
-                None,
-                os("/home/u"),
-                at("/home/u/.local/state/auto-clicker/current-recording"),
-            ),
-            (None, os("relative"), CurrentFile::none()),
-            (None, None, CurrentFile::none()),
-        ];
-        for (state, home, expected) in cases {
-            assert_eq!(
-                CurrentFile::from_env(state.clone(), home.clone()),
-                expected,
-                "{state:?} {home:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_environment_names_the_path() {
-        let from =
-            CurrentFile::from_env(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"));
-        assert_eq!(CurrentFile::of_environment(), from);
+    fn the_file_is_in_the_state_folder() {
+        assert_eq!(
+            CurrentFile::of_environment(),
+            state_dir().map_or(CurrentFile::none(), |dir| {
+                CurrentFile::at(dir.join("current-recording"))
+            })
+        );
     }
 
     #[test]

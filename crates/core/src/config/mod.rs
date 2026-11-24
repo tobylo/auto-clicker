@@ -56,7 +56,6 @@ mod reason;
 mod validate;
 mod write;
 
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -74,6 +73,7 @@ pub use reason::Reason;
 pub use write::render;
 
 use crate::clicker::ClickerSettings;
+use crate::dirs::config_dir;
 use crate::hotkeys::Bindings;
 use crate::playback::PlaybackSettings;
 use crate::recording::Layout;
@@ -270,22 +270,10 @@ fn parse_bytes(bytes: &[u8]) -> Result<Config, Problem> {
     Config::parse(text)
 }
 
-/// Where the config file is: `$XDG_CONFIG_HOME/auto-clicker/config.toml`, or
-/// `~/.config/auto-clicker/config.toml` when `XDG_CONFIG_HOME` is unset or
-/// not absolute. `None` when neither gives an absolute directory.
+/// Where the config file is: `config.toml` in the program's config folder
+/// ([`config_dir`]). `None` when there is no such folder.
 pub fn config_path() -> Option<PathBuf> {
-    config_path_from(
-        std::env::var_os("XDG_CONFIG_HOME"),
-        std::env::var_os("HOME"),
-    )
-}
-
-fn config_path_from(xdg_config_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
-    let absolute = |dir: OsString| Some(PathBuf::from(dir)).filter(|dir| dir.is_absolute());
-    xdg_config_home
-        .and_then(absolute)
-        .or_else(|| home.and_then(absolute).map(|home| home.join(".config")))
-        .map(|dir| dir.join("auto-clicker").join("config.toml"))
+    config_dir().map(|dir| dir.join("config.toml"))
 }
 
 #[cfg(test)]
