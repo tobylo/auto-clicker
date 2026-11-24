@@ -13,12 +13,12 @@ fn events(markdown: &str) -> impl Iterator<Item = (Event<'_>, bool)> {
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS;
-    // Whether each open container is plain, outermost first.
+    // For each open container, whether it and every one around it is plain.
     let mut open: Vec<bool> = Vec::new();
     Parser::new_ext(markdown, gfm).map(move |event| {
-        let plain = is_plain(&event) && open.iter().all(|&p| p);
+        let plain = is_plain(&event) && open.last().copied().unwrap_or(true);
         match event {
-            Event::Start(_) => open.push(is_plain(&event)),
+            Event::Start(_) => open.push(plain),
             Event::End(_) => drop(open.pop()),
             _ => {}
         }
