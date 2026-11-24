@@ -304,8 +304,10 @@ impl Folder {
         }
     }
 
-    /// Renames the temporary file `temp` after `name`. Its new name is as
-    /// unique as any temporary file's, so the rename replaces nothing.
+    /// Renames the temporary file `temp` after `name`. The rename would
+    /// replace a file already at the new name, but that name carries this
+    /// process's id and 64 random bits, so only a temporary file another
+    /// process with the same id left could be there, with odds of 1 in 2^64.
     fn retarget(&self, temp: &mut PathBuf, name: &str) -> io::Result<()> {
         let next = self.path.join(temps::temp_name(name.as_ref()));
         self.patience
