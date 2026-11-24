@@ -65,8 +65,8 @@ fn the_state_folder_follows_xdg_state_home_then_home() {
 
 #[test]
 fn each_folder_reads_its_own_variables() {
-    let home = var("HOME");
-    let read = |name, fallback: &[&str]| from(var(name), home.clone(), fallback);
+    let home = std::env::var_os("HOME");
+    let read = |name, fallback: &[&str]| from(std::env::var_os(name), home.clone(), fallback);
     assert_eq!(config_dir(), read("XDG_CONFIG_HOME", &[".config"]));
     assert_eq!(data_dir(), read("XDG_DATA_HOME", &[".local", "share"]));
     assert_eq!(state_dir(), read("XDG_STATE_HOME", &[".local", "state"]));

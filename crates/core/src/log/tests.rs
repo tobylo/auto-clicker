@@ -67,6 +67,26 @@ fn a_full_file_that_cannot_be_moved_keeps_its_lines() {
 }
 
 #[test]
+fn a_full_file_moved_without_a_new_one_starts_one_at_the_next_line() {
+    let dir = TempDir::new();
+    let path = dir.path().join("auto-clicker.log");
+    let mut log = LogFile::open(path.clone(), 8).unwrap();
+    log.write_line("one two\n");
+    // The state a rename leaves when the new file then cannot be opened:
+    // the open file is no longer at the path.
+    let moved = dir.path().join("moved");
+    fs::rename(&path, &moved).unwrap();
+    log.write_line("three\n");
+    assert_eq!(read(&path), "three\n");
+    assert_eq!(read(&moved), "one two\n");
+}
+
+#[test]
+fn the_cap_is_one_mebibyte() {
+    assert_eq!(LOG_CAP, 1 << 20);
+}
+
+#[test]
 fn a_log_file_that_cannot_be_opened_is_an_error() {
     let dir = TempDir::new();
     let blocker = dir.path().join("file");

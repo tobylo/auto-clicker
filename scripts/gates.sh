@@ -50,11 +50,12 @@ advisory_db_reachable() {
 
 # A Cargo config in the tree could replace crates.io with another registry,
 # which cargo-deny would still report as crates.io, or alias a cargo command
-# the gates run. The repository tracks no `.cargo` path at all, so this runs
-# before the first cargo command.
+# the gates run. The repository tracks no `.cargo` path at all, in any case,
+# since Windows reads `.CARGO` as `.cargo`, so this runs before the first
+# cargo command.
 no_cargo_config() {
     local found
-    found="$(git ls-files -- ':(glob)**/.cargo' ':(glob)**/.cargo/**')" || return 1
+    found="$(git ls-files -- ':(glob,icase)**/.cargo' ':(glob,icase)**/.cargo/**')" || return 1
     if [[ -n "$found" ]]; then
         echo "Cargo configuration is not allowed in the repository: $found" >&2
         return 1

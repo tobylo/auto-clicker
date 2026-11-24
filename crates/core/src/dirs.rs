@@ -46,3 +46,22 @@ pub fn log_path() -> Option<PathBuf> {
 fn program_dir(dir: PathBuf) -> Option<PathBuf> {
     dir.is_absolute().then(|| dir.join("auto-clicker"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_folder_is_the_systems_and_the_log_is_in_the_state_folder() {
+        // The test environment names a home folder (HOME, or APPDATA and
+        // LOCALAPPDATA), so each folder exists and a lost one shows.
+        assert!(config_dir().is_some() && data_dir().is_some() && state_dir().is_some());
+        assert_eq!(config_dir(), system::config_dir());
+        assert_eq!(data_dir(), system::data_dir());
+        assert_eq!(state_dir(), system::state_dir());
+        assert_eq!(
+            log_path(),
+            system::state_dir().map(|dir| dir.join("logs").join("auto-clicker.log"))
+        );
+    }
+}

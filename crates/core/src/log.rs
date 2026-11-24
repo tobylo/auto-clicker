@@ -76,23 +76,28 @@ impl LogFile {
     }
 
     /// Writes `text`, after starting a new file when it would take this one
-    /// past the cap. A failed write is dropped.
+    /// past the cap. A failed write is dropped, and counted as written: one
+    /// that wrote part of the line still grew the file, and counting too
+    /// much only starts the next file sooner.
     fn write_line(&mut self, text: &str) {
         let len = u64::try_from(text.len()).unwrap_or(u64::MAX);
         if self.size.saturating_add(len) > self.cap {
             self.start_new();
         }
-        if self.file.write_all(text.as_bytes()).is_ok() {
-            self.size = self.size.saturating_add(len);
-        }
+        let _ = self.file.write_all(text.as_bytes());
+        self.size = self.size.saturating_add(len);
     }
 
     /// Renames the file to `.1`, replacing the one before, and starts a new
-    /// one. When either step fails, lines keep going to the file open now,
+    /// one. No file at the path means it has been moved already: by an
+    /// earlier rename whose new file could not be opened, or by someone
+    /// else. When either step fails, lines keep going to the file open now,
     /// and the next line tries again.
     fn start_new(&mut self) {
-        if std::fs::rename(&self.path, rotated(&self.path)).is_err() {
-            return;
+        match std::fs::rename(&self.path, rotated(&self.path)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => return,
         }
         if let Ok(file) = append(&self.path) {
             self.file = file;
