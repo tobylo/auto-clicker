@@ -66,12 +66,6 @@ impl FileName {
         &self.0
     }
 
-    /// The name the save that made this file tried first, without `-1` to
-    /// `-9`: what its temporary file is named after ([`super::save`]).
-    pub fn first_choice(&self) -> String {
-        format!("{}.json", &self.0[..TIME_FORM.len()])
-    }
-
     /// What orders two names by when their recordings were made: the time,
     /// then the plain name before `-1` to `-9`.
     fn made(&self) -> (&str, usize, &str) {

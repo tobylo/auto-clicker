@@ -232,7 +232,9 @@ impl Folder {
     /// The contents go to a temporary file that is flushed to disk before
     /// it is put in place, and the folder is flushed after, so a crash
     /// leaves no half-written file. A file that appears under a name
-    /// between the check and the placing is never overwritten.
+    /// between the check and the placing is never overwritten. Before each
+    /// name after the first is tried, the temporary file is renamed after
+    /// it, so one left behind always names the file it became.
     ///
     /// # Errors
     /// `write`'s error, a write or flush error, or `AlreadyExists` when
@@ -264,14 +266,12 @@ impl Folder {
             .ok_or_else(|| io::Error::other("the saved file has no name"))
     }
 
-    /// Puts `temp` in place under the first of `names` that is free.
-    fn place_at_first_free(&self, temp: &Path, names: &[String]) -> io::Result<PathBuf> {
-        for name in names {
-            let path = self.join(name)?;
-            match put(temp, &path, Place::New, &self.patience) {
-                Ok(()) => return Ok(path),
-                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(err) => return Err(err),
+    /// Puts `temp` in place under the first of `names` that is free,
+    /// renaming it after each name before that name is tried.
+    fn place_at_first_free(&self, temp: &mut PathBuf, names: &[String]) -> io::Result<PathBuf> {
+        for (tried, name) in names.iter().enumerate() {
+            if let Some(placed) = self.place_if_free(temp, tried > 0, name)? {
+                return Ok(placed);
             }
         }
         let first = names.first().map(String::as_str).unwrap_or_default();
@@ -282,6 +282,36 @@ impl Folder {
                 self.path.join(first).display()
             ),
         ))
+    }
+
+    /// Puts `temp` at `name` if nothing is there, renaming it after `name`
+    /// first when it was named after another (`retarget`). `None` when
+    /// `name` is taken.
+    fn place_if_free(
+        &self,
+        temp: &mut PathBuf,
+        retarget: bool,
+        name: &str,
+    ) -> io::Result<Option<PathBuf>> {
+        let path = self.join(name)?;
+        if retarget {
+            self.retarget(temp, name)?;
+        }
+        match put(temp, &path, Place::New, &self.patience) {
+            Ok(()) => Ok(Some(path)),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Renames the temporary file `temp` after `name`. Its new name is as
+    /// unique as any temporary file's, so the rename replaces nothing.
+    fn retarget(&self, temp: &mut PathBuf, name: &str) -> io::Result<()> {
+        let next = self.path.join(temps::temp_name(name.as_ref()));
+        self.patience
+            .retry(&next, Op::Change, || fs::rename(&*temp, &next))?;
+        *temp = next;
+        Ok(())
     }
 
     /// Replaces the file `name` with what `write` writes, atomically, as
@@ -356,17 +386,18 @@ struct Beside<'a> {
 }
 
 /// The steps every save shares: write a temporary file beside the target
-/// with `write`, flush it to disk, `place` it, then `sync` its directory.
-/// A failure before the file is placed removes the temporary file and is
-/// the outer error; a failure to sync after is the inner one.
+/// with `write`, flush it to disk, `place` it (which may rename it first),
+/// then `sync` its directory. A failure before the file is placed removes
+/// the temporary file, wherever `place` left it, and is the outer error; a
+/// failure to sync after is the inner one.
 fn write_then_place(
     beside: Beside<'_>,
     write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
-    place: impl FnOnce(&Path) -> io::Result<PathBuf>,
+    place: impl FnOnce(&mut PathBuf) -> io::Result<PathBuf>,
     sync: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<Result<PathBuf, Unsynced>> {
-    let (temp, file) = create_temp(beside)?;
-    let placed = match fill(file, write).and_then(|()| place(&temp)) {
+    let (mut temp, file) = create_temp(beside)?;
+    let placed = match fill(file, write).and_then(|()| place(&mut temp)) {
         Ok(placed) => placed,
         Err(err) => return Err(remove_temp(&temp, err)),
     };

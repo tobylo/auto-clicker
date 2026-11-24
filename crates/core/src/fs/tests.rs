@@ -62,7 +62,8 @@ fn a_failure_at_any_step_before_the_placing_leaves_the_old_file_whole() {
         dir: dir.path(),
         path: &path,
     };
-    let unplaced = |_: &Path| -> io::Result<PathBuf> { panic!("placed after a failed write") };
+    let unplaced =
+        |_: &mut PathBuf| -> io::Result<PathBuf> { panic!("placed after a failed write") };
     let crashed_writing = write_then_place(
         beside,
         |out| {
@@ -78,9 +79,29 @@ fn a_failure_at_any_step_before_the_placing_leaves_the_old_file_whole() {
         |_| -> io::Result<PathBuf> { Err(io::Error::other("crashed placing")) },
         || Ok(()),
     );
+    // The temporary file renamed after another name first: that one goes.
+    let crashed_renamed = write_then_place(
+        beside,
+        |out| out.write_all(b"new"),
+        |temp| -> io::Result<PathBuf> {
+            let next = temp.with_file_name(".recording-1.json.1.0123456789abcdef.tmp");
+            fs::rename(&*temp, &next)?;
+            *temp = next;
+            Err(io::Error::other("crashed after a rename"))
+        },
+        || Ok(()),
+    );
 
-    let errors = [crashed_writing, crashed_placing].map(|err| err.unwrap_err().to_string());
-    assert_eq!(errors, ["crashed mid-write", "crashed placing"]);
+    let errors =
+        [crashed_writing, crashed_placing, crashed_renamed].map(|err| err.unwrap_err().to_string());
+    assert_eq!(
+        errors,
+        [
+            "crashed mid-write",
+            "crashed placing",
+            "crashed after a rename"
+        ]
+    );
     assert_eq!(fs::read(&path).unwrap(), b"old");
     assert_eq!(dir.entries(), ["recording.json"]);
 }
@@ -213,6 +234,31 @@ fn a_start_keeps_a_temp_file_younger_than_an_hour() {
 
     assert_eq!(removed, 1);
     assert_eq!(dir.entries(), [".a.json.1.0123456789abcdef.tmp"]);
+}
+
+#[test]
+fn a_temp_file_is_renamed_after_each_name_before_it_is_tried_there() {
+    let dir = TempDir::new();
+    // Taken: a file, and a folder a placing cannot replace either.
+    fs::write(dir.path().join("a.json"), b"kept").unwrap();
+    fs::create_dir(dir.path().join("a-1.json")).unwrap();
+    let folder = Folder::open(dir.path()).unwrap();
+    let (mut temp, file) = create_temp(Beside {
+        dir: folder.path(),
+        path: &folder.path().join("a.json"),
+    })
+    .unwrap();
+    fill(file, |out| out.write_all(b"new")).unwrap();
+
+    let err = folder
+        .place_at_first_free(&mut temp, &names(&["a.json", "a-1.json"]))
+        .unwrap_err();
+
+    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+    let name = temp.file_name().unwrap().to_str().unwrap();
+    assert_eq!(temps::target_of(name), Some("a-1.json"), "{name}");
+    assert_eq!(fs::read(&temp).unwrap(), b"new");
+    assert_eq!(dir.entries().len(), 3);
 }
 
 #[test]

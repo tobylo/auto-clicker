@@ -212,21 +212,19 @@ pub fn delete(dir: &Path, doomed: Doomed<'_>, keep: usize) -> Result<Removed, Ch
 }
 
 /// Removes the temporary files `temps` holds for `file`, all of them even
-/// when one fails, then `file` itself if they all went. A rename names its
-/// temporary file after the file; a save after the name it tried first, so
-/// a plain name and its `-1` to `-9` share those. Says whether anything
-/// was removed, and the first failure.
+/// when one fails, then `file` itself if they all went. A save or a rename
+/// names its temporary file after the file it becomes, so those are the
+/// ones named after `file`. Says whether anything was removed, and the
+/// first failure.
 fn remove_with_temps(
     folder: &Folder,
     dir: &Path,
     file: &FileName,
     temps: &[Temp],
 ) -> (bool, Result<(), ChangeError>) {
-    let first_choice = file.first_choice();
     let mut gone = false;
     let mut kept = None;
-    let ours = |temp: &&Temp| temp.target() == file.as_str() || temp.target() == first_choice;
-    for temp in temps.iter().filter(ours) {
+    for temp in temps.iter().filter(|temp| temp.target() == file.as_str()) {
         match folder.remove_file(temp.name()) {
             Ok(()) => gone = true,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
