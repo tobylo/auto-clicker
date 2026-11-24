@@ -159,8 +159,17 @@ fn every_path_is_a_file_in_the_repository_and_every_quote_is_in_its_source() {
 
 #[test]
 fn a_path_is_a_file_only_with_no_link_along_it() {
-    // Made here, not found: create_dir fails on a path that is already there.
-    let root = std::env::temp_dir().join(format!("auto-clicker-facts-{}", std::process::id()));
+    // Made here, not found: create_dir fails on a path that is already there,
+    // and the time in its name keeps one left by an earlier run out of the way.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    let name = format!(
+        "auto-clicker-facts-{}-{}",
+        std::process::id(),
+        now.as_nanos()
+    );
+    let root = std::env::temp_dir().join(name);
     fs::create_dir(&root).unwrap();
     fs::create_dir_all(root.join("docs/guide")).unwrap();
     fs::write(root.join("docs/guide/install.md"), "x").unwrap();

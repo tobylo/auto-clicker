@@ -6,12 +6,24 @@
 
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-fn events(markdown: &str) -> Parser<'_> {
+/// Each event, with whether it shows as plain Markdown: it is plain and so is
+/// every container around it (a table inside a footnote is not).
+fn events(markdown: &str) -> impl Iterator<Item = (Event<'_>, bool)> {
     let gfm = Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS;
-    Parser::new_ext(markdown, gfm)
+    // Whether each open container is plain, outermost first.
+    let mut open: Vec<bool> = Vec::new();
+    Parser::new_ext(markdown, gfm).map(move |event| {
+        let plain = is_plain(&event) && open.iter().all(|&p| p);
+        match event {
+            Event::Start(_) => open.push(is_plain(&event)),
+            Event::End(_) => drop(open.pop()),
+            _ => {}
+        }
+        (event, plain)
+    })
 }
 
 /// Whether `event` is plain Markdown, which shows what it says where it says
@@ -59,8 +71,8 @@ pub fn section_commands(markdown: &str, heading: &str) -> Result<Vec<String>, St
         want: heading,
         ..Section::default()
     };
-    for event in events(markdown) {
-        section.take(event);
+    for (event, plain) in events(markdown) {
+        section.take(event, plain);
     }
     section.finish()
 }
@@ -82,10 +94,9 @@ struct Section<'w> {
 }
 
 impl Section<'_> {
-    fn take(&mut self, event: Event<'_>) {
-        if !is_plain(&event) {
-            self.not_plain_here();
-        }
+    /// Takes the next event; one that is not plain marks the heading being
+    /// read, and the section it is in.
+    fn take(&mut self, event: Event<'_>, plain: bool) {
         match event {
             Event::Start(Tag::Heading { level, .. }) => self.start_heading(level),
             Event::End(TagEnd::Heading(_)) => self.end_heading(),
@@ -95,6 +106,9 @@ impl Section<'_> {
             // A heading over two lines (setext) reads as one line.
             Event::SoftBreak => self.text(" "),
             _ => {}
+        }
+        if !plain {
+            self.not_plain_here();
         }
     }
 
@@ -118,7 +132,8 @@ impl Section<'_> {
     fn not_plain_here(&mut self) {
         if let Some((_, _, plain)) = &mut self.heading {
             *plain = false;
-        } else if self.open.is_some() {
+        }
+        if self.open.is_some() {
             self.not_plain = true;
         }
     }
@@ -190,8 +205,8 @@ struct Table {
 /// Every table, with each cell's text.
 fn tables(markdown: &str) -> Vec<Table> {
     let mut scan = Tables::default();
-    for event in events(markdown) {
-        scan.take(event);
+    for (event, plain) in events(markdown) {
+        scan.take(event, plain);
     }
     scan.done
 }
@@ -205,10 +220,9 @@ struct Tables {
 }
 
 impl Tables {
-    fn take(&mut self, event: Event<'_>) {
-        if !is_plain(&event)
-            && let Some(table) = &mut self.table
-        {
+    /// Takes the next event; one that is not plain marks the table it is in.
+    fn take(&mut self, event: Event<'_>, plain: bool) {
+        if !plain && let Some(table) = &mut self.table {
             table.not_plain = true;
         }
         match event {
@@ -356,6 +370,14 @@ mod tests {
         );
         let footnote = "Run[^1]:\n\n[^1]: note\n\n    ## Notes\n\n```\nhidden\n```";
         refused(&INSTALL.replace("Run:", footnote), "an image or a footnote");
+        let sub = "### Notes <img src=\"x.svg\">\n\n```\na\n```";
+        refused(&INSTALL.replace("Run:", sub), "an image or a footnote");
+        refused(
+            &INSTALL.replace("Run:", "### Notes ![](x.svg)"),
+            "an image or a footnote",
+        );
+        let wrapped = "# Title\n\n[^x]:\n    ## Install\n\n    ```\n    a\n    b\n    ```\n";
+        refused(wrapped, "an image or a footnote");
         let before = format!("<!-- a comment -->\n\n{INSTALL}<details></details>\n");
         assert_eq!(commands(&before), ["a", "b"]);
     }
@@ -386,5 +408,8 @@ mod tests {
             |cell: &str| err(&HOTKEYS.replace("| B |", cell)).contains("has HTML, an image");
         assert!(not_plain("| <b>B</b> |"));
         assert!(not_plain("| ![B](b.svg) |"));
+        let indented: String = HOTKEYS.lines().map(|l| format!("    {l}\n")).collect();
+        let wrapped = format!("[^x]:\n{indented}");
+        assert!(err(&wrapped).contains("has HTML, an image"), "{wrapped}");
     }
 }
