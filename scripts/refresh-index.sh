@@ -10,12 +10,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 # Cargo resolves the locked graph itself, optional crates included, whatever
 # Cargo.lock's formatting; no registry package in it means there is nothing to
-# refresh. `jq -b` keeps a native Windows jq from ending the line with CR,
-# which the command substitution would keep in the name.
+# refresh. A native Windows jq ends its line with CR, which the command
+# substitution would keep in the name, so it is removed.
 export GIT_TERMINAL_PROMPT=0
-spec="$(timeout --kill-after=10 300 cargo metadata --locked --all-features --format-version 1 | jq -b -r '
+spec="$(timeout --kill-after=10 300 cargo metadata --locked --all-features --format-version 1 | jq -r '
     [.packages[] | select((.source // "") | startswith("registry+"))
-        | "\(.name)@\(.version)"] | first // empty')"
+        | "\(.name)@\(.version)"] | first // empty' | tr -d '\r')"
 if [[ -z "$spec" ]]; then
     exit 0
 fi

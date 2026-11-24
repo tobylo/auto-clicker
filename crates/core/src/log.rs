@@ -51,7 +51,8 @@ pub fn to_file(path: &Path) -> io::Result<()> {
 }
 
 /// A log file that becomes its `.1` file once a line would take it past
-/// its cap.
+/// its cap. While that cannot happen, it takes lines up to twice its cap,
+/// and drops the rest.
 struct LogFile {
     path: PathBuf,
     file: File,
@@ -65,8 +66,7 @@ impl LogFile {
         if let Some(dir) = path.parent() {
             create_private_dir_all(dir)?;
         }
-        let file = append(&path)?;
-        let size = file.metadata()?.len();
+        let (file, size) = append(&path)?;
         Ok(LogFile {
             path,
             file,
@@ -76,39 +76,43 @@ impl LogFile {
     }
 
     /// Writes `text`, after starting a new file when it would take this one
-    /// past the cap. A failed write is dropped, and counted as written: one
-    /// that wrote part of the line still grew the file, and counting too
-    /// much only starts the next file sooner.
+    /// past the cap. A line that would take a file no new one replaced past
+    /// twice the cap is dropped. A failed write is dropped too, and counted
+    /// as written: one that wrote part of the line still grew the file, and
+    /// counting too much only starts the next file sooner.
     fn write_line(&mut self, text: &str) {
         let len = u64::try_from(text.len()).unwrap_or(u64::MAX);
         if self.size.saturating_add(len) > self.cap {
             self.start_new();
         }
+        if self.size.saturating_add(len) > self.cap.saturating_mul(2) {
+            return;
+        }
         let _ = self.file.write_all(text.as_bytes());
         self.size = self.size.saturating_add(len);
     }
 
-    /// Renames the file to `.1`, replacing the one before, and starts a new
-    /// one. No file at the path means it has been moved already: by an
-    /// earlier rename whose new file could not be opened, or by someone
-    /// else. When either step fails, lines keep going to the file open now,
-    /// and the next line tries again.
+    /// Renames the file to `.1`, replacing the one before, and opens the
+    /// file at the path, measured. When the rename fails, that is the same
+    /// file again, still full, and the next line tries again; when nothing
+    /// was at the path (an earlier rename whose new file could not be
+    /// opened, or someone else moved it), it is a new one. When the open
+    /// fails, lines keep going to the file open now.
     fn start_new(&mut self) {
-        match std::fs::rename(&self.path, rotated(&self.path)) {
-            Ok(()) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => return,
-        }
-        if let Ok(file) = append(&self.path) {
+        let _ = std::fs::rename(&self.path, rotated(&self.path));
+        if let Ok((file, size)) = append(&self.path) {
             self.file = file;
-            self.size = 0;
+            self.size = size;
         }
     }
 }
 
-/// `path` opened for appending, created if missing.
-fn append(path: &Path) -> io::Result<File> {
-    OpenOptions::new().create(true).append(true).open(path)
+/// `path` opened for appending, created if missing, with what it holds
+/// already: another run may have written there.
+fn append(path: &Path) -> io::Result<(File, u64)> {
+    let file = OpenOptions::new().create(true).append(true).open(path)?;
+    let size = file.metadata()?.len();
+    Ok((file, size))
 }
 
 /// Where a full log file goes: `auto-clicker.log.1`.

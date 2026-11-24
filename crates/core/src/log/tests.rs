@@ -57,14 +57,18 @@ fn a_full_file_that_cannot_be_moved_keeps_its_lines() {
     let mut log = LogFile::open(path.clone(), 8).unwrap();
     log.write_line("one two\n");
     log.write_line("three\n");
+    // Twice the cap is as far as it grows: 14 + 5 would pass 16, 14 + 2
+    // reaches it.
     log.write_line("four\n");
-    assert_eq!(read(&path), "one two\nthree\nfour\n");
+    log.write_line("a\n");
+    log.write_line("b\n");
+    assert_eq!(read(&path), "one two\nthree\na\n");
     // Once the way is clear, the next line starts a new file, however short:
     // the file is still past its cap.
     fs::remove_dir_all(rotated(&path)).unwrap();
     log.write_line("5\n");
     assert_eq!(read(&path), "5\n");
-    assert_eq!(read(&rotated(&path)), "one two\nthree\nfour\n");
+    assert_eq!(read(&rotated(&path)), "one two\nthree\na\n");
 }
 
 #[test]
