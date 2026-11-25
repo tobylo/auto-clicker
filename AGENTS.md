@@ -20,7 +20,7 @@ What the product is and what has been decided: [docs/planning/map.md](docs/plann
   - *Every transition reaches every member.* Stop, pause, backend loss and shutdown apply to every task, timer and device a change adds: bind them to their owner's cancellation.
   - *Recorded state tells the truth after a crash.* Write a recording or config atomically (write a temp file in the same directory, fsync it, rename, fsync the directory; Windows has no directory fsync, so that step is left out there), never a half file.
   - *Errors keep their meaning.* Tell transient from permanent (a device unplugged versus permission denied), and never read a failed or empty read as "nothing there".
-  - *Every wait is bounded.* Each wait has its own deadline, cleanup calls included. The one exception is the daemon's idle wait for events, which may block indefinitely but must end at once on shutdown.
+  - *Every wait is bounded.* Each wait has its own deadline, cleanup calls included. The exceptions are the daemon's idle wait for events, which may block indefinitely but must end at once on shutdown, and the Windows watchdog's wait to deliver releases Windows blocked, which sleeps on events and ends at delivery or when the session ends; each operation inside either wait keeps its own deadline.
 
 ## Hard rules
 - No `unsafe` outside a backend module, and every `unsafe` block carries a `// SAFETY:` comment.
