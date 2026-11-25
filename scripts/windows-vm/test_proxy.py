@@ -195,6 +195,9 @@ class Serve(unittest.TestCase):
             b"GET http://static.rust-lang.org/ HTTP/1.1\nX: y\r\n\r\n",
             b"GET http://static.rust-lang.org/ HTTP/9\r\n\r\n",
             b"GET  http://static.rust-lang.org/ HTTP/1.1\r\n\r\n",
+            b"POST http://static.rust-lang.org/ HTTP/1.1\r\nContent-Length : 5\r\n\r\n",
+            b"POST http://static.rust-lang.org/ HTTP/1.1\r\nContent-Length\xa0: 5\r\n\r\n",
+            b"POST http://static.rust-lang.org/ HTTP/1.1\r\nAccept: */*\r\n Content-Length: 5\r\n\r\n",
         ):
             with self.subTest(request=request):
                 vm, conn = socket.socketpair()
@@ -285,6 +288,25 @@ class PlainHttpBody(unittest.TestCase):
     def test_body_of_content_length_is_read_in_full(self):
         head = "POST http://a.b/ HTTP/1.1\r\nContent-Length: 6"
         self.assertEqual(self.body(head, b"abc", later=b"def"), b"abcdef")
+
+    def test_expect_100_continue_is_answered_before_the_body(self):
+        head = "POST http://a.b/ HTTP/1.1\r\nContent-Length: 4\r\nExpect: 100-continue"
+
+        def client():
+            self.assertEqual(receive(self.vm, 25), b"HTTP/1.1 100 Continue\r\n\r\n")
+            self.vm.sendall(b"abcd")
+
+        sender = threading.Thread(target=client, daemon=True)
+        sender.start()
+        with mock.patch.object(proxy, "HEADER_TIMEOUT", 5):
+            self.assertEqual(proxy.read_body(self.conn, head, b""), b"abcd")
+        sender.join(timeout=5)
+        self.assertNotIn("expect", proxy.origin_request(head, "http://a.b/", "a.b", 80).decode().lower())
+
+    def test_other_expectations_get_417(self):
+        with self.assertRaises(proxy.Refused) as caught:
+            self.body("POST http://a.b/ HTTP/1.1\r\nContent-Length: 4\r\nExpect: something-else")
+        self.assertEqual(caught.exception.status, 417)
 
     def test_no_body_without_content_length(self):
         self.assertEqual(self.body("GET http://a.b/ HTTP/1.1\r\nHost: a.b"), b"")

@@ -42,11 +42,13 @@ PORTS = {"CONNECT": 443, "GET": 80, "HEAD": 80, "POST": 80}
 # A DNS name in letters, digits and hyphens, with an optional final dot:
 # nothing the resolver could read differently from the allowlist check (a
 # NUL, say, after which it stops reading).
-# A request line as the proxy rebuilds it, and header text with no line break
-# but CRLF: a bare LF or CR is read as a line end by some servers and not by
-# others, so it could carry a second Host past the one the proxy writes.
+# A request line as the proxy rebuilds it. Neither it nor a header line
+# (below) may hold a bare CR or LF, which some servers read as a line end.
 REQUEST_LINE = re.compile(r"[A-Z]+ [!-~]+ HTTP/1\.[01]\Z")
-BARE_BREAK = re.compile(r"\r(?!\n)|(?<!\r)\n")
+# A header line in its one plain form: a token name directly followed by a
+# colon. A space before the colon or a folded line is read one way here and
+# another way by some servers, so it is refused rather than interpreted.
+HEADER_LINE = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+:[^\r\n]*\Z")
 DNS_NAME = re.compile(r"(?=.{1,253}\.?\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.?\Z")
 
 
@@ -206,8 +208,10 @@ def checked_head(head):
     line = head.split("\r\n", 1)[0]
     if len(line) > MAX_REQUEST_LINE:
         raise Refused(414, "request line too long")
-    if BARE_BREAK.search(head) or not REQUEST_LINE.match(line):
+    if not REQUEST_LINE.match(line):
         raise Refused(400, "malformed request line or header")
+    if not all(HEADER_LINE.match(field) for field in head.split("\r\n")[1:]):
+        raise Refused(400, "header line not in plain form")
     return head
 
 
@@ -216,7 +220,7 @@ def header_values(head, name):
     values = []
     for line in head.split("\r\n")[1:]:
         key, _, value = line.partition(":")
-        if key.strip().lower() == name:
+        if key.lower() == name:
             values.append(value.strip())
     return values
 
@@ -241,12 +245,25 @@ def body_length(head):
     return length
 
 
+def answer_expectation(conn, head, missing):
+    """Answers `Expect: 100-continue` here, since the body it holds back is
+    read before the proxy connects upstream; the header is not sent on."""
+    expected = {value.lower() for value in header_values(head, "expect")}
+    if not expected:
+        return
+    if expected != {"100-continue"}:
+        raise Refused(417, "unknown expectation")
+    if missing > 0:
+        conn.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
+
+
 def read_body(conn, head, rest):
     """Exactly the request's body, within the header's deadline. Bytes past
     it would be a second request, whose Host the proxy never checked."""
     length = body_length(head)
     if len(rest) > length:
         raise Refused(400, "more than one request on the connection")
+    answer_expectation(conn, head, length - len(rest))
     deadline = time.monotonic() + HEADER_TIMEOUT
     body = rest
     while len(body) < length:
@@ -254,7 +271,7 @@ def read_body(conn, head, rest):
     return body
 
 
-DROPPED_HEADERS = ("host", "connection", "proxy-connection", "keep-alive")
+DROPPED_HEADERS = ("host", "connection", "proxy-connection", "keep-alive", "expect")
 
 
 def origin_request(head, target, host, port):
@@ -264,7 +281,7 @@ def origin_request(head, target, host, port):
     lines = head.split("\r\n")
     method, _, version = lines[0].split(" ", 2)
     path = "/" + target.split("://", 1)[1].partition("/")[2]
-    kept = [line for line in lines[1:] if line.split(":", 1)[0].strip().lower() not in DROPPED_HEADERS]
+    kept = [line for line in lines[1:] if line.split(":", 1)[0].lower() not in DROPPED_HEADERS]
     authority = host if port == 80 else f"{host}:{port}"
     out = [f"{method} {path} {version}", f"Host: {authority}", *kept, "Connection: close", "", ""]
     return "\r\n".join(out).encode("latin-1")
