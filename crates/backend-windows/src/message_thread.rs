@@ -523,12 +523,10 @@ fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LR
             power(wparam, lparam);
             Some(1)
         }
-        // Never holds up a logoff: the program releases on `WM_ENDSESSION`.
-        // Only a wake, reported as such.
-        WM_QUERYENDSESSION => {
-            emit(WindowEvent::Other(message));
-            Some(1)
-        }
+        // Never holds up a logoff: answered at once, before anything that
+        // could wait (the handler, a log line), and not reported; the
+        // program releases on `WM_ENDSESSION`, which follows either way.
+        WM_QUERYENDSESSION => Some(1),
         // A session end that was called off is only a wake.
         WM_ENDSESSION => {
             emit(if wparam == 0 {

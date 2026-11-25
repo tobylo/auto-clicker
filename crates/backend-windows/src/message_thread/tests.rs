@@ -119,15 +119,9 @@ fn notices_the_program_does_not_follow_are_reported_as_wakes() {
     remote.post(WM_POWERBROADCAST, 0xa, 0).unwrap();
     // Each is reported, in whichever order: Windows may send a power
     // notice of its own meanwhile.
-    remote.post(WM_QUERYENDSESSION, 0, 0).unwrap();
     // A logoff that was called off.
     remote.post(WM_ENDSESSION, 0, 0).unwrap();
-    let mut unseen = vec![
-        WM_WTSSESSION_CHANGE,
-        WM_POWERBROADCAST,
-        WM_QUERYENDSESSION,
-        WM_ENDSESSION,
-    ];
+    let mut unseen = vec![WM_WTSSESSION_CHANGE, WM_POWERBROADCAST, WM_ENDSESSION];
     while !unseen.is_empty() {
         let message = first(&received, |event| match event {
             WindowEvent::Other(message) if unseen.contains(&message) => Some(message),

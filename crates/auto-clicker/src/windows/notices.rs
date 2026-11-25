@@ -83,7 +83,9 @@ impl Notices {
     pub fn handle(&mut self, event: WindowEvent) {
         match &event {
             WindowEvent::EndSession => {
+                // Quit first: nothing, a log line included, holds it up.
                 self.send(Message::Quit);
+                log::line(format_args!("auto-clicker: heard {event:?}"));
                 if !self.released.wait_for(ENDED, RELEASE_BEFORE_LOGOFF) {
                     log::line(format_args!(
                         "auto-clicker: the session ends before the daemon did"
@@ -91,7 +93,10 @@ impl Notices {
                 }
                 return;
             }
-            WindowEvent::Close => return self.send(Message::Quit),
+            WindowEvent::Close => {
+                self.send(Message::Quit);
+                return log::line(format_args!("auto-clicker: heard {event:?}"));
+            }
             WindowEvent::Ended { failure } => {
                 if let Some(failure) = failure {
                     log::line(format_args!("auto-clicker: {failure}; quitting"));
