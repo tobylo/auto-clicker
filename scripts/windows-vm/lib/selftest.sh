@@ -72,7 +72,7 @@ check_click() {
 
 # The ids of the VM's ping processes, one per line.
 ping_ids() {
-    vm_ssh 60 "$VM_DIR" 'Get-Process -Name PING -ErrorAction SilentlyContinue | ForEach-Object Id' | tr -d '\r'
+    vm_ssh 60 "$VM_DIR" '@(Get-Process -Name PING -ErrorAction SilentlyContinue).Id' | tr -d '\r'
 }
 
 # A job that outlives its deadline is ended with everything it started: a
