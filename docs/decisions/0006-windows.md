@@ -50,7 +50,7 @@ From the main checkout's `.claude/local/x03/`, after `./push.sh` (copies `probe/
 | --- | --- | --- |
 | 1, clicks | `./run.sh m1 300` | `scen/m1.ps1` |
 | 1, keys | `./run.sh m1keys 200` | `scen/m1keys.ps1` |
-| 2 | `./run.sh timing 1800`; the control, with no driver running: `scripts/windows-vm/vm run --timeout 600 -- powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\work\x03\scen\timing.ps1 -Intervals 10 -Runs 3 -Settings 'throttle,waitable'`; row (f), likewise: `scripts/windows-vm/vm run --timeout 900 -- powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\work\x03\scen\timing.ps1 -Intervals '10,12,15' -Runs 3 -Settings bridge` | `scen/timing.ps1` |
+| 2 | `./run.sh timing 1800`; the control, with no driver running: `../../../scripts/windows-vm/vm run --timeout 600 -- powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File 'C:\work\x03\scen\timing.ps1' -Intervals 10 -Runs 3 -Settings 'throttle,waitable'`; row (f), likewise: `../../../scripts/windows-vm/vm run --timeout 900 -- powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File 'C:\work\x03\scen\timing.ps1' -Intervals '10,12,15' -Runs 3 -Settings bridge` | `scen/timing.ps1` |
 | 3 | `./run.sh m3 200` | `scen/m3.ps1` |
 | 4 | `./run.sh m4 300` | `scen/m4.ps1` |
 | 5 | `./run.sh m5 400` | `scen/m5.ps1` |
