@@ -18,7 +18,7 @@ use auto_clicker_backend_kernel::monotonic_now;
 use auto_clicker_backend_kwin::Kwin;
 use auto_clicker_backend_portal::{PortalOutput, token_path};
 use auto_clicker_backend_wayland::{Cursors, OnScreen, Wayland};
-use auto_clicker_core::config::{Config, ConfigFile, config_path};
+use auto_clicker_core::config::{Config, ConfigFile};
 use auto_clicker_core::controller::{Controller, Links, Message, Platform};
 use auto_clicker_core::input::{Input, InputError};
 use auto_clicker_core::message::ConfigProblem;
@@ -27,6 +27,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
+use crate::config::load_config;
 use detect::{Detected, Output, detect};
 use instance::ClaimError;
 use platform::{Desktop, Hotkeys, Kernel, Portal};
@@ -222,21 +223,6 @@ async fn claim_name() -> Result<instance::Claim, ExitCode> {
         Ok(Err(ClaimError::Bus(err))) => Err(fail(&format!("session bus: {err}"))),
         Err(_) => Err(fail("the session bus did not answer")),
     }
-}
-
-/// The config, its error as the tray shows it, and the file as read.
-fn load_config() -> (Config, Option<ConfigProblem>, ConfigFile) {
-    let Some(path) = config_path() else {
-        let error = ConfigProblem::NoDirectory;
-        eprintln!("auto-clicker: {error}; using the defaults");
-        return (Config::default(), Some(error), ConfigFile::none());
-    };
-    let loaded = Config::load(&path);
-    let error = loaded.error.as_ref().map(ConfigProblem::from);
-    if let Some(error) = &error {
-        eprintln!("auto-clicker: {error}; using the defaults");
-    }
-    (loaded.config, error, loaded.file)
 }
 
 /// SIGTERM and SIGINT ask the controller to quit, which releases everything.

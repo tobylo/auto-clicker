@@ -1,6 +1,12 @@
 use super::*;
 
 #[test]
+fn messages_name_the_variables_that_were_missing() {
+    assert_eq!(NO_CONFIG_DIR, "APPDATA is not set to an absolute folder");
+    assert_eq!(NO_DATA_DIR, "LOCALAPPDATA is not set to an absolute folder");
+}
+
+#[test]
 fn a_folder_needs_an_absolute_path() {
     let os = |text: &str| Some(OsString::from(text));
     for (dir, expected) in [

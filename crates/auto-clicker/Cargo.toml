@@ -29,13 +29,22 @@ tokio = { version = "1.54.1", default-features = false, features = ["rt", "macro
 # purpose: ksni is built on it, so the tree carries one zbus.
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
-# The daemon on Windows (src/windows.rs): every Win32 call is in backend-windows.
+# The daemon on Windows (src/windows/): every Win32 call is in backend-windows.
 [target.'cfg(windows)'.dependencies]
 auto-clicker-backend-windows = { path = "../backend-windows" }
+# The controller's runtime; its timers alone, since nothing on Windows needs
+# its I/O driver.
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "sync", "time"] }
 
 [lints]
 workspace = true
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+[dev-dependencies]
 auto-clicker-core = { path = "../core", features = ["fake"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
 tokio = { version = "1.54.1", features = ["rt", "macros", "sync", "time", "test-util", "io-util"] }
+
+# `join!` in the Windows daemon's tests.
+[target.'cfg(windows)'.dev-dependencies]
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "macros", "sync", "time"] }

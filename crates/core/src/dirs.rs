@@ -16,6 +16,8 @@ mod windows;
 #[cfg(windows)]
 use windows as system;
 
+pub use system::{NO_CONFIG_DIR, NO_DATA_DIR};
+
 /// The program's folder for its config: `$XDG_CONFIG_HOME/auto-clicker`
 /// (`~/.config` when unset or not absolute), or `%APPDATA%\auto-clicker`.
 pub fn config_dir() -> Option<PathBuf> {

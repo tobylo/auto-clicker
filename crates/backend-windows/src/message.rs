@@ -27,7 +27,7 @@ pub fn show_error(title: &str, text: &str) {
 
 /// `text` as NUL-terminated UTF-16. A NUL inside it would end it early, so
 /// it is replaced.
-fn wide(text: &str) -> Vec<u16> {
+pub(crate) fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16()
         .map(|unit| if unit == 0 { u16::from(b' ') } else { unit })
         .chain(once(0))

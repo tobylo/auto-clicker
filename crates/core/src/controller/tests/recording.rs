@@ -5,6 +5,7 @@
 use std::fs;
 
 use super::*;
+use crate::dirs::NO_DATA_DIR;
 use crate::hotkeys::DeviceId;
 use crate::recording::{Change, KeyInput, MAX_DURATION, Recording};
 
@@ -274,8 +275,7 @@ async fn a_recording_that_cannot_be_saved_says_why() {
         d.record_hotkey().await;
         assert_eq!(
             d.notice(),
-            "The recording could not be saved: no data directory: neither XDG_DATA_HOME nor \
-             HOME is set"
+            format!("The recording could not be saved: no data directory: {NO_DATA_DIR}")
         );
     })
     .await;

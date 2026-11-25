@@ -7,6 +7,11 @@ use std::path::PathBuf;
 
 use super::program_dir;
 
+/// Why there is no config folder, as a message says it.
+pub const NO_CONFIG_DIR: &str = "APPDATA is not set to an absolute folder";
+/// Why there is no data folder, as a message says it.
+pub const NO_DATA_DIR: &str = "LOCALAPPDATA is not set to an absolute folder";
+
 pub(super) fn config_dir() -> Option<PathBuf> {
     from(std::env::var_os("APPDATA"))
 }

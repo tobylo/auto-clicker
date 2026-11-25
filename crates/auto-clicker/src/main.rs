@@ -1,9 +1,11 @@
 //! The auto-clicker daemon: the tray icon, hotkeys and the clicker, run by one
-//! controller on a single thread. Each system has its own module; this file
-//! only picks it.
+//! controller (on Windows, beside a Win32 message thread). Each system has
+//! its own module; this file only picks it.
 
 // No console window opens on Windows: the daemon writes to its log file.
 #![cfg_attr(not(test), windows_subsystem = "windows")]
+
+mod config;
 
 #[cfg(target_os = "linux")]
 mod linux;

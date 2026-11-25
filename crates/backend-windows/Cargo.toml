@@ -14,7 +14,17 @@ publish.workspace = true
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Globalization",
+    # The message thread's window class (WNDCLASSW names a brush).
+    "Win32_Graphics_Gdi",
     "Win32_Security",
+    # The module handle a window class is registered for.
+    "Win32_System_LibraryLoader",
+    # The display turning off or on (RegisterPowerSettingNotification).
+    "Win32_System_Power",
+    # Session notices and the session's state (WTS).
+    "Win32_System_RemoteDesktop",
+    # GUID_CONSOLE_DISPLAY_STATE.
+    "Win32_System_SystemServices",
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }
