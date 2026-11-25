@@ -11,10 +11,11 @@ boot_time() {
 
 # Waits up to $2 seconds until both runner tasks in the VM run (each writes
 # its pid to `ready` when it starts). A `ready` from an earlier boot names a
-# pid some other process may have now, so it must be newer than the boot.
+# pid some other process may have now, so it must be newer than the boot, and
+# the process must be a PowerShell that started before it wrote the file.
 wait_runners() {
     local dir="$1" deadline=$((SECONDS + $2)) check
-    check='$boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime; foreach ($q in "normal","high") { $f = Get-Item "C:\wn01\queue\$q\ready" -ErrorAction Stop; if ($f.LastWriteTime -lt $boot) { exit 1 }; $p = [int](Get-Content -LiteralPath $f.FullName -ErrorAction Stop); Get-Process -Id $p -ErrorAction Stop | Out-Null }'
+    check='$boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime; foreach ($q in "normal","high") { $f = Get-Item "C:\wn01\queue\$q\ready" -ErrorAction Stop; if ($f.LastWriteTime -lt $boot) { exit 1 }; $p = Get-Process -Id ([int](Get-Content -LiteralPath $f.FullName -ErrorAction Stop)) -ErrorAction Stop; if ($p.ProcessName -ne "powershell" -or $p.StartTime -gt $f.LastWriteTime) { exit 1 } }'
     until vm_ssh 60 "$dir" "$check" >/dev/null 2>&1; do
         ((SECONDS < deadline)) || die "the runner tasks did not start within $2 s"
         sleep 5
@@ -94,6 +95,8 @@ cmd_stop() {
 
 cmd_reset() {
     take_lock 30
+    # Puts back a VM an interrupted rebuild left aside, so its changes go too.
+    restore_previous_vm
     machine_running "$RUN_DIR" && die "the VM is running; stop it first (vm stop)"
     rm -rf "$RUN_DIR"
     log "reset: the next start boots the clean build"

@@ -52,6 +52,7 @@ All of them print to stderr as they go, and every wait in them has a deadline.
 - The default `--timeout` is 120 seconds and the maximum is 3600. The deadline counts from when `vm run` hands the command in, including any time it waits behind another job. At the deadline, the command's whole process tree is ended: it runs in its own Windows job object, and so does everything it starts.
 - A `vm run` you interrupt (Ctrl-C, a lost SSH connection) does not stop its command: the command runs on in the VM until its deadline.
 - Exit code 124 means the deadline hit, 125 that the runner could not start the command, and 126 that the runner did not answer.
+- The command's output is read as UTF-8. A program that prints in the console's code page shows non-ASCII letters as replacement characters.
 - `--elevated` runs the command through the second runner, which has administrator rights in the same desktop. Use it for a window that is meant to be elevated, as in a UIPI test.
 
 ## Running a test

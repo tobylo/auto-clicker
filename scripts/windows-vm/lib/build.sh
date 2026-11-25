@@ -128,6 +128,8 @@ install_opengl_pack() {
     command='winget install --id 9NQPSL29BFFF --source msstore --silent --accept-package-agreements --accept-source-agreements --disable-interactivity'
     run_job "$dir" normal 1200 'C:\work' "$command" || die "the OpenGL compatibility pack did not install"
     close_network "$dir"
+    run_job "$dir" high 120 'C:\work' 'winget settings --disable BypassCertificatePinningForMicrosoftStore' ||
+        die "could not turn winget's Store certificate pinning back on"
 }
 
 # Sends a monitor command and fails on an error in its answer.
@@ -177,10 +179,11 @@ restart_windows() {
     wait_runners "$dir" 300
 }
 
-# Windows Update passes until nothing is left, a restart after each.
+# Windows Update passes until nothing is left, a restart after each. The
+# last pass may only find nothing: one that installs still fails the build.
 update_windows() {
     local dir="$1" pass state
-    for pass in 1 2 3 4 5 6; do
+    for pass in 1 2 3 4 5 6 7; do
         provision "$dir" update-start 120
         state="$(wait_update "$dir" 10800)"
         log "Windows Update pass $pass: $state"
@@ -188,7 +191,7 @@ update_windows() {
         [[ "$state" == reboot ]] || die "Windows Update failed"
         restart_windows "$dir"
     done
-    die "Windows Update still had updates after 6 passes"
+    die "Windows Update still had updates after 7 passes"
 }
 
 # Waits up to $2 seconds for the running update pass to finish; prints its state.
@@ -235,8 +238,9 @@ datetime.date.fromisoformat(info["expires"])
 # Replaces the current VM with the finished build.
 swap_in() {
     local dir="$1" old="$STATE_DIR/old.$$"
+    # The old base stays read-only: a rollback puts it back as it was, and
+    # rm -rf needs only the directories writable.
     if [[ -d "$VM_DIR" ]]; then
-        chmod -R u+w "$VM_DIR"
         mv "$VM_DIR" "$old"
     fi
     mv "$dir" "$VM_DIR"

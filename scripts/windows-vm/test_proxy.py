@@ -8,6 +8,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -199,20 +200,51 @@ class Serve(unittest.TestCase):
     def test_connect_relays_both_ways(self):
         upstream_vm_side, upstream = socket.socketpair()
         self.addCleanup(upstream_vm_side.close)
-        echo = threading.Thread(target=lambda: upstream_vm_side.sendall(upstream_vm_side.recv(64)))
+        echo = threading.Thread(target=self.echo_once, args=(upstream_vm_side,), daemon=True)
         echo.start()
         with resolving_to("93.184.216.34"), mock.patch.object(proxy, "connect_upstream", return_value=upstream):
             self.vm.sendall(b"CONNECT static.rust-lang.org:443 HTTP/1.1\r\n\r\nping")
-            worker = threading.Thread(target=proxy.serve, args=(self.conn, ALLOW, self.logfile))
+            worker = threading.Thread(target=proxy.serve, args=(self.conn, ALLOW, self.logfile), daemon=True)
             worker.start()
             expected = b"HTTP/1.1 200 Connection established\r\n\r\nping"
             self.assertEqual(receive(self.vm, len(expected)), expected)
             self.vm.shutdown(socket.SHUT_WR)
+            self.assertEqual(receive(self.vm, 1), b"", "the upstream's close did not reach the VM")
             worker.join(timeout=10)
         echo.join(timeout=10)
         self.assertFalse(worker.is_alive(), "relay did not end when the VM closed")
         with open(self.logfile, encoding="utf-8") as handle:
             self.assertIn("passed CONNECT static.rust-lang.org:443", handle.read())
+
+
+    @staticmethod
+    def echo_once(sock):
+        sock.sendall(sock.recv(64))
+        sock.shutdown(socket.SHUT_WR)
+
+    def test_answer_still_arrives_after_the_vm_closes_its_sending_half(self):
+        upstream_side, upstream = socket.socketpair()
+        self.addCleanup(upstream_side.close)
+
+        def answer_after_eof():
+            request = b""
+            while chunk := upstream_side.recv(4096):
+                request += chunk
+            upstream_side.sendall(b"HTTP/1.1 200 OK\r\n\r\nbody")
+            upstream_side.shutdown(socket.SHUT_WR)
+
+        server = threading.Thread(target=answer_after_eof, daemon=True)
+        server.start()
+        with resolving_to("93.184.216.34"), mock.patch.object(proxy, "connect_upstream", return_value=upstream):
+            self.vm.sendall(b"GET http://static.rust-lang.org/ HTTP/1.1\r\n\r\n")
+            self.vm.shutdown(socket.SHUT_WR)
+            worker = threading.Thread(target=proxy.serve, args=(self.conn, ALLOW, self.logfile), daemon=True)
+            worker.start()
+            expected = b"HTTP/1.1 200 OK\r\n\r\nbody"
+            self.assertEqual(receive(self.vm, len(expected)), expected)
+            worker.join(timeout=10)
+        server.join(timeout=10)
+        self.assertFalse(worker.is_alive(), "relay did not end once both sides closed")
 
 
 class Deadlines(unittest.TestCase):
@@ -291,6 +323,16 @@ class Deadlines(unittest.TestCase):
                 sock.sendall(b"x" * 65536)
         except OSError:
             pass
+
+    def test_stalled_lookup_is_refused_in_time(self):
+        def stall(*_args, **_kwargs):
+            time.sleep(3)
+            return PUBLIC
+
+        with mock.patch.object(proxy, "DNS_TIMEOUT", 0.2), mock.patch.object(proxy.socket, "getaddrinfo", stall):
+            with self.assertRaises(proxy.Refused) as caught:
+                self.bounded(lambda: proxy.check_target("CONNECT", "static.rust-lang.org", 443, ALLOW))
+        self.assertEqual(caught.exception.status, 504)
 
     def test_upstream_connect_has_a_deadline(self):
         sock = mock.MagicMock()

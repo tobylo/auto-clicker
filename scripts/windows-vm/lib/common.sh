@@ -2,6 +2,12 @@
 # shellcheck shell=bash
 
 STATE_DIR="${WN01_STATE_DIR:-$HOME/.local/share/auto-clicker-vm}"
+# Paths under it go into QEMU's comma-separated options and the proxy's
+# space-separated command line.
+[[ "$STATE_DIR" =~ ^/[^[:space:],]+$ ]] || {
+    echo "vm: the state directory must be an absolute path without spaces or commas: '$STATE_DIR'" >&2
+    exit 2
+}
 CACHE_DIR="$STATE_DIR/cache"
 # The current VM: its clean base disk, firmware variables and TPM state, the
 # SSH key and password, and what the build recorded (info.json).
@@ -71,6 +77,8 @@ require_tools() {
         command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
     done
     [[ -r "$OVMF_CODE" && -r "$OVMF_VARS" ]] || missing+=("OVMF ($OVMF_CODE)")
+    # QEMU starts the proxy by this path, not through PATH.
+    [[ -x /usr/bin/python3 ]] || missing+=("/usr/bin/python3")
     [[ -w /dev/kvm ]] || missing+=("/dev/kvm access")
     ((${#missing[@]} == 0)) || die "missing: ${missing[*]}"
 }

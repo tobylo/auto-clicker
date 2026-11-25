@@ -27,11 +27,7 @@ function Install-Pending {
     if ($found.Count -eq 0) {
         return @{ state = 'done'; installed = 0; error = $null }
     }
-    $batch = New-Object -ComObject Microsoft.Update.UpdateColl
-    foreach ($update in $found) {
-        if (-not $update.EulaAccepted) { $update.AcceptEula() }
-        $null = $batch.Add($update)
-    }
+    $batch = Select-Batch $found
     $downloader = $session.CreateUpdateDownloader()
     $downloader.Updates = $batch
     $null = $downloader.Download()
@@ -42,7 +38,33 @@ function Install-Pending {
     if ($result.ResultCode -notin 2, 3) {
         return @{ state = 'failed'; installed = 0; error = "install result code $($result.ResultCode)" }
     }
-    return @{ state = 'reboot'; installed = $batch.Count; error = $null }
+    $failed = Get-FailedUpdates $batch $result
+    return @{ state = 'reboot'; installed = $batch.Count - $failed.Count; error = ($failed -join '; ') }
+}
+
+# What one Install() call takes: an update that must be installed on its
+# own (InstallationBehavior.Impact 2) alone, else every update found.
+function Select-Batch($Found) {
+    $batch = New-Object -ComObject Microsoft.Update.UpdateColl
+    $exclusive = @($Found | Where-Object { $_.InstallationBehavior.Impact -eq 2 } | Select-Object -First 1)
+    foreach ($update in $(if ($exclusive.Count -gt 0) { $exclusive } else { $Found })) {
+        if (-not $update.EulaAccepted) { $update.AcceptEula() }
+        $null = $batch.Add($update)
+    }
+    return , $batch
+}
+
+# The updates in the batch that did not install, with their HRESULTs, so a
+# build that keeps failing on one says which.
+function Get-FailedUpdates($Batch, $Result) {
+    $failed = @()
+    for ($i = 0; $i -lt $Batch.Count; $i++) {
+        $one = $Result.GetUpdateResult($i)
+        if ($one.ResultCode -ne 2) {
+            $failed += '{0} (result {1}, 0x{2:X8})' -f $Batch.Item($i).Title, $one.ResultCode, $one.HResult
+        }
+    }
+    return , $failed
 }
 
 Remove-Item -LiteralPath $StatusPath -Force -ErrorAction SilentlyContinue

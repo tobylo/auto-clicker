@@ -25,9 +25,11 @@ import re
 import selectors
 import socket
 import sys
+import threading
 import time
 
 CONNECT_TIMEOUT = 15
+DNS_TIMEOUT = 15
 HEADER_TIMEOUT = 30
 IDLE_TIMEOUT = 300
 MAX_HEADER_BYTES = 64 * 1024
@@ -82,9 +84,30 @@ def is_ip_literal(host):
     return True
 
 
+def resolve(host, port):
+    """getaddrinfo within DNS_TIMEOUT. The lookup itself cannot be cancelled,
+    so it runs in a daemon thread that ends with this one-request process."""
+    outcome = {}
+
+    def lookup():
+        try:
+            outcome["infos"] = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except OSError as err:
+            outcome["error"] = err
+
+    worker = threading.Thread(target=lookup, daemon=True)
+    worker.start()
+    worker.join(DNS_TIMEOUT)
+    if worker.is_alive():
+        raise Refused(504, f"lookup of {host} took over {DNS_TIMEOUT} s")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["infos"]
+
+
 def global_addresses(host, port):
     """The host's global addresses; private, loopback and link-local ones are dropped."""
-    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    infos = resolve(host, port)
     found = []
     for family, _, _, _, sockaddr in infos:
         if ipaddress.ip_address(sockaddr[0]).is_global:
@@ -207,28 +230,40 @@ def connect_upstream(addresses):
 
 
 def relay(client, upstream):
-    """Copies bytes both ways until either side closes or both stay idle too long."""
+    """Copies bytes both ways until both sides have closed, or neither has
+    sent anything for IDLE_TIMEOUT. A side that closes only its sending half
+    still gets the rest of the other side's answer."""
     selector = selectors.DefaultSelector()
     peers = {client: upstream, upstream: client}
     for sock in peers:
         sock.setblocking(False)
         selector.register(sock, selectors.EVENT_READ)
     try:
-        while forward_ready(selector.select(timeout=IDLE_TIMEOUT), peers):
+        while selector.get_map() and forward_ready(selector, selector.select(timeout=IDLE_TIMEOUT), peers):
             pass
     finally:
         selector.close()
 
 
-def forward_ready(events, peers):
-    """Forwards what each ready socket has; False once idle or one side has closed."""
+def half_close(selector, sock, out):
+    """`sock` sent its last byte: stop reading it and tell `out` so."""
+    selector.unregister(sock)
+    try:
+        out.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass  # `out` has gone already; its own end shows on its next read
+
+
+def forward_ready(selector, events, peers):
+    """Forwards what each ready socket has; False once both stayed idle."""
     if not events:
         return False
     for key, _ in events:
         data = key.fileobj.recv(CHUNK)
-        if not data:
-            return False
         out = peers[key.fileobj]
+        if not data:
+            half_close(selector, key.fileobj, out)
+            continue
         out.setblocking(True)
         out.settimeout(IDLE_TIMEOUT)
         out.sendall(data)

@@ -29,6 +29,10 @@ $Outbox = Join-Path $QueueDir 'outbox'
 $MaxTimeoutSeconds = 3600
 # The watcher can drop events, so the inbox is also rescanned this often.
 $RescanSeconds = 30
+# run-job.ps1 removes its outbox folder when it is done; one whose client
+# was killed stays. No client waits longer than the longest job and its
+# 60 s grace, so a folder untouched for two hours has nobody waiting on it.
+$AbandonedAfter = New-TimeSpan -Hours 2
 
 Add-Type -Path (Join-Path $Root 'JobRunner.cs')
 
@@ -93,7 +97,7 @@ function Invoke-Job([IO.FileInfo] $File) {
         $spec.WorkDir = $job.workDir
         $spec.StdoutPath = $stdout
         $spec.StderrPath = $stderr
-        $spec.TimeoutMs = $ms
+        $spec.DeadlineUtc = [DateTime]::UtcNow.AddMilliseconds($ms)
         $run = [Wn01.JobRunner]::Run($spec)
         $result = @{ exitCode = $run.ExitCode; timedOut = $run.TimedOut; error = $null }
     } catch {
@@ -102,6 +106,13 @@ function Invoke-Job([IO.FileInfo] $File) {
         Remove-Item -LiteralPath $claimed -Force -ErrorAction SilentlyContinue
     }
     Write-AtomicFile (Join-Path $out 'result.json') ($result | ConvertTo-Json -Compress)
+}
+
+function Remove-AbandonedOutboxes {
+    $cutoff = (Get-Date) - $AbandonedAfter
+    foreach ($dir in (Get-ChildItem -LiteralPath $Outbox -Directory | Where-Object LastWriteTime -lt $cutoff)) {
+        Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Invoke-Pending {
@@ -141,5 +152,6 @@ while ($true) {
     # Events up to here are covered by the scan that follows.
     Get-Event | Remove-Event
     Invoke-Pending
+    Remove-AbandonedOutboxes
     Wait-Event -Timeout $RescanSeconds | Remove-Event
 }

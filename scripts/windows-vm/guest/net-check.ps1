@@ -51,7 +51,8 @@ foreach ($target in $Targets + @('1.1.1.1:443', '10.0.2.2:22')) {
 }
 foreach ($target in $Targets + @('example.com:443', '127.0.0.1:443', '10.0.2.2:443')) {
     $answer = Get-ProxyAnswer "https://$target/"
-    Report ($answer -ne 200) "proxy refuses $target (answered $answer)"
+    # The proxy's own refusal, not a timeout (0) or an upstream error.
+    Report ($answer -eq 403) "proxy refuses $target (answered $answer)"
 }
 $answer = Get-ProxyAnswer 'https://static.rust-lang.org/rustup/release-stable.toml'
 Report ($answer -eq 200) "proxy passes static.rust-lang.org (answered $answer)"
