@@ -190,7 +190,13 @@ fn a_display_notice_reaches_the_handler() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{SMTO_NORMAL, SendMessageTimeoutW};
 
     let (thread, received) = started();
-    let off = Setting::new(GUID_CONSOLE_DISPLAY_STATE, 4, 0);
+    // Static: should the send time out while the thread still reads it,
+    // it stays valid.
+    static OFF: Setting = Setting {
+        guid: GUID_CONSOLE_DISPLAY_STATE,
+        length: 4,
+        data: [0; 4],
+    };
     let power_setting = usize::try_from(PBT_POWERSETTINGCHANGE).unwrap();
     let Some(Window(hwnd)) = *thread.remote.0.lock().unwrap() else {
         panic!("no window");
@@ -198,13 +204,13 @@ fn a_display_notice_reaches_the_handler() {
     let mut answer = 0;
     // SAFETY: `hwnd` is the running thread's window. A notice carrying a
     // pointer can only be sent, not posted; the call returns once the
-    // window procedure handled it, while `off` is alive, or at the timeout.
+    // window procedure handled it, or at the timeout; `OFF` lives for ever.
     let sent = unsafe {
         SendMessageTimeoutW(
             hwnd,
             WM_POWERBROADCAST,
             power_setting,
-            std::ptr::from_ref(&off) as LPARAM,
+            std::ptr::from_ref(&OFF) as LPARAM,
             SMTO_NORMAL,
             10_000,
             &mut answer,

@@ -14,6 +14,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::BTreeMap;
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread::sleep;
@@ -48,15 +49,16 @@ impl Home {
         Home(dir)
     }
 
-    fn start(&self) -> Child {
-        Command::new(DAEMON)
+    fn start(&self) -> Daemon {
+        let child = Command::new(DAEMON)
             .env("APPDATA", self.0.join("roaming"))
             .env("LOCALAPPDATA", self.0.join("local"))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .unwrap()
+            .unwrap();
+        Daemon(child)
     }
 
     fn log(&self) -> String {
@@ -73,6 +75,36 @@ impl Home {
             assert!(daemon.try_wait().unwrap().is_none(), "{}", self.log());
             assert!(Instant::now() < deadline, "not running: {}", self.log());
             sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+/// A started daemon, ended and reaped however the test ends, a failed
+/// assertion included: a daemon left running would hold the session's
+/// single instance.
+struct Daemon(Child);
+
+impl Deref for Daemon {
+    type Target = Child;
+
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+
+impl DerefMut for Daemon {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        // A daemon that already ended is only reaped; killing it fails.
+        let _ = self.0.kill();
+        let deadline = Instant::now() + END;
+        while matches!(self.0.try_wait(), Ok(None)) && Instant::now() < deadline {
+            sleep(Duration::from_millis(20));
         }
     }
 }
