@@ -35,7 +35,7 @@ use windows_sys::Win32::System::Power::{
 use windows_sys::Win32::System::RemoteDesktop::{
     NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification, WTSUnRegisterSessionNotification,
 };
-use windows_sys::Win32::System::SystemServices::GUID_CONSOLE_DISPLAY_STATE;
+use windows_sys::Win32::System::SystemServices::GUID_SESSION_DISPLAY_STATUS;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetMessageW, KillTimer, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSUSPEND,
@@ -51,9 +51,11 @@ use crate::session::{SessionState, query};
 
 /// Posted by [`Remote::quit`]: destroy the window and end the thread.
 const WM_QUIT_REQUEST: u32 = WM_APP + 1;
-/// The timer that tries the session notices' registration again.
+/// The timer that tries the session notices' registration, or the
+/// session's read, again.
 const RETRY_TIMER: usize = 1;
-/// The waits between tries at registering for session notices: soon at
+/// The waits between tries at registering for session notices, or at
+/// reading the session's state: soon at
 /// first, since early in a logon the service that sends them may not be
 /// ready yet, then less often.
 const RETRY_DELAYS: [Duration; 6] = [
@@ -64,7 +66,9 @@ const RETRY_DELAYS: [Duration; 6] = [
     Duration::from_secs(16),
     Duration::from_secs(30),
 ];
-/// The display state in a `GUID_CONSOLE_DISPLAY_STATE` notice: off, on,
+/// The display state in a `GUID_SESSION_DISPLAY_STATUS` notice (the
+/// display of the daemon's own session, the console's or a remote
+/// desktop's, not the console's alone): off, on,
 /// dimmed. Dimmed counts as on.
 const DISPLAY_OFF: u32 = 0;
 
@@ -72,7 +76,8 @@ const DISPLAY_OFF: u32 = 0;
 #[derive(Debug)]
 pub enum WindowEvent {
     /// The session's state, read once its notices are registered for: at
-    /// start, and after a registration that failed succeeded later.
+    /// start, after a registration that failed succeeded later, and again
+    /// after a read that failed (which is tried again until one succeeds).
     SessionRead(io::Result<SessionState>),
     /// Registering for session notices failed; it is tried again later, and
     /// no session notice arrives until it succeeds.
@@ -199,11 +204,9 @@ impl MessageThread {
                 done,
                 thread,
             }),
-            Ok(Err(err)) => {
-                // The thread returns right after reporting the failure.
-                let _ = thread.join();
-                Err(err)
-            }
+            // The thread ends right after reporting the failure, on its
+            // own: nothing waits for it.
+            Ok(Err(err)) => Err(err),
             Err(_) => Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "the message thread's window was not ready in time",
@@ -309,9 +312,18 @@ fn run(
     HANDLER.set(Some(handler));
     SHARED.set(Some(shared.clone()));
     let class = class_name();
-    let failure = match catch_unwind(AssertUnwindSafe(|| serve(&class, shared, ready))) {
+    let announced = Cell::new(false);
+    let failure = match catch_unwind(AssertUnwindSafe(|| {
+        serve(&class, shared, ready, &announced)
+    })) {
         Ok(failure) => failure,
-        Err(panic) => Some(Some(panicked(&*panic))),
+        Err(panic) if announced.get() => Some(Some(panicked(&*panic))),
+        // Not ready yet: the start fails, and says why. Windows destroys
+        // the thread's window when it ends.
+        Err(panic) => {
+            let _ = ready.send(Err(io::Error::other(panicked(&*panic))));
+            None
+        }
     };
     // An `Ended` after a refused start would reach a controller that never
     // runs; only a thread that was ready reports it.
@@ -323,13 +335,14 @@ fn run(
     SHARED.set(None);
 }
 
-/// Creates the window, reports readiness, and runs the loop; the loop's
-/// failure, or `None` when the window could not be created (reported to
-/// `ready` instead).
+/// Creates the window, reports readiness (and sets `announced` just
+/// before), and runs the loop; the loop's failure, or `None` when the
+/// window could not be created (reported to `ready` instead).
 fn serve(
     class: &[u16],
     shared: &Remote,
     ready: &mpsc::Sender<io::Result<()>>,
+    announced: &Cell<bool>,
 ) -> Option<Option<String>> {
     let hwnd = match create_window(class) {
         Ok(hwnd) => hwnd,
@@ -342,6 +355,7 @@ fn serve(
     watch_session(hwnd);
     watch_display(hwnd);
     READY.set(true);
+    announced.set(true);
     // The spawner may have given up already; the thread runs on regardless
     // and ends with the process.
     let _ = ready.send(Ok(()));
@@ -496,10 +510,13 @@ unsafe extern "system" fn window_procedure(
 /// default.
 fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     match message {
+        // A notice the program does not follow is still a wake, reported
+        // as such.
         WM_WTSSESSION_CHANGE => {
-            if let Some(change) = SessionChange::from_code(wparam) {
-                emit(WindowEvent::Session(change));
-            }
+            emit(
+                SessionChange::from_code(wparam)
+                    .map_or(WindowEvent::Other(message), WindowEvent::Session),
+            );
             Some(0)
         }
         WM_POWERBROADCAST => {
@@ -542,21 +559,16 @@ fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LR
     }
 }
 
-/// A `WM_POWERBROADCAST`.
+/// A `WM_POWERBROADCAST`; one the program does not follow (the power
+/// source changing, say) is still a wake, reported as such.
 fn power(event: WPARAM, lparam: LPARAM) {
-    let Ok(event) = u32::try_from(event) else {
-        return;
+    let event = match u32::try_from(event) {
+        Ok(PBT_APMSUSPEND) => Some(WindowEvent::Suspend),
+        Ok(PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND) => Some(WindowEvent::Resume),
+        Ok(PBT_POWERSETTINGCHANGE) => display_setting(lparam).map(WindowEvent::Display),
+        _ => None,
     };
-    match event {
-        PBT_APMSUSPEND => emit(WindowEvent::Suspend),
-        PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND => emit(WindowEvent::Resume),
-        PBT_POWERSETTINGCHANGE => {
-            if let Some(on) = display_setting(lparam) {
-                emit(WindowEvent::Display(on));
-            }
-        }
-        _ => {}
-    }
+    emit(event.unwrap_or(WindowEvent::Other(WM_POWERBROADCAST)));
 }
 
 /// Whether the display is on, from a `PBT_POWERSETTINGCHANGE` notice's
@@ -571,7 +583,7 @@ fn display_setting(lparam: LPARAM) -> Option<bool> {
     // `POWERBROADCAST_SETTING` that lives for the message's handling; only
     // its setting and length are read here.
     let (guid, length) = unsafe { ((*setting).PowerSetting, (*setting).DataLength) };
-    if !same_guid(&guid, &GUID_CONSOLE_DISPLAY_STATE)
+    if !same_guid(&guid, &GUID_SESSION_DISPLAY_STATUS)
         || usize::try_from(length).map_or(true, |len| len < size_of::<u32>())
     {
         return None;
@@ -587,23 +599,32 @@ fn same_guid(a: &windows_sys::core::GUID, b: &windows_sys::core::GUID) -> bool {
     (a.data1, a.data2, a.data3, a.data4) == (b.data1, b.data2, b.data3, b.data4)
 }
 
-/// Registers for session notices, then reads the state once: a notice that
-/// arrives meanwhile is queued, and handled after the state it follows. On
-/// failure, tries again later.
+/// Registers for session notices, unless it already has, then reads the
+/// state: a notice that arrives meanwhile is queued, and handled after the
+/// state it follows. A registration or a read that fails is tried again
+/// later; a read alone never registers twice.
 #[allow(unsafe_code)]
 fn watch_session(hwnd: HWND) {
-    // SAFETY: `hwnd` is this thread's live window.
-    if unsafe { WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) } == 0 {
-        emit(WindowEvent::SessionUnwatched(io::Error::last_os_error()));
-        schedule_retry(hwnd);
-        return;
+    if !SESSION_WATCHED.get() {
+        // SAFETY: `hwnd` is this thread's live window.
+        if unsafe { WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) } == 0 {
+            emit(WindowEvent::SessionUnwatched(io::Error::last_os_error()));
+            schedule_retry(hwnd);
+            return;
+        }
+        SESSION_WATCHED.set(true);
     }
-    SESSION_WATCHED.set(true);
-    RETRIES.set(0);
-    emit(WindowEvent::SessionRead(query()));
+    let read = query();
+    let failed = read.is_err();
+    emit(WindowEvent::SessionRead(read));
+    if failed {
+        schedule_retry(hwnd);
+    } else {
+        RETRIES.set(0);
+    }
 }
 
-/// Starts the retry timer for the session notices.
+/// Starts the retry timer for the session notices or the session's read.
 #[allow(unsafe_code)]
 fn schedule_retry(hwnd: HWND) {
     let tries = RETRIES.get();
@@ -613,7 +634,14 @@ fn schedule_retry(hwnd: HWND) {
     // SAFETY: `hwnd` is this thread's live window; no callback, so the
     // timer arrives as `WM_TIMER`.
     if unsafe { SetTimer(hwnd, RETRY_TIMER, millis, None) } == 0 {
-        emit(WindowEvent::SessionUnwatched(io::Error::last_os_error()));
+        // Nothing would try again: the thread ends, and says why, rather
+        // than leave the session unwatched for good.
+        FAILURE.set(Some(format!(
+            "the session's next try could not be scheduled: {}",
+            io::Error::last_os_error()
+        )));
+        // SAFETY: no arguments but the exit code.
+        unsafe { PostQuitMessage(1) };
     }
 }
 
@@ -632,7 +660,7 @@ fn watch_display(hwnd: HWND) {
     let registration = unsafe {
         RegisterPowerSettingNotification(
             hwnd,
-            &GUID_CONSOLE_DISPLAY_STATE,
+            &GUID_SESSION_DISPLAY_STATUS,
             DEVICE_NOTIFY_WINDOW_HANDLE,
         )
     };

@@ -23,7 +23,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Power",
     # Session notices and the session's state (WTS).
     "Win32_System_RemoteDesktop",
-    # GUID_CONSOLE_DISPLAY_STATE.
+    # GUID_SESSION_DISPLAY_STATUS.
     "Win32_System_SystemServices",
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",

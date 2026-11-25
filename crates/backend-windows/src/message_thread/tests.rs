@@ -109,6 +109,28 @@ fn notices_reach_the_handler_in_order_and_quit_ends_the_thread() {
 }
 
 #[test]
+fn notices_the_program_does_not_follow_are_reported_as_wakes() {
+    let (thread, received) = started();
+    let remote = thread.remote();
+    remote
+        .post(WM_WTSSESSION_CHANGE, session_code(WTS_SESSION_LOGON), 0)
+        .unwrap();
+    // The power source changing (PBT_APMPOWERSTATUSCHANGE).
+    remote.post(WM_POWERBROADCAST, 0xa, 0).unwrap();
+    let mut wakes = Vec::new();
+    while wakes.len() < 2 {
+        wakes.push(first(&received, |event| match event {
+            WindowEvent::Other(message @ (WM_WTSSESSION_CHANGE | WM_POWERBROADCAST)) => {
+                Some(message)
+            }
+            _ => None,
+        }));
+    }
+    assert_eq!(wakes, [WM_WTSSESSION_CHANGE, WM_POWERBROADCAST]);
+    thread.quit_and_join(JOIN).unwrap();
+}
+
+#[test]
 fn once_the_thread_ended_nothing_posts_to_its_window() {
     let (thread, _received) = started();
     let remote = thread.remote();
@@ -186,40 +208,61 @@ fn the_retry_timer_registers_again_and_other_timers_are_reported() {
 
 #[test]
 #[allow(unsafe_code)]
-fn a_display_notice_reaches_the_handler() {
+fn display_notices_reach_the_handler() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{SMTO_NORMAL, SendMessageTimeoutW};
 
-    let (thread, received) = started();
-    // Static: should the send time out while the thread still reads it,
-    // it stays valid.
+    // Static: should a send time out while the thread still reads one, it
+    // stays valid.
     static OFF: Setting = Setting {
-        guid: GUID_CONSOLE_DISPLAY_STATE,
+        guid: GUID_SESSION_DISPLAY_STATUS,
         length: 4,
         data: [0; 4],
     };
+    static ON: Setting = Setting {
+        guid: GUID_SESSION_DISPLAY_STATUS,
+        length: 4,
+        data: [1, 0, 0, 0],
+    };
+    let (thread, received) = started();
     let power_setting = usize::try_from(PBT_POWERSETTINGCHANGE).unwrap();
     let Some(Window(hwnd)) = *thread.remote.0.lock().unwrap() else {
         panic!("no window");
     };
-    let mut answer = 0;
-    // SAFETY: `hwnd` is the running thread's window. A notice carrying a
-    // pointer can only be sent, not posted; the call returns once the
-    // window procedure handled it, or at the timeout; `OFF` lives for ever.
-    let sent = unsafe {
-        SendMessageTimeoutW(
-            hwnd,
-            WM_POWERBROADCAST,
-            power_setting,
-            std::ptr::from_ref(&OFF) as LPARAM,
-            SMTO_NORMAL,
-            10_000,
-            &mut answer,
-        )
-    };
-    assert_ne!(sent, 0, "{}", io::Error::last_os_error());
-    first(&received, |event| {
-        matches!(event, WindowEvent::Display(false)).then_some(())
-    });
+    // Off, on, off: an order Windows' own notice of the display's state
+    // cannot make up on its own.
+    for setting in [&OFF, &ON, &OFF] {
+        let mut answer = 0;
+        // SAFETY: `hwnd` is the running thread's window. A notice carrying
+        // a pointer can only be sent, not posted; the call returns once the
+        // window procedure handled it, or at the timeout, and `setting`
+        // lives for ever.
+        let sent = unsafe {
+            SendMessageTimeoutW(
+                hwnd,
+                WM_POWERBROADCAST,
+                power_setting,
+                std::ptr::from_ref(setting) as LPARAM,
+                SMTO_NORMAL,
+                10_000,
+                &mut answer,
+            )
+        };
+        assert_ne!(sent, 0, "{}", io::Error::last_os_error());
+    }
+    // Each send returned after its handler ran: the events are queued.
+    let mut expected = [false, true, false].into_iter().peekable();
+    for event in received.try_iter() {
+        if let WindowEvent::Display(on) = event
+            && expected.peek() == Some(&on)
+        {
+            expected.next();
+        }
+    }
+    assert_eq!(
+        expected.next(),
+        None,
+        "the notices did not all arrive in order"
+    );
     thread.quit_and_join(JOIN).unwrap();
 }
 
@@ -305,7 +348,7 @@ fn the_display_setting_says_on_or_off() {
         std::mem::offset_of!(Setting, data),
         std::mem::offset_of!(POWERBROADCAST_SETTING, Data)
     );
-    let display = GUID_CONSOLE_DISPLAY_STATE;
+    let display = GUID_SESSION_DISPLAY_STATUS;
     assert_eq!(Setting::new(display, 4, 0).read(), Some(false));
     assert_eq!(Setting::new(display, 4, 1).read(), Some(true));
     // Dimmed is on.

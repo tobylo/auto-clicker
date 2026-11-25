@@ -37,9 +37,17 @@ pub enum ClaimError {
 ///
 /// # Errors
 /// [`ClaimError::Taken`] when another process holds the name, and
-/// [`ClaimError::Failed`] when Windows cannot create or open it.
+/// [`ClaimError::Failed`] when the name holds a NUL or Windows cannot create
+/// or open it.
 #[allow(unsafe_code)]
 pub fn claim(name: &str) -> Result<Instance, ClaimError> {
+    // A NUL would be read as a space, naming another object.
+    if name.contains('\0') {
+        return Err(ClaimError::Failed(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "an instance name holds a NUL",
+        )));
+    }
     let name = wide(&format!("Local\\{name}"));
     // SAFETY: `name` is NUL-terminated UTF-16, alive for the call; no
     // security attributes are given, so the mutex gets the default ones,
@@ -93,6 +101,17 @@ mod tests {
         drop(first);
         let again = claim(&name).unwrap();
         drop(again);
+    }
+
+    #[test]
+    fn a_name_with_a_nul_fails_rather_than_naming_another() {
+        let name = unique("nul");
+        let spaced = claim(&format!("{name} x")).unwrap();
+        assert!(matches!(
+            claim(&format!("{name}\0x")),
+            Err(ClaimError::Failed(err)) if err.kind() == io::ErrorKind::InvalidInput
+        ));
+        drop(spaced);
     }
 
     #[test]

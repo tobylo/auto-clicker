@@ -187,9 +187,13 @@ fn a_second_daemon_in_the_session_exits_with_the_reason() {
 /// A log's lines but those naming what Windows woke the daemon with, which
 /// come when Windows sends them.
 fn said(log: &str) -> Vec<&str> {
-    log.lines()
-        .filter(|line| !line.contains("woken by window message"))
-        .collect()
+    log.lines().filter(|line| !windows_said(line)).collect()
+}
+
+/// Whether a log line names something Windows told the daemon: a message
+/// it does not act on, or a notice it heard.
+fn windows_said(line: &str) -> bool {
+    line.contains("woken by window message") || line.contains(": heard ")
 }
 
 /// Every thread of `pid` and how often each was switched to so far.
@@ -212,8 +216,10 @@ fn switches(pid: u32) -> BTreeMap<u32, u64> {
     sample
 }
 
-/// How many context switches the threads in `after` made since `before`.
-fn wakes(before: &BTreeMap<u32, u64>, after: &BTreeMap<u32, u64>) -> u64 {
+/// How many context switches the threads in `after` made since `before`,
+/// and how many threads of `before` ended meanwhile, whose last switches
+/// no sample counts.
+fn wakes(before: &BTreeMap<u32, u64>, after: &BTreeMap<u32, u64>) -> (u64, usize) {
     let mut wakes = 0;
     for (thread, count) in after {
         let was = before.get(thread).copied().unwrap_or(0);
@@ -221,10 +227,14 @@ fn wakes(before: &BTreeMap<u32, u64>, after: &BTreeMap<u32, u64>) -> u64 {
         println!("thread {thread}: {was} -> {count} (+{delta})");
         wakes += delta;
     }
-    for gone in before.keys().filter(|thread| !after.contains_key(thread)) {
-        println!("thread {gone}: ended during the minute");
+    let gone: Vec<&u32> = before
+        .keys()
+        .filter(|thread| !after.contains_key(thread))
+        .collect();
+    for thread in &gone {
+        println!("thread {thread}: ended during the minute");
     }
-    wakes
+    (wakes, gone.len())
 }
 
 #[test]
@@ -235,9 +245,10 @@ fn an_idle_daemon_wakes_for_nothing_of_its_own() {
     home.running(&mut daemon);
     // Let start-up settle: the loader's worker threads end on their own.
     sleep(Duration::from_secs(10));
-    // A minute counts once Windows sent nothing in it: then every context
-    // switch would be the daemon's own. A minute with Windows' messages
-    // is watched again.
+    // A minute counts once Windows sent nothing in it and no thread ended
+    // in it: then every context switch is counted and would be the
+    // daemon's own. A minute with Windows' messages, or in which a thread
+    // ended (the loader's workers end on their own), is watched again.
     let mut interrupted = Vec::new();
     let mut quiet = false;
     for _ in 0..IDLE_TRIES {
@@ -247,31 +258,35 @@ fn an_idle_daemon_wakes_for_nothing_of_its_own() {
         let after = switches(daemon.id());
         let woken: Vec<String> = home.log()[logged..]
             .lines()
-            .filter(|line| line.contains("woken by window message"))
+            .filter(|line| windows_said(line))
             .map(str::to_owned)
             .collect();
         // A timer, or a message the program posts to itself, is the
         // program's own wake, whatever the count says.
-        let own: Vec<&String> = woken.iter().filter(|line| own_message(line)).collect();
+        let own: Vec<&String> = woken
+            .iter()
+            .filter(|line| line.contains("woken by window message") && own_message(line))
+            .collect();
         assert!(own.is_empty(), "the daemon woke itself: {own:?}");
-        let wakes = wakes(&before, &after);
+        let (wakes, gone) = wakes(&before, &after);
         println!("woken by Windows: {woken:?}");
         // No window message explains a wake: the daemon caused it.
         assert!(
             wakes == 0 || !woken.is_empty(),
             "{wakes} context switches in {IDLE:?} with no window message to explain them"
         );
-        if woken.is_empty() {
+        if woken.is_empty() && gone == 0 {
             quiet = true;
             break;
         }
-        interrupted.push((wakes, woken));
+        interrupted.push((wakes, gone, woken));
     }
     ask_to_quit(&daemon);
     assert!(ended(&mut daemon, END).success(), "{}", home.log());
     assert!(
         quiet,
-        "Windows woke the daemon in each of {IDLE_TRIES} minutes: {interrupted:?}"
+        "Windows woke the daemon, or a thread ended, in each of {IDLE_TRIES} minutes \
+         (wakes, threads ended, messages): {interrupted:?}"
     );
 }
 

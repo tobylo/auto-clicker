@@ -103,6 +103,14 @@ impl Notices {
                     "auto-clicker: woken by window message {message:#06x}"
                 ));
             }
+            // What Windows said is logged, so that every wake it causes is
+            // named: no keystroke is among these.
+            WindowEvent::Session(_)
+            | WindowEvent::Suspend
+            | WindowEvent::Resume
+            | WindowEvent::Display(_) => {
+                log::line(format_args!("auto-clicker: heard {event:?}"));
+            }
             _ => {}
         }
         match self.session.apply(&event) {
