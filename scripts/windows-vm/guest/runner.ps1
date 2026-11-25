@@ -42,21 +42,30 @@ function Read-Job([string] $Path) {
     # run-job.ps1 writes UTF-8 without a BOM, which Windows PowerShell would
     # otherwise read in the ANSI code page.
     $job = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
-    if (-not ($job.command -is [string]) -or $job.command.Length -eq 0) {
-        throw 'job has no command'
-    }
-    if (-not ($job.workDir -is [string]) -or -not (Test-Path -LiteralPath $job.workDir -PathType Container)) {
-        throw "job's workDir is not a folder"
-    }
+    Assert-JobCommand $job
     $timeout = [int] $job.timeoutSeconds
     if ($timeout -lt 1 -or $timeout -gt $MaxTimeoutSeconds) {
         throw "timeoutSeconds must be 1 to $MaxTimeoutSeconds"
     }
-    if (-not ($job.expiresUtc -is [string])) { throw 'job has no expiresUtc' }
-    $expires = [DateTime]::ParseExact($job.expiresUtc, 'o', [Globalization.CultureInfo]::InvariantCulture,
+    return $job, (Get-JobExpiry $job)
+}
+
+function Assert-JobCommand($Job) {
+    if (-not ($Job.command -is [string]) -or $Job.command.Length -eq 0) {
+        throw 'job has no command'
+    }
+    if (-not ($Job.workDir -is [string]) -or -not (Test-Path -LiteralPath $Job.workDir -PathType Container)) {
+        throw "job's workDir is not a folder"
+    }
+}
+
+# The job's absolute deadline, as the UTC round-trip time run-job.ps1 wrote.
+function Get-JobExpiry($Job) {
+    if (-not ($Job.expiresUtc -is [string])) { throw 'job has no expiresUtc' }
+    $expires = [DateTime]::ParseExact($Job.expiresUtc, 'o', [Globalization.CultureInfo]::InvariantCulture,
         [Globalization.DateTimeStyles]::RoundtripKind)
     if ($expires.Kind -ne [DateTimeKind]::Utc) { throw 'expiresUtc is not a UTC time' }
-    return $job, $expires
+    return $expires
 }
 
 # What is left of the job's time, in milliseconds: its absolute deadline, set
