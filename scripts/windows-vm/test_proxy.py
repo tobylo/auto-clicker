@@ -31,6 +31,18 @@ def receive(sock, count, seconds=10):
     return data
 
 
+def receive_until(sock, ending, seconds=10):
+    """Reads until the data ends with `ending`, or fails at the deadline."""
+    sock.settimeout(seconds)
+    data = b""
+    while not data.endswith(ending):
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
 def resolving_to(*addresses):
     infos = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 443)) for a in addresses]
     return mock.patch.object(proxy.socket, "getaddrinfo", return_value=infos)
@@ -193,6 +205,15 @@ class Serve(unittest.TestCase):
                     proxy.read_header(conn)
                 self.assertEqual(caught.exception.status, 400)
 
+    def test_second_request_behind_a_plain_http_one_gets_400(self):
+        refuse = mock.patch.object(proxy, "connect_upstream", side_effect=AssertionError("connected upstream"))
+        with resolving_to("93.184.216.34"), refuse as connect:
+            answer = self.serve(
+                b"GET http://static.rust-lang.org/ HTTP/1.1\r\n\r\nGET / HTTP/1.1\r\nHost: unlisted.example\r\n\r\n"
+            )
+        self.assertTrue(answer.startswith(b"HTTP/1.1 400"))
+        connect.assert_not_called()
+
     def test_malformed_request_line_gets_400(self):
         answer = self.serve(b"garbage\r\n\r\n")
         self.assertTrue(answer.startswith(b"HTTP/1.1 400"))
@@ -222,7 +243,7 @@ class Serve(unittest.TestCase):
         sock.sendall(sock.recv(64))
         sock.shutdown(socket.SHUT_WR)
 
-    def test_answer_still_arrives_after_the_vm_closes_its_sending_half(self):
+    def test_tunnel_answer_still_arrives_after_the_vm_closes_its_sending_half(self):
         upstream_side, upstream = socket.socketpair()
         self.addCleanup(upstream_side.close)
 
@@ -230,21 +251,94 @@ class Serve(unittest.TestCase):
             request = b""
             while chunk := upstream_side.recv(4096):
                 request += chunk
-            upstream_side.sendall(b"HTTP/1.1 200 OK\r\n\r\nbody")
+            upstream_side.sendall(b"answer to " + request)
             upstream_side.shutdown(socket.SHUT_WR)
 
         server = threading.Thread(target=answer_after_eof, daemon=True)
         server.start()
         with resolving_to("93.184.216.34"), mock.patch.object(proxy, "connect_upstream", return_value=upstream):
-            self.vm.sendall(b"GET http://static.rust-lang.org/ HTTP/1.1\r\n\r\n")
+            self.vm.sendall(b"CONNECT static.rust-lang.org:443 HTTP/1.1\r\n\r\nhello")
             self.vm.shutdown(socket.SHUT_WR)
             worker = threading.Thread(target=proxy.serve, args=(self.conn, ALLOW, self.logfile), daemon=True)
             worker.start()
-            expected = b"HTTP/1.1 200 OK\r\n\r\nbody"
+            expected = b"HTTP/1.1 200 Connection established\r\n\r\nanswer to hello"
             self.assertEqual(receive(self.vm, len(expected)), expected)
             worker.join(timeout=10)
         server.join(timeout=10)
         self.assertFalse(worker.is_alive(), "relay did not end once both sides closed")
+
+
+class PlainHttpBody(unittest.TestCase):
+    """A plain-HTTP request goes upstream with exactly its own body, and
+    nothing after it: a second request would carry an unchecked Host."""
+
+    def setUp(self):
+        self.vm, self.conn = socket.socketpair()
+        self.addCleanup(self.vm.close)
+        self.addCleanup(self.conn.close)
+
+    def body(self, head, rest=b"", later=b""):
+        if later:
+            self.vm.sendall(later)
+        return proxy.read_body(self.conn, head, rest)
+
+    def test_body_of_content_length_is_read_in_full(self):
+        head = "POST http://a.b/ HTTP/1.1\r\nContent-Length: 6"
+        self.assertEqual(self.body(head, b"abc", later=b"def"), b"abcdef")
+
+    def test_no_body_without_content_length(self):
+        self.assertEqual(self.body("GET http://a.b/ HTTP/1.1\r\nHost: a.b"), b"")
+
+    def test_bytes_past_the_body_are_refused(self):
+        head = "GET http://a.b/ HTTP/1.1\r\nHost: a.b"
+        with self.assertRaises(proxy.Refused) as caught:
+            self.body(head, b"GET / HTTP/1.1\r\nHost: unlisted.example\r\n\r\n")
+        self.assertIn("more than one request", caught.exception.reason)
+
+    def test_unclear_or_chunked_lengths_are_refused(self):
+        for head, status in (
+            ("POST http://a.b/ HTTP/1.1\r\nTransfer-Encoding: chunked", 411),
+            ("POST http://a.b/ HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 4", 400),
+            ("POST http://a.b/ HTTP/1.1\r\nContent-Length: -1", 400),
+            (f"POST http://a.b/ HTTP/1.1\r\nContent-Length: {proxy.MAX_BODY_BYTES + 1}", 413),
+        ):
+            with self.subTest(head=head), self.assertRaises(proxy.Refused) as caught:
+                self.body(head)
+            self.assertEqual(caught.exception.status, status)
+
+    def test_serve_sends_one_request_and_relays_only_the_answer(self):
+        upstream_side, upstream = socket.socketpair()
+        self.addCleanup(upstream_side.close)
+        logfile = tempfile.NamedTemporaryFile(delete=False).name
+        self.addCleanup(os.unlink, logfile)
+        self.vm.sendall(b"POST http://static.rust-lang.org/ocsp HTTP/1.1\r\nContent-Length: 4\r\n\r\nabcd")
+        with resolving_to("93.184.216.34"), mock.patch.object(proxy, "connect_upstream", return_value=upstream):
+            worker = threading.Thread(target=proxy.serve, args=(self.conn, ALLOW, logfile), daemon=True)
+            worker.start()
+            sent = receive_until(upstream_side, b"abcd")
+            self.vm.sendall(b"GET / HTTP/1.1\r\nHost: unlisted.example\r\n\r\n")
+            upstream_side.sendall(b"HTTP/1.1 200 OK\r\n\r\nok")
+            upstream_side.shutdown(socket.SHUT_WR)
+            self.assertEqual(receive(self.vm, 21), b"HTTP/1.1 200 OK\r\n\r\nok")
+            worker.join(timeout=10)
+        self.assertTrue(sent.endswith(b"Connection: close\r\n\r\nabcd"), sent)
+        upstream_side.settimeout(1)
+        self.assertNotIn(b"unlisted", sent + upstream_side.recv(4096))
+
+
+class LogSize(unittest.TestCase):
+    def test_vm_text_in_a_log_line_is_cut_short(self):
+        handle, logfile = tempfile.mkstemp()
+        os.close(handle)
+        self.addCleanup(os.unlink, logfile)
+        proxy.log(logfile, "refused 403: not a host name: " + "a" * 60000)
+        with open(logfile, encoding="utf-8") as read:
+            self.assertLess(len(read.read()), proxy.MAX_LOGGED_CHARS + 50)
+
+    def test_long_request_line_is_refused_before_it_is_parsed(self):
+        with self.assertRaises(proxy.Refused) as caught:
+            proxy.checked_head("CONNECT " + "a" * proxy.MAX_REQUEST_LINE + ":443 HTTP/1.1")
+        self.assertEqual(caught.exception.status, 414)
 
 
 class Deadlines(unittest.TestCase):

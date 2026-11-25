@@ -18,9 +18,11 @@ namespace Wn01
         public string WorkDir;
         public string StdoutPath;
         public string StderrPath;
-        /// When the job must be over, in UTC; checked again just before the
-        /// command is resumed, so its own start-up counts against it.
-        public DateTime DeadlineUtc;
+        /// What is left of the job's time, measured when Clock started: a
+        /// monotonic budget, so neither a delay before the command starts nor
+        /// a change to Windows' clock can stretch it.
+        public uint TimeoutMs;
+        public System.Diagnostics.Stopwatch Clock;
     }
 
     public sealed class JobResult
@@ -140,7 +142,7 @@ namespace Wn01
         /// command itself exits.
         public static JobResult Run(JobSpec spec)
         {
-            if (MillisecondsLeft(spec.DeadlineUtc) == 0)
+            if (MillisecondsLeft(spec) == 0)
             {
                 // Its deadline passed while it waited in the queue: it never starts.
                 return TimedOut();
@@ -152,7 +154,7 @@ namespace Wn01
                 PROCESS_INFORMATION process = StartSuspended(spec.CommandLine, spec.WorkDir, stdout, stderr);
                 try
                 {
-                    return RunInJob(job, process, spec.DeadlineUtc);
+                    return RunInJob(job, process, spec);
                 }
                 finally
                 {
@@ -178,13 +180,13 @@ namespace Wn01
             return new JobResult { ExitCode = TIMED_OUT_EXIT_CODE, TimedOut = true };
         }
 
-        static uint MillisecondsLeft(DateTime deadlineUtc)
+        static uint MillisecondsLeft(JobSpec spec)
         {
-            double left = (deadlineUtc - DateTime.UtcNow).TotalMilliseconds;
-            return left <= 0 ? 0 : (uint)Math.Min(left, uint.MaxValue - 1.0);
+            long left = spec.TimeoutMs - spec.Clock.ElapsedMilliseconds;
+            return left <= 0 ? 0 : (uint)left;
         }
 
-        static JobResult RunInJob(SafeFileHandle job, PROCESS_INFORMATION process, DateTime deadlineUtc)
+        static JobResult RunInJob(SafeFileHandle job, PROCESS_INFORMATION process, JobSpec spec)
         {
             if (!AssignProcessToJobObject(job, process.hProcess))
             {
@@ -193,7 +195,7 @@ namespace Wn01
                 TerminateProcess(process.hProcess, 1);
                 throw new Win32Exception(error, "AssignProcessToJobObject failed");
             }
-            uint timeoutMs = MillisecondsLeft(deadlineUtc);
+            uint timeoutMs = MillisecondsLeft(spec);
             if (timeoutMs == 0)
             {
                 // Still suspended: the caller's TerminateJobObject ends it unrun.

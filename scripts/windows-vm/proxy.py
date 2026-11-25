@@ -33,6 +33,10 @@ DNS_TIMEOUT = 15
 HEADER_TIMEOUT = 30
 IDLE_TIMEOUT = 300
 MAX_HEADER_BYTES = 64 * 1024
+MAX_REQUEST_LINE = 8 * 1024
+# A plain-HTTP body (OCSP's POST, a few kilobytes) and logged VM text.
+MAX_BODY_BYTES = 1024 * 1024
+MAX_LOGGED_CHARS = 300
 CHUNK = 64 * 1024
 PORTS = {"CONNECT": 443, "GET": 80, "HEAD": 80, "POST": 80}
 # A DNS name in letters, digits and hyphens, with an optional final dot:
@@ -171,6 +175,19 @@ def parse_target(method, target):
     return split_host_port(authority, 80)
 
 
+def recv_by(conn, deadline, size, part):
+    """One read of at most `size` bytes before `deadline` (a monotonic time);
+    refuses a connection that closes before the request's `part` ended."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError(f"the request {part} did not arrive in time")
+    conn.settimeout(left)
+    chunk = conn.recv(size)
+    if not chunk:
+        raise Refused(400, f"connection closed before the {part} ended")
+    return chunk
+
+
 def read_header(conn):
     """Reads up to the blank line ending the request header; returns (head, rest)."""
     # One deadline for the whole header, so a trickle of bytes cannot extend it.
@@ -179,23 +196,62 @@ def read_header(conn):
     while b"\r\n\r\n" not in data:
         if len(data) > MAX_HEADER_BYTES:
             raise Refused(431, "request header too large")
-        left = deadline - time.monotonic()
-        if left <= 0:
-            raise TimeoutError("the request header did not end in time")
-        conn.settimeout(left)
-        chunk = conn.recv(CHUNK)
-        if not chunk:
-            raise Refused(400, "connection closed before the header ended")
-        data += chunk
+        data += recv_by(conn, deadline, CHUNK, "header")
     head, _, rest = data.partition(b"\r\n\r\n")
     return checked_head(head.decode("latin-1")), rest
 
 
 def checked_head(head):
     """The header text, refused unless its line breaks and request line are plain."""
-    if BARE_BREAK.search(head) or not REQUEST_LINE.match(head.split("\r\n", 1)[0]):
+    line = head.split("\r\n", 1)[0]
+    if len(line) > MAX_REQUEST_LINE:
+        raise Refused(414, "request line too long")
+    if BARE_BREAK.search(head) or not REQUEST_LINE.match(line):
         raise Refused(400, "malformed request line or header")
     return head
+
+
+def header_values(head, name):
+    """Every value of header `name` in the header text."""
+    values = []
+    for line in head.split("\r\n")[1:]:
+        key, _, value = line.partition(":")
+        if key.strip().lower() == name:
+            values.append(value.strip())
+    return values
+
+
+def content_length(head):
+    """The Content-Length, 0 when there is none; refused unless it is one
+    plain number, however often it is repeated."""
+    lengths = set(header_values(head, "content-length"))
+    if len(lengths) > 1 or not all(value.isdigit() for value in lengths):
+        raise Refused(400, "unclear Content-Length")
+    return int(lengths.pop()) if lengths else 0
+
+
+def body_length(head):
+    """The one Content-Length a plain-HTTP request may carry; chunked
+    bodies are refused, since only a known length shows where it ends."""
+    if header_values(head, "transfer-encoding"):
+        raise Refused(411, "Transfer-Encoding instead of Content-Length")
+    length = content_length(head)
+    if length > MAX_BODY_BYTES:
+        raise Refused(413, "body too large")
+    return length
+
+
+def read_body(conn, head, rest):
+    """Exactly the request's body, within the header's deadline. Bytes past
+    it would be a second request, whose Host the proxy never checked."""
+    length = body_length(head)
+    if len(rest) > length:
+        raise Refused(400, "more than one request on the connection")
+    deadline = time.monotonic() + HEADER_TIMEOUT
+    body = rest
+    while len(body) < length:
+        body += recv_by(conn, deadline, min(CHUNK, length - len(body)), "body")
+    return body
 
 
 DROPPED_HEADERS = ("host", "connection", "proxy-connection", "keep-alive")
@@ -229,14 +285,16 @@ def connect_upstream(addresses):
     raise Refused(502, f"cannot connect: {last_error}")
 
 
-def relay(client, upstream):
-    """Copies bytes both ways until both sides have closed, or neither has
-    sent anything for IDLE_TIMEOUT. A side that closes only its sending half
-    still gets the rest of the other side's answer."""
+def relay(client, upstream, sources=None):
+    """Copies bytes from each of `sources` (both sides unless given) to the
+    other side until every source has closed, or none has sent anything for
+    IDLE_TIMEOUT. A side that closes only its sending half still gets the
+    rest of the other side's answer."""
     selector = selectors.DefaultSelector()
     peers = {client: upstream, upstream: client}
     for sock in peers:
         sock.setblocking(False)
+    for sock in sources or peers:
         selector.register(sock, selectors.EVENT_READ)
     try:
         while selector.get_map() and forward_ready(selector, selector.select(timeout=IDLE_TIMEOUT), peers):
@@ -272,6 +330,10 @@ def forward_ready(selector, events, peers):
 
 
 def log(logfile, message):
+    """Appends one line; text from the VM is cut short, so the VM cannot
+    grow the log by more than a line per connection."""
+    if len(message) > MAX_LOGGED_CHARS:
+        message = message[:MAX_LOGGED_CHARS] + "..."
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with open(logfile, "a", encoding="utf-8") as handle:
         handle.write(f"{stamp} {message}\n")
@@ -284,6 +346,7 @@ def serve(conn, allowlist, logfile):
         method, target = head.split("\r\n", 1)[0].split(" ")[:2]
         host, port = parse_target(method, target)
         addresses = check_target(method, host, port, allowlist)
+        body = rest if method == "CONNECT" else read_body(conn, head, rest)
         upstream = connect_upstream(addresses)
     except Refused as refusal:
         log(logfile, f"refused {refusal.status}: {refusal.reason}")
@@ -297,11 +360,12 @@ def serve(conn, allowlist, logfile):
     with upstream:
         if method == "CONNECT":
             conn.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            upstream.sendall(body)
+            relay(conn, upstream)
         else:
-            upstream.sendall(origin_request(head, target, host, port))
-        if rest:
-            upstream.sendall(rest)
-        relay(conn, upstream)
+            # One request and its body; the VM sends nothing after them.
+            upstream.sendall(origin_request(head, target, host, port) + body)
+            relay(conn, upstream, sources=(upstream,))
 
 
 def main(argv):

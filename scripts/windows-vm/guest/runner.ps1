@@ -90,6 +90,9 @@ function Invoke-Job([IO.FileInfo] $File) {
     $stderr = Join-Path $out 'stderr.txt'
     try {
         $job, $expires = Read-Job $claimed
+        # Started before the budget is read off the wall clock, so the time
+        # between the two only shortens it.
+        $clock = [Diagnostics.Stopwatch]::StartNew()
         $ms = Get-MillisecondsLeft ([int] $job.timeoutSeconds) $expires
         $spec = New-Object Wn01.JobSpec
         # Through cmd.exe, so a job may use its syntax: pipes, &&, redirection.
@@ -97,7 +100,8 @@ function Invoke-Job([IO.FileInfo] $File) {
         $spec.WorkDir = $job.workDir
         $spec.StdoutPath = $stdout
         $spec.StderrPath = $stderr
-        $spec.DeadlineUtc = [DateTime]::UtcNow.AddMilliseconds($ms)
+        $spec.TimeoutMs = $ms
+        $spec.Clock = $clock
         $run = [Wn01.JobRunner]::Run($spec)
         $result = @{ exitCode = $run.ExitCode; timedOut = $run.TimedOut; error = $null }
     } catch {

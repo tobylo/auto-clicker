@@ -160,7 +160,8 @@ cmd_run() {
     done
     (($#)) || die "usage: vm run [--elevated] [--timeout SECONDS] [--workdir DIR] -- COMMAND..."
     seconds="$(seconds_arg --timeout "$seconds" 3600)"
-    [[ "$workdir" != *"'"* ]] || die "--workdir cannot contain a quote"
+    # It goes inside PowerShell quotes, which also end at typographic quotes.
+    [[ "$workdir" =~ ^[A-Za-z]:[A-Za-z0-9_.\\-]*$ ]] || die "use a Windows folder without spaces or quotes for --workdir: $workdir"
     take_lock "$seconds"
     require_running
     run_job "$VM_DIR" "$queue" "$seconds" "$workdir" "$*"
