@@ -397,6 +397,7 @@ dependencies = [
  "fastrand",
  "libc",
  "nix 0.29.0",
+ "pulldown-cmark",
  "serde",
  "serde_json",
  "tokio",
