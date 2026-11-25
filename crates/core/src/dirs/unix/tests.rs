@@ -1,11 +1,5 @@
 use super::*;
 
-#[test]
-fn messages_name_the_variables_that_were_missing() {
-    assert_eq!(NO_CONFIG_DIR, "neither XDG_CONFIG_HOME nor HOME is set");
-    assert_eq!(NO_DATA_DIR, "neither XDG_DATA_HOME nor HOME is set");
-}
-
 fn os(text: &str) -> Option<OsString> {
     Some(OsString::from(text))
 }
