@@ -24,8 +24,8 @@ The VM reaches nothing by itself. QEMU's user networking runs with `restrict=on`
 - **The proxy out:** connections to `10.0.2.100:3128` reach `proxy.py`. QEMU starts a copy for each connection, so it listens on nothing.
   - It passes HTTPS (`CONNECT` to port 443) and plain HTTP (`GET` or `HEAD` with no body, to port 80) to listed host names only, one request per connection.
   - It refuses address literals, and any name that resolves only to private, loopback or link-local addresses.
-  - While a build runs, it allows `allow-run.txt` and `allow-build.txt`: Windows Update, activation, Visual Studio Build Tools, winget's Store source, Rust and crates.io.
-  - In normal runs, it allows `allow-run.txt` only: Rust and crates.io. Windows Update cannot reach its servers between builds, so it cannot restart the VM in the middle of a test.
+  - While a build runs, it allows `allow-run.txt` and `allow-build.txt`: Windows Update, activation, Visual Studio Build Tools, winget's Store source, Rust and crates.io, and those certificate hosts.
+  - In normal runs, it allows `allow-run.txt` only: Rust and crates.io, and the revocation and certificate hosts (OCSP, CRL, AIA) of the authorities that sign their certificates, which Windows' TLS checks ask before trusting a connection. Windows Update cannot reach its servers between builds, so it cannot restart the VM in the middle of a test.
 - **One exception, during the build only:** the Microsoft Store's download service ignores the proxy, so for the OpenGL compatibility pack the build hot-plugs a second network card on unrestricted user networking, which reaches the internet and the LAN. Once the pack is installed it removes the card, and the build fails unless QEMU confirms the card is gone within a minute. A built VM never has that card.
 
 Every request, passed or refused, is logged to `proxy.log` in the machine's directory: `vm/run/` for a running VM, the build directory during a build. When a build or a `cargo` fetch fails on a refused host, that log names the host. A host goes into the list it belongs to in a PR, never by hand on the dev box.
