@@ -59,8 +59,7 @@ A program started over SSH has no desktop: it cannot inject input or own a visib
 
 ```sh
 scripts/windows-vm/vm start
-# Copy the tree at HEAD into the VM and build it there. (Until WN03 makes the
-# workspace build on Windows, `cargo build` stops at the Linux-only crates.)
+# Copy the tree at HEAD into the VM and build it there.
 git archive --format=tar --prefix=src/ HEAD | scripts/windows-vm/vm ssh "cmd /c 'tar -x -f - -C C:\work'"
 scripts/windows-vm/vm ssh 'cd C:\work\src; cargo build --locked'
 # Device tests run in the desktop, one at a time.

@@ -141,9 +141,13 @@ open_network() {
 # Removes the open network card; fails the build unless QEMU confirms it is
 # gone within a minute.
 close_network() {
-    local dir="$1" deadline=$((SECONDS + 60))
+    local dir="$1" deadline=$((SECONDS + 60)) answer
     monitor_ok "$dir" "device_del opennic"
-    while monitor "$dir" "info pci" | grep -q opennic; do
+    while true; do
+        # A monitor that does not answer says nothing about the card.
+        answer="$(monitor "$dir" "info pci")" || die "the QEMU monitor did not answer: info pci"
+        grep -q "Bus" <<<"$answer" || die "QEMU's 'info pci' listed no devices: $answer"
+        grep -q opennic <<<"$answer" || break
         ((SECONDS < deadline)) || die "the open network card was not removed"
         sleep 2
     done
@@ -151,12 +155,18 @@ close_network() {
     log "network closed again"
 }
 
-# Restarts Windows and waits for SSH and the runners again.
+# Restarts Windows and waits until SSH and the runners answer from the new
+# boot: SSH can still answer from the old one while it shuts down.
 restart_windows() {
-    local dir="$1"
+    local dir="$1" before now="" deadline=$((SECONDS + 1800))
+    before="$(boot_time "$dir")" && [[ "$before" =~ ^[0-9]+$ ]] || die "could not read Windows' boot time"
     vm_ssh 30 "$dir" 'Restart-Computer -Force' >/dev/null 2>&1 || true
-    sleep 60
-    wait_ssh "$dir" "$dir" 1800
+    until [[ "$now" =~ ^[0-9]+$ && "$now" != "$before" ]]; do
+        machine_running "$dir" || die "the VM exited while restarting; see $dir/qemu.log"
+        ((SECONDS < deadline)) || die "Windows did not come back from its restart within 1800 s"
+        sleep 10
+        now="$(boot_time "$dir" 2>/dev/null)" || now=""
+    done
     wait_runners "$dir" 300
 }
 

@@ -2,11 +2,19 @@
 # screen, key and reset. Sourced by scripts/windows-vm/vm.
 # shellcheck shell=bash
 
+# Seconds since 1970 at which the running Windows booted, from the VM whose
+# keys are in $1.
+boot_time() {
+    vm_ssh 60 "$1" '([DateTimeOffset] (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).ToUnixTimeSeconds()' |
+        tr -d '\r'
+}
+
 # Waits up to $2 seconds until both runner tasks in the VM run (each writes
-# its pid to `ready` when it starts).
+# its pid to `ready` when it starts). A `ready` from an earlier boot names a
+# pid some other process may have now, so it must be newer than the boot.
 wait_runners() {
     local dir="$1" deadline=$((SECONDS + $2)) check
-    check='foreach ($q in "normal","high") { $p = [int](Get-Content "C:\wn01\queue\$q\ready" -ErrorAction Stop); Get-Process -Id $p -ErrorAction Stop | Out-Null }'
+    check='$boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime; foreach ($q in "normal","high") { $f = Get-Item "C:\wn01\queue\$q\ready" -ErrorAction Stop; if ($f.LastWriteTime -lt $boot) { exit 1 }; $p = [int](Get-Content -LiteralPath $f.FullName -ErrorAction Stop); Get-Process -Id $p -ErrorAction Stop | Out-Null }'
     until vm_ssh 60 "$dir" "$check" >/dev/null 2>&1; do
         ((SECONDS < deadline)) || die "the runner tasks did not start within $2 s"
         sleep 5
@@ -116,13 +124,19 @@ cmd_push() {
     vm_push "${WN01_SSH_TIMEOUT:-3600}" "$VM_DIR" "${2:-C:\\work}" "$1"
 }
 
+# The value after option $1, or a usage error when there is none.
+option_value() {
+    (($# >= 2)) || die "$1 takes a value"
+    printf '%s' "$2"
+}
+
 cmd_run() {
     local queue=normal seconds=120 workdir='C:\work'
     while (($#)); do
         case "$1" in
             --elevated) queue=high ;;
-            --timeout) seconds="$2"; shift ;;
-            --workdir) workdir="$2"; shift ;;
+            --timeout) seconds="$(option_value "$@")"; shift ;;
+            --workdir) workdir="$(option_value "$@")"; shift ;;
             --) shift; break ;;
             *) break ;;
         esac
