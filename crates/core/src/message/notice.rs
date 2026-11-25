@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{InputFailure, Quoted, Titled};
 use crate::controller::{Blocked, NoRecording};
+use crate::dirs::NO_DATA_DIR;
 use crate::hotkeys::{Binding, Refusal, Unavailable};
 use crate::playback::Fallback;
 use crate::recording::{FileName, LoadError, MAX_FILE_BYTES};
@@ -331,7 +332,8 @@ impl fmt::Display for Saving {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum SaveFailure {
-    /// Neither `XDG_DATA_HOME` nor `HOME` is set.
+    /// There is no data folder: neither `XDG_DATA_HOME` nor `HOME` is set,
+    /// or on Windows `LOCALAPPDATA` is not an absolute folder.
     NoDataDirectory,
     /// What was recorded is not a valid recording: the check's words.
     Invalid(Quoted),
@@ -343,7 +345,7 @@ impl fmt::Display for SaveFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SaveFailure::NoDataDirectory => {
-                f.write_str("no data directory: neither XDG_DATA_HOME nor HOME is set")
+                write!(f, "no data directory: {NO_DATA_DIR}")
             }
             SaveFailure::Invalid(why) | SaveFailure::Write(why) => why.fmt(f),
         }

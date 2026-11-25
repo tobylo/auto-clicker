@@ -16,6 +16,8 @@ mod windows;
 #[cfg(windows)]
 use windows as system;
 
+pub use system::{NO_CONFIG_DIR, NO_DATA_DIR};
+
 /// The program's folder for its config: `$XDG_CONFIG_HOME/auto-clicker`
 /// (`~/.config` when unset or not absolute), or `%APPDATA%\auto-clicker`.
 pub fn config_dir() -> Option<PathBuf> {
@@ -50,6 +52,22 @@ fn program_dir(dir: PathBuf) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn messages_name_the_variables_that_were_missing() {
+        let expected = if cfg!(windows) {
+            (
+                "APPDATA is not set to an absolute folder",
+                "LOCALAPPDATA is not set to an absolute folder",
+            )
+        } else {
+            (
+                "neither XDG_CONFIG_HOME nor HOME is set",
+                "neither XDG_DATA_HOME nor HOME is set",
+            )
+        };
+        assert_eq!((NO_CONFIG_DIR, NO_DATA_DIR), expected);
+    }
 
     #[test]
     fn each_folder_is_the_systems_and_the_log_is_in_the_state_folder() {

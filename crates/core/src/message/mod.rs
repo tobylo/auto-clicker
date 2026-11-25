@@ -35,6 +35,7 @@ pub use titled::Titled;
 
 use crate::config::ConfigError;
 use crate::controller::Blocked;
+use crate::dirs::NO_CONFIG_DIR;
 use crate::hotkeys::Unavailable;
 
 /// What is wrong now, as the tray and the settings window list it.
@@ -94,7 +95,8 @@ impl fmt::Display for Problem {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConfigProblem {
-    /// Neither `XDG_CONFIG_HOME` nor `HOME` is set.
+    /// There is no config folder: neither `XDG_CONFIG_HOME` nor `HOME` is
+    /// set, or on Windows `APPDATA` is not an absolute folder.
     NoDirectory,
     /// The file could not be read.
     Unreadable { file: Quoted, why: Quoted },
@@ -127,7 +129,7 @@ impl fmt::Display for ConfigProblem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConfigProblem::NoDirectory => {
-                f.write_str("no config directory: neither XDG_CONFIG_HOME nor HOME is set")
+                write!(f, "no config directory: {NO_CONFIG_DIR}")
             }
             ConfigProblem::Unreadable { file, why } => {
                 write!(f, "{file}: could not read the file: {why}")

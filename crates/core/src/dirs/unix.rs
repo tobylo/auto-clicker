@@ -5,6 +5,11 @@ use std::path::PathBuf;
 
 use super::program_dir;
 
+/// Why there is no config folder, as a message says it.
+pub const NO_CONFIG_DIR: &str = "neither XDG_CONFIG_HOME nor HOME is set";
+/// Why there is no data folder, as a message says it.
+pub const NO_DATA_DIR: &str = "neither XDG_DATA_HOME nor HOME is set";
+
 pub(super) fn config_dir() -> Option<PathBuf> {
     from(var("XDG_CONFIG_HOME"), var("HOME"), &[".config"])
 }

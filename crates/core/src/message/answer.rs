@@ -6,13 +6,14 @@ use serde::{Deserialize, Serialize};
 
 use super::{NoScreens, Quoted, Unplayable};
 use crate::controller::Blocked;
+use crate::dirs::NO_CONFIG_DIR;
 use crate::hotkeys::Unavailable;
 
 /// Why a save or the desktop's settings failed.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Failure {
-    /// Neither `XDG_CONFIG_HOME` nor `HOME` is set.
+    /// There is no config folder (see [`crate::dirs::NO_CONFIG_DIR`]).
     NoConfigDirectory,
     /// Writing the config file failed.
     Write(Quoted),
@@ -30,7 +31,7 @@ impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Failure::NoConfigDirectory => {
-                f.write_str("there is no config directory: neither XDG_CONFIG_HOME nor HOME is set")
+                write!(f, "there is no config directory: {NO_CONFIG_DIR}")
             }
             Failure::Write(why) => write!(f, "the config file could not be written: {why}"),
             Failure::BadToken => f.write_str("the activation token is not one"),

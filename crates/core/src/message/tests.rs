@@ -4,6 +4,7 @@
 use super::*;
 use crate::config::Reason;
 use crate::controller::NoRecording;
+use crate::dirs::{NO_CONFIG_DIR, NO_DATA_DIR};
 use crate::hotkeys::{Binding, Refusal};
 use crate::input::Key;
 use crate::playback::Fallback;
@@ -30,7 +31,7 @@ fn problems_read_as_before() {
     assert_english(&[
         (
             Problem::Config(ConfigProblem::NoDirectory),
-            "no config directory: neither XDG_CONFIG_HOME nor HOME is set",
+            format!("no config directory: {NO_CONFIG_DIR}").as_str(),
         ),
         (
             Problem::Config(ConfigProblem::Unreadable {
@@ -116,7 +117,7 @@ fn answers_read_as_before() {
     assert_english(&[
         (
             Failure::NoConfigDirectory,
-            "there is no config directory: neither XDG_CONFIG_HOME nor HOME is set",
+            format!("there is no config directory: {NO_CONFIG_DIR}").as_str(),
         ),
         (
             Failure::Write(q()),
@@ -375,8 +376,7 @@ fn recordings_ended_read_as_before() {
         ),
         (
             recorded(None, Saving::Failed(SaveFailure::NoDataDirectory)),
-            "The recording could not be saved: no data directory: neither XDG_DATA_HOME nor \
-             HOME is set",
+            format!("The recording could not be saved: no data directory: {NO_DATA_DIR}").as_str(),
         ),
         (
             recorded(None, Saving::Failed(SaveFailure::Invalid(q()))),
