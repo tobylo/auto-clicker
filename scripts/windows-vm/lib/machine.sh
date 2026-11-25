@@ -13,6 +13,8 @@ live_pid() {
     pid="$(<"$pidfile")"
     [[ "$pid" =~ ^[0-9]+$ ]] || return 1
     exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || return 1
+    # A package upgrade while it runs leaves the kernel's " (deleted)" suffix.
+    exe="${exe% (deleted)}"
     [[ "${exe##*/}" == qemu-system-x86_64 || "${exe##*/}" == swtpm ]] || return 1
     tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "$marker" || return 1
     echo "$pid"
@@ -70,7 +72,7 @@ start_tpm() {
     swtpm socket --tpm2 --tpmstate "dir=$dir/tpm" \
         --ctrl "type=unixio,path=$dir/swtpm.sock" \
         --log "file=$dir/swtpm.log" --pid "file=$dir/swtpm.pid" \
-        --terminate --daemon 9>&- || die "swtpm did not start"
+        --terminate --daemon 8>&- 9>&- || die "swtpm did not start"
 }
 
 # Starts the machine in $1 on disk $2, with extra QEMU arguments after them.
@@ -81,8 +83,8 @@ start_machine() {
     rm -f "$dir/monitor.sock" "$dir/swtpm.sock"
     start_tpm "$dir"
     qemu_command "$dir" "$disk"
-    # 9>&-: the daemons must not inherit the VM's lock (lib/common.sh).
-    bounded 60 "${QEMU[@]}" "$@" 2>>"$dir/qemu.log" 9>&- || die "QEMU did not start; see $dir/qemu.log"
+    # The daemons must not inherit the VM's lock or our stderr (lib/common.sh).
+    bounded 60 "${QEMU[@]}" "$@" 2>>"$dir/qemu.log" || die "QEMU did not start; see $dir/qemu.log"
 }
 
 # Sends one human-monitor command to the machine in $1 and prints its answer.

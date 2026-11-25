@@ -18,6 +18,8 @@
 #   vm stop                  shut Windows down and stop QEMU
 #   vm reset                 discard every change since the build
 set -euo pipefail
+# Functions run inside $(...) stop at their first failure too.
+shopt -s inherit_errexit
 
 LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
 # shellcheck source=lib/common.sh

@@ -34,8 +34,12 @@ OPENSSH_FILE="OpenSSH-Win64-v10.4.0.0.msi"
 OVMF_CODE=/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd
 OVMF_VARS=/usr/share/edk2/x64/OVMF_VARS.4m.fd
 
+# The script's own stderr, kept as fd 8: an exit trap that runs while a
+# command's stderr is sent elsewhere (`vm_ssh ... 2>/dev/null`) still reports.
+exec 8>&2
+
 log() {
-    printf '%s vm: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2
+    printf '%s vm: %s\n' "$(date -u +%H:%M:%S)" "$*" >&8
 }
 
 die() {
@@ -45,11 +49,11 @@ die() {
 
 # Runs a command, killing it after $1 seconds. --foreground keeps it in our
 # process group, so Ctrl-C reaches it; 9>&- keeps it from holding the VM's
-# lock should it outlive us.
+# lock should it outlive us, and 8>&- from holding our stderr open.
 bounded() {
     local seconds="$1"
     shift
-    timeout --foreground --kill-after=10 "$seconds" "$@" 9>&-
+    timeout --foreground --kill-after=10 "$seconds" "$@" 8>&- 9>&-
 }
 
 # Checks that $2 is a whole number of seconds from 1 to $3, written in decimal

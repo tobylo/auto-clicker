@@ -175,6 +175,23 @@ class Serve(unittest.TestCase):
         for _ in range(count):
             self.vm.sendall(line)
 
+    def test_bare_line_breaks_and_odd_request_lines_get_400(self):
+        for request in (
+            b"GET http://static.rust-lang.org/ HTTP/1.1\nHost: unlisted.example\n\n\r\n\r\n",
+            b"GET http://static.rust-lang.org/ HTTP/1.1\r\nHost: a\rHost: unlisted.example\r\n\r\n",
+            b"GET http://static.rust-lang.org/ HTTP/1.1\nX: y\r\n\r\n",
+            b"GET http://static.rust-lang.org/ HTTP/9\r\n\r\n",
+            b"GET  http://static.rust-lang.org/ HTTP/1.1\r\n\r\n",
+        ):
+            with self.subTest(request=request):
+                vm, conn = socket.socketpair()
+                self.addCleanup(vm.close)
+                self.addCleanup(conn.close)
+                vm.sendall(request)
+                with self.assertRaises(proxy.Refused) as caught:
+                    proxy.read_header(conn)
+                self.assertEqual(caught.exception.status, 400)
+
     def test_malformed_request_line_gets_400(self):
         answer = self.serve(b"garbage\r\n\r\n")
         self.assertTrue(answer.startswith(b"HTTP/1.1 400"))

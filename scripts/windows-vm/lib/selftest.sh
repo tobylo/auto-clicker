@@ -34,8 +34,9 @@ listening_port() {
 # host alias, and one port that listens only on the dev box's loopback.
 forbidden_targets() {
     local wildcard loopback addr
-    wildcard="$(listening_port 0.0.0.0)"
-    loopback="$(listening_port 127.0.0.1)"
+    # errexit does not reach into a command substitution: fail by hand.
+    wildcard="$(listening_port 0.0.0.0)" || return 1
+    loopback="$(listening_port 127.0.0.1)" || return 1
     for addr in $(external_addresses); do
         [[ "$addr" == *:* ]] || echo "$addr:$wildcard"
     done
@@ -45,7 +46,7 @@ forbidden_targets() {
 
 check_network() {
     local targets
-    targets="$(forbidden_targets)"
+    targets="$(forbidden_targets)" || die "no listening ports to check the VM against"
     targets="$(paste -sd, - <<<"$targets")"
     log "checking what the VM reaches (must not: $targets)"
     vm_push 60 "$VM_DIR" "C:\\work" "$SCRIPT_DIR/guest/net-check.ps1"

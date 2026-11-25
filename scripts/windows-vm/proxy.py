@@ -36,6 +36,11 @@ PORTS = {"CONNECT": 443, "GET": 80, "HEAD": 80, "POST": 80}
 # A DNS name in letters, digits and hyphens, with an optional final dot:
 # nothing the resolver could read differently from the allowlist check (a
 # NUL, say, after which it stops reading).
+# A request line as the proxy rebuilds it, and header text with no line break
+# but CRLF: a bare LF or CR is read as a line end by some servers and not by
+# others, so it could carry a second Host past the one the proxy writes.
+REQUEST_LINE = re.compile(r"[A-Z]+ [!-~]+ HTTP/1\.[01]\Z")
+BARE_BREAK = re.compile(r"\r(?!\n)|(?<!\r)\n")
 DNS_NAME = re.compile(r"(?=.{1,253}\.?\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.?\Z")
 
 
@@ -160,7 +165,14 @@ def read_header(conn):
             raise Refused(400, "connection closed before the header ended")
         data += chunk
     head, _, rest = data.partition(b"\r\n\r\n")
-    return head.decode("latin-1"), rest
+    return checked_head(head.decode("latin-1")), rest
+
+
+def checked_head(head):
+    """The header text, refused unless its line breaks and request line are plain."""
+    if BARE_BREAK.search(head) or not REQUEST_LINE.match(head.split("\r\n", 1)[0]):
+        raise Refused(400, "malformed request line or header")
+    return head
 
 
 DROPPED_HEADERS = ("host", "connection", "proxy-connection", "keep-alive")

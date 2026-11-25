@@ -138,6 +138,11 @@ namespace Wn01
         /// command itself exits.
         public static JobResult Run(JobSpec spec)
         {
+            if (spec.TimeoutMs == 0)
+            {
+                // Its deadline passed while it waited in the queue: it never starts.
+                return new JobResult { ExitCode = TIMED_OUT_EXIT_CODE, TimedOut = true };
+            }
             using (SafeFileHandle job = CreateKillOnCloseJob())
             using (FileStream stdout = InheritableFile(spec.StdoutPath))
             using (FileStream stderr = InheritableFile(spec.StderrPath))
@@ -152,10 +157,16 @@ namespace Wn01
                     // Whatever the command left running ends with it, before
                     // the result is written: a descendant still holding the
                     // output files would keep the client from reading them.
-                    TerminateJobObject(job, TIMED_OUT_EXIT_CODE);
-                    WaitForEmptyJob(job);
-                    CloseHandle(process.hThread);
-                    CloseHandle(process.hProcess);
+                    try
+                    {
+                        TerminateJobObject(job, TIMED_OUT_EXIT_CODE);
+                        WaitForEmptyJob(job);
+                    }
+                    finally
+                    {
+                        CloseHandle(process.hThread);
+                        CloseHandle(process.hProcess);
+                    }
                 }
             }
         }
