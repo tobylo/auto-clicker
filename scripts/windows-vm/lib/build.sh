@@ -252,6 +252,7 @@ cmd_build() {
     require_tools
     take_lock 60
     machine_running "$RUN_DIR" && die "the VM is running; stop it first (vm stop)"
+    kill_machine "$RUN_DIR" || die "the TPM in $RUN_DIR could not be ended"
     remove_stale_builds
     fetch_verified "$ISO_URL" "$ISO_FILE" "$ISO_SHA256"
     fetch_verified "$OPENSSH_URL" "$OPENSSH_FILE" "$OPENSSH_SHA256"
