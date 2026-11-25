@@ -108,6 +108,10 @@ namespace Wn01
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool TerminateProcess(IntPtr process, uint exitCode);
 
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security,
+            uint disposition, uint flags, IntPtr template);
+
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern uint ResumeThread(IntPtr thread);
 
@@ -195,14 +199,14 @@ namespace Wn01
                 TerminateProcess(process.hProcess, 1);
                 throw new Win32Exception(error, "AssignProcessToJobObject failed");
             }
-            uint timeoutMs = MillisecondsLeft(spec);
-            if (timeoutMs == 0)
+            if (MillisecondsLeft(spec) == 0)
             {
                 // Still suspended: the caller's TerminateJobObject ends it unrun.
                 return TimedOut();
             }
             Check(ResumeThread(process.hThread) != 0xFFFFFFFF, "ResumeThread");
-            uint waited = WaitForSingleObject(process.hProcess, timeoutMs);
+            // Measured again: the wait is relative, and time passed since the check.
+            uint waited = WaitForSingleObject(process.hProcess, MillisecondsLeft(spec));
             Check(waited != WAIT_FAILED, "WaitForSingleObject");
             if (waited == WAIT_TIMEOUT)
             {
@@ -243,28 +247,47 @@ namespace Wn01
             return job;
         }
 
+        const uint HANDLE_FLAG_INHERIT = 1;
+
         static FileStream InheritableFile(string path)
         {
             var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
-            const uint HANDLE_FLAG_INHERIT = 1;
             Check(SetHandleInformation(stream.SafeFileHandle.DangerousGetHandle(), HANDLE_FLAG_INHERIT,
                 HANDLE_FLAG_INHERIT), "SetHandleInformation");
             return stream;
         }
 
+        /// NUL for the job's stdin, so a program that reads it sees its end
+        /// rather than an invalid handle. FileStream refuses devices.
+        static SafeFileHandle InheritableNul()
+        {
+            const uint GENERIC_READ = 0x80000000, FILE_SHARE_READ_WRITE = 3, OPEN_EXISTING = 3;
+            SafeFileHandle nul = CreateFile("NUL", GENERIC_READ, FILE_SHARE_READ_WRITE, IntPtr.Zero, OPEN_EXISTING,
+                0, IntPtr.Zero);
+            Check(!nul.IsInvalid, "CreateFile NUL");
+            Check(SetHandleInformation(nul.DangerousGetHandle(), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT),
+                "SetHandleInformation");
+            return nul;
+        }
+
         static PROCESS_INFORMATION StartSuspended(string commandLine, string workDir, FileStream stdout,
             FileStream stderr)
         {
-            var startup = new STARTUPINFO();
-            startup.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            startup.dwFlags = STARTF_USESTDHANDLES;
-            startup.hStdOutput = stdout.SafeFileHandle.DangerousGetHandle();
-            startup.hStdError = stderr.SafeFileHandle.DangerousGetHandle();
-            PROCESS_INFORMATION process;
-            uint flags = CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT;
-            Check(CreateProcess(null, new System.Text.StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero,
-                true, flags, IntPtr.Zero, workDir, ref startup, out process), "CreateProcess");
-            return process;
+            // CreateProcess copies the handle, so this one closes once it returns.
+            using (SafeFileHandle stdin = InheritableNul())
+            {
+                var startup = new STARTUPINFO();
+                startup.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+                startup.dwFlags = STARTF_USESTDHANDLES;
+                startup.hStdInput = stdin.DangerousGetHandle();
+                startup.hStdOutput = stdout.SafeFileHandle.DangerousGetHandle();
+                startup.hStdError = stderr.SafeFileHandle.DangerousGetHandle();
+                PROCESS_INFORMATION process;
+                uint flags = CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT;
+                Check(CreateProcess(null, new System.Text.StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero,
+                    true, flags, IntPtr.Zero, workDir, ref startup, out process), "CreateProcess");
+                return process;
+            }
         }
 
         static void Check(bool ok, string call)

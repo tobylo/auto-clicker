@@ -23,7 +23,12 @@ function Write-Status([hashtable] $Status) {
 
 function Install-Pending {
     $session = New-Object -ComObject Microsoft.Update.Session
-    $found = $session.CreateUpdateSearcher().Search("IsInstalled=0 and IsHidden=0 and Type='Software'").Updates
+    $search = $session.CreateUpdateSearcher().Search("IsInstalled=0 and IsHidden=0 and Type='Software'")
+    # ResultCode 2 is succeeded: an incomplete search's empty list proves nothing.
+    if ($search.ResultCode -ne 2) {
+        return @{ state = 'failed'; installed = 0; error = "search result code $($search.ResultCode)" }
+    }
+    $found = $search.Updates
     if ($found.Count -eq 0) {
         return @{ state = 'done'; installed = 0; error = $null }
     }

@@ -89,6 +89,8 @@ function Get-WindowsUpdateStatus {
     }
     $task = Get-ScheduledTask -TaskName 'wn01-windows-update'
     if ($task.State -eq 'Running' -or $task.State -eq 'Queued') { return 'running' }
+    # The task may have written its status and ended since the first look.
+    if (Test-Path -LiteralPath $path) { return Get-WindowsUpdateStatus }
     return 'failed'
 }
 

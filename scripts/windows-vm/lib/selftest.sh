@@ -33,11 +33,12 @@ listening_port() {
 # box with a port listening on all addresses, the same port through QEMU's
 # host alias, and one port that listens only on the dev box's loopback.
 forbidden_targets() {
-    local wildcard loopback addr
+    local wildcard loopback addrs addr
     # errexit does not reach into a command substitution: fail by hand.
     wildcard="$(listening_port 0.0.0.0)" || return 1
     loopback="$(listening_port 127.0.0.1)" || return 1
-    for addr in $(external_addresses); do
+    addrs="$(external_addresses)" || return 1
+    for addr in $addrs; do
         [[ "$addr" == *:* ]] || echo "$addr:$wildcard"
     done
     echo "10.0.2.2:$wildcard"
