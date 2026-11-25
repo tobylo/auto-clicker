@@ -193,12 +193,13 @@ def read_header(conn):
     # One deadline for the whole header, so a trickle of bytes cannot extend it.
     deadline = time.monotonic() + HEADER_TIMEOUT
     data = b""
-    while b"\r\n\r\n" not in data:
-        if len(data) > MAX_HEADER_BYTES:
-            raise Refused(431, "request header too large")
+    while True:
         data += recv_by(conn, deadline)
-    head, _, rest = data.partition(b"\r\n\r\n")
-    return checked_head(head.decode("latin-1")), rest
+        head, end, rest = data.partition(b"\r\n\r\n")
+        if len(head) > MAX_HEADER_BYTES:
+            raise Refused(431, "request header too large")
+        if end:
+            return checked_head(head.decode("latin-1")), rest
 
 
 def checked_head(head):

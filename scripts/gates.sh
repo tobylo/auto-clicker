@@ -96,7 +96,8 @@ gate clippy cargo clippy --workspace --all-targets --locked -- -D warnings
 # CI on Windows runs this gate in a step of its own, outside Git for Windows'
 # bash, and sets GATES_TEST_APART=1 (ci.yml says why).
 if [[ "${GATES_TEST_APART:-}" == 1 ]]; then
-    echo "=== ALL GATES PASSED BUT test, which the caller runs"
+    # vm-proxy belongs to the Linux dev box and runs in the Linux job.
+    echo "=== ALL GATES PASSED BUT test, which the caller runs, and vm-proxy"
     exit 0
 fi
 gate test cargo test --workspace --locked

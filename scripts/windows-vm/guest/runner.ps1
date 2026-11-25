@@ -106,10 +106,11 @@ function Invoke-Job([IO.FileInfo] $File) {
         $result = @{ exitCode = $run.ExitCode; timedOut = $run.TimedOut; error = $null }
     } catch {
         $result = @{ exitCode = 125; timedOut = $false; error = $_.Exception.Message }
-    } finally {
-        Remove-Item -LiteralPath $claimed -Force -ErrorAction SilentlyContinue
     }
+    # The claimed job goes only once its result is out, so a runner that dies
+    # in between still answers it when it starts again.
     Write-AtomicFile (Join-Path $out 'result.json') ($result | ConvertTo-Json -Compress)
+    Remove-Item -LiteralPath $claimed -Force
 }
 
 function Remove-AbandonedOutboxes {
@@ -133,12 +134,16 @@ function Invoke-Pending {
 foreach ($dir in $Inbox, $Work, $Outbox) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
-# A job claimed by a runner that died never finishes: answer it as failed.
+# A job claimed by a runner that died never finishes: answer it as failed,
+# unless its result was already out.
 Get-ChildItem -LiteralPath $Work -Filter '*.json' | ForEach-Object {
     $out = Join-Path $Outbox $_.BaseName
     New-Item -ItemType Directory -Path $out -Force | Out-Null
-    $failed = @{ exitCode = 125; timedOut = $false; error = 'the runner stopped during this job' }
-    Write-AtomicFile (Join-Path $out 'result.json') ($failed | ConvertTo-Json -Compress)
+    $resultPath = Join-Path $out 'result.json'
+    if (-not (Test-Path -LiteralPath $resultPath)) {
+        $failed = @{ exitCode = 125; timedOut = $false; error = 'the runner stopped during this job' }
+        Write-AtomicFile $resultPath ($failed | ConvertTo-Json -Compress)
+    }
     Remove-Item -LiteralPath $_.FullName -Force
 }
 

@@ -3,9 +3,10 @@
 
 STATE_DIR="${WN01_STATE_DIR:-$HOME/.local/share/auto-clicker-vm}"
 # Paths under it go into QEMU's comma-separated options and the proxy's
-# space-separated command line.
-[[ "$STATE_DIR" =~ ^/[^[:space:],]+$ ]] || {
-    echo "vm: the state directory must be an absolute path without spaces or commas: '$STATE_DIR'" >&2
+# command line, which GLib splits as a shell would: only characters that mean
+# nothing to either are allowed.
+[[ "$STATE_DIR" =~ ^/[A-Za-z0-9._/+-]+$ ]] || {
+    echo "vm: the state directory must be an absolute path of letters, digits and ._/+- only: '$STATE_DIR'" >&2
     exit 2
 }
 CACHE_DIR="$STATE_DIR/cache"

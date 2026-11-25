@@ -94,32 +94,40 @@ monitor() {
     printf '%s\n' "$*" | bounded 30 socat -t 10 - "UNIX-CONNECT:$dir/monitor.sock"
 }
 
-# Waits up to $2 seconds for the machine in $1 to exit.
+# Waits up to $2 seconds for the machine in $1 to exit, or with $3 = swtpm,
+# its TPM.
 wait_exit() {
-    local dir="$1" deadline=$((SECONDS + $2))
-    while machine_running "$dir"; do
+    local dir="$1" deadline=$((SECONDS + $2)) name="${3:-qemu}"
+    while live_pid "$dir/$name.pid" "$dir/" >/dev/null; do
         ((SECONDS < deadline)) || return 1
-        sleep 2
+        sleep 1
     done
 }
 
-# Ends the machine in $1 at once (no guest shutdown) and its TPM with it.
-# Fails, keeping its pid files and sockets so a later call can try again,
-# when QEMU is still alive after SIGKILL.
+# Waits for process $2 (qemu or swtpm) of the machine in $1, already asked to
+# end, and kills it when it has not ended within 15 s. Fails when it is still
+# alive 15 s after SIGKILL.
+end_process() {
+    local dir="$1" name="$2" pid
+    wait_exit "$dir" 15 "$name" && return 0
+    pid="$(live_pid "$dir/$name.pid" "$dir/")" && { kill -KILL "$pid" 2>/dev/null || true; }
+    wait_exit "$dir" 15 "$name" && return 0
+    log "$name in $dir did not exit, even after SIGKILL"
+    return 1
+}
+
+# Ends the machine in $1 at once (no guest shutdown) and its TPM with it,
+# whether or not QEMU still runs: a start interrupted before QEMU leaves the
+# TPM behind. Fails, keeping the pid files and sockets so a later call can try
+# again, when either is still alive after SIGKILL.
 kill_machine() {
     local dir="$1" pid
     if machine_running "$dir"; then
         monitor "$dir" quit >/dev/null 2>&1 || true
-        if ! wait_exit "$dir" 15; then
-            pid="$(live_pid "$dir/qemu.pid" "$dir/")" && { kill -KILL "$pid" 2>/dev/null || true; }
-            if ! wait_exit "$dir" 15; then
-                log "QEMU in $dir did not exit, even after SIGKILL"
-                return 1
-            fi
-        fi
     fi
-    # It may have ended on its own between the check and the kill.
+    end_process "$dir" qemu || return 1
     pid="$(live_pid "$dir/swtpm.pid" "$dir/")" && { kill -TERM "$pid" 2>/dev/null || true; }
+    end_process "$dir" swtpm || return 1
     rm -f "$dir/qemu.pid" "$dir/swtpm.pid" "$dir/monitor.sock" "$dir/swtpm.sock"
 }
 
@@ -143,7 +151,7 @@ vm_push() {
     local seconds="$1" keys="$2" dest="$3" path="$4"
     [[ "$dest" =~ ^[A-Za-z]:[A-Za-z0-9_.\\-]*$ ]] || die "use a Windows folder without spaces or quotes: $dest"
     [[ -e "$path" ]] || die "no such file or folder: $path"
-    tar -c -f - -C "$(dirname "$path")" "$(basename "$path")" |
+    tar -c -f - -C "$(dirname "$path")" -- "$(basename "$path")" |
         vm_ssh "$seconds" "$keys" "New-Item -ItemType Directory -Force $dest | Out-Null; cmd /c 'tar -x -f - -C $dest'; exit \$LASTEXITCODE"
 }
 
@@ -158,10 +166,14 @@ wait_ssh() {
     done
 }
 
-# Shuts Windows down cleanly, within $3 seconds, else ends the machine.
+# Shuts Windows down cleanly, within $3 seconds, else ends the machine. With
+# QEMU already gone, it still ends a TPM left behind.
 shutdown_machine() {
     local dir="$1" keys="$2" seconds="$3"
-    machine_running "$dir" || return 0
+    if ! machine_running "$dir"; then
+        kill_machine "$dir" || die "the TPM in $dir could not be ended"
+        return 0
+    fi
     vm_ssh 30 "$keys" 'Stop-Computer -Force' >/dev/null 2>&1 ||
         monitor "$dir" system_powerdown >/dev/null 2>&1 || true
     if wait_exit "$dir" "$seconds"; then

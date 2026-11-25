@@ -185,6 +185,15 @@ class Serve(unittest.TestCase):
         sender.join(timeout=10)
         self.assertTrue(self.vm.recv(4096).startswith(b"HTTP/1.1 431"))
 
+    def test_whole_header_over_the_cap_gets_431(self):
+        fill = b"X-Fill: " + b"a" * (proxy.MAX_HEADER_BYTES + 1) + b"\r\n\r\n"
+        sender = threading.Thread(target=self.vm.sendall, args=(b"CONNECT static.rust-lang.org:443 HTTP/1.1\r\n" + fill,))
+        sender.start()
+        with self.assertRaises(proxy.Refused) as caught:
+            proxy.read_header(self.conn)
+        sender.join(timeout=10)
+        self.assertEqual(caught.exception.status, 431)
+
     def fill(self, line, count):
         for _ in range(count):
             self.vm.sendall(line)

@@ -89,7 +89,6 @@ cmd_start() {
 
 cmd_stop() {
     take_lock 30
-    machine_running "$RUN_DIR" || return 0
     shutdown_machine "$RUN_DIR" "$VM_DIR" 180 || log "the VM was ended without a clean shutdown"
 }
 
@@ -98,6 +97,7 @@ cmd_reset() {
     # Puts back a VM an interrupted rebuild left aside, so its changes go too.
     restore_previous_vm
     machine_running "$RUN_DIR" && die "the VM is running; stop it first (vm stop)"
+    kill_machine "$RUN_DIR" || die "the TPM in $RUN_DIR could not be ended"
     rm -rf "$RUN_DIR"
     log "reset: the next start boots the clean build"
 }
