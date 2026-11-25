@@ -129,6 +129,10 @@ end_process() {
     local dir="$1" name="$2" pids pid pass
     for pass in 1 2 3; do
         pids="$(machine_pids "$dir" "$name")" || return 1
+        # One scan is not atomic: a process that forks and exits while it
+        # runs hides its child, which exists by the time the scan ends. A
+        # second empty scan right after it is the proof that none is left.
+        [[ -n "$pids" ]] || pids="$(machine_pids "$dir" "$name")" || return 1
         [[ -n "$pids" ]] || return 0
         for pid in $pids; do
             end_pid "$dir" "$name" "$pid" || return 1
