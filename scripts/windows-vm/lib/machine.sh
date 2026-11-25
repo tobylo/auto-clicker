@@ -5,18 +5,24 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# The process in pid file $1 if it is alive, is QEMU or swtpm, and its
-# command line names $2, so a recycled pid is never taken for ours.
-live_pid() {
-    local pidfile="$1" marker="$2" pid exe
-    [[ -f "$pidfile" ]] || return 1
-    pid="$(<"$pidfile")"
-    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+# Whether process $1 is alive, is QEMU or swtpm, and its command line names
+# $2, so a recycled pid is never taken for ours.
+vm_process() {
+    local pid="$1" marker="$2" exe
     exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || return 1
     # A package upgrade while it runs leaves the kernel's " (deleted)" suffix.
     exe="${exe% (deleted)}"
     [[ "${exe##*/}" == qemu-system-x86_64 || "${exe##*/}" == swtpm ]] || return 1
-    tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "$marker" || return 1
+    tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "$marker"
+}
+
+# The process in pid file $1, if it is one of ours (vm_process, marker $2).
+live_pid() {
+    local pidfile="$1" marker="$2" pid
+    [[ -f "$pidfile" ]] || return 1
+    pid="$(<"$pidfile")"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    vm_process "$pid" "$marker" || return 1
     echo "$pid"
 }
 
@@ -80,7 +86,8 @@ start_machine() {
     local dir="$1" disk="$2"
     shift 2
     machine_running "$dir" && die "the machine in $dir is already running"
-    rm -f "$dir/monitor.sock" "$dir/swtpm.sock"
+    # A start killed between the TPM and QEMU left that TPM running.
+    kill_machine "$dir" || die "a TPM left in $dir could not be ended"
     start_tpm "$dir"
     qemu_command "$dir" "$disk"
     # The daemons must not inherit the VM's lock or our stderr (lib/common.sh).
@@ -94,11 +101,12 @@ monitor() {
     printf '%s\n' "$*" | bounded 30 socat -t 10 - "UNIX-CONNECT:$dir/monitor.sock"
 }
 
-# Waits up to $2 seconds for process $1 to exit. By its pid, not its pid
-# file: swtpm removes that file as it starts to shut down.
+# Waits up to $3 seconds for process $1, the QEMU or swtpm of the machine
+# in $2, to exit. By its pid, not its pid file: swtpm removes that file as it
+# starts to shut down.
 wait_pid() {
-    local pid="$1" deadline=$((SECONDS + $2))
-    while kill -0 "$pid" 2>/dev/null; do
+    local pid="$1" dir="$2" deadline=$((SECONDS + $3))
+    while vm_process "$pid" "$dir/"; do
         ((SECONDS < deadline)) || return 1
         sleep 1
     done
@@ -115,9 +123,10 @@ end_process() {
     else
         kill -TERM "$pid" 2>/dev/null || true
     fi
-    wait_pid "$pid" 15 && return 0
-    kill -KILL "$pid" 2>/dev/null || true
-    wait_pid "$pid" 15 && return 0
+    wait_pid "$pid" "$dir" 15 && return 0
+    # Checked again: a pid freed since is never the target.
+    vm_process "$pid" "$dir/" && { kill -KILL "$pid" 2>/dev/null || true; }
+    wait_pid "$pid" "$dir" 15 && return 0
     log "$name in $dir did not exit, even after SIGKILL"
     return 1
 }
@@ -178,7 +187,7 @@ shutdown_machine() {
     fi
     vm_ssh 30 "$keys" 'Stop-Computer -Force' >/dev/null 2>&1 ||
         monitor "$dir" system_powerdown >/dev/null 2>&1 || true
-    if wait_pid "$pid" "$seconds"; then
+    if wait_pid "$pid" "$dir" "$seconds"; then
         kill_machine "$dir" || die "the VM in $dir could not be ended"
         return 0
     fi

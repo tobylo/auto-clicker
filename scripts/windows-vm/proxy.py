@@ -255,15 +255,24 @@ def connect_upstream(addresses):
     """Connects to the first address that answers within the deadline."""
     last_error = None
     for family, sockaddr in addresses:
-        sock = socket.socket(family, socket.SOCK_STREAM)
-        sock.settimeout(CONNECT_TIMEOUT)
         try:
-            sock.connect(sockaddr)
-            return sock
+            return connect_one(family, sockaddr)
         except OSError as err:
             last_error = err
-            sock.close()
     raise Refused(502, f"cannot connect: {last_error}")
+
+
+def connect_one(family, sockaddr):
+    """A socket connected to `sockaddr` within CONNECT_TIMEOUT. Creating it
+    can fail too, for a family the dev box has turned off."""
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(CONNECT_TIMEOUT)
+        sock.connect(sockaddr)
+    except OSError:
+        sock.close()
+        raise
+    return sock
 
 
 def relay(client, upstream, sources=None):

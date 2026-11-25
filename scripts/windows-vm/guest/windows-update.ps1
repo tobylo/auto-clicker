@@ -39,7 +39,10 @@ function Install-Pending {
         return @{ state = 'failed'; installed = 0; error = "install result code $($result.ResultCode)" }
     }
     $failed = Get-FailedUpdates $batch $result
-    return @{ state = 'reboot'; installed = $batch.Count - $failed.Count; error = ($failed -join '; ') }
+    $installed = $batch.Count - $failed.Count
+    # Nothing installed: another pass would only fail on the same updates.
+    $state = if ($installed -eq 0) { 'failed' } else { 'reboot' }
+    return @{ state = $state; installed = $installed; error = ($failed -join '; ') }
 }
 
 # What one Install() call takes: an update that must be installed on its

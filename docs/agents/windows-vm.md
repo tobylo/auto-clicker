@@ -61,8 +61,8 @@ A program started over SSH has no desktop: it cannot inject input or own a visib
 
 ```sh
 scripts/windows-vm/vm start
-# Copy the tree at HEAD into the VM and build it there.
-git archive --format=tar --prefix=src/ HEAD | scripts/windows-vm/vm ssh "cmd /c 'tar -x -f - -C C:\work'"
+# Copy the tree at HEAD into an empty C:\work\src and build it there.
+git archive --format=tar --prefix=src/ HEAD | scripts/windows-vm/vm ssh "if (Test-Path C:\work\src) { Remove-Item -Recurse -Force -ErrorAction Stop C:\work\src }; cmd /c 'tar -x -f - -C C:\work'"
 scripts/windows-vm/vm ssh 'cd C:\work\src; cargo build --locked'
 # Device tests run in the desktop, one at a time.
 scripts/windows-vm/vm run --timeout 600 --workdir 'C:\work\src' -- cargo test --locked -- --ignored --test-threads=1

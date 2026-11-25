@@ -448,6 +448,20 @@ class Deadlines(unittest.TestCase):
                 self.bounded(lambda: proxy.check_target("CONNECT", "static.rust-lang.org", 443, ALLOW))
         self.assertEqual(caught.exception.status, 504)
 
+    def test_next_address_is_tried_when_a_socket_cannot_be_made(self):
+        sock = mock.MagicMock()
+        with mock.patch.object(proxy.socket, "socket", side_effect=[OSError("IPv6 is off"), sock]):
+            found = proxy.connect_upstream([(socket.AF_INET6, ("2001:db8::1", 443, 0, 0)), (socket.AF_INET, ("93.184.216.34", 443))])
+        self.assertIs(found, sock)
+        sock.connect.assert_called_once_with(("93.184.216.34", 443))
+
+    def test_failed_connect_closes_its_socket(self):
+        sock = mock.MagicMock()
+        sock.connect.side_effect = OSError("refused")
+        with mock.patch.object(proxy.socket, "socket", return_value=sock), self.assertRaises(proxy.Refused):
+            proxy.connect_upstream([(socket.AF_INET, ("93.184.216.34", 443))])
+        sock.close.assert_called_once_with()
+
     def test_upstream_connect_has_a_deadline(self):
         sock = mock.MagicMock()
         with mock.patch.object(proxy.socket, "socket", return_value=sock):

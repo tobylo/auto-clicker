@@ -81,8 +81,10 @@ function Disable-Interruptions {
     Set-Reg 'HKLM:\SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell' 'ExecutionPolicy' 'RemoteSigned' 'String'
     foreach ($setting in 'monitor-timeout-ac', 'standby-timeout-ac', 'hibernate-timeout-ac', 'disk-timeout-ac') {
         & powercfg.exe /change $setting 0
+        if ($LASTEXITCODE -ne 0) { throw "powercfg /change $setting failed" }
     }
     & powercfg.exe /hibernate off
+    if ($LASTEXITCODE -ne 0) { throw 'powercfg /hibernate off failed' }
     Set-Reg 'HKCU:\Control Panel\Desktop' 'ScreenSaveActive' '0' 'String'
     Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization' 'NoLockScreen' 1
     Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Power\PowerSettings\0e796bdb-100d-47d6-a2d5-f7d2daa51f51' 'ACSettingIndex' 0
