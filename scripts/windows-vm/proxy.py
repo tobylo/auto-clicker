@@ -6,9 +6,9 @@ address (a `guestfwd ... cmd:` rule), with the connection on stdin and stdout,
 so nothing listens on the dev box. It serves one request:
 
 - `CONNECT host:443`, then relays bytes both ways (HTTPS);
-- an absolute-form `GET http://host/...` (or HEAD, POST) to port 80, sent on
-  with `Connection: close`, then relays the response (plain HTTP, which
-  Windows Update and certificate revocation checks use).
+- an absolute-form `GET http://host/...` (or HEAD) to port 80 with no body,
+  sent on with `Connection: close`, then relays the response (plain HTTP,
+  which Windows Update and certificate revocation checks use).
 
 A host passes only when the allowlist file names it, and its address is
 connected to only when it is a global address: never the LAN, loopback,
@@ -34,11 +34,9 @@ HEADER_TIMEOUT = 30
 IDLE_TIMEOUT = 300
 MAX_HEADER_BYTES = 64 * 1024
 MAX_REQUEST_LINE = 8 * 1024
-# A plain-HTTP body (OCSP's POST, a few kilobytes) and logged VM text.
-MAX_BODY_BYTES = 1024 * 1024
 MAX_LOGGED_CHARS = 300
 CHUNK = 64 * 1024
-PORTS = {"CONNECT": 443, "GET": 80, "HEAD": 80, "POST": 80}
+PORTS = {"CONNECT": 443, "GET": 80, "HEAD": 80}
 # A DNS name in letters, digits and hyphens, with an optional final dot:
 # nothing the resolver could read differently from the allowlist check (a
 # NUL, say, after which it stops reading).
@@ -177,16 +175,16 @@ def parse_target(method, target):
     return split_host_port(authority, 80)
 
 
-def recv_by(conn, deadline, size, part):
-    """One read of at most `size` bytes before `deadline` (a monotonic time);
-    refuses a connection that closes before the request's `part` ended."""
+def recv_by(conn, deadline):
+    """One read before `deadline` (a monotonic time); refuses a connection
+    that closes before the header ended."""
     left = deadline - time.monotonic()
     if left <= 0:
-        raise TimeoutError(f"the request {part} did not arrive in time")
+        raise TimeoutError("the request header did not arrive in time")
     conn.settimeout(left)
-    chunk = conn.recv(size)
+    chunk = conn.recv(CHUNK)
     if not chunk:
-        raise Refused(400, f"connection closed before the {part} ended")
+        raise Refused(400, "connection closed before the header ended")
     return chunk
 
 
@@ -198,7 +196,7 @@ def read_header(conn):
     while b"\r\n\r\n" not in data:
         if len(data) > MAX_HEADER_BYTES:
             raise Refused(431, "request header too large")
-        data += recv_by(conn, deadline, CHUNK, "header")
+        data += recv_by(conn, deadline)
     head, _, rest = data.partition(b"\r\n\r\n")
     return checked_head(head.decode("latin-1")), rest
 
@@ -225,53 +223,18 @@ def header_values(head, name):
     return values
 
 
-def content_length(head):
-    """The Content-Length, 0 when there is none; refused unless it is one
-    plain number, however often it is repeated."""
-    lengths = set(header_values(head, "content-length"))
-    if len(lengths) > 1 or not all(value.isdigit() for value in lengths):
-        raise Refused(400, "unclear Content-Length")
-    return int(lengths.pop()) if lengths else 0
+def check_bodiless(head, rest):
+    """Refuses a plain-HTTP request that sends or announces a body. GET and
+    HEAD carry none, so whatever follows the header would be a second
+    request, whose Host the proxy never checked."""
+    if rest:
+        raise Refused(400, "bytes after the request header")
+    announced = header_values(head, "transfer-encoding") + header_values(head, "expect")
+    if announced or set(header_values(head, "content-length")) - {"0"}:
+        raise Refused(400, "a body announced on a request without one")
 
 
-def body_length(head):
-    """The one Content-Length a plain-HTTP request may carry; chunked
-    bodies are refused, since only a known length shows where it ends."""
-    if header_values(head, "transfer-encoding"):
-        raise Refused(411, "Transfer-Encoding instead of Content-Length")
-    length = content_length(head)
-    if length > MAX_BODY_BYTES:
-        raise Refused(413, "body too large")
-    return length
-
-
-def answer_expectation(conn, head, missing):
-    """Answers `Expect: 100-continue` here, since the body it holds back is
-    read before the proxy connects upstream; the header is not sent on."""
-    expected = {value.lower() for value in header_values(head, "expect")}
-    if not expected:
-        return
-    if expected != {"100-continue"}:
-        raise Refused(417, "unknown expectation")
-    if missing > 0:
-        conn.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
-
-
-def read_body(conn, head, rest):
-    """Exactly the request's body, within the header's deadline. Bytes past
-    it would be a second request, whose Host the proxy never checked."""
-    length = body_length(head)
-    if len(rest) > length:
-        raise Refused(400, "more than one request on the connection")
-    answer_expectation(conn, head, length - len(rest))
-    deadline = time.monotonic() + HEADER_TIMEOUT
-    body = rest
-    while len(body) < length:
-        body += recv_by(conn, deadline, min(CHUNK, length - len(body)), "body")
-    return body
-
-
-DROPPED_HEADERS = ("host", "connection", "proxy-connection", "keep-alive", "expect")
+DROPPED_HEADERS = ("host", "connection", "proxy-connection", "keep-alive")
 
 
 def origin_request(head, target, host, port):
@@ -362,8 +325,9 @@ def serve(conn, allowlist, logfile):
         head, rest = read_header(conn)
         method, target = head.split("\r\n", 1)[0].split(" ")[:2]
         host, port = parse_target(method, target)
+        if method != "CONNECT":
+            check_bodiless(head, rest)
         addresses = check_target(method, host, port, allowlist)
-        body = rest if method == "CONNECT" else read_body(conn, head, rest)
         upstream = connect_upstream(addresses)
     except Refused as refusal:
         log(logfile, f"refused {refusal.status}: {refusal.reason}")
@@ -377,11 +341,11 @@ def serve(conn, allowlist, logfile):
     with upstream:
         if method == "CONNECT":
             conn.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
-            upstream.sendall(body)
+            upstream.sendall(rest)
             relay(conn, upstream)
         else:
-            # One request and its body; the VM sends nothing after them.
-            upstream.sendall(origin_request(head, target, host, port) + body)
+            # One request; anything the VM sends after it is never read.
+            upstream.sendall(origin_request(head, target, host, port))
             relay(conn, upstream, sources=(upstream,))
 
 

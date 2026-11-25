@@ -22,7 +22,7 @@ The VM reaches nothing by itself. QEMU's user networking runs with `restrict=on`
 
 - **SSH in:** QEMU forwards `127.0.0.1:52222` on the dev box (`WN01_SSH_PORT` changes it) to the VM's port 22. It listens on loopback only, so other machines cannot reach it.
 - **The proxy out:** connections to `10.0.2.100:3128` reach `proxy.py`. QEMU starts a copy for each connection, so it listens on nothing.
-  - It passes HTTPS (`CONNECT` to port 443) and plain HTTP (port 80) to listed host names only.
+  - It passes HTTPS (`CONNECT` to port 443) and plain HTTP (`GET` or `HEAD` with no body, to port 80) to listed host names only, one request per connection.
   - It refuses address literals, and any name that resolves only to private, loopback or link-local addresses.
   - While a build runs, it allows `allow-run.txt` and `allow-build.txt`: Windows Update, activation, Visual Studio Build Tools, winget's Store source, Rust and crates.io.
   - In normal runs, it allows `allow-run.txt` only: Rust and crates.io. Windows Update cannot reach its servers between builds, so it cannot restart the VM in the middle of a test.

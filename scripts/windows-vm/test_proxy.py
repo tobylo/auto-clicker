@@ -113,9 +113,10 @@ class CheckTarget(unittest.TestCase):
                 self.assertIn(f"port {port}", caught.exception.reason)
 
     def test_other_methods_are_refused(self):
-        with self.assertRaises(proxy.Refused) as caught:
-            proxy.check_target("PUT", "static.rust-lang.org", 80, ALLOW)
-        self.assertEqual(caught.exception.status, 405)
+        for method in ("POST", "PUT"):
+            with self.subTest(method=method), self.assertRaises(proxy.Refused) as caught:
+                proxy.check_target(method, "static.rust-lang.org", 80, ALLOW)
+            self.assertEqual(caught.exception.status, 405)
 
 
 class ParseTarget(unittest.TestCase):
@@ -195,9 +196,9 @@ class Serve(unittest.TestCase):
             b"GET http://static.rust-lang.org/ HTTP/1.1\nX: y\r\n\r\n",
             b"GET http://static.rust-lang.org/ HTTP/9\r\n\r\n",
             b"GET  http://static.rust-lang.org/ HTTP/1.1\r\n\r\n",
-            b"POST http://static.rust-lang.org/ HTTP/1.1\r\nContent-Length : 5\r\n\r\n",
-            b"POST http://static.rust-lang.org/ HTTP/1.1\r\nContent-Length\xa0: 5\r\n\r\n",
-            b"POST http://static.rust-lang.org/ HTTP/1.1\r\nAccept: */*\r\n Content-Length: 5\r\n\r\n",
+            b"GET http://static.rust-lang.org/ HTTP/1.1\r\nContent-Length : 5\r\n\r\n",
+            b"GET http://static.rust-lang.org/ HTTP/1.1\r\nContent-Length\xa0: 5\r\n\r\n",
+            b"GET http://static.rust-lang.org/ HTTP/1.1\r\nAccept: */*\r\n Content-Length: 5\r\n\r\n",
         ):
             with self.subTest(request=request):
                 vm, conn = socket.socketpair()
@@ -271,81 +272,69 @@ class Serve(unittest.TestCase):
         self.assertFalse(worker.is_alive(), "relay did not end once both sides closed")
 
 
-class PlainHttpBody(unittest.TestCase):
-    """A plain-HTTP request goes upstream with exactly its own body, and
-    nothing after it: a second request would carry an unchecked Host."""
+class Bodiless(unittest.TestCase):
+    """Plain HTTP carries GET and HEAD without a body, and nothing after
+    them: a second request would carry an unchecked Host."""
 
+    HEAD = "GET http://a.b/ HTTP/1.1\r\nHost: a.b"
+
+    def test_request_without_a_body_passes(self):
+        proxy.check_bodiless(self.HEAD, b"")
+        proxy.check_bodiless(self.HEAD + "\r\nContent-Length: 0", b"")
+
+    def test_bytes_after_the_header_are_refused(self):
+        with self.assertRaises(proxy.Refused) as caught:
+            proxy.check_bodiless(self.HEAD, b"GET / HTTP/1.1\r\nHost: unlisted.example\r\n\r\n")
+        self.assertIn("bytes after the request header", caught.exception.reason)
+
+    def test_a_body_announced_in_any_header_is_refused(self):
+        for extra in (
+            "Content-Length: 4",
+            "Content-Length: 0\r\nContent-Length: 4",
+            "Content-Length: 00",
+            "Transfer-Encoding: chunked",
+            "Expect: 100-continue",
+        ):
+            with self.subTest(extra=extra), self.assertRaises(proxy.Refused) as caught:
+                proxy.check_bodiless(self.HEAD + "\r\n" + extra, b"")
+            self.assertEqual(caught.exception.status, 400)
+
+
+class PlainHttpServe(unittest.TestCase):
     def setUp(self):
         self.vm, self.conn = socket.socketpair()
         self.addCleanup(self.vm.close)
         self.addCleanup(self.conn.close)
+        handle, self.logfile = tempfile.mkstemp()
+        os.close(handle)
+        self.addCleanup(os.unlink, self.logfile)
 
-    def body(self, head, rest=b"", later=b""):
-        if later:
-            self.vm.sendall(later)
-        return proxy.read_body(self.conn, head, rest)
-
-    def test_body_of_content_length_is_read_in_full(self):
-        head = "POST http://a.b/ HTTP/1.1\r\nContent-Length: 6"
-        self.assertEqual(self.body(head, b"abc", later=b"def"), b"abcdef")
-
-    def test_expect_100_continue_is_answered_before_the_body(self):
-        head = "POST http://a.b/ HTTP/1.1\r\nContent-Length: 4\r\nExpect: 100-continue"
-
-        def client():
-            self.assertEqual(receive(self.vm, 25), b"HTTP/1.1 100 Continue\r\n\r\n")
-            self.vm.sendall(b"abcd")
-
-        sender = threading.Thread(target=client, daemon=True)
-        sender.start()
-        with mock.patch.object(proxy, "HEADER_TIMEOUT", 5):
-            self.assertEqual(proxy.read_body(self.conn, head, b""), b"abcd")
-        sender.join(timeout=5)
-        self.assertNotIn("expect", proxy.origin_request(head, "http://a.b/", "a.b", 80).decode().lower())
-
-    def test_other_expectations_get_417(self):
-        with self.assertRaises(proxy.Refused) as caught:
-            self.body("POST http://a.b/ HTTP/1.1\r\nContent-Length: 4\r\nExpect: something-else")
-        self.assertEqual(caught.exception.status, 417)
-
-    def test_no_body_without_content_length(self):
-        self.assertEqual(self.body("GET http://a.b/ HTTP/1.1\r\nHost: a.b"), b"")
-
-    def test_bytes_past_the_body_are_refused(self):
-        head = "GET http://a.b/ HTTP/1.1\r\nHost: a.b"
-        with self.assertRaises(proxy.Refused) as caught:
-            self.body(head, b"GET / HTTP/1.1\r\nHost: unlisted.example\r\n\r\n")
-        self.assertIn("more than one request", caught.exception.reason)
-
-    def test_unclear_or_chunked_lengths_are_refused(self):
-        for head, status in (
-            ("POST http://a.b/ HTTP/1.1\r\nTransfer-Encoding: chunked", 411),
-            ("POST http://a.b/ HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 4", 400),
-            ("POST http://a.b/ HTTP/1.1\r\nContent-Length: -1", 400),
-            (f"POST http://a.b/ HTTP/1.1\r\nContent-Length: {proxy.MAX_BODY_BYTES + 1}", 413),
-        ):
-            with self.subTest(head=head), self.assertRaises(proxy.Refused) as caught:
-                self.body(head)
-            self.assertEqual(caught.exception.status, status)
+    def test_body_is_refused_before_any_lookup_or_connection(self):
+        refuse = mock.patch.object(proxy, "connect_upstream", side_effect=AssertionError("connected upstream"))
+        with mock.patch.object(proxy.socket, "getaddrinfo") as lookup, refuse as connect:
+            self.vm.sendall(b"GET http://static.rust-lang.org/ HTTP/1.1\r\nContent-Length: 4\r\n\r\nabcd")
+            proxy.serve(self.conn, ALLOW, self.logfile)
+        self.assertTrue(receive(self.vm, 12).startswith(b"HTTP/1.1 400"))
+        lookup.assert_not_called()
+        connect.assert_not_called()
 
     def test_serve_sends_one_request_and_relays_only_the_answer(self):
         upstream_side, upstream = socket.socketpair()
         self.addCleanup(upstream_side.close)
-        logfile = tempfile.NamedTemporaryFile(delete=False).name
-        self.addCleanup(os.unlink, logfile)
-        self.vm.sendall(b"POST http://static.rust-lang.org/ocsp HTTP/1.1\r\nContent-Length: 4\r\n\r\nabcd")
+        self.vm.sendall(b"GET http://static.rust-lang.org/crl HTTP/1.1\r\nAccept: */*\r\n\r\n")
         with resolving_to("93.184.216.34"), mock.patch.object(proxy, "connect_upstream", return_value=upstream):
-            worker = threading.Thread(target=proxy.serve, args=(self.conn, ALLOW, logfile), daemon=True)
+            worker = threading.Thread(target=proxy.serve, args=(self.conn, ALLOW, self.logfile), daemon=True)
             worker.start()
-            sent = receive_until(upstream_side, b"abcd")
+            sent = receive_until(upstream_side, b"\r\n\r\n")
             self.vm.sendall(b"GET / HTTP/1.1\r\nHost: unlisted.example\r\n\r\n")
             upstream_side.sendall(b"HTTP/1.1 200 OK\r\n\r\nok")
             upstream_side.shutdown(socket.SHUT_WR)
             self.assertEqual(receive(self.vm, 21), b"HTTP/1.1 200 OK\r\n\r\nok")
             worker.join(timeout=10)
-        self.assertTrue(sent.endswith(b"Connection: close\r\n\r\nabcd"), sent)
+        self.assertFalse(worker.is_alive(), "relay did not end when the upstream closed")
+        self.assertEqual(sent, b"GET /crl HTTP/1.1\r\nHost: static.rust-lang.org\r\nAccept: */*\r\nConnection: close\r\n\r\n")
         upstream_side.settimeout(1)
-        self.assertNotIn(b"unlisted", sent + upstream_side.recv(4096))
+        self.assertNotIn(b"unlisted", upstream_side.recv(4096))
 
 
 class LogSize(unittest.TestCase):
