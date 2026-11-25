@@ -168,15 +168,12 @@ cmd_run() {
 }
 
 cmd_screen() {
-    local out="${1:-$PWD/wn01-screen.png}" dir shot
+    local out="${1:-wn01-screen.png}" shot
     require_running
-    # $(dirname) drops trailing newlines, so it could pick another folder.
-    [[ "$out" != *[[:cntrl:]]* ]] || die "the screenshot path holds a control character"
-    dir="$(realpath -e -- "$(dirname -- "$out")")" || die "no such folder: $(dirname -- "$out")"
-    out="$dir/$(basename -- "$out")"
     # QEMU writes into the run folder, whose path holds no space (lib/common.sh),
-    # so the monitor reads one command. The rename then replaces whatever
-    # $out names, a symlink included, and never writes through it.
+    # so the monitor reads one command. The rename then takes $out as given
+    # and replaces whatever it names, a symlink included, never writing
+    # through it.
     shot="$(mktemp "$RUN_DIR/screen.XXXXXX")"
     if monitor "$RUN_DIR" "screendump $shot -f png" >/dev/null &&
         [[ "$(head -c 8 "$shot" | od -An -tx1 | tr -d ' \n')" == 89504e470d0a1a0a ]] &&
