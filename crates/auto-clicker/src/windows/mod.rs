@@ -240,7 +240,47 @@ fn open_log() {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+
+    /// Set in the child process the next test starts.
+    const CHILD: &str = "AUTO_CLICKER_TEST_CHILD";
+
+    #[test]
+    fn the_daemon_logs_to_its_file_under_localappdata() {
+        if std::env::var_os(CHILD).is_some() {
+            open_log();
+            log::line(format_args!("auto-clicker: a line"));
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "auto-clicker-test-{}-{:016x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "windows::tests::the_daemon_logs_to_its_file_under_localappdata",
+                "--exact",
+            ])
+            .env(CHILD, "1")
+            .env("LOCALAPPDATA", &dir)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        let log: PathBuf = ["auto-clicker", "logs", "auto-clicker.log"]
+            .iter()
+            .collect();
+        let text = std::fs::read_to_string(dir.join(log)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(status.success());
+        assert_eq!(text, "auto-clicker: a line\n");
+    }
 
     #[test]
     fn a_second_daemon_says_why_in_the_users_language() {

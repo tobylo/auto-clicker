@@ -188,6 +188,10 @@ fn an_idle_daemon_wakes_for_nothing_of_its_own() {
         .filter(|line| line.contains("woken by window message"))
         .map(str::to_owned)
         .collect();
+    // A timer, or a message the program posts to itself, is the program's
+    // own wake, whatever the count says.
+    let own: Vec<&String> = woken.iter().filter(|line| own_message(line)).collect();
+    assert!(own.is_empty(), "the daemon woke itself: {own:?}");
     ask_to_quit(&daemon);
     assert!(ended(&mut daemon, END).success(), "{}", home.log());
     let mut wakes = 0;
@@ -207,4 +211,30 @@ fn an_idle_daemon_wakes_for_nothing_of_its_own() {
         wakes == 0 || !woken.is_empty(),
         "{wakes} context switches in {IDLE:?} with no window message to explain them"
     );
+}
+
+/// Whether a "woken by window message 0x...." line names a message only
+/// the program itself could cause: `WM_TIMER`, or one in `WM_APP`'s range.
+fn own_message(line: &str) -> bool {
+    let Some(number) = line
+        .rsplit("0x")
+        .next()
+        .and_then(|hex| u32::from_str_radix(hex.trim(), 16).ok())
+    else {
+        return true;
+    };
+    number == 0x0113 || (0x8000..0xc000).contains(&number)
+}
+
+#[test]
+fn a_timer_or_a_message_to_itself_is_the_programs_own() {
+    let line = |hex: &str| format!("auto-clicker: woken by window message 0x{hex}");
+    assert!(own_message(&line("0113")));
+    assert!(own_message(&line("8001")));
+    assert!(own_message(&line("bfff")));
+    assert!(!own_message(&line("001e")));
+    assert!(!own_message(&line("031f")));
+    // A registered message, such as Explorer's TaskbarCreated.
+    assert!(!own_message(&line("c0f2")));
+    assert!(own_message("garbled"));
 }
