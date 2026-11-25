@@ -170,6 +170,8 @@ cmd_run() {
 cmd_screen() {
     local out="${1:-$PWD/wn01-screen.png}" dir shot
     require_running
+    # $(dirname) drops trailing newlines, so it could pick another folder.
+    [[ "$out" != *[[:cntrl:]]* ]] || die "the screenshot path holds a control character"
     dir="$(realpath -e -- "$(dirname -- "$out")")" || die "no such folder: $(dirname -- "$out")"
     out="$dir/$(basename -- "$out")"
     # QEMU writes into the run folder, whose path holds no space (lib/common.sh),
