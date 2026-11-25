@@ -168,16 +168,22 @@ cmd_run() {
 }
 
 cmd_screen() {
-    local out="${1:-$PWD/wn01-screen.png}"
+    local out="${1:-$PWD/wn01-screen.png}" dir shot
     require_running
-    out="$(realpath -m "$out")"
-    # The monitor reads one command per line and splits on spaces.
-    [[ "$out" =~ ^[[:graph:]]+$ ]] || die "the screenshot path cannot contain spaces or control characters: $out"
-    rm -f "$out"
-    monitor "$RUN_DIR" "screendump $out -f png" >/dev/null || die "the QEMU monitor did not answer"
-    [[ "$(head -c 8 "$out" 2>/dev/null | od -An -tx1 | tr -d ' \n')" == 89504e470d0a1a0a ]] ||
-        die "no screenshot was written to $out"
-    echo "$out"
+    dir="$(realpath -e -- "$(dirname -- "$out")")" || die "no such folder: $(dirname -- "$out")"
+    out="$dir/$(basename -- "$out")"
+    # QEMU writes into the run folder, whose path holds no space (lib/common.sh),
+    # so the monitor reads one command. The rename then replaces whatever
+    # $out names, a symlink included, and never writes through it.
+    shot="$(mktemp "$RUN_DIR/screen.XXXXXX")"
+    if monitor "$RUN_DIR" "screendump $shot -f png" >/dev/null &&
+        [[ "$(head -c 8 "$shot" | od -An -tx1 | tr -d ' \n')" == 89504e470d0a1a0a ]] &&
+        mv -fT -- "$shot" "$out"; then
+        echo "$out"
+        return 0
+    fi
+    rm -f "$shot"
+    die "no screenshot was written to $out"
 }
 
 cmd_key() {
