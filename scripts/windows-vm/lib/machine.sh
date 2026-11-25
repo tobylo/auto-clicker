@@ -184,13 +184,15 @@ vm_push() {
 }
 
 # Waits up to $3 seconds for SSH into the machine in $1 (keys in $2) to answer,
-# failing at once if the machine exits. Each probe gets at most the time left.
+# failing at once if the machine exits. Each probe and pause gets at most the
+# time left (a probe that ignores SIGTERM has bounded's 10 s grace on top).
 wait_ssh() {
     local dir="$1" keys="$2" deadline=$((SECONDS + $3)) left
     while left=$((deadline - SECONDS)); ((left > 0)); do
         vm_ssh $((left < 30 ? left : 30)) "$keys" 'exit 0' >/dev/null 2>&1 && return 0
         machine_running "$dir" || die "the VM exited while waiting for SSH; see $dir/qemu.log"
-        sleep 10
+        left=$((deadline - SECONDS))
+        ((left <= 0)) || sleep $((left < 10 ? left : 10))
     done
     die "SSH did not answer within $3 s"
 }
