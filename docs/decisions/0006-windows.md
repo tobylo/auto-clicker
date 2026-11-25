@@ -30,7 +30,7 @@
 Two results changed the brief's decisions. The owner settled both on 2026-11-25, and the brief says them as decisions 5 and 6.
 
 - **Decision 5, timing.** On Windows, a run's deadlines are waited for by a high-resolution waitable timer on a thread that exists only while a run is active. It wakes the runtime, and a stop or shutdown ends its wait at once. Nothing raises the system's timer resolution. The execution-speed power-throttling opt-out stays, during runs only. The 10 ms floor stays on both systems. The alternative was to keep tokio's sleep at 1 ms resolution and make the floor 20 ms on Windows.
-- **Decision 6, the watchdog sends again.** The watchdog applies decision 7 to its own releases. A release counts as delivered only when the user's desktop had input and the window in front was not of higher integrity, both before and after the send. Any other release stays in the table and is sent again on the next foreground or desktop change. The watchdog exits only when every entry is delivered. That wait has no deadline: like the daemon's idle wait, it sleeps on events and ends at delivery or when the session ends. AGENTS.md's rule that every wait is bounded names it as its second exception.
+- **Decision 6, the watchdog sends again.** The daemon clears a table entry only once its release counts as delivered under decision 7, and the watchdog applies the same rule to its own releases. A release counts as delivered only when the user's desktop had input and the window in front was not of higher integrity, both before and after the send. Any other release stays in the table and is sent again on the next foreground or desktop change. The watchdog exits only when every entry is delivered. That wait has no deadline: like the daemon's idle wait, it sleeps on events and ends at delivery or when the session ends. AGENTS.md's rule that every wait is bounded names it as its second exception.
 - **Decision 9 and invariant N5, stopping a run.** While a run is active, the backend also reads raw keyboard input and matches only the combinations of the hotkeys that stop the running job, the same set as on Linux. So a run stops by its hotkey even when a game in front has registered `RIDEV_NOHOTKEYS`. The alternative was to name such games in the guide and stop runs from the tray.
 
 ## How it was measured
@@ -41,6 +41,24 @@ Each measurement is one `vm run` of a scenario script, which starts every proces
 - **Not available:** the monitor's `mouse_move` cannot place the tablet; it always goes to the PS/2 mouse. Every PS/2 move, of any size, arrived in raw input as (508, 508), so no real relative motion could be produced. Relative motion from a real mouse is therefore unmeasured. Relative motion from another program's SendInput, which brief decision 8 counts as the user's, stands in for it.
 
 `vm key` waits on the lock that the running `vm run` holds. So a dev-box script (`drive.py`) reads which request the scenario has reached from a 16x16 marker the probe draws in the screen's corner, read through `screendump`, and sends the input straight to the monitor socket. A scenario checks that each piece of real input arrived (in its own logs) before it reads a result. See "Tooling found broken" for why this script reads the screen rather than a file over SSH.
+
+## Commands
+
+From the main checkout's `.claude/local/x03/`, after `./push.sh` (copies `probe/` and `scen/` into the VM and builds there with `cargo build --release --locked`). `run.sh SCENARIO [--elevated] TIMEOUT [ARGS]` starts `drive.py` and runs `scripts/windows-vm/vm run [--elevated] --timeout TIMEOUT -- powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\work\x03\scen\SCENARIO.ps1 [ARGS]`, then fetches the logs. `analyze.py clicks|timing DIR` gives point 1's and 2's figures.
+
+| Point | Command | Scenario |
+| --- | --- | --- |
+| 1, clicks | `./run.sh m1 300` | `scen/m1.ps1` |
+| 1, keys | `./run.sh m1keys 200` | `scen/m1keys.ps1` |
+| 2 | `./run.sh timing 1800`; control: `vm run --timeout 600 -- powershell … timing.ps1 -Intervals 10 -Runs 3 -Settings 'throttle,waitable'` with no driver; (f): `… timing.ps1 -Intervals '10,12,15' -Runs 3 -Settings bridge` | `scen/timing.ps1` |
+| 3 | `./run.sh m3 200` | `scen/m3.ps1` |
+| 4 | `./run.sh m4 300` | `scen/m4.ps1` |
+| 5 | `./run.sh m5 400` | `scen/m5.ps1` |
+| 6 | `./run.sh uipi --elevated 200`; `./run.sh lock 300`; `./run.sh uac 300` | `scen/uipi.ps1`, `lock.ps1`, `uac.ps1` |
+| 7 | `./run.sh watchdog 300` | `scen/watchdog.ps1` |
+| 8 | `./run.sh overlay 300` | `scen/overlay.ps1` |
+
+The VM was reset (`vm stop && vm reset`) before the timing runs.
 
 ## Results
 
