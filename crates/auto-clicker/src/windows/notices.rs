@@ -79,7 +79,9 @@ impl Notices {
         }
     }
 
-    /// Handles one event from the message thread.
+    /// Handles one event from the message thread. The controller is told,
+    /// and any wait is made, before anything is logged: a log write never
+    /// holds up a stop.
     pub fn handle(&mut self, event: WindowEvent) {
         match &event {
             WindowEvent::EndSession => {
@@ -93,33 +95,48 @@ impl Notices {
             }
             WindowEvent::Close => return self.send(Message::Quit),
             WindowEvent::Ended { failure } => {
+                self.send(Message::Quit);
                 if let Some(failure) = failure {
                     log::line(format_args!("auto-clicker: {failure}; quitting"));
                 }
-                return self.send(Message::Quit);
+                return;
             }
             WindowEvent::Other(message) => {
                 return log::line(format_args!(
                     "auto-clicker: woken by window message {message:#06x}"
                 ));
             }
-            // What Windows said is logged, so that every wake it causes is
-            // named: no keystroke is among these.
-            WindowEvent::Session(_)
-            | WindowEvent::Suspend
-            | WindowEvent::Resume
-            | WindowEvent::Display(_) => {
-                log::line(format_args!("auto-clicker: heard {event:?}"));
-            }
             _ => {}
         }
-        match self.session.apply(&event) {
+        let told = self.session.apply(&event);
+        self.tell(told);
+        // What Windows said is logged, so that every wake it causes is
+        // named: no keystroke is among these.
+        if matches!(
+            event,
+            WindowEvent::Session(_)
+                | WindowEvent::Suspend
+                | WindowEvent::Resume
+                | WindowEvent::Display(_)
+        ) {
+            log::line(format_args!("auto-clicker: heard {event:?}"));
+        }
+    }
+
+    /// Tells the controller what changed, and before sleep waits for it to
+    /// let go; then logs what went wrong, if anything did.
+    fn tell(&self, told: Told) {
+        match told {
             Told::Nothing => {}
             Told::Session(blocked) => {
-                if let Some(Blocked::Unknown(why)) = &blocked {
+                let unknown = match &blocked {
+                    Some(Blocked::Unknown(why)) => Some(why.to_string()),
+                    _ => None,
+                };
+                self.send(Message::Session(blocked));
+                if let Some(why) = unknown {
                     log::line(format_args!("auto-clicker: {why}"));
                 }
-                self.send(Message::Session(blocked));
             }
             Told::Sleep(notice) => {
                 self.send(Message::Sleep(notice));

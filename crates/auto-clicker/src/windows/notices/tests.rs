@@ -235,10 +235,11 @@ fn a_display_that_cannot_be_followed_refuses_starts() {
             Told::Nothing,
         ]
     );
-    // Before the session is read, its own reason comes first.
+    // At start the display is registered for first: its failure arrives
+    // before the session's first read, which then allows no start.
     assert_eq!(
-        told(vec![unwatched()]),
-        [unknown("the session state is not read yet")]
+        told(vec![unwatched(), WindowEvent::SessionRead(Ok(UNLOCKED))]),
+        [unknown("the session state is not read yet"), unknown(why)]
     );
 }
 
@@ -545,6 +546,13 @@ fn locking_the_desktop_releases_a_held_button_at_once_and_unlocking_allows_start
             assert!(Instant::now() < deadline, "never unlocked");
         }
         println!("held again {:?} after the lock", locking.elapsed());
+        // Quit only once the new hold has pressed, so it has a press to
+        // release.
+        until(Duration::from_secs(10), "held again", || {
+            let runs = output.0.lock().unwrap().len();
+            runs > 0 && !output.presses(runs - 1).is_empty()
+        })
+        .await;
         send.send(Message::Quit).unwrap();
     };
     runtime().block_on(async { tokio::join!(controller.run(), steps) });

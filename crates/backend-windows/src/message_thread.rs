@@ -352,8 +352,10 @@ fn serve(
         }
     };
     *shared.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(Window(hwnd));
-    watch_session(hwnd);
+    // The display first: a registration that fails says so before the
+    // session's first read can allow a start.
     watch_display(hwnd);
+    watch_session(hwnd);
     READY.set(true);
     announced.set(true);
     // The spawner may have given up already; the thread runs on regardless

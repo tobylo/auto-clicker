@@ -61,11 +61,22 @@ impl Home {
         Daemon(child)
     }
 
-    fn log(&self) -> String {
+    fn log_path(&self) -> PathBuf {
         let path: PathBuf = ["local", "auto-clicker", "logs", "auto-clicker.log"]
             .iter()
             .collect();
-        std::fs::read_to_string(self.0.join(path)).unwrap_or_default()
+        self.0.join(path)
+    }
+
+    /// The log so far; empty until the daemon has created it.
+    fn log(&self) -> String {
+        std::fs::read_to_string(self.log_path()).unwrap_or_default()
+    }
+
+    /// The log, which must be there to read: a read that fails is never
+    /// taken for an empty log.
+    fn existing_log(&self) -> String {
+        std::fs::read_to_string(self.log_path()).unwrap()
     }
 
     /// Waits until the daemon logged that it runs.
@@ -252,11 +263,17 @@ fn an_idle_daemon_wakes_for_nothing_of_its_own() {
     let mut interrupted = Vec::new();
     let mut quiet = false;
     for _ in 0..IDLE_TRIES {
-        let logged = home.log().len();
+        let earlier = home.existing_log();
         let before = switches(daemon.id());
         sleep(IDLE);
         let after = switches(daemon.id());
-        let woken: Vec<String> = home.log()[logged..]
+        let now = home.existing_log();
+        // The log only grows during the minute (a rotation would not fit
+        // in it).
+        let added = now
+            .strip_prefix(earlier.as_str())
+            .expect("the log was rewritten during the minute");
+        let woken: Vec<String> = added
             .lines()
             .filter(|line| windows_said(line))
             .map(str::to_owned)
