@@ -222,13 +222,14 @@ namespace Wn01
         /// such event, so this checks its count every 50 ms.
         static void WaitForEmptyJob(SafeFileHandle job)
         {
-            var deadline = DateTime.UtcNow.AddMilliseconds(TERMINATION_WAIT_MS);
+            // A monotonic clock: a change to the wall clock moves no deadline.
+            var clock = System.Diagnostics.Stopwatch.StartNew();
             JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info;
             int size = Marshal.SizeOf(typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION));
             while (QueryInformationJobObject(job, JobObjectBasicAccountingInformation, out info, size, IntPtr.Zero)
                 && info.ActiveProcesses > 0)
             {
-                if (DateTime.UtcNow >= deadline)
+                if (clock.ElapsedMilliseconds >= TERMINATION_WAIT_MS)
                 {
                     throw new TimeoutException("the job's processes did not end within " + TERMINATION_WAIT_MS + " ms");
                 }

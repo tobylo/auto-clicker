@@ -81,7 +81,7 @@ scripts/windows-vm/vm stop
   - The new VM is built beside the old one and replaces it only once the build has succeeded.
   - A failed or interrupted build removes its half-made files, and the old VM stays as it was.
   - A build killed outright leaves a directory that the next build removes.
-  - Run `vm selftest` on the new VM before using it.
+  - Run `vm start` and `vm selftest` on the new VM before using it.
 - **Changes under `scripts/windows-vm/guest/`:** the runner, setup and provisioning scripts are copied into the VM at build time, so a change to them takes a rebuild to apply. `selftest` copies its two check scripts in each time.
 - **A new ISO:** when Microsoft replaces the evaluation image, the build stops on the SHA-256 mismatch. Update `ISO_URL`, `ISO_SHA256` and `ISO_FILE` in `lib/common.sh` from Microsoft's verification page (https://aka.ms/VerifyWindowsISO) in a PR. Never take the image from a mirror.
 

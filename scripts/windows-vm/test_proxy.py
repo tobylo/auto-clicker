@@ -152,6 +152,17 @@ class OriginRequest(unittest.TestCase):
         self.assertEqual([line for line in out.split("\r\n") if line.lower().startswith("host:")], ["Host: a.b"])
         self.assertIn("Accept: */*\r\n", out)
 
+    def test_headers_named_by_connection_go_no_further(self):
+        head = (
+            "GET http://a.b/ HTTP/1.1\r\nConnection: keep-alive, X-Local\r\nconnection: x-other\r\n"
+            "X-Local: proxy-only\r\nx-other: hop\r\nAccept: */*"
+        )
+        out = proxy.origin_request(head, "http://a.b/", "a.b", 80).decode()
+        self.assertNotIn("x-local", out.lower())
+        self.assertNotIn("x-other", out.lower())
+        self.assertIn("Accept: */*\r\n", out)
+        self.assertTrue(out.endswith("Connection: close\r\n\r\n"))
+
 
 class Serve(unittest.TestCase):
     """One request through serve(), with the VM's side on a socket pair."""

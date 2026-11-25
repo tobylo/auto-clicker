@@ -2,13 +2,14 @@
 # shellcheck shell=bash
 
 STATE_DIR="${WN01_STATE_DIR:-$HOME/.local/share/auto-clicker-vm}"
+# Running processes are recognised by the spelling of their directory, so
+# every session uses the one physical path, with each symbolic link resolved.
 # Paths under it go into QEMU's comma-separated options and the proxy's
 # command line, which GLib splits as a shell would: only characters that mean
 # nothing to either are allowed.
-# It must be spelled in its normal form too (no ".", ".." or doubled or
-# trailing slash): running processes are recognised by the spelling.
-[[ "$STATE_DIR" =~ ^/[A-Za-z0-9._/+-]+$ && "$STATE_DIR" == "$(realpath -ms -- "$STATE_DIR")" ]] || {
-    echo "vm: the state directory must be an absolute path in normal form, of letters, digits and ._/+- only: '$STATE_DIR'" >&2
+[[ "$STATE_DIR" == /* ]] && STATE_DIR="$(realpath -m -- "$STATE_DIR")" &&
+    [[ "$STATE_DIR" =~ ^/[A-Za-z0-9._/+-]+$ ]] || {
+    echo "vm: the state directory must be an absolute path whose resolved form has letters, digits and ._/+- only: '$STATE_DIR'" >&2
     exit 2
 }
 CACHE_DIR="$STATE_DIR/cache"

@@ -238,6 +238,16 @@ def check_bodiless(head, rest):
 DROPPED_HEADERS = ("host", "connection", "proxy-connection", "keep-alive")
 
 
+def connection_options(head):
+    """The header names the Connection header lists: they are meant for the
+    proxy alone and go no further (RFC 9110, 7.6.1)."""
+    return {
+        name.strip().lower()
+        for value in header_values(head, "connection")
+        for name in value.split(",")
+    }
+
+
 def origin_request(head, target, host, port):
     """Rewrites an absolute-form request to origin form for the checked host,
     closing after one response. The VM's own Host header is dropped: it could
@@ -245,7 +255,8 @@ def origin_request(head, target, host, port):
     lines = head.split("\r\n")
     method, _, version = lines[0].split(" ", 2)
     path = "/" + target.split("://", 1)[1].partition("/")[2]
-    kept = [line for line in lines[1:] if line.split(":", 1)[0].lower() not in DROPPED_HEADERS]
+    dropped = set(DROPPED_HEADERS) | connection_options(head)
+    kept = [line for line in lines[1:] if line.split(":", 1)[0].lower() not in dropped]
     authority = host if port == 80 else f"{host}:{port}"
     out = [f"{method} {path} {version}", f"Host: {authority}", *kept, "Connection: close", "", ""]
     return "\r\n".join(out).encode("latin-1")
