@@ -185,14 +185,15 @@ fn a_state_not_known_refuses_until_a_notice_says_it() {
 }
 
 #[test]
-fn sleep_and_the_display_turning_off_each_announce_sleep_once() {
+fn sleep_the_display_turning_off_and_every_suspend_announce_sleep() {
     assert_eq!(
         told(vec![
             WindowEvent::SessionRead(Ok(UNLOCKED)),
             WindowEvent::Suspend,
             WindowEvent::Resume,
             WindowEvent::Display(false),
-            // Already asleep: nothing more to announce.
+            // In the dark already, a suspend is announced again: the
+            // thread waits for the controller before Windows suspends.
             WindowEvent::Suspend,
             lock(),
             WindowEvent::Resume,
@@ -205,12 +206,39 @@ fn sleep_and_the_display_turning_off_each_announce_sleep_once() {
             Told::Sleep(1),
             Told::Session(None),
             Told::Sleep(2),
-            Told::Nothing,
+            Told::Sleep(3),
             Told::Nothing,
             Told::Nothing,
             Told::Session(Some(Blocked::Locked)),
             Told::Session(None),
         ]
+    );
+}
+
+#[test]
+fn a_display_that_cannot_be_followed_refuses_starts() {
+    let unwatched = || WindowEvent::DisplayUnwatched(io::Error::other("refused"));
+    let why = "the display's state cannot be followed: refused";
+    assert_eq!(
+        told(vec![
+            WindowEvent::SessionRead(Ok(UNLOCKED)),
+            unwatched(),
+            // A state not known comes before the lock, as the session's
+            // own does: starts stay refused for the same reason.
+            lock(),
+            unlock(),
+        ]),
+        [
+            Told::Session(None),
+            unknown(why),
+            Told::Nothing,
+            Told::Nothing,
+        ]
+    );
+    // Before the session is read, its own reason comes first.
+    assert_eq!(
+        told(vec![unwatched()]),
+        [unknown("the session state is not read yet")]
     );
 }
 
@@ -221,16 +249,9 @@ fn other_events_tell_the_session_nothing() {
             WindowEvent::Other(0x1a),
             WindowEvent::Close,
             WindowEvent::EndSession,
-            WindowEvent::DisplayUnwatched(io::Error::other("x")),
             WindowEvent::Ended { failure: None },
         ]),
-        [
-            Told::Nothing,
-            Told::Nothing,
-            Told::Nothing,
-            Told::Nothing,
-            Told::Nothing
-        ]
+        [Told::Nothing, Told::Nothing, Told::Nothing, Told::Nothing]
     );
 }
 
@@ -270,18 +291,12 @@ fn a_mark_wakes_its_waiter_when_raised() {
     assert!(mark.wait_for(2, Duration::ZERO));
 }
 
-/// A handler on its own channel, and the marks it waits on.
-fn notices() -> (
-    Notices,
-    mpsc::UnboundedReceiver<Message>,
-    Arc<Mark>,
-    Arc<Mark>,
-) {
+/// A handler on its own channel, and the mark it waits on.
+fn notices() -> (Notices, mpsc::UnboundedReceiver<Message>, Arc<Mark>) {
     let (send, inbox) = mpsc::unbounded_channel();
     let released = Arc::new(Mark::default());
-    let ended = Arc::new(Mark::default());
-    let notices = Notices::new(send, Arc::clone(&released), Arc::clone(&ended));
-    (notices, inbox, released, ended)
+    let notices = Notices::new(send, Arc::clone(&released));
+    (notices, inbox, released)
 }
 
 fn drained(inbox: &mut mpsc::UnboundedReceiver<Message>) -> Vec<Message> {
@@ -290,12 +305,12 @@ fn drained(inbox: &mut mpsc::UnboundedReceiver<Message>) -> Vec<Message> {
 
 #[test]
 fn a_close_logoff_or_the_threads_end_quits() {
-    let (mut notices, mut inbox, _released, ended) = notices();
+    let (mut notices, mut inbox, released) = notices();
     notices.handle(WindowEvent::Close);
     notices.handle(WindowEvent::Ended {
         failure: Some("the message thread panicked: x".to_owned()),
     });
-    ended.raise(1);
+    released.raise(ENDED);
     let ending = Instant::now();
     notices.handle(WindowEvent::EndSession);
     assert!(ending.elapsed() < RELEASE_BEFORE_LOGOFF);
@@ -305,7 +320,7 @@ fn a_close_logoff_or_the_threads_end_quits() {
 
 #[test]
 fn sleep_waits_for_the_controller_to_let_go_and_no_longer() {
-    let (mut notices, mut inbox, released, _ended) = notices();
+    let (mut notices, mut inbox, released) = notices();
     notices.handle(WindowEvent::SessionRead(Ok(UNLOCKED)));
     let raiser = Arc::clone(&released);
     let raising = thread::spawn(move || {
@@ -325,6 +340,21 @@ fn sleep_waits_for_the_controller_to_let_go_and_no_longer() {
         waited >= RELEASE_BEFORE_SLEEP && waited < RELEASE_BEFORE_SLEEP * 5,
         "{waited:?}"
     );
+    // A suspend in the dark waits again, for a notice of its own.
+    let suspending = Instant::now();
+    notices.handle(WindowEvent::Suspend);
+    let waited = suspending.elapsed();
+    assert!(
+        waited >= RELEASE_BEFORE_SLEEP && waited < RELEASE_BEFORE_SLEEP * 5,
+        "{waited:?}"
+    );
+    // Once the controller has ended, nothing is held: no wait.
+    released.raise(ENDED);
+    notices.handle(WindowEvent::Resume);
+    notices.handle(WindowEvent::Display(true));
+    let suspending = Instant::now();
+    notices.handle(WindowEvent::Suspend);
+    assert!(suspending.elapsed() < RELEASE_BEFORE_SLEEP);
     assert_eq!(
         drained(&mut inbox),
         [
@@ -332,6 +362,9 @@ fn sleep_waits_for_the_controller_to_let_go_and_no_longer() {
             Message::Sleep(1),
             Message::Session(None),
             Message::Sleep(2),
+            Message::Sleep(3),
+            Message::Session(None),
+            Message::Sleep(4),
         ]
     );
 }
@@ -422,11 +455,7 @@ const AT_ONCE: Duration = Duration::from_secs(1);
 fn a_lock_from_the_message_thread_releases_a_held_button_at_once() {
     let output = FakeOutput::default();
     let (controller, links) = holding(output.clone());
-    let mut handler = Notices::new(
-        links.send.clone(),
-        Arc::new(Mark::default()),
-        Arc::new(Mark::default()),
-    );
+    let mut handler = Notices::new(links.send.clone(), Arc::new(Mark::default()));
     handler.handle(WindowEvent::SessionRead(Ok(UNLOCKED)));
     // The message thread, as the daemon runs it: events on its own thread.
     let (events, heard) = std_mpsc::channel::<WindowEvent>();
@@ -478,12 +507,7 @@ fn locking_the_desktop_releases_a_held_button_at_once_and_unlocking_allows_start
     let output = FakeOutput::default();
     let (controller, links) = holding(output.clone());
     let released = Arc::new(Mark::default());
-    let ended = Arc::new(Mark::default());
-    let mut handler = Notices::new(
-        links.send.clone(),
-        Arc::clone(&released),
-        Arc::clone(&ended),
-    );
+    let mut handler = Notices::new(links.send.clone(), Arc::clone(&released));
     let thread = MessageThread::spawn(move |event| handler.handle(event), AT_ONCE * 5).unwrap();
     let view = links.view.clone();
     let send = links.send.clone();
@@ -524,7 +548,7 @@ fn locking_the_desktop_releases_a_held_button_at_once_and_unlocking_allows_start
         send.send(Message::Quit).unwrap();
     };
     runtime().block_on(async { tokio::join!(controller.run(), steps) });
-    ended.raise(1);
+    released.raise(ENDED);
     thread.quit_and_join(AT_ONCE).unwrap();
     let runs = output.0.lock().unwrap().len();
     assert_eq!(output.presses(runs - 1), [PressState::Down, PressState::Up]);

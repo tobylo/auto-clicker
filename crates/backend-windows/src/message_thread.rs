@@ -143,13 +143,17 @@ pub enum JoinError {
     TimedOut,
     /// It panicked outside its handler and window procedure.
     Panicked,
+    /// It ended on its own before it was told to quit, for this reason (its
+    /// loop failed, or its handler or window procedure panicked).
+    Failed(String),
 }
 
 /// The running message thread: post to it, and end it.
 pub struct MessageThread {
     remote: Remote,
-    /// Signalled (or dropped) on the thread's way out.
-    done: mpsc::Receiver<()>,
+    /// Sent on (or dropped) on the thread's way out: why it ended on its
+    /// own, if it did.
+    done: mpsc::Receiver<Option<String>>,
     thread: JoinHandle<()>,
 }
 
@@ -218,16 +222,18 @@ impl MessageThread {
     ///
     /// # Errors
     /// [`JoinError::TimedOut`] when it is still running at the deadline,
-    /// [`JoinError::Panicked`] when it panicked.
+    /// [`JoinError::Panicked`] when it panicked, and [`JoinError::Failed`]
+    /// when it had ended on its own.
     pub fn quit_and_join(self, within: Duration) -> Result<(), JoinError> {
         // A thread that already ended has no window left to post to.
         let _ = self.remote.quit();
-        match self.done.recv_timeout(within) {
-            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                self.thread.join().map_err(|_| JoinError::Panicked)
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => Err(JoinError::TimedOut),
-        }
+        let failure = match self.done.recv_timeout(within) {
+            Ok(failure) => failure,
+            Err(mpsc::RecvTimeoutError::Disconnected) => None,
+            Err(mpsc::RecvTimeoutError::Timeout) => return Err(JoinError::TimedOut),
+        };
+        self.thread.join().map_err(|_| JoinError::Panicked)?;
+        failure.map_or(Ok(()), |why| Err(JoinError::Failed(why)))
     }
 }
 
@@ -293,10 +299,13 @@ fn run(
     handler: Handler,
     shared: &Remote,
     ready: &mpsc::Sender<io::Result<()>>,
-    finished: mpsc::Sender<()>,
+    finished: mpsc::Sender<Option<String>>,
 ) {
     // Dropped last, so the joiner hears of the end only once all is done.
-    let _finished = Finished(finished);
+    let mut finished = Finished {
+        send: finished,
+        failure: None,
+    };
     HANDLER.set(Some(handler));
     SHARED.set(Some(shared.clone()));
     let class = class_name();
@@ -307,6 +316,7 @@ fn run(
     // An `Ended` after a refused start would reach a controller that never
     // runs; only a thread that was ready reports it.
     if let Some(failure) = failure {
+        finished.failure.clone_from(&failure);
         emit(WindowEvent::Ended { failure });
     }
     HANDLER.set(None);
@@ -351,13 +361,17 @@ fn serve(
     Some(failure.or_else(|| FAILURE.take()))
 }
 
-/// Sends on the done channel when dropped: the thread's last act.
-struct Finished(mpsc::Sender<()>);
+/// Sends on the done channel when dropped, the thread's last act: why the
+/// thread ended on its own, if it did.
+struct Finished {
+    send: mpsc::Sender<Option<String>>,
+    failure: Option<String>,
+}
 
 impl Drop for Finished {
     fn drop(&mut self) {
         // The joiner may have stopped waiting.
-        let _ = self.0.send(());
+        let _ = self.send.send(self.failure.take());
     }
 }
 
@@ -555,16 +569,17 @@ fn display_setting(lparam: LPARAM) -> Option<bool> {
     }
     // SAFETY: for `PBT_POWERSETTINGCHANGE` Windows passes a
     // `POWERBROADCAST_SETTING` that lives for the message's handling; only
-    // its header is read here.
-    let header = unsafe { &*setting };
-    if !same_guid(&header.PowerSetting, &GUID_CONSOLE_DISPLAY_STATE)
-        || usize::try_from(header.DataLength).map_or(true, |len| len < size_of::<u32>())
+    // its setting and length are read here.
+    let (guid, length) = unsafe { ((*setting).PowerSetting, (*setting).DataLength) };
+    if !same_guid(&guid, &GUID_CONSOLE_DISPLAY_STATE)
+        || usize::try_from(length).map_or(true, |len| len < size_of::<u32>())
     {
         return None;
     }
-    // SAFETY: `DataLength` says at least four bytes of data follow the
-    // header, starting at `Data`; they may be unaligned.
-    let state = unsafe { header.Data.as_ptr().cast::<u32>().read_unaligned() };
+    // SAFETY: `DataLength` says at least four bytes of data start at
+    // `Data`; they are read through the notice's own pointer, not a
+    // reference to its one-byte array, and may be unaligned.
+    let state = unsafe { (&raw const (*setting).Data).cast::<u32>().read_unaligned() };
     Some(state != DISPLAY_OFF)
 }
 

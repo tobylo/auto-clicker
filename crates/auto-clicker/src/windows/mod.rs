@@ -31,7 +31,7 @@ use auto_clicker_core::recording::CurrentFile;
 use tokio::sync::watch;
 
 use crate::config::load_config;
-use notices::{Mark, Notices};
+use notices::{ENDED, Mark, Notices};
 use platform::Windows;
 
 /// The message box's title.
@@ -172,12 +172,7 @@ fn run() -> ExitCode {
     controller.keep_config_file(file);
     controller.keep_current_file(CurrentFile::of_environment());
     let released = Arc::new(Mark::default());
-    let ended = Arc::new(Mark::default());
-    let mut notices = Notices::new(
-        links.send.clone(),
-        Arc::clone(&released),
-        Arc::clone(&ended),
-    );
+    let mut notices = Notices::new(links.send.clone(), Arc::clone(&released));
     let thread =
         match MessageThread::spawn(move |event| notices.handle(event), MESSAGE_THREAD_START) {
             Ok(thread) => thread,
@@ -191,12 +186,16 @@ fn run() -> ExitCode {
     // the controller always has a reader.
     let _view = links.view;
     runtime.block_on(async {
-        tokio::spawn(report_releases(links.released_for_sleep, released));
+        tokio::spawn(report_releases(
+            links.released_for_sleep,
+            Arc::clone(&released),
+        ));
         controller.run().await;
     });
-    // The controller has ended and released everything: a logoff waiting
-    // for that may go on.
-    ended.raise(1);
+    // The controller has ended and released everything: a logoff or a
+    // sleep waiting for that may go on, whether or not its report was
+    // passed on before the runtime stopped.
+    released.raise(ENDED);
     end(thread)
 }
 
@@ -215,6 +214,8 @@ fn end(thread: MessageThread) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(JoinError::TimedOut) => fail("the message thread did not end in time"),
         Err(JoinError::Panicked) => fail("the message thread panicked"),
+        // Already logged when it ended.
+        Err(JoinError::Failed(_)) => ExitCode::FAILURE,
     }
 }
 
@@ -280,6 +281,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert!(status.success());
         assert_eq!(text, "auto-clicker: a line\n");
+    }
+
+    #[test]
+    fn the_controllers_release_reports_reach_the_message_threads_mark() {
+        let (report, reports) = watch::channel(0);
+        let released = Arc::new(Mark::default());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let passing = tokio::spawn(report_releases(reports, Arc::clone(&released)));
+            report.send_replace(2);
+            // The controller is gone: the task passes on the last report
+            // and ends.
+            drop(report);
+            passing.await.unwrap();
+        });
+        assert!(released.wait_for(2, Duration::ZERO));
     }
 
     #[test]

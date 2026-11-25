@@ -136,7 +136,84 @@ fn a_panicking_handler_ends_the_thread_and_says_why() {
         ended[0].starts_with("Failed: the message thread panicked: on close"),
         "{ended:?}"
     );
-    // The thread destroyed its window on the way out and ended.
+    // The thread destroyed its window on the way out and ended, and its
+    // join says why.
+    let joined = thread.quit_and_join(JOIN);
+    assert!(
+        matches!(&joined, Err(JoinError::Failed(why)) if why.contains("on close")),
+        "{joined:?}"
+    );
+}
+
+/// The first event `pick` takes, within the arrival bound.
+fn first<T>(
+    received: &mpsc::Receiver<WindowEvent>,
+    mut pick: impl FnMut(WindowEvent) -> Option<T>,
+) -> T {
+    let deadline = Instant::now() + ARRIVAL;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let event = received.recv_timeout(left).unwrap();
+        if let Some(picked) = pick(event) {
+            return picked;
+        }
+    }
+}
+
+#[test]
+fn the_retry_timer_registers_again_and_other_timers_are_reported() {
+    let (thread, received) = started();
+    // Whatever Windows says on registering, the start has said it by now.
+    let remote = thread.remote();
+    remote.post(WM_TIMER, RETRY_TIMER + 1, 0).unwrap();
+    remote.post(WM_TIMER, RETRY_TIMER, 0).unwrap();
+    // The other timer is only a wake; the retry timer registers again and
+    // says so, whether or not Windows lets it.
+    let mut after_other = false;
+    let what = first(&received, |event| match event {
+        WindowEvent::Other(WM_TIMER) => {
+            after_other = true;
+            None
+        }
+        WindowEvent::SessionRead(_) | WindowEvent::SessionUnwatched(_) if after_other => {
+            Some("registered")
+        }
+        _ => None,
+    });
+    assert_eq!(what, "registered");
+    thread.quit_and_join(JOIN).unwrap();
+}
+
+#[test]
+#[allow(unsafe_code)]
+fn a_display_notice_reaches_the_handler() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SMTO_NORMAL, SendMessageTimeoutW};
+
+    let (thread, received) = started();
+    let off = Setting::new(GUID_CONSOLE_DISPLAY_STATE, 4, 0);
+    let power_setting = usize::try_from(PBT_POWERSETTINGCHANGE).unwrap();
+    let Some(Window(hwnd)) = *thread.remote.0.lock().unwrap() else {
+        panic!("no window");
+    };
+    let mut answer = 0;
+    // SAFETY: `hwnd` is the running thread's window. A notice carrying a
+    // pointer can only be sent, not posted; the call returns once the
+    // window procedure handled it, while `off` is alive, or at the timeout.
+    let sent = unsafe {
+        SendMessageTimeoutW(
+            hwnd,
+            WM_POWERBROADCAST,
+            power_setting,
+            std::ptr::from_ref(&off) as LPARAM,
+            SMTO_NORMAL,
+            10_000,
+            &mut answer,
+        )
+    };
+    assert_ne!(sent, 0, "{}", io::Error::last_os_error());
+    first(&received, |event| {
+        matches!(event, WindowEvent::Display(false)).then_some(())
+    });
     thread.quit_and_join(JOIN).unwrap();
 }
 
@@ -191,23 +268,22 @@ fn session_notices_map_to_changes() {
     assert_eq!(SessionChange::from_code(usize::MAX), None);
 }
 
-/// A `POWERBROADCAST_SETTING` with four bytes of data.
+/// A `POWERBROADCAST_SETTING` with four bytes of data, laid out as
+/// Windows sends it: the data follows the length directly, with no padding
+/// in between.
 #[repr(C)]
 struct Setting {
-    header: POWERBROADCAST_SETTING,
-    rest: [u8; 3],
+    guid: windows_sys::core::GUID,
+    length: u32,
+    data: [u8; 4],
 }
 
 impl Setting {
     fn new(guid: windows_sys::core::GUID, length: u32, value: u32) -> Setting {
-        let [first, rest @ ..] = value.to_le_bytes();
         Setting {
-            header: POWERBROADCAST_SETTING {
-                PowerSetting: guid,
-                DataLength: length,
-                Data: [first],
-            },
-            rest,
+            guid,
+            length,
+            data: value.to_le_bytes(),
         }
     }
 
@@ -218,6 +294,11 @@ impl Setting {
 
 #[test]
 fn the_display_setting_says_on_or_off() {
+    // The fixture's data sits where the notice's does.
+    assert_eq!(
+        std::mem::offset_of!(Setting, data),
+        std::mem::offset_of!(POWERBROADCAST_SETTING, Data)
+    );
     let display = GUID_CONSOLE_DISPLAY_STATE;
     assert_eq!(Setting::new(display, 4, 0).read(), Some(false));
     assert_eq!(Setting::new(display, 4, 1).read(), Some(true));

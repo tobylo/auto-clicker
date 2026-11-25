@@ -5,7 +5,7 @@
 //! with the tree in `C:\work\<dir>`:
 //!
 //! ```text
-//! scripts/windows-vm/vm run --timeout 600 --workdir 'C:\work\<dir>' -- cargo test --locked -p auto-clicker --test windows_daemon -- --ignored --test-threads=1 --nocapture
+//! scripts/windows-vm/vm run --timeout 900 --workdir 'C:\work\<dir>' -- cargo test --locked -p auto-clicker --test windows_daemon -- --ignored --test-threads=1 --nocapture
 //! ```
 
 // Windows alone, as the daemon it drives.
@@ -26,6 +26,9 @@ const START: Duration = Duration::from_secs(20);
 const END: Duration = Duration::from_secs(10);
 /// How long an idle daemon is watched (the issue's criterion).
 const IDLE: Duration = Duration::from_secs(60);
+/// How many minutes are watched, at most, for one in which Windows sent
+/// the daemon nothing.
+const IDLE_TRIES: usize = 5;
 
 /// Folders of a daemon's own, removed when dropped.
 struct Home(PathBuf);
@@ -163,39 +166,24 @@ fn switches(pid: u32) -> BTreeMap<u32, u64> {
         "Get-CimInstance Win32_PerfRawData_PerfProc_Thread -Filter 'IDProcess = {pid}' \
          | ForEach-Object {{ \"$($_.IDThread) $($_.ContextSwitchesPersec)\" }}"
     ));
-    text.lines()
-        .filter_map(|line| {
-            let (thread, count) = line.trim().split_once(' ')?;
-            Some((thread.parse().ok()?, count.parse().ok()?))
+    // Every row is read, or the sample fails: a row dropped, or none at
+    // all, would measure nothing and pass.
+    let sample: BTreeMap<u32, u64> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let (thread, count) = line.trim().split_once(' ').expect(line);
+            (thread.parse().expect(line), count.parse().expect(line))
         })
-        .collect()
+        .collect();
+    assert!(!sample.is_empty(), "no thread counters for {pid}: {text:?}");
+    sample
 }
 
-#[test]
-#[ignore = "starts the daemon in the desktop and watches it for a minute: run in the WN01 VM through `vm run`"]
-fn an_idle_daemon_wakes_for_nothing_of_its_own() {
-    let home = Home::new("idle");
-    let mut daemon = home.start();
-    home.running(&mut daemon);
-    // Let start-up settle: the loader's worker threads end on their own.
-    sleep(Duration::from_secs(10));
-    let logged = home.log().len();
-    let before = switches(daemon.id());
-    sleep(IDLE);
-    let after = switches(daemon.id());
-    let woken: Vec<String> = home.log()[logged..]
-        .lines()
-        .filter(|line| line.contains("woken by window message"))
-        .map(str::to_owned)
-        .collect();
-    // A timer, or a message the program posts to itself, is the program's
-    // own wake, whatever the count says.
-    let own: Vec<&String> = woken.iter().filter(|line| own_message(line)).collect();
-    assert!(own.is_empty(), "the daemon woke itself: {own:?}");
-    ask_to_quit(&daemon);
-    assert!(ended(&mut daemon, END).success(), "{}", home.log());
+/// How many context switches the threads in `after` made since `before`.
+fn wakes(before: &BTreeMap<u32, u64>, after: &BTreeMap<u32, u64>) -> u64 {
     let mut wakes = 0;
-    for (thread, count) in &after {
+    for (thread, count) in after {
         let was = before.get(thread).copied().unwrap_or(0);
         let delta = count.saturating_sub(was);
         println!("thread {thread}: {was} -> {count} (+{delta})");
@@ -204,12 +192,54 @@ fn an_idle_daemon_wakes_for_nothing_of_its_own() {
     for gone in before.keys().filter(|thread| !after.contains_key(thread)) {
         println!("thread {gone}: ended during the minute");
     }
-    println!("woken by Windows: {woken:?}");
-    // Anything that woke the daemon came from Windows and is named in the
-    // log: no timer, no poll and no message to itself.
+    wakes
+}
+
+#[test]
+#[ignore = "starts the daemon in the desktop and watches it for up to five minutes: run in the WN01 VM through `vm run`"]
+fn an_idle_daemon_wakes_for_nothing_of_its_own() {
+    let home = Home::new("idle");
+    let mut daemon = home.start();
+    home.running(&mut daemon);
+    // Let start-up settle: the loader's worker threads end on their own.
+    sleep(Duration::from_secs(10));
+    // A minute counts once Windows sent nothing in it: then every context
+    // switch would be the daemon's own. A minute with Windows' messages
+    // is watched again.
+    let mut interrupted = Vec::new();
+    let mut quiet = false;
+    for _ in 0..IDLE_TRIES {
+        let logged = home.log().len();
+        let before = switches(daemon.id());
+        sleep(IDLE);
+        let after = switches(daemon.id());
+        let woken: Vec<String> = home.log()[logged..]
+            .lines()
+            .filter(|line| line.contains("woken by window message"))
+            .map(str::to_owned)
+            .collect();
+        // A timer, or a message the program posts to itself, is the
+        // program's own wake, whatever the count says.
+        let own: Vec<&String> = woken.iter().filter(|line| own_message(line)).collect();
+        assert!(own.is_empty(), "the daemon woke itself: {own:?}");
+        let wakes = wakes(&before, &after);
+        println!("woken by Windows: {woken:?}");
+        // No window message explains a wake: the daemon caused it.
+        assert!(
+            wakes == 0 || !woken.is_empty(),
+            "{wakes} context switches in {IDLE:?} with no window message to explain them"
+        );
+        if woken.is_empty() {
+            quiet = true;
+            break;
+        }
+        interrupted.push((wakes, woken));
+    }
+    ask_to_quit(&daemon);
+    assert!(ended(&mut daemon, END).success(), "{}", home.log());
     assert!(
-        wakes == 0 || !woken.is_empty(),
-        "{wakes} context switches in {IDLE:?} with no window message to explain them"
+        quiet,
+        "Windows woke the daemon in each of {IDLE_TRIES} minutes: {interrupted:?}"
     );
 }
 

@@ -7,8 +7,10 @@
 //! Two notices make the thread wait, each with its own deadline, since
 //! Windows goes on once the window procedure returns: before sleep it waits
 //! until the controller reports that nothing is held, and at logoff until
-//! the controller has ended. Neither the controller's stop nor its release
-//! ever waits on the message thread, so neither wait can deadlock.
+//! the controller has ended. Both wait on one [`Mark`]: the controller's
+//! reports raise it, and its end raises it to [`ENDED`], which satisfies
+//! every wait. Neither the controller's stop nor its release ever waits on
+//! the message thread, so neither wait can deadlock.
 
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
@@ -25,6 +27,9 @@ pub const RELEASE_BEFORE_SLEEP: Duration = Duration::from_secs(1);
 /// may end the process once the window procedure returns, and shows its
 /// "this app is preventing shutdown" screen after about five seconds.
 pub const RELEASE_BEFORE_LOGOFF: Duration = Duration::from_secs(3);
+/// The mark once the controller has ended, with nothing held: above every
+/// sleep notice.
+pub const ENDED: u64 = u64::MAX;
 
 /// A count that only goes up, which one thread waits on and another
 /// raises: the controller's reports to the message thread.
@@ -61,23 +66,16 @@ impl Mark {
 pub struct Notices {
     session: Session,
     send: mpsc::UnboundedSender<Message>,
-    /// The last sleep notice the controller let go for.
+    /// The last sleep notice the controller let go for, or [`ENDED`].
     released: Arc<Mark>,
-    /// Raised to 1 once the controller has ended, with nothing held.
-    ended: Arc<Mark>,
 }
 
 impl Notices {
-    pub fn new(
-        send: mpsc::UnboundedSender<Message>,
-        released: Arc<Mark>,
-        ended: Arc<Mark>,
-    ) -> Notices {
+    pub fn new(send: mpsc::UnboundedSender<Message>, released: Arc<Mark>) -> Notices {
         Notices {
             session: Session::default(),
             send,
             released,
-            ended,
         }
     }
 
@@ -86,7 +84,7 @@ impl Notices {
         match &event {
             WindowEvent::EndSession => {
                 self.send(Message::Quit);
-                if !self.ended.wait_for(1, RELEASE_BEFORE_LOGOFF) {
+                if !self.released.wait_for(ENDED, RELEASE_BEFORE_LOGOFF) {
                     log::line(format_args!(
                         "auto-clicker: the session ends before the daemon did"
                     ));
@@ -103,11 +101,6 @@ impl Notices {
             WindowEvent::Other(message) => {
                 return log::line(format_args!(
                     "auto-clicker: woken by window message {message:#06x}"
-                ));
-            }
-            WindowEvent::DisplayUnwatched(err) => {
-                return log::line(format_args!(
-                    "auto-clicker: the display's state cannot be followed: {err}"
                 ));
             }
             _ => {}
@@ -158,6 +151,9 @@ struct Session {
     unknown: Option<String>,
     suspended: bool,
     display_off: bool,
+    /// Why the display's state cannot be followed, when it cannot: then
+    /// the display could turn off unheard, so starts are refused.
+    display_unwatched: Option<String>,
     /// What the controller was last told; `None` before anything was.
     told: Option<Option<Blocked>>,
     /// How many times sleep was announced.
@@ -180,9 +176,13 @@ impl Session {
             WindowEvent::Suspend => self.suspended = true,
             WindowEvent::Resume => self.suspended = false,
             WindowEvent::Display(on) => self.display_off = !on,
+            WindowEvent::DisplayUnwatched(err) => {
+                self.display_unwatched =
+                    Some(format!("the display's state cannot be followed: {err}"));
+            }
             _ => return Told::Nothing,
         }
-        if self.asleep() && !was_asleep {
+        if self.announces_sleep(event, was_asleep) {
             self.sleeps = self.sleeps.saturating_add(1);
             self.told = Some(Some(Blocked::Sleeping));
             return Told::Sleep(self.sleeps);
@@ -228,31 +228,42 @@ impl Session {
         self.unknown = Some(why);
     }
 
+    /// Whether `event` announces sleep: it put the machine to sleep, or it
+    /// is a suspend. Each suspend is announced, even in the dark, so the
+    /// thread waits for the controller's report before Windows suspends,
+    /// whatever became of an earlier wait.
+    fn announces_sleep(&self, event: &WindowEvent, was_asleep: bool) -> bool {
+        let suspending = matches!(event, WindowEvent::Suspend);
+        self.asleep() && (suspending || !was_asleep)
+    }
+
     fn asleep(&self) -> bool {
         self.suspended || self.display_off
     }
 
     /// Why clicking may not run, or `None` when it may: sleep first, then
-    /// a state not known, then core's order of the lock and another
-    /// session in front.
+    /// a session state not known, then a display not followed, then core's
+    /// order of the lock and another session in front.
     fn blocked(&self) -> Option<Blocked> {
         if self.asleep() {
             return Some(Blocked::Sleeping);
         }
-        match (self.locked, self.active) {
-            (Some(locked), Some(active)) => SessionFacts {
-                locked,
-                active,
-                sleeping: false,
-            }
-            .blocked(),
-            _ => Some(Blocked::Unknown(
-                self.unknown
-                    .clone()
-                    .unwrap_or_else(|| "the session state is not read yet".to_owned())
-                    .into(),
-            )),
+        let (Some(locked), Some(active)) = (self.locked, self.active) else {
+            let why = self
+                .unknown
+                .as_deref()
+                .unwrap_or("the session state is not read yet");
+            return Some(Blocked::Unknown(why.to_owned().into()));
+        };
+        if let Some(why) = &self.display_unwatched {
+            return Some(Blocked::Unknown(why.clone().into()));
         }
+        SessionFacts {
+            locked,
+            active,
+            sleeping: false,
+        }
+        .blocked()
     }
 }
 
