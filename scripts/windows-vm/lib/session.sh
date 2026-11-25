@@ -29,7 +29,9 @@ run_job() {
         "C:\\wn01\\run-job.ps1 -CommandBase64 $encoded -TimeoutSeconds $seconds -Queue $queue -WorkDir '$workdir'; exit \$LASTEXITCODE"
 }
 
+# Under the lock: puts back a VM an interrupted rebuild left aside first.
 require_vm() {
+    restore_previous_vm
     [[ -f "$VM_DIR/base.qcow2" ]] || die "no VM built yet; run: vm build"
 }
 
@@ -70,13 +72,13 @@ cmd_start() {
     take_lock 60
     require_vm
     if machine_running "$RUN_DIR"; then
-        log "already running; SSH on 127.0.0.1:$SSH_PORT"
-        return 0
+        log "already running; waiting for SSH and the runners"
+    else
+        prepare_run_dir
+        install_proxy "$RUN_DIR"
+        trap 'kill_machine "$RUN_DIR"' EXIT
+        start_machine "$RUN_DIR" "$RUN_DIR/disk.qcow2"
     fi
-    prepare_run_dir
-    install_proxy "$RUN_DIR"
-    trap 'kill_machine "$RUN_DIR"' EXIT
-    start_machine "$RUN_DIR" "$RUN_DIR/disk.qcow2"
     wait_ssh "$RUN_DIR" "$VM_DIR" 600
     wait_runners "$VM_DIR" 300
     trap - EXIT
@@ -113,15 +115,26 @@ cmd_status() {
     return 0
 }
 
+# How long `vm ssh` and `vm push` may take: WN01_SSH_TIMEOUT, default an hour.
+ssh_seconds() {
+    seconds_arg WN01_SSH_TIMEOUT "${WN01_SSH_TIMEOUT:-3600}" 86400
+}
+
 cmd_ssh() {
+    local seconds
+    seconds="$(ssh_seconds)"
+    take_lock 600
     require_running
-    vm_ssh "${WN01_SSH_TIMEOUT:-3600}" "$VM_DIR" "$@"
+    vm_ssh "$seconds" "$VM_DIR" "$@"
 }
 
 cmd_push() {
     (($# >= 1 && $# <= 2)) || die "usage: vm push LOCAL_FILE_OR_FOLDER [WINDOWS_FOLDER, default C:\\work]"
+    local seconds
+    seconds="$(ssh_seconds)"
+    take_lock 600
     require_running
-    vm_push "${WN01_SSH_TIMEOUT:-3600}" "$VM_DIR" "${2:-C:\\work}" "$1"
+    vm_push "$seconds" "$VM_DIR" "${2:-C:\\work}" "$1"
 }
 
 # The value after option $1, or a usage error when there is none.
@@ -143,7 +156,7 @@ cmd_run() {
         shift
     done
     (($#)) || die "usage: vm run [--elevated] [--timeout SECONDS] [--workdir DIR] -- COMMAND..."
-    [[ "$seconds" =~ ^[0-9]+$ ]] && ((seconds >= 1 && seconds <= 3600)) || die "--timeout takes 1 to 3600 seconds"
+    seconds="$(seconds_arg --timeout "$seconds" 3600)"
     [[ "$workdir" != *"'"* ]] || die "--workdir cannot contain a quote"
     take_lock "$seconds"
     require_running
@@ -154,6 +167,8 @@ cmd_screen() {
     local out="${1:-$PWD/wn01-screen.png}"
     require_running
     out="$(realpath -m "$out")"
+    # The monitor reads one command per line and splits on spaces.
+    [[ "$out" =~ ^[[:graph:]]+$ ]] || die "the screenshot path cannot contain spaces or control characters: $out"
     rm -f "$out"
     monitor "$RUN_DIR" "screendump $out -f png" >/dev/null || die "the QEMU monitor did not answer"
     [[ "$(head -c 8 "$out" 2>/dev/null | od -An -tx1 | tr -d ' \n')" == 89504e470d0a1a0a ]] ||
@@ -163,6 +178,7 @@ cmd_screen() {
 
 cmd_key() {
     (($#)) || die "usage: vm key KEYS... (QEMU names, e.g. ctrl-alt-delete, ret, meta_l-r)"
+    take_lock 600
     require_running
     local key
     for key in "$@"; do

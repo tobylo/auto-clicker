@@ -119,6 +119,20 @@ namespace Wn01
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
 
+        [StructLayout(LayoutKind.Sequential)]
+        struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+        {
+            public long TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime;
+            public uint TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses;
+        }
+
+        const int JobObjectBasicAccountingInformation = 1;
+        const int TERMINATION_WAIT_MS = 10000;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool QueryInformationJobObject(SafeFileHandle job, int infoClass,
+            out JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info, int length, IntPtr returnLength);
+
         /// Runs the job's command line with stdout and stderr written to its
         /// two files, and ends its whole tree at the deadline or once the
         /// command itself exits.
@@ -135,8 +149,11 @@ namespace Wn01
                 }
                 finally
                 {
-                    // Whatever the command left running ends with it.
+                    // Whatever the command left running ends with it, before
+                    // the result is written: a descendant still holding the
+                    // output files would keep the client from reading them.
                     TerminateJobObject(job, TIMED_OUT_EXIT_CODE);
+                    WaitForEmptyJob(job);
                     CloseHandle(process.hThread);
                     CloseHandle(process.hProcess);
                 }
@@ -162,6 +179,25 @@ namespace Wn01
             uint code;
             Check(GetExitCodeProcess(process.hProcess, out code), "GetExitCodeProcess");
             return new JobResult { ExitCode = unchecked((int)code), TimedOut = false };
+        }
+
+        /// Waits, up to TERMINATION_WAIT_MS, until no process is left in the
+        /// job. Termination is asynchronous and the job object signals no
+        /// such event, so this checks its count every 50 ms.
+        static void WaitForEmptyJob(SafeFileHandle job)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(TERMINATION_WAIT_MS);
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info;
+            int size = Marshal.SizeOf(typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION));
+            while (QueryInformationJobObject(job, JobObjectBasicAccountingInformation, out info, size, IntPtr.Zero)
+                && info.ActiveProcesses > 0)
+            {
+                if (DateTime.UtcNow >= deadline)
+                {
+                    throw new TimeoutException("the job's processes did not end within " + TERMINATION_WAIT_MS + " ms");
+                }
+                System.Threading.Thread.Sleep(50);
+            }
         }
 
         static SafeFileHandle CreateKillOnCloseJob()

@@ -4,8 +4,9 @@ Hands one command to the runner in tester's desktop and waits for its result.
 
 .DESCRIPTION
 Run over SSH by `vm run`. Writes the job into the queue's inbox (a temp file,
-then a rename, so the runner never reads half a job), waits for result.json
-with its own deadline, prints the job's stdout and stderr, and exits with the
+then a rename, so the runner never reads half a job) with an absolute
+deadline, TimeoutSeconds from now, which the runner ends it at however long it
+waited in the queue. It waits for result.json for that long plus a grace, prints the job's stdout and stderr, and exits with the
 job's exit code: 124 when the job hit its deadline, 125 when the runner could
 not run it, 126 when no result came back in time.
 
@@ -52,14 +53,17 @@ New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
 $id = [guid]::NewGuid().ToString('N')
 $out = Join-Path $QueueDir "outbox\$id"
 New-Item -ItemType Directory -Path $out -Force | Out-Null
-$job = @{ command = $command; workDir = $WorkDir; timeoutSeconds = $TimeoutSeconds } | ConvertTo-Json -Compress
+$submitted = [DateTime]::UtcNow
+$expires = $submitted.AddSeconds($TimeoutSeconds).ToString('o')
+$job = @{ command = $command; workDir = $WorkDir; timeoutSeconds = $TimeoutSeconds; expiresUtc = $expires } | ConvertTo-Json -Compress
 $inbox = Join-Path $QueueDir 'inbox'
 [IO.File]::WriteAllText((Join-Path $inbox "$id.tmp"), $job)
 Move-Item -LiteralPath (Join-Path $inbox "$id.tmp") -Destination (Join-Path $inbox "$id.json")
 
 $resultPath = Join-Path $out 'result.json'
 try {
-    if (-not (Wait-Result $resultPath (Get-Date).AddSeconds($TimeoutSeconds + $GraceSeconds))) {
+    # By then the runner has ended the job, unless the runner itself is gone.
+    if (-not (Wait-Result $resultPath $submitted.ToLocalTime().AddSeconds($TimeoutSeconds + $GraceSeconds))) {
         [Console]::Error.WriteLine("no result from the $Queue runner within $($TimeoutSeconds + $GraceSeconds) s; is it running?")
         exit 126
     }

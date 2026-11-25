@@ -42,6 +42,9 @@ function Get-ProxyAnswer([string] $Url) {
     return [int] $code
 }
 
+# The control: a direct connection that must work, so a check that cannot
+# connect to anything does not read as "blocked".
+Report (Test-Direct '10.0.2.100' 3128) 'direct connection to the proxy at 10.0.2.100:3128 (control)'
 foreach ($target in $Targets + @('1.1.1.1:443', '10.0.2.2:22')) {
     $hostName, $port = $target -split ':'
     Report (-not (Test-Direct $hostName ([int] $port))) "no direct connection to $target"

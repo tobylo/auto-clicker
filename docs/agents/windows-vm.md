@@ -43,13 +43,14 @@ All of them print to stderr as they go, and every wait in them has a deadline.
 | `vm key KEYS...` | Presses keys in the VM, by QEMU names: `ret`, `esc`, `ctrl-alt-delete`, `meta_l-r`. |
 | `vm push PATH [DIR]` | Copies a local file or folder into `DIR` in the VM (default `C:\work`), as a tar stream over SSH. `scp` and `sftp` do not work: Windows' OpenSSH server ends its SFTP subsystem at once. |
 | `vm ssh [COMMAND]` | Runs PowerShell over SSH as tester, elevated, with no desktop. Use it for files, builds and inspection. |
-| `vm selftest` | Checks the running VM: an injected click reaches a window, the screen is captured, SSH listens on loopback only, and the VM reaches nothing it should not. |
+| `vm selftest` | Checks the running VM: an injected click reaches a window, a job past its deadline is ended with everything it started, the screen is captured, SSH listens on loopback only, and the VM reaches nothing it should not. |
 | `vm status` | Shows the Windows build, days until the evaluation expires, and whether the VM is running. |
 | `vm stop` | Shuts Windows down (3 minutes, then the VM is ended) and stops QEMU and the TPM. |
 | `vm reset` | Discards every change made since the build. The next start boots the clean build. |
 
 `vm run` details:
-- The default `--timeout` is 120 seconds and the maximum is 3600. At the deadline, the command's whole process tree is ended: it runs in its own Windows job object, and so does everything it starts.
+- The default `--timeout` is 120 seconds and the maximum is 3600. The deadline counts from when `vm run` hands the command in, including any time it waits behind another job. At the deadline, the command's whole process tree is ended: it runs in its own Windows job object, and so does everything it starts.
+- A `vm run` you interrupt (Ctrl-C, a lost SSH connection) does not stop its command: the command runs on in the VM until its deadline.
 - Exit code 124 means the deadline hit, 125 that the runner could not start the command, and 126 that the runner did not answer.
 - `--elevated` runs the command through the second runner, which has administrator rights in the same desktop. Use it for a window that is meant to be elevated, as in a UIPI test.
 
@@ -68,7 +69,7 @@ scripts/windows-vm/vm screen .claude/local/after-test.png
 scripts/windows-vm/vm stop
 ```
 
-- One session uses the VM at a time. `vm run`, `start`, `stop`, `reset`, `build` and `selftest` take a lock: a second session waits, and gives up with a message once its deadline passes. Stop the VM when your runs are done. It never starts on its own.
+- One command uses the VM at a time. Every command but `status` and `screen` takes a lock: a second session's command waits, and gives up with a message once its deadline passes. The lock covers one command, not a series: another session's command can run between two of yours. Stop the VM when your runs are done, unless it was already running when you started: then another session is using it, and `stop` or `reset` would end its work. The VM never starts on its own.
 - The PR names the VM's Windows build, as `vm status` prints it.
 - A measurement that needs a real graphics card (a game at full speed, fullscreen behaviour, timing without a hypervisor) is marked VM-only.
 

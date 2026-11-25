@@ -34,6 +34,14 @@ public static class Wn01Input
     [DllImport("user32.dll")]
     static extern int GetSystemMetrics(int index);
 
+    /// Releases the left button: after a click whose up event Windows did
+    /// not take, so the test never leaves the button pressed.
+    public static uint Release()
+    {
+        INPUT[] inputs = new INPUT[] { Mouse(0, 0, LEFTUP) };
+        return SendInput(1, inputs, Marshal.SizeOf(typeof(INPUT)));
+    }
+
     /// Clicks at a screen point; returns how many events Windows accepted.
     public static uint ClickAt(int x, int y)
     {
@@ -86,6 +94,9 @@ $form.Add_Shown({ $send.Start(); $giveUp.Start() })
 
 if ($script:sent -ne 3) {
     Write-Output "SendInput accepted $($script:sent) of 3 events"
+    if ($script:sent -ge 2 -and [Wn01Input]::Release() -ne 1) {
+        Write-Output 'and the left button could not be released: reset the VM (vm stop; vm reset)'
+    }
     exit 2
 }
 if (-not $script:clicked) {

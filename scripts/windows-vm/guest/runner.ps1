@@ -8,9 +8,10 @@ Started at tester's logon by a scheduled task (setup.ps1 registers two: the
 SSH has no desktop to inject input into; one started here has.
 
 A job is <id>.json in the queue's inbox, written by run-job.ps1:
-  { "command": "...", "workDir": "...", "timeoutSeconds": 120 }
+  { "command": "...", "workDir": "...", "timeoutSeconds": 120,
+    "expiresUtc": "2026-11-25T10:00:00.0000000Z" }
 The runner moves it to work\, runs it through JobRunner (its own Win32 job
-object, ended at the deadline and when the command exits), and writes
+object, ended at expiresUtc and when the command exits), and writes
 outbox\<id>\stdout.txt, stderr.txt and, last, result.json.
 #>
 param(
@@ -38,7 +39,9 @@ function Write-AtomicFile([string] $Path, [string] $Text) {
 }
 
 function Read-Job([string] $Path) {
-    $job = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    # run-job.ps1 writes UTF-8 without a BOM, which Windows PowerShell would
+    # otherwise read in the ANSI code page.
+    $job = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not ($job.command -is [string]) -or $job.command.Length -eq 0) {
         throw 'job has no command'
     }
@@ -49,7 +52,19 @@ function Read-Job([string] $Path) {
     if ($timeout -lt 1 -or $timeout -gt $MaxTimeoutSeconds) {
         throw "timeoutSeconds must be 1 to $MaxTimeoutSeconds"
     }
-    return $job
+    if (-not ($job.expiresUtc -is [string])) { throw 'job has no expiresUtc' }
+    $expires = [DateTime]::ParseExact($job.expiresUtc, 'o', [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind)
+    if ($expires.Kind -ne [DateTimeKind]::Utc) { throw 'expiresUtc is not a UTC time' }
+    return $job, $expires
+}
+
+# What is left of the job's time, in milliseconds: its absolute deadline, set
+# when it was handed in, counts the time it waited in the queue. Never more
+# than its own timeout, whatever the clock says.
+function Get-MillisecondsLeft([int] $TimeoutSeconds, [DateTime] $Expires) {
+    $left = ($Expires - [DateTime]::UtcNow).TotalMilliseconds
+    return [uint32] [Math]::Max(0, [Math]::Min($left, $TimeoutSeconds * 1000.0))
 }
 
 function Invoke-Job([IO.FileInfo] $File) {
@@ -61,8 +76,8 @@ function Invoke-Job([IO.FileInfo] $File) {
     $stdout = Join-Path $out 'stdout.txt'
     $stderr = Join-Path $out 'stderr.txt'
     try {
-        $job = Read-Job $claimed
-        $ms = [uint32] ([int] $job.timeoutSeconds * 1000)
+        $job, $expires = Read-Job $claimed
+        $ms = Get-MillisecondsLeft ([int] $job.timeoutSeconds) $expires
         $spec = New-Object Wn01.JobSpec
         # Through cmd.exe, so a job may use its syntax: pipes, &&, redirection.
         $spec.CommandLine = 'cmd.exe /d /s /c "' + $job.command + '"'

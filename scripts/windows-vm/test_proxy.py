@@ -18,6 +18,18 @@ ALLOW = {"static.rust-lang.org", ".windowsupdate.com"}
 PUBLIC = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
 
 
+def receive(sock, count, seconds=10):
+    """Reads exactly `count` bytes, however the stream splits them, or fails."""
+    sock.settimeout(seconds)
+    data = b""
+    while len(data) < count:
+        chunk = sock.recv(count - len(data))
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
 def resolving_to(*addresses):
     infos = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 443)) for a in addresses]
     return mock.patch.object(proxy.socket, "getaddrinfo", return_value=infos)
@@ -31,6 +43,14 @@ class HostAllowed(unittest.TestCase):
         self.assertTrue(proxy.host_allowed("download.windowsupdate.com", ALLOW))
         self.assertTrue(proxy.host_allowed("windowsupdate.com", ALLOW))
         self.assertFalse(proxy.host_allowed("x.static.rust-lang.org", ALLOW))
+
+    def test_names_the_resolver_could_read_differently_are_refused(self):
+        # getaddrinfo stops at a NUL and would connect to the address before it.
+        for host in ("93.184.216.34\x00.windowsupdate.com", "a b.windowsupdate.com", "x_y.windowsupdate.com",
+                     "-x.windowsupdate.com", ".windowsupdate.com", "a..windowsupdate.com"):
+            with self.subTest(host=host), resolving_to("93.184.216.34"), self.assertRaises(proxy.Refused) as caught:
+                proxy.check_target("CONNECT", host, 443, ALLOW)
+            self.assertIn("not a host name", caught.exception.reason)
 
     def test_lookalike_suffix_is_refused(self):
         self.assertFalse(proxy.host_allowed("evilwindowsupdate.com", ALLOW))
@@ -73,10 +93,11 @@ class CheckTarget(unittest.TestCase):
         self.assertEqual([sockaddr[0] for _, sockaddr in found], ["93.184.216.34"])
 
     def test_wrong_port_for_method_is_refused(self):
-        with self.assertRaises(proxy.Refused):
-            proxy.check_target("CONNECT", "static.rust-lang.org", 22, ALLOW)
-        with self.assertRaises(proxy.Refused):
-            proxy.check_target("GET", "static.rust-lang.org", 443, ALLOW)
+        for method, port in (("CONNECT", 22), ("GET", 443)):
+            with self.subTest(method=method), resolving_to("93.184.216.34"):
+                with self.assertRaises(proxy.Refused) as caught:
+                    proxy.check_target(method, "static.rust-lang.org", port, ALLOW)
+                self.assertIn(f"port {port}", caught.exception.reason)
 
     def test_other_methods_are_refused(self):
         with self.assertRaises(proxy.Refused) as caught:
@@ -104,11 +125,18 @@ class ParseTarget(unittest.TestCase):
 class OriginRequest(unittest.TestCase):
     def test_rewrites_to_origin_form_and_closes(self):
         head = "GET http://a.b/p?q=1 HTTP/1.1\r\nHost: a.b\r\nProxy-Connection: keep-alive\r\nConnection: keep-alive"
-        out = proxy.origin_request(head, "http://a.b/p?q=1").decode()
+        out = proxy.origin_request(head, "http://a.b/p?q=1", "a.b", 80).decode()
         self.assertTrue(out.startswith("GET /p?q=1 HTTP/1.1\r\n"))
         self.assertIn("Host: a.b\r\n", out)
         self.assertNotIn("keep-alive", out.lower())
         self.assertTrue(out.endswith("Connection: close\r\n\r\n"))
+
+
+    def test_host_header_is_the_checked_host_only(self):
+        head = "GET http://a.b/ HTTP/1.1\r\nHost: unlisted.example\r\nhost: other.example\r\nAccept: */*"
+        out = proxy.origin_request(head, "http://a.b/", "a.b", 80).decode()
+        self.assertEqual([line for line in out.split("\r\n") if line.lower().startswith("host:")], ["Host: a.b"])
+        self.assertIn("Accept: */*\r\n", out)
 
 
 class Serve(unittest.TestCase):
@@ -160,14 +188,98 @@ class Serve(unittest.TestCase):
             self.vm.sendall(b"CONNECT static.rust-lang.org:443 HTTP/1.1\r\n\r\nping")
             worker = threading.Thread(target=proxy.serve, args=(self.conn, ALLOW, self.logfile))
             worker.start()
-            self.assertEqual(self.vm.recv(64), b"HTTP/1.1 200 Connection established\r\n\r\n")
-            self.assertEqual(self.vm.recv(64), b"ping")
+            expected = b"HTTP/1.1 200 Connection established\r\n\r\nping"
+            self.assertEqual(receive(self.vm, len(expected)), expected)
             self.vm.shutdown(socket.SHUT_WR)
             worker.join(timeout=10)
         echo.join(timeout=10)
         self.assertFalse(worker.is_alive(), "relay did not end when the VM closed")
         with open(self.logfile, encoding="utf-8") as handle:
             self.assertIn("passed CONNECT static.rust-lang.org:443", handle.read())
+
+
+class Deadlines(unittest.TestCase):
+    """Every wait in the proxy ends: a silent VM or upstream never holds it open.
+
+    Each test shortens one deadline to 0.2 s and allows 5 s, well under the
+    real deadline it stands for."""
+
+    BOUND = 5
+
+    def pair(self):
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        return a, b
+
+    def bounded(self, call):
+        """Runs `call` in a thread and fails unless it ends within BOUND
+        seconds; re-raises what it raised."""
+        outcome = {}
+
+        def run():
+            try:
+                call()
+            except BaseException as err:  # handed back to the test below
+                outcome["error"] = err
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(self.BOUND)
+        self.assertFalse(worker.is_alive(), f"still waiting after {self.BOUND} s")
+        if "error" in outcome:
+            raise outcome["error"]
+
+    def test_header_that_never_ends_times_out(self):
+        vm, conn = self.pair()
+        vm.sendall(b"CONNECT static.rust-lang.org:443 HTTP/1.1\r\n")
+        with mock.patch.object(proxy, "HEADER_TIMEOUT", 0.2), self.assertRaises(TimeoutError):
+            self.bounded(lambda: proxy.read_header(conn))
+
+    def test_header_trickled_byte_by_byte_still_hits_one_deadline(self):
+        vm, conn = self.pair()
+        stop = threading.Event()
+
+        def trickle():
+            while not stop.wait(0.05):
+                try:
+                    vm.sendall(b"x")
+                except OSError:
+                    return
+
+        threading.Thread(target=trickle, daemon=True).start()
+        self.addCleanup(stop.set)
+        with mock.patch.object(proxy, "HEADER_TIMEOUT", 0.5), self.assertRaises(TimeoutError):
+            self.bounded(lambda: proxy.read_header(conn))
+
+    def test_relay_ends_when_both_sides_stay_silent(self):
+        _, client = self.pair()
+        _, upstream = self.pair()
+        with mock.patch.object(proxy, "IDLE_TIMEOUT", 0.2):
+            self.bounded(lambda: proxy.relay(client, upstream))
+
+    def test_send_to_a_peer_that_never_reads_times_out(self):
+        vm, client = self.pair()
+        _, upstream = self.pair()
+        upstream.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        filler = threading.Thread(target=self.flood, args=(vm,), daemon=True)
+        filler.start()
+        with mock.patch.object(proxy, "IDLE_TIMEOUT", 0.2), self.assertRaises(TimeoutError):
+            self.bounded(lambda: proxy.relay(client, upstream))
+
+    @staticmethod
+    def flood(sock):
+        try:
+            while True:
+                sock.sendall(b"x" * 65536)
+        except OSError:
+            pass
+
+    def test_upstream_connect_has_a_deadline(self):
+        sock = mock.MagicMock()
+        with mock.patch.object(proxy.socket, "socket", return_value=sock):
+            proxy.connect_upstream([(socket.AF_INET, ("93.184.216.34", 443))])
+        self.assertEqual(sock.method_calls[:2], [mock.call.settimeout(proxy.CONNECT_TIMEOUT), mock.call.connect(("93.184.216.34", 443))])
 
 
 class LoadAllowlist(unittest.TestCase):

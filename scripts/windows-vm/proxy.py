@@ -21,6 +21,7 @@ Usage: proxy.py LOGFILE ALLOWLIST [ALLOWLIST...]
 
 import ipaddress
 import os
+import re
 import selectors
 import socket
 import sys
@@ -32,6 +33,10 @@ IDLE_TIMEOUT = 300
 MAX_HEADER_BYTES = 64 * 1024
 CHUNK = 64 * 1024
 PORTS = {"CONNECT": 443, "GET": 80, "HEAD": 80, "POST": 80}
+# A DNS name in letters, digits and hyphens, with an optional final dot:
+# nothing the resolver could read differently from the allowlist check (a
+# NUL, say, after which it stops reading).
+DNS_NAME = re.compile(r"(?=.{1,253}\.?\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.?\Z")
 
 
 class Refused(Exception):
@@ -89,6 +94,7 @@ def request_refusal(method, host, port, allowlist):
     rules = (
         (port != PORTS[method], f"port {port} for {method}"),
         (is_ip_literal(host), f"address literal {host}"),
+        (not DNS_NAME.match(host.lower()), f"not a host name: {host!r}"),
         (not host_allowed(host, allowlist), f"host {host} not listed"),
     )
     for broken, reason in rules:
@@ -139,11 +145,16 @@ def parse_target(method, target):
 
 def read_header(conn):
     """Reads up to the blank line ending the request header; returns (head, rest)."""
-    conn.settimeout(HEADER_TIMEOUT)
+    # One deadline for the whole header, so a trickle of bytes cannot extend it.
+    deadline = time.monotonic() + HEADER_TIMEOUT
     data = b""
     while b"\r\n\r\n" not in data:
         if len(data) > MAX_HEADER_BYTES:
             raise Refused(431, "request header too large")
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("the request header did not end in time")
+        conn.settimeout(left)
         chunk = conn.recv(CHUNK)
         if not chunk:
             raise Refused(400, "connection closed before the header ended")
@@ -152,17 +163,19 @@ def read_header(conn):
     return head.decode("latin-1"), rest
 
 
-def origin_request(head, target):
-    """Rewrites an absolute-form request to origin form, closing after one response."""
+DROPPED_HEADERS = ("host", "connection", "proxy-connection", "keep-alive")
+
+
+def origin_request(head, target, host, port):
+    """Rewrites an absolute-form request to origin form for the checked host,
+    closing after one response. The VM's own Host header is dropped: it could
+    name another site behind the same server."""
     lines = head.split("\r\n")
     method, _, version = lines[0].split(" ", 2)
     path = "/" + target.split("://", 1)[1].partition("/")[2]
-    kept = [
-        line
-        for line in lines[1:]
-        if line.split(":", 1)[0].strip().lower() not in ("connection", "proxy-connection", "keep-alive")
-    ]
-    out = [f"{method} {path} {version}", *kept, "Connection: close", "", ""]
+    kept = [line for line in lines[1:] if line.split(":", 1)[0].strip().lower() not in DROPPED_HEADERS]
+    authority = host if port == 80 else f"{host}:{port}"
+    out = [f"{method} {path} {version}", f"Host: {authority}", *kept, "Connection: close", "", ""]
     return "\r\n".join(out).encode("latin-1")
 
 
@@ -238,7 +251,7 @@ def serve(conn, allowlist, logfile):
         if method == "CONNECT":
             conn.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
         else:
-            upstream.sendall(origin_request(head, target))
+            upstream.sendall(origin_request(head, target, host, port))
         if rest:
             upstream.sendall(rest)
         relay(conn, upstream)

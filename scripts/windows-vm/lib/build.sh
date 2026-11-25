@@ -7,32 +7,32 @@ BUILD_DIR=""
 
 # Every exit before the swap removes the half-made VM: its QEMU, its TPM and
 # its directory.
+# The machine is ended before anything else can fail: the evidence is kept
+# on a best-effort basis, and a full disk must not leave QEMU running.
 abandon_build() {
     [[ -n "$BUILD_DIR" && -d "$BUILD_DIR" ]] || return 0
-    keep_failure_evidence "$BUILD_DIR"
-    log "build failed; removing $BUILD_DIR (its logs and last screen are in $STATE_DIR/last-failed-build)"
-    kill_machine "$BUILD_DIR"
-    rm -rf "$BUILD_DIR"
-}
-
-# Keeps the logs and the last screen of a failed build; never its disk or secrets.
-keep_failure_evidence() {
-    local dir="$1" keep="$STATE_DIR/last-failed-build" file
-    rm -rf "$keep"
-    mkdir -p "$keep"
-    if machine_running "$dir"; then
-        monitor "$dir" "screendump $keep/screen.png -f png" >/dev/null 2>&1 || log "no screenshot of the failed build"
+    local keep="$STATE_DIR/last-failed-build" file
+    log "build failed; removing $BUILD_DIR (its logs and last screen go to $keep)"
+    rm -rf "$keep" && mkdir -p "$keep" || keep=""
+    if [[ -n "$keep" ]] && machine_running "$BUILD_DIR"; then
+        monitor "$BUILD_DIR" "screendump $keep/screen.png -f png" >/dev/null 2>&1 || log "no screenshot of the failed build"
+    fi
+    if ! kill_machine "$BUILD_DIR"; then
+        log "kept $BUILD_DIR, whose QEMU is still alive; the next build removes it"
+        restore_previous_vm
+        return 0
     fi
     for file in qemu.log swtpm.log proxy.log; do
-        [[ -f "$dir/$file" ]] && cp "$dir/$file" "$keep/"
+        [[ -n "$keep" && -f "$BUILD_DIR/$file" ]] && { cp "$BUILD_DIR/$file" "$keep/" || log "could not keep $file"; }
     done
-    return 0
+    rm -rf "$BUILD_DIR"
+    restore_previous_vm
 }
 
-# Removes what a build killed outright (SIGKILL skips its trap) left behind.
-# A build killed between swap_in's two renames left the previous VM as
-# old.*: that one is put back, not removed.
-remove_stale_builds() {
+# A build stopped between swap_in's two renames left the previous VM as
+# old.* and no current one: that one is put back. Run under the lock, by a
+# failed build and before any command that needs the VM.
+restore_previous_vm() {
     local dir
     for dir in "$STATE_DIR"/old.*/; do
         if [[ -d "$dir" && ! -e "$VM_DIR" ]]; then
@@ -40,10 +40,17 @@ remove_stale_builds() {
             mv "${dir%/}" "$VM_DIR"
         fi
     done
+}
+
+# Removes what a build killed outright (SIGKILL skips its trap) left behind,
+# after putting back a previous VM it left as old.*.
+remove_stale_builds() {
+    local dir
+    restore_previous_vm
     for dir in "$STATE_DIR"/build.*/ "$STATE_DIR"/old.*/; do
         [[ -d "$dir" ]] || continue
         log "removing a stale build: $dir"
-        kill_machine "${dir%/}"
+        kill_machine "${dir%/}" || die "a stale build's QEMU in $dir is still alive"
         rm -rf "$dir"
     done
 }
@@ -185,15 +192,17 @@ update_windows() {
 }
 
 # Waits up to $2 seconds for the running update pass to finish; prints its state.
+# The first check comes after a minute, once the task has had time to start.
 wait_update() {
-    local dir="$1" deadline=$((SECONDS + $2)) state
+    local dir="$1" deadline=$((SECONDS + $2)) state=timeout
     while ((SECONDS < deadline)); do
+        sleep 60
+        machine_running "$dir" || die "the VM exited during Windows Update; see $dir/qemu.log"
         state="$(vm_ssh 120 "$dir" 'C:\wn01\provision.ps1 -Step update-status' | tr -d '\r')" ||
             state=unreachable
         [[ "$state" == running || "$state" == unreachable ]] || break
-        sleep 60
     done
-    echo "${state:-timeout}"
+    echo "$state"
 }
 
 # Turns the provisioned disk, variables and TPM state into the clean base.
@@ -201,6 +210,7 @@ seal_base() {
     local dir="$1"
     vm_ssh 300 "$dir" 'C:\wn01\provision.ps1 -Step info' | tr -d '\r' >"$dir/info.json" ||
         die "could not read the Windows build and expiry"
+    check_info "$dir/info.json"
     vm_ssh 120 "$dir" 'Remove-Item -Recurse -Force C:\wn01\downloads -ErrorAction SilentlyContinue' ||
         die "could not clear the downloads"
     shutdown_machine "$dir" "$dir" 600 || die "Windows did not shut down cleanly"
@@ -209,6 +219,17 @@ seal_base() {
     mv "$dir/tpm" "$dir/base-tpm"
     chmod a-w "$dir/base.qcow2" "$dir/base-vars.fd"
     rm -f "$dir/stick.img" "$dir/authorized_keys" "$dir"/allow-*.txt "$dir/proxy.py"
+}
+
+# Refuses an info.json without the Windows build and a valid expiry date,
+# which `vm start` and `vm status` read.
+check_info() {
+    python3 -I -c '
+import datetime, json, sys
+info = json.load(open(sys.argv[1]))
+assert isinstance(info["build"], str) and info["build"]
+datetime.date.fromisoformat(info["expires"])
+' "$1" 2>/dev/null || die "the build recorded no Windows build and expiry: $(<"$1")"
 }
 
 # Replaces the current VM with the finished build.

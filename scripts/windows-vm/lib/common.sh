@@ -10,6 +10,11 @@ VM_DIR="$STATE_DIR/vm"
 # state, sockets, pid files and logs. `vm reset` removes it.
 RUN_DIR="$VM_DIR/run"
 SSH_PORT="${WN01_SSH_PORT:-52222}"
+# It goes into QEMU's comma-separated -netdev option: a port and nothing else.
+[[ "$SSH_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && ((SSH_PORT <= 65535)) || {
+    echo "vm: WN01_SSH_PORT must be a port number, not '$SSH_PORT'" >&2
+    exit 2
+}
 LOCK_FILE="$STATE_DIR/lock"
 
 # Microsoft's Windows 11 Enterprise evaluation, 26H2, en-US, x64 (build
@@ -38,11 +43,21 @@ die() {
     exit 1
 }
 
-# Runs a command, killing it after $1 seconds.
+# Runs a command, killing it after $1 seconds. --foreground keeps it in our
+# process group, so Ctrl-C reaches it; 9>&- keeps it from holding the VM's
+# lock should it outlive us.
 bounded() {
     local seconds="$1"
     shift
-    timeout --kill-after=10 "$seconds" "$@"
+    timeout --foreground --kill-after=10 "$seconds" "$@" 9>&-
+}
+
+# Checks that $2 is a whole number of seconds from 1 to $3, written in decimal
+# without leading zeros (bash would read 010 as octal), and prints it.
+seconds_arg() {
+    local name="$1" value="$2" max="$3"
+    [[ "$value" =~ ^[1-9][0-9]{0,5}$ ]] && ((value <= max)) || die "$name takes 1 to $max seconds, not '$value'"
+    printf '%s' "$value"
 }
 
 require_tools() {
