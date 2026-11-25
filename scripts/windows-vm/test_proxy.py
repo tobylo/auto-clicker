@@ -63,9 +63,10 @@ class HostAllowed(unittest.TestCase):
         # getaddrinfo stops at a NUL and would connect to the address before it.
         for host in ("93.184.216.34\x00.windowsupdate.com", "a b.windowsupdate.com", "x_y.windowsupdate.com",
                      "-x.windowsupdate.com", ".windowsupdate.com", "a..windowsupdate.com"):
-            with self.subTest(host=host), resolving_to("93.184.216.34"), self.assertRaises(proxy.Refused) as caught:
-                proxy.check_target("CONNECT", host, 443, ALLOW)
-            self.assertIn("not a host name", caught.exception.reason)
+            with self.subTest(host=host):
+                with resolving_to("93.184.216.34"), self.assertRaises(proxy.Refused) as caught:
+                    proxy.check_target("CONNECT", host, 443, ALLOW)
+                self.assertIn("not a host name", caught.exception.reason)
 
     def test_lookalike_suffix_is_refused(self):
         self.assertFalse(proxy.host_allowed("evilwindowsupdate.com", ALLOW))
@@ -92,9 +93,10 @@ class CheckTarget(unittest.TestCase):
         # A global literal too, listed and resolving to itself, so only the
         # literal check stands between it and a connection.
         for host in ("127.0.0.1", "10.0.2.2", "192.168.1.253", "::1", "93.184.216.34"):
-            with self.subTest(host=host), resolving_to("93.184.216.34"), self.assertRaises(proxy.Refused) as caught:
-                proxy.check_target("CONNECT", host, 443, ALLOW | {host})
-            self.assertIn("address literal", caught.exception.reason)
+            with self.subTest(host=host):
+                with resolving_to("93.184.216.34"), self.assertRaises(proxy.Refused) as caught:
+                    proxy.check_target("CONNECT", host, 443, ALLOW | {host})
+                self.assertIn("address literal", caught.exception.reason)
 
     def test_listed_host_resolving_to_private_addresses_is_refused(self):
         for address in ("127.0.0.1", "192.168.1.253", "10.0.2.2", "169.254.1.1"):
@@ -116,9 +118,10 @@ class CheckTarget(unittest.TestCase):
 
     def test_other_methods_are_refused(self):
         for method in ("POST", "PUT"):
-            with self.subTest(method=method), self.assertRaises(proxy.Refused) as caught:
-                proxy.check_target(method, "static.rust-lang.org", 80, ALLOW)
-            self.assertEqual(caught.exception.status, 405)
+            with self.subTest(method=method):
+                with self.assertRaises(proxy.Refused) as caught:
+                    proxy.check_target(method, "static.rust-lang.org", 80, ALLOW)
+                self.assertEqual(caught.exception.status, 405)
 
 
 class ParseTarget(unittest.TestCase):
@@ -324,9 +327,10 @@ class Bodiless(unittest.TestCase):
             "Transfer-Encoding: chunked",
             "Expect: 100-continue",
         ):
-            with self.subTest(extra=extra), self.assertRaises(proxy.Refused) as caught:
-                proxy.check_bodiless(self.HEAD + "\r\n" + extra, b"")
-            self.assertEqual(caught.exception.status, 400)
+            with self.subTest(extra=extra):
+                with self.assertRaises(proxy.Refused) as caught:
+                    proxy.check_bodiless(self.HEAD + "\r\n" + extra, b"")
+                self.assertEqual(caught.exception.status, 400)
 
 
 class PlainHttpServe(unittest.TestCase):
