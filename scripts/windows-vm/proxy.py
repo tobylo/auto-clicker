@@ -168,11 +168,19 @@ def parse_target(method, target):
     """The host and port a request line names."""
     if method == "CONNECT":
         return split_host_port(target, 443)
-    prefix = "http://"
-    if not target.lower().startswith(prefix):
+    if not target.lower().startswith("http://"):
         raise Refused(400, "only absolute http:// targets")
-    authority = target[len(prefix):].split("/", 1)[0]
-    return split_host_port(authority, 80)
+    return split_host_port(split_http_target(target)[0], 80)
+
+
+def split_http_target(target):
+    """The authority and origin-form path of an absolute http:// target. The
+    authority ends at the first "/" or "?"; the path keeps the query, and is
+    "/" when the target names none (RFC 9112, 3.2.1)."""
+    rest = target[len("http://"):]
+    cut = min((at for at in (rest.find("/"), rest.find("?")) if at >= 0), default=len(rest))
+    path = rest[cut:]
+    return rest[:cut], path if path.startswith("/") else "/" + path
 
 
 def recv_by(conn, deadline):
@@ -254,7 +262,7 @@ def origin_request(head, target, host, port):
     name another site behind the same server."""
     lines = head.split("\r\n")
     method, _, version = lines[0].split(" ", 2)
-    path = "/" + target.split("://", 1)[1].partition("/")[2]
+    path = split_http_target(target)[1]
     dropped = set(DROPPED_HEADERS) | connection_options(head)
     kept = [line for line in lines[1:] if line.split(":", 1)[0].lower() not in dropped]
     authority = host if port == 80 else f"{host}:{port}"
@@ -263,22 +271,27 @@ def origin_request(head, target, host, port):
 
 
 def connect_upstream(addresses):
-    """Connects to the first address that answers within the deadline."""
-    last_error = None
+    """Connects to the first address that answers, all of them within one
+    CONNECT_TIMEOUT: each attempt gets only the time left."""
+    deadline = time.monotonic() + CONNECT_TIMEOUT
+    last_error = TimeoutError("no time left")
     for family, sockaddr in addresses:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            break
         try:
-            return connect_one(family, sockaddr)
+            return connect_one(family, sockaddr, left)
         except OSError as err:
             last_error = err
-    raise Refused(502, f"cannot connect: {last_error}")
+    raise Refused(502, f"cannot connect within {CONNECT_TIMEOUT} s: {last_error}")
 
 
-def connect_one(family, sockaddr):
-    """A socket connected to `sockaddr` within CONNECT_TIMEOUT. Creating it
-    can fail too, for a family the dev box has turned off."""
+def connect_one(family, sockaddr, seconds):
+    """A socket connected to `sockaddr` within `seconds`. Creating it can
+    fail too, for a family the dev box has turned off."""
     sock = socket.socket(family, socket.SOCK_STREAM)
     try:
-        sock.settimeout(CONNECT_TIMEOUT)
+        sock.settimeout(seconds)
         sock.connect(sockaddr)
     except OSError:
         sock.close()

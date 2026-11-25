@@ -44,8 +44,10 @@ def receive_until(sock, ending, seconds=10):
 
 
 def resolving_to(*addresses):
-    infos = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 443)) for a in addresses]
-    return mock.patch.object(proxy.socket, "getaddrinfo", return_value=infos)
+    def lookup(host, port, **_):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, port)) for a in addresses]
+
+    return mock.patch.object(proxy.socket, "getaddrinfo", side_effect=lookup)
 
 
 class HostAllowed(unittest.TestCase):
@@ -145,6 +147,13 @@ class OriginRequest(unittest.TestCase):
         self.assertNotIn("keep-alive", out.lower())
         self.assertTrue(out.endswith("Connection: close\r\n\r\n"))
 
+
+    def test_query_without_a_path_keeps_its_query(self):
+        for target, path in [("http://a.b?q=1", "/?q=1"), ("http://a.b/p?q=1/x", "/p?q=1/x"), ("http://a.b", "/")]:
+            with self.subTest(target=target):
+                self.assertEqual(proxy.parse_target("GET", target), ("a.b", 80))
+                out = proxy.origin_request(f"GET {target} HTTP/1.1", target, "a.b", 80).decode()
+                self.assertTrue(out.startswith(f"GET {path} HTTP/1.1\r\n"))
 
     def test_host_header_is_the_checked_host_only(self):
         head = "GET http://a.b/ HTTP/1.1\r\nHost: unlisted.example\r\nhost: other.example\r\nAccept: */*"
@@ -342,10 +351,12 @@ class PlainHttpServe(unittest.TestCase):
         upstream_side, upstream = socket.socketpair()
         self.addCleanup(upstream_side.close)
         self.vm.sendall(b"GET http://static.rust-lang.org/crl HTTP/1.1\r\nAccept: */*\r\n\r\n")
-        with resolving_to("93.184.216.34"), mock.patch.object(proxy, "connect_upstream", return_value=upstream):
+        connect = mock.patch.object(proxy, "connect_upstream", return_value=upstream)
+        with resolving_to("93.184.216.34"), connect as dial:
             worker = threading.Thread(target=proxy.serve, args=(self.conn, ALLOW, self.logfile), daemon=True)
             worker.start()
             sent = receive_until(upstream_side, b"\r\n\r\n")
+            dial.assert_called_once_with([(socket.AF_INET, ("93.184.216.34", 80))])
             self.vm.sendall(b"GET / HTTP/1.1\r\nHost: unlisted.example\r\n\r\n")
             upstream_side.sendall(b"HTTP/1.1 200 OK\r\n\r\nok")
             upstream_side.shutdown(socket.SHUT_WR)
@@ -475,9 +486,25 @@ class Deadlines(unittest.TestCase):
 
     def test_upstream_connect_has_a_deadline(self):
         sock = mock.MagicMock()
-        with mock.patch.object(proxy.socket, "socket", return_value=sock):
+        with mock.patch.object(proxy.time, "monotonic", return_value=100.0), mock.patch.object(proxy.socket, "socket", return_value=sock):
             proxy.connect_upstream([(socket.AF_INET, ("93.184.216.34", 443))])
         self.assertEqual(sock.method_calls[:2], [mock.call.settimeout(proxy.CONNECT_TIMEOUT), mock.call.connect(("93.184.216.34", 443))])
+
+    def test_later_addresses_get_only_the_time_left(self):
+        silent, answering = mock.MagicMock(), mock.MagicMock()
+        silent.connect.side_effect = TimeoutError("timed out")
+        clock = mock.patch.object(proxy.time, "monotonic", side_effect=[100.0, 100.0, 110.0])
+        with clock, mock.patch.object(proxy.socket, "socket", side_effect=[silent, answering]):
+            proxy.connect_upstream([(socket.AF_INET, ("93.184.216.34", 443)), (socket.AF_INET, ("93.184.216.35", 443))])
+        answering.settimeout.assert_called_once_with(proxy.CONNECT_TIMEOUT - 10)
+
+    def test_no_address_is_tried_once_the_deadline_passed(self):
+        silent = mock.MagicMock()
+        silent.connect.side_effect = TimeoutError("timed out")
+        clock = mock.patch.object(proxy.time, "monotonic", side_effect=[100.0, 100.0, 100.0 + proxy.CONNECT_TIMEOUT])
+        with clock, mock.patch.object(proxy.socket, "socket", side_effect=[silent]) as make, self.assertRaises(proxy.Refused):
+            proxy.connect_upstream([(socket.AF_INET, ("93.184.216.34", 443)), (socket.AF_INET, ("93.184.216.35", 443))])
+        self.assertEqual(make.call_count, 1)
 
 
 class LoadAllowlist(unittest.TestCase):

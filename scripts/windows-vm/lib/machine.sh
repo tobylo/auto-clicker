@@ -16,18 +16,24 @@ vm_process() {
     tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "$marker"
 }
 
-# The process in pid file $1, if it is one of ours (vm_process, marker $2).
-live_pid() {
-    local pidfile="$1" marker="$2" pid
-    [[ -f "$pidfile" ]] || return 1
-    pid="$(<"$pidfile")"
-    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-    vm_process "$pid" "$marker" || return 1
-    echo "$pid"
+# The processes $2 (qemu or swtpm) of the machine in $1, one pid per line.
+# Found by executable and directory, not by pid file: QEMU writes its file
+# only once it has started, and swtpm removes its own as it begins to exit,
+# so a pid file can miss a process that still runs. Fails when the process
+# list cannot be read.
+machine_pids() {
+    local dir="$1" pids pid
+    # The kernel keeps 15 characters of a process name.
+    pids="$(pgrep -u "$UID" -x -- "${2/#qemu/qemu-system-x86}")" || (($? == 1)) || return 1
+    for pid in $pids; do
+        if vm_process "$pid" "$dir/"; then echo "$pid"; fi
+    done
 }
 
 machine_running() {
-    live_pid "$1/qemu.pid" "$1/" >/dev/null
+    local pids
+    pids="$(machine_pids "$1" qemu)" || die "could not list the dev box's processes"
+    [[ -n "$pids" ]]
 }
 
 # Copies the proxy and its allowlists into the machine's directory, so a
@@ -69,7 +75,7 @@ qemu_command() {
         -vga none -device VGA,xres=1920,yres=1080,edid=on
         -display none
         -monitor "unix:$dir/monitor.sock,server=on,wait=off"
-        -daemonize -pidfile "$dir/qemu.pid")
+        -daemonize)
 }
 
 start_tpm() {
@@ -77,7 +83,7 @@ start_tpm() {
     mkdir -p "$dir/tpm"
     swtpm socket --tpm2 --tpmstate "dir=$dir/tpm" \
         --ctrl "type=unixio,path=$dir/swtpm.sock" \
-        --log "file=$dir/swtpm.log" --pid "file=$dir/swtpm.pid" \
+        --log "file=$dir/swtpm.log" \
         --terminate --daemon 8>&- 9>&- || die "swtpm did not start"
 }
 
@@ -91,7 +97,11 @@ start_machine() {
     start_tpm "$dir"
     qemu_command "$dir" "$disk"
     # The daemons must not inherit the VM's lock or our stderr (lib/common.sh).
-    bounded 60 "${QEMU[@]}" "$@" 2>>"$dir/qemu.log" || die "QEMU did not start; see $dir/qemu.log"
+    # A start past its deadline can leave a QEMU that goes on starting: end it.
+    bounded 60 "${QEMU[@]}" "$@" 2>>"$dir/qemu.log" || {
+        kill_machine "$dir" || true
+        die "QEMU did not start; see $dir/qemu.log"
+    }
 }
 
 # Sends one human-monitor command to the machine in $1 and prints its answer.
@@ -102,8 +112,7 @@ monitor() {
 }
 
 # Waits up to $3 seconds for process $1, the QEMU or swtpm of the machine
-# in $2, to exit. By its pid, not its pid file: swtpm removes that file as it
-# starts to shut down.
+# in $2, to exit.
 wait_pid() {
     local pid="$1" dir="$2" deadline=$((SECONDS + $3))
     while vm_process "$pid" "$dir/"; do
@@ -112,12 +121,20 @@ wait_pid() {
     done
 }
 
-# Asks process $2 (qemu or swtpm) of the machine in $1 to end, and kills it
-# when it has not ended within 15 s. Fails when it is still alive 15 s after
-# SIGKILL.
+# Asks every process $2 (qemu or swtpm) of the machine in $1 to end. Fails
+# when one is still alive after SIGKILL, or the process list cannot be read.
 end_process() {
-    local dir="$1" name="$2" pid
-    pid="$(live_pid "$dir/$name.pid" "$dir/")" || return 0
+    local dir="$1" name="$2" pids pid
+    pids="$(machine_pids "$dir" "$name")" || return 1
+    for pid in $pids; do
+        end_pid "$dir" "$name" "$pid" || return 1
+    done
+}
+
+# Asks process $3, the $2 of the machine in $1, to end, and kills it when it
+# has not ended within 15 s. Fails when it is still alive 15 s after SIGKILL.
+end_pid() {
+    local dir="$1" name="$2" pid="$3"
     if [[ "$name" == qemu ]]; then
         monitor "$dir" quit >/dev/null 2>&1 || true
     else
@@ -133,13 +150,13 @@ end_process() {
 
 # Ends the machine in $1 at once (no guest shutdown) and its TPM with it,
 # whether or not QEMU still runs: a start interrupted before QEMU leaves the
-# TPM behind. Fails, keeping the pid files and sockets so a later call can try
-# again, when either is still alive after SIGKILL.
+# TPM behind. Fails, keeping the sockets, when either is still alive after
+# SIGKILL.
 kill_machine() {
     local dir="$1"
     end_process "$dir" qemu || return 1
     end_process "$dir" swtpm || return 1
-    rm -f "$dir/qemu.pid" "$dir/swtpm.pid" "$dir/monitor.sock" "$dir/swtpm.sock"
+    rm -f "$dir/monitor.sock" "$dir/swtpm.sock"
 }
 
 # SSH to tester in the VM whose keys are in $2, ended after $1 seconds.
@@ -167,21 +184,24 @@ vm_push() {
 }
 
 # Waits up to $3 seconds for SSH into the machine in $1 (keys in $2) to answer,
-# failing at once if the machine exits.
+# failing at once if the machine exits. Each probe gets at most the time left.
 wait_ssh() {
-    local dir="$1" keys="$2" deadline=$((SECONDS + $3))
-    until vm_ssh 30 "$keys" 'exit 0' >/dev/null 2>&1; do
+    local dir="$1" keys="$2" deadline=$((SECONDS + $3)) left
+    while left=$((deadline - SECONDS)); ((left > 0)); do
+        vm_ssh $((left < 30 ? left : 30)) "$keys" 'exit 0' >/dev/null 2>&1 && return 0
         machine_running "$dir" || die "the VM exited while waiting for SSH; see $dir/qemu.log"
-        ((SECONDS < deadline)) || die "SSH did not answer within $3 s"
         sleep 10
     done
+    die "SSH did not answer within $3 s"
 }
 
 # Shuts Windows down cleanly, within $3 seconds, else ends the machine. With
 # QEMU already gone, it still ends a TPM left behind.
 shutdown_machine() {
     local dir="$1" keys="$2" seconds="$3" pid
-    if ! pid="$(live_pid "$dir/qemu.pid" "$dir/")"; then
+    pid="$(machine_pids "$dir" qemu)" || die "could not list the dev box's processes"
+    pid="${pid%%$'\n'*}"
+    if [[ -z "$pid" ]]; then
         kill_machine "$dir" || die "the TPM in $dir could not be ended"
         return 0
     fi

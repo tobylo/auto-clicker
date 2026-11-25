@@ -17,7 +17,7 @@ CACHE_DIR="$STATE_DIR/cache"
 # SSH key and password, and what the build recorded (info.json).
 VM_DIR="$STATE_DIR/vm"
 # A started VM: the overlay on the base disk, copies of the variables and TPM
-# state, sockets, pid files and logs. `vm reset` removes it.
+# state, sockets and logs. `vm reset` removes it.
 RUN_DIR="$VM_DIR/run"
 SSH_PORT="${WN01_SSH_PORT:-52222}"
 # It goes into QEMU's comma-separated -netdev option: a port and nothing else.
@@ -107,13 +107,15 @@ no_cow() {
 # Downloads $1 into the cache as $2 unless a verified copy is there, and
 # refuses (deleting the download) when its SHA-256 is not $3.
 fetch_verified() {
-    local url="$1" name="$2" sha="$3" path="$CACHE_DIR/$2"
+    local url="$1" name="$2" sha="$3" path="$CACHE_DIR/$2" rc=0
     mkdir -p "$CACHE_DIR"
     if [[ ! -f "$path" ]]; then
         log "downloading $name"
         bounded 3600 curl --fail --location --silent --show-error --retry 3 --continue-at - \
-            --speed-limit 100000 --speed-time 120 --output "$path.part" "$url" ||
-            die "download of $name failed"
+            --speed-limit 100000 --speed-time 120 --output "$path.part" "$url" || rc=$?
+        # 33: the server refused to resume. The next build starts from byte zero.
+        ((rc != 33)) || rm -f "$path.part"
+        ((rc == 0)) || die "download of $name failed (curl exit $rc)"
         mv "$path.part" "$path"
     fi
     if ! echo "$sha  $path" | sha256sum --check --status; then
