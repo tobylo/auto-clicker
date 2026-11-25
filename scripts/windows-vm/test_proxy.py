@@ -54,9 +54,12 @@ class CheckTarget(unittest.TestCase):
         lookup.assert_not_called()
 
     def test_address_literals_are_refused(self):
-        for host in ("127.0.0.1", "10.0.2.2", "192.168.1.253", "::1"):
-            with self.subTest(host=host), self.assertRaises(proxy.Refused):
+        # A global literal too, listed and resolving to itself, so only the
+        # literal check stands between it and a connection.
+        for host in ("127.0.0.1", "10.0.2.2", "192.168.1.253", "::1", "93.184.216.34"):
+            with self.subTest(host=host), resolving_to("93.184.216.34"), self.assertRaises(proxy.Refused) as caught:
                 proxy.check_target("CONNECT", host, 443, ALLOW | {host})
+            self.assertIn("address literal", caught.exception.reason)
 
     def test_listed_host_resolving_to_private_addresses_is_refused(self):
         for address in ("127.0.0.1", "192.168.1.253", "10.0.2.2", "169.254.1.1"):
@@ -130,6 +133,19 @@ class Serve(unittest.TestCase):
         self.assertTrue(answer.startswith(b"HTTP/1.1 403"))
         with open(self.logfile, encoding="utf-8") as handle:
             self.assertIn("example.com not listed", handle.read())
+
+    def test_header_without_end_gets_431_once_over_the_cap(self):
+        line = b"X-Fill: " + b"a" * 1000 + b"\r\n"
+        self.vm.sendall(b"CONNECT static.rust-lang.org:443 HTTP/1.1\r\n")
+        sender = threading.Thread(target=self.fill, args=(line, proxy.MAX_HEADER_BYTES // len(line) + 2))
+        sender.start()
+        proxy.serve(self.conn, ALLOW, self.logfile)
+        sender.join(timeout=10)
+        self.assertTrue(self.vm.recv(4096).startswith(b"HTTP/1.1 431"))
+
+    def fill(self, line, count):
+        for _ in range(count):
+            self.vm.sendall(line)
 
     def test_malformed_request_line_gets_400(self):
         answer = self.serve(b"garbage\r\n\r\n")
