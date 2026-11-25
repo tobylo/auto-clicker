@@ -104,18 +104,27 @@ no_cow() {
     fi
 }
 
+# The size in bytes of partial download $1, 0 when there is none.
+part_size() {
+    if [[ -f "$1" ]]; then stat -c %s -- "$1"; else echo 0; fi
+}
+
 # Downloads $1 into the cache as $2 unless a verified copy is there, and
 # refuses (deleting the download) when its SHA-256 is not $3.
 fetch_verified() {
-    local url="$1" name="$2" sha="$3" path="$CACHE_DIR/$2" rc=0
+    local url="$1" name="$2" sha="$3" path="$CACHE_DIR/$2" rc=0 had
     mkdir -p "$CACHE_DIR"
     if [[ ! -f "$path" ]]; then
         log "downloading $name"
+        had="$(part_size "$path.part")"
         bounded 3600 curl --fail --location --silent --show-error --retry 3 --continue-at - \
             --speed-limit 100000 --speed-time 120 --output "$path.part" "$url" || rc=$?
-        # 33: the server refused to resume. The next build starts from byte zero.
-        ((rc != 33)) || rm -f "$path.part"
-        ((rc == 0)) || die "download of $name failed (curl exit $rc)"
+        if ((rc != 0)); then
+            # A resume that got nowhere (the server refused the range, or
+            # answered 416) would fail the same way again: start over next time.
+            (($(part_size "$path.part") > had)) || rm -f "$path.part"
+            die "download of $name failed (curl exit $rc)"
+        fi
         mv "$path.part" "$path"
     fi
     if ! echo "$sha  $path" | sha256sum --check --status; then

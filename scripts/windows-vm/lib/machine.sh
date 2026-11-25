@@ -121,14 +121,21 @@ wait_pid() {
     done
 }
 
-# Asks every process $2 (qemu or swtpm) of the machine in $1 to end. Fails
-# when one is still alive after SIGKILL, or the process list cannot be read.
+# Asks every process $2 (qemu or swtpm) of the machine in $1 to end, looking
+# again after each pass: QEMU daemonizes in two forks, so a start cut short
+# can leave a child that forks once more after the first look. Fails when one
+# is still alive after SIGKILL, or the process list cannot be read.
 end_process() {
-    local dir="$1" name="$2" pids pid
-    pids="$(machine_pids "$dir" "$name")" || return 1
-    for pid in $pids; do
-        end_pid "$dir" "$name" "$pid" || return 1
+    local dir="$1" name="$2" pids pid pass
+    for pass in 1 2 3; do
+        pids="$(machine_pids "$dir" "$name")" || return 1
+        [[ -n "$pids" ]] || return 0
+        for pid in $pids; do
+            end_pid "$dir" "$name" "$pid" || return 1
+        done
     done
+    log "$name in $dir was still starting after $pass passes"
+    return 1
 }
 
 # Asks process $3, the $2 of the machine in $1, to end, and kills it when it
