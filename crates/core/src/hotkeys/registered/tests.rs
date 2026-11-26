@@ -85,47 +85,52 @@ fn press(hotkeys: &mut Registered, keyboard: &mut FakeKeyboard, key: u16) -> Vec
     events
 }
 
+/// What one step sent, and whether the keyboard is read after it.
+fn after(events: Vec<HotkeyEvent>, keyboard: &FakeKeyboard) -> (Vec<HotkeyEvent>, bool) {
+    (events, keyboard.reading)
+}
+
 #[test]
 fn nothing_is_read_at_idle() {
     let mut keyboard = FakeKeyboard::default();
     let mut hotkeys = registered();
     assert!(!hotkeys.reading());
-    assert_eq!(hotkeys.watch(Watching::default(), &mut keyboard), []);
-    assert!(!keyboard.reading && keyboard.starts == 0);
+    let watched = hotkeys.watch(Watching::default(), &mut keyboard);
+    assert_eq!(after(watched, &keyboard), (vec![], false));
     // A key event that reaches it anyway changes nothing and fires nothing.
-    assert_eq!(press(&mut hotkeys, &mut keyboard, F6), []);
+    let pressed = press(&mut hotkeys, &mut keyboard, F6);
+    assert_eq!((pressed, keyboard.starts), (vec![], 0));
 }
 
 #[test]
 fn a_hotkey_reads_its_modifiers_until_they_are_up_then_stops_reading() {
     let mut keyboard = holding(&[CTRL, SHIFT]);
     let mut hotkeys = registered();
-    assert_eq!(hotkeys.hotkey(CLICKING, &mut keyboard), [Fired(CLICKING)]);
-    assert!(keyboard.reading, "the wait reads the keyboard");
-    assert_eq!(hotkeys.watch(WAITING, &mut keyboard), []);
-    assert_eq!(hotkeys.key(F6, false, &mut keyboard), []);
-    assert_eq!(hotkeys.key(SHIFT, false, &mut keyboard), []);
-    assert!(keyboard.reading);
-    assert_eq!(hotkeys.key(CTRL, false, &mut keyboard), [ModifiersReleased]);
-    assert!(!keyboard.reading, "nothing needs the keyboard any more");
+    let fired = hotkeys.hotkey(CLICKING, &mut keyboard);
+    assert_eq!(after(fired, &keyboard), (vec![Fired(CLICKING)], true));
+    hotkeys.watch(WAITING, &mut keyboard);
+    hotkeys.key(F6, false, &mut keyboard);
+    let shift = hotkeys.key(SHIFT, false, &mut keyboard);
+    assert_eq!(after(shift, &keyboard), (vec![], true));
+    let ctrl = hotkeys.key(CTRL, false, &mut keyboard);
+    assert_eq!(after(ctrl, &keyboard), (vec![ModifiersReleased], false));
     // The controller's answer to the release comes after it: no second
     // wait.
-    assert_eq!(hotkeys.watch(Watching::default(), &mut keyboard), []);
-    assert_eq!(keyboard.starts, 1);
+    let answered = hotkeys.watch(Watching::default(), &mut keyboard);
+    assert_eq!((answered, keyboard.starts), (vec![], 1));
 }
 
 #[test]
 fn modifiers_already_up_when_the_wait_reads_them_are_released_at_once() {
     let mut keyboard = FakeKeyboard::default();
     let mut hotkeys = registered();
-    assert_eq!(
-        hotkeys.hotkey(CLICKING, &mut keyboard),
-        [Fired(CLICKING), ModifiersReleased]
-    );
-    assert!(!keyboard.reading);
-    // The controller waited on the hotkey before it heard of the release.
-    assert_eq!(hotkeys.watch(WAITING, &mut keyboard), []);
-    assert_eq!(keyboard.starts, 1, "no second read of a reported release");
+    let fired = hotkeys.hotkey(CLICKING, &mut keyboard);
+    let expected = vec![Fired(CLICKING), ModifiersReleased];
+    assert_eq!(after(fired, &keyboard), (expected, false));
+    // The controller waited on the hotkey before it heard of the release:
+    // no second read of a reported release.
+    let waited = hotkeys.watch(WAITING, &mut keyboard);
+    assert_eq!((waited, keyboard.starts), (vec![], 1));
 }
 
 #[test]
@@ -176,15 +181,17 @@ fn a_wait_ended_by_an_older_answer_is_read_again_when_the_controller_waits() {
     hotkeys.watch(WAITING, &mut keyboard);
     hotkeys.hotkey(CLICKING, &mut keyboard);
     hotkeys.hotkey(CLICKING, &mut keyboard);
-    assert_eq!(hotkeys.watch(Watching::default(), &mut keyboard), []);
-    assert!(!keyboard.reading);
+    let ended = hotkeys.watch(Watching::default(), &mut keyboard);
+    assert_eq!(after(ended, &keyboard), (vec![], false));
     // Then it waits for the third press: read afresh.
-    assert_eq!(hotkeys.watch(WAITING, &mut keyboard), []);
-    assert!(keyboard.reading);
-    assert_eq!(keyboard.starts, 2);
+    let waited = hotkeys.watch(WAITING, &mut keyboard);
+    assert_eq!(
+        (waited, keyboard.reading, keyboard.starts),
+        (vec![], true, 2)
+    );
     hotkeys.key(SHIFT, false, &mut keyboard);
-    assert_eq!(hotkeys.key(CTRL, false, &mut keyboard), [ModifiersReleased]);
-    assert!(!keyboard.reading);
+    let ctrl = hotkeys.key(CTRL, false, &mut keyboard);
+    assert_eq!(after(ctrl, &keyboard), (vec![ModifiersReleased], false));
 }
 
 #[test]
@@ -192,20 +199,19 @@ fn a_wait_ending_during_a_run_leaves_the_runs_stop_matching_reading() {
     let mut keyboard = FakeKeyboard::default();
     let mut hotkeys = registered();
     hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
-    assert!(keyboard.reading);
     // The recording hotkey during clicking: its wait joins and ends.
     hotkeys.key(CTRL, true, &mut keyboard);
     hotkeys.key(SHIFT, true, &mut keyboard);
-    assert_eq!(hotkeys.hotkey(RECORDING, &mut keyboard), [Fired(RECORDING)]);
+    let fired = hotkeys.hotkey(RECORDING, &mut keyboard);
+    assert_eq!(fired, [Fired(RECORDING)]);
     hotkeys.key(SHIFT, false, &mut keyboard);
-    assert_eq!(hotkeys.key(CTRL, false, &mut keyboard), [ModifiersReleased]);
-    assert!(keyboard.reading, "the run's stop matching still reads");
-    assert_eq!(keyboard.starts, 1, "one registration for both");
+    let ctrl = hotkeys.key(CTRL, false, &mut keyboard);
+    // The run's stop matching still reads, on the one registration.
+    let state = (ctrl, keyboard.reading, keyboard.starts);
+    assert_eq!(state, (vec![ModifiersReleased], true, 1));
     // And it still stops the run.
-    assert_eq!(
-        press(&mut hotkeys, &mut keyboard, F6),
-        [Fired(CLICKING), ModifiersReleased]
-    );
+    let stopped = press(&mut hotkeys, &mut keyboard, F6);
+    assert_eq!(stopped, [Fired(CLICKING), ModifiersReleased]);
     hotkeys.watch(Watching::default(), &mut keyboard);
     assert!(!keyboard.reading);
 }

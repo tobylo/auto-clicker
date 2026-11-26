@@ -149,14 +149,10 @@ impl Registered {
     /// activation's wait ended on an older answer) is taken up again with
     /// a fresh read, unless its release was already reported.
     pub fn watch(&mut self, watching: Watching, keyboard: &mut impl Keyboard) -> Vec<HotkeyEvent> {
-        let waited = self.watching.release;
-        if waited && !watching.release {
-            self.owed = false;
-        } else if !waited && watching.release && !self.owed && !self.released {
-            self.owed = true;
-            if self.reading {
-                self.seed(keyboard);
-            }
+        match (self.watching.release, watching.release) {
+            (true, false) => self.owed = false,
+            (false, true) => self.wait_again(keyboard),
+            _ => {}
         }
         self.watching = watching;
         let mut events = Vec::new();
@@ -170,6 +166,18 @@ impl Registered {
         self.watching = Watching::default();
         let mut events = Vec::new();
         self.settle(keyboard, &mut events);
+    }
+
+    /// The controller waits for a release the keyboard no longer follows,
+    /// unless it was reported already.
+    fn wait_again(&mut self, keyboard: &impl Keyboard) {
+        if self.owed || self.released {
+            return;
+        }
+        self.owed = true;
+        if self.reading {
+            self.seed(keyboard);
+        }
     }
 
     fn binding(&self, action: Action) -> Option<Binding> {
@@ -259,25 +267,38 @@ impl Registered {
     /// does, reporting an owed release once the modifiers are up.
     fn settle(&mut self, keyboard: &mut impl Keyboard, events: &mut Vec<HotkeyEvent>) {
         if self.wanted() && !self.reading {
-            if keyboard.start().is_ok() {
-                self.reading = true;
-                self.held.clear();
-                self.seed(keyboard);
-            } else if self.owed {
-                self.owed = false;
-                events.push(HotkeyEvent::ReleaseLost);
-            }
+            self.start(keyboard, events);
         }
-        if self.owed && self.reading && self.modifiers() == Modifiers::NONE {
-            self.owed = false;
-            self.released = true;
-            events.push(HotkeyEvent::ModifiersReleased);
+        if self.reading {
+            self.release_if_up(events);
         }
         if !self.wanted() && self.reading {
             keyboard.stop();
             self.reading = false;
             self.held.clear();
             self.unpaired.clear();
+        }
+    }
+
+    /// Starts reading, from what the key state says is down; an owed
+    /// release is lost when it cannot.
+    fn start(&mut self, keyboard: &mut impl Keyboard, events: &mut Vec<HotkeyEvent>) {
+        if keyboard.start().is_ok() {
+            self.reading = true;
+            self.held.clear();
+            self.seed(keyboard);
+        } else if self.owed {
+            self.owed = false;
+            events.push(HotkeyEvent::ReleaseLost);
+        }
+    }
+
+    /// Reports an owed release once no modifier is down.
+    fn release_if_up(&mut self, events: &mut Vec<HotkeyEvent>) {
+        if self.owed && self.modifiers() == Modifiers::NONE {
+            self.owed = false;
+            self.released = true;
+            events.push(HotkeyEvent::ModifiersReleased);
         }
     }
 }

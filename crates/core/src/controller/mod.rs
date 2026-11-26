@@ -800,8 +800,7 @@ impl<P: Platform> Controller<P> {
     fn toggle(&mut self) {
         match &mut self.state {
             State::Idle => {
-                if self.may_start()
-                    && self.foreground_allows(Start::Clicking)
+                if self.may_start_from_hotkey()
                     && let Some(deadline) = Instant::now().checked_add(RELEASE_WAIT)
                 {
                     self.state = State::Release(deadline, Job::Click);
@@ -897,6 +896,12 @@ impl<P: Platform> Controller<P> {
             why: Hindrance::Elevated,
         });
         false
+    }
+
+    /// Whether clicking may start from its hotkey; says why not when it
+    /// may not.
+    fn may_start_from_hotkey(&mut self) -> bool {
+        self.may_start() && self.foreground_allows(Start::Clicking)
     }
 
     /// Whether a start may begin; says why not when it may not.

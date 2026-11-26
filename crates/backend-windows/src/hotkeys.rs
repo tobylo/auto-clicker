@@ -26,7 +26,9 @@ use auto_clicker_core::hotkeys::{
 };
 use auto_clicker_core::input::Key;
 use auto_clicker_core::log;
-use windows_sys::Win32::Foundation::{ERROR_HOTKEY_ALREADY_REGISTERED, HWND, LPARAM, WPARAM};
+use windows_sys::Win32::Foundation::{
+    ERROR_HOTKEY_ALREADY_REGISTERED, HWND, LPARAM, LRESULT, WPARAM,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, MAPVK_VSC_TO_VK_EX, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
     MapVirtualKeyW, RegisterHotKey, UnregisterHotKey,
@@ -36,7 +38,8 @@ use windows_sys::Win32::UI::Input::{
     RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEKEYBOARD, RegisterRawInputDevices,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, MSG, PM_REMOVE, PeekMessageW, RI_KEY_BREAK, RI_KEY_E0, WM_APP, WM_INPUT,
+    DefWindowProcW, MSG, PM_REMOVE, PeekMessageW, RI_KEY_BREAK, RI_KEY_E0, WM_APP, WM_HOTKEY,
+    WM_INPUT,
 };
 
 use crate::message_thread::Remote;
@@ -44,7 +47,7 @@ use crate::output::keys::{Code, code};
 use crate::output::{MARKER, received_key};
 
 /// Posted when the slot changed: the thread reads it.
-pub(crate) const WM_HOTKEYS_CHANGED: u32 = WM_APP + 5;
+const WM_HOTKEYS_CHANGED: u32 = WM_APP + 5;
 
 /// The generic desktop page's keyboard usage, for raw input.
 const KEYBOARD: (u16, u16) = (1, 6);
@@ -162,7 +165,7 @@ thread_local! {
 
 /// The slot changed: registers the wanted reader's hotkeys in place of the
 /// old one's, and passes on what the keyboard is watched for.
-pub(crate) fn changed(hwnd: HWND, remote: &Remote) {
+fn changed(hwnd: HWND, remote: &Remote) {
     let wanted = remote
         .hotkeys()
         .lock()
@@ -204,9 +207,32 @@ pub(crate) fn end(hwnd: HWND) {
     }
 }
 
+/// What the window answers to a hotkey's or the keyboard's message;
+/// `None` for any other message, and `Some(None)` to leave it to
+/// `DefWindowProc` after.
+pub(crate) fn answer(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> Option<Option<LRESULT>> {
+    match message {
+        // A key press is never a wake to log (invariant N5).
+        WM_HOTKEY => hotkey(hwnd, wparam),
+        // Left to the default as well, which frees the event's data.
+        WM_INPUT => {
+            input(hwnd, lparam);
+            return Some(None);
+        }
+        WM_HOTKEYS_CHANGED => Remote::on_thread(|remote| changed(hwnd, remote)),
+        _ => return None,
+    }
+    Some(Some(0))
+}
+
 /// A `WM_HOTKEY` with this id. Raw input already queued goes first: it
 /// happened before, and the key state the hotkey reads is newer than it.
-pub(crate) fn hotkey(hwnd: HWND, id: WPARAM) {
+fn hotkey(hwnd: HWND, id: WPARAM) {
     drain_input(hwnd);
     with_active(hwnd, |active, keyboard| {
         let action = active
@@ -222,7 +248,7 @@ pub(crate) fn hotkey(hwnd: HWND, id: WPARAM) {
 }
 
 /// A `WM_INPUT`; the window procedure leaves it to `DefWindowProc` after.
-pub(crate) fn input(hwnd: HWND, lparam: LPARAM) {
+fn input(hwnd: HWND, lparam: LPARAM) {
     let Some((code, down)) = key_event(lparam) else {
         return;
     };
@@ -366,7 +392,11 @@ fn key_event(lparam: LPARAM) -> Option<(u16, bool)> {
             header,
         )
     };
-    if read == u32::MAX || read == 0 || input.header.dwType != RIM_TYPEKEYBOARD {
+    let failed = read == u32::MAX || read == 0;
+    if failed {
+        return None;
+    }
+    if input.header.dwType != RIM_TYPEKEYBOARD {
         return None;
     }
     // SAFETY: a keyboard event, so the union holds its keyboard part.

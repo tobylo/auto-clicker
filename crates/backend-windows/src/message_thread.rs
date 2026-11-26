@@ -40,13 +40,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetMessageW, KillTimer, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSUSPEND,
     PBT_POWERSETTINGCHANGE, PostMessageW, PostQuitMessage, RegisterClassW, SetTimer,
-    UnregisterClassW, WM_APP, WM_CLOSE, WM_DESTROY, WM_ENDSESSION, WM_HOTKEY, WM_INPUT,
-    WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER, WM_WTSSESSION_CHANGE, WNDCLASSW,
-    WS_EX_TOOLWINDOW, WS_OVERLAPPED, WTS_CONSOLE_CONNECT, WTS_CONSOLE_DISCONNECT,
-    WTS_REMOTE_CONNECT, WTS_REMOTE_DISCONNECT, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+    UnregisterClassW, WM_APP, WM_CLOSE, WM_DESTROY, WM_ENDSESSION, WM_POWERBROADCAST,
+    WM_QUERYENDSESSION, WM_TIMER, WM_WTSSESSION_CHANGE, WNDCLASSW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+    WTS_CONSOLE_CONNECT, WTS_CONSOLE_DISCONNECT, WTS_REMOTE_CONNECT, WTS_REMOTE_DISCONNECT,
+    WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
 };
 
-use crate::hotkeys::{self, WM_HOTKEYS_CHANGED, Wanted};
+use crate::hotkeys::{self, Wanted};
 use crate::message::wide;
 use crate::session::{SessionState, query};
 use crate::tray::{self, TrayContent, WM_TRAY_REFRESH};
@@ -295,6 +295,15 @@ impl Remote {
         }
         self.post(WM_TRAY_REFRESH, 0, 0)
             .inspect_err(|_| *slot = None)
+    }
+
+    /// Runs `with` on this thread's own remote, while the window lives.
+    pub(crate) fn on_thread(with: impl FnOnce(&Remote)) {
+        SHARED.with_borrow(|shared| {
+            if let Some(shared) = shared {
+                with(shared);
+            }
+        });
     }
 
     /// What the runtime wants of the hotkeys.
@@ -579,8 +588,11 @@ unsafe extern "system" fn window_procedure(
 /// What the window answers to `message`; `None` leaves it to Windows'
 /// default.
 fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-    if let Some(result) = tray::answer(hwnd, message, wparam, lparam) {
-        return Some(result);
+    let handled = tray::answer(hwnd, message, wparam, lparam)
+        .map(Some)
+        .or_else(|| hotkeys::answer(hwnd, message, wparam, lparam));
+    if let Some(result) = handled {
+        return result;
     }
     match message {
         // A notice the program does not follow is still a wake, reported
@@ -629,24 +641,6 @@ fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LR
         }
         WM_DESTROY => {
             unwatch(hwnd);
-            Some(0)
-        }
-        // A key press is never a wake to log (invariant N5).
-        WM_HOTKEY => {
-            hotkeys::hotkey(hwnd, wparam);
-            Some(0)
-        }
-        // Left to the default as well, which frees the event's data.
-        WM_INPUT => {
-            hotkeys::input(hwnd, lparam);
-            None
-        }
-        WM_HOTKEYS_CHANGED => {
-            SHARED.with_borrow(|shared| {
-                if let Some(shared) = shared {
-                    hotkeys::changed(hwnd, shared);
-                }
-            });
             Some(0)
         }
         // What the user's hand moved around the tray's menu is no wake.
