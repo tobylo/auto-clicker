@@ -502,3 +502,21 @@ fn a_key_the_system_takes_for_a_stops_key_stops_it_from_raw_input() {
         [Fired(CLICKING), ModifiersReleased]
     );
 }
+
+#[test]
+fn letting_go_of_a_key_lets_go_of_its_seeded_aliases() {
+    const ENTER: u16 = 28;
+    const KEYPAD_ENTER: u16 = 96;
+    let enter = Binding::parse("Ctrl+Shift+Enter").unwrap();
+    let both = |binding: Binding| vec![binding.key(), Key::new(KEYPAD_ENTER).unwrap()];
+    let mut hotkeys = Registered::new(vec![(CLICKING, enter)], both);
+    // Enter held at the start: the key state shows both Enter keys down.
+    let mut keyboard = holding(&[ENTER, KEYPAD_ENTER]);
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    keyboard.down.clear();
+    hotkeys.key(ENTER, false, &mut keyboard);
+    assert_eq!(
+        press(&mut hotkeys, &mut keyboard, KEYPAD_ENTER),
+        [Fired(CLICKING), ModifiersReleased]
+    );
+}

@@ -174,6 +174,7 @@ impl Registered {
             self.pressed(code, &mut events);
         } else if !down {
             self.held.retain(|&held| held != code);
+            self.forget_seeded_aliases(code);
             let hotkeys = &self.hotkeys;
             self.unpaired.retain(|(action, _)| {
                 !hotkeys
@@ -283,6 +284,22 @@ impl Registered {
     fn tracked(&self, code: u16) -> bool {
         MODIFIER_CODES.contains(&code)
             || self.hotkeys.iter().any(|taken| taken.keys.contains(&code))
+    }
+
+    /// The user let go of `code`: the keys the system takes for the same
+    /// key share its key state, so a seed of one of them that no raw event
+    /// confirmed was this key, and is up too.
+    fn forget_seeded_aliases(&mut self, code: u16) {
+        let aliases: Vec<u16> = self
+            .hotkeys
+            .iter()
+            .filter(|taken| taken.keys.contains(&code))
+            .flat_map(|taken| taken.keys.iter().copied())
+            .collect();
+        let seeded = &self.seeded;
+        self.held
+            .retain(|held| !(aliases.contains(held) && seeded.contains(held)));
+        self.seeded.retain(|seeded| !aliases.contains(seeded));
     }
 
     /// Adds what the system's key state says is down.

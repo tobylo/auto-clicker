@@ -942,7 +942,7 @@ fn key(scan: u16, down: bool) {
 
 /// Lets go of these keys (by scan code) when dropped, so a test that fails
 /// leaves nothing of its own down in the desktop.
-struct LetGo(&'static [u16]);
+struct LetGo(Vec<u16>);
 
 impl Drop for LetGo {
     fn drop(&mut self) {
@@ -953,7 +953,7 @@ impl Drop for LetGo {
 
 /// Ctrl+Shift+`scan`, every key let go at once, as a quick hand does.
 fn combination(scan: u16) {
-    let _up = LetGo(&[CTRL, SHIFT]);
+    let _up = LetGo(vec![CTRL, SHIFT, scan]);
     for (scan, down) in [
         (CTRL, true),
         (SHIFT, true),
@@ -1013,7 +1013,7 @@ fn each_hotkey_starts_and_stops_its_job_while_another_window_has_focus() {
     let pid = daemon.process();
     let front = in_front(false);
     // Clicking starts only once Ctrl and Shift are both up.
-    let _up = LetGo(&[CTRL, SHIFT, F6]);
+    let _up = LetGo(vec![CTRL, SHIFT, F6]);
     key(CTRL, true);
     key(SHIFT, true);
     key(F6, true);
@@ -1102,8 +1102,8 @@ fn a_combination_another_program_holds_is_named_in_the_tray() {
 /// with its watchdog and the task, when dropped.
 struct Unelevated {
     task: String,
-    watchdog: u32,
-    daemon: u32,
+    watchdog: Option<u32>,
+    daemon: Option<u32>,
 }
 
 /// The watchdogs running from `path`.
@@ -1144,6 +1144,12 @@ impl Unelevated {
         let script = script.display().to_string().replace('\'', "''");
         // Only a watchdog of this build that was not there before is ours.
         let before = watchdogs_of(&listed);
+        // From here on, whatever the task started is ended when dropped.
+        let mut started = Unelevated {
+            task: task.clone(),
+            watchdog: None,
+            daemon: None,
+        };
         powershell(&format!(
             "schtasks /create /tn '{task}' /tr '\"{script}\"' /sc once /st 23:59 /rl limited /it /f | Out-Null; schtasks /run /tn '{task}' | Out-Null"
         ));
@@ -1152,12 +1158,9 @@ impl Unelevated {
             new.retain(|pid| !before.contains(pid));
             new.first().copied()
         });
+        started.watchdog = Some(watchdog);
         let daemon = wait_for("its daemon", || children(watchdog, DAEMON).first().copied());
-        let started = Unelevated {
-            task,
-            watchdog,
-            daemon,
-        };
+        started.daemon = Some(daemon);
         (started, desktop::Process(daemon))
     }
 }
@@ -1166,12 +1169,16 @@ impl Drop for Unelevated {
     /// Ends the daemon first, so its watchdog releases whatever it held,
     /// then the watchdog should it still run.
     fn drop(&mut self) {
-        let _ = kill(self.daemon, false);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while alive(self.watchdog) && Instant::now() < deadline {
-            sleep(Duration::from_millis(100));
+        if let Some(daemon) = self.daemon {
+            let _ = kill(daemon, false);
         }
-        let _ = kill(self.watchdog, true);
+        if let Some(watchdog) = self.watchdog {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while alive(watchdog) && Instant::now() < deadline {
+                sleep(Duration::from_millis(100));
+            }
+            let _ = kill(watchdog, true);
+        }
         let task = &self.task;
         powershell(&format!("schtasks /delete /tn '{task}' /f | Out-Null"));
     }
