@@ -1,6 +1,6 @@
 //! A driver for the device tests, in the WN01 VM's desktop: the pointer,
-//! the tray icon, its popup and its menu, seen and used from outside, as a
-//! user's hand would. Built for tests alone (the `desktop` feature), so the
+//! the keyboard, the tray icon, its popup and its menu, seen and used from
+//! outside, as a user's hand would, and a window to put in front. Built for tests alone (the `desktop` feature), so the
 //! daemon's tests drive Windows without `unsafe` of their own.
 
 use std::fs::{File, OpenOptions};
@@ -15,9 +15,10 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, MOUSEEVENTF_ABSOLUTE,
+    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
+    KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOD_CONTROL, MOD_SHIFT, MOUSEEVENTF_ABSOLUTE,
     MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
-    MOUSEEVENTF_RIGHTUP, MOUSEINPUT, SendInput, VIRTUAL_KEY,
+    MOUSEEVENTF_RIGHTUP, MOUSEINPUT, RegisterHotKey, SendInput, UnregisterHotKey, VIRTUAL_KEY,
 };
 use windows_sys::Win32::UI::Shell::{NOTIFYICONIDENTIFIER, Shell_NotifyIconGetRect};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -28,6 +29,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::message::wide;
+
+mod front;
+
+pub use front::Front;
 
 /// A rectangle on the screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,6 +194,71 @@ pub fn click(at: Point, button: Button) -> io::Result<()> {
     move_pointer(at)?;
     send_mouse(at, MOUSEEVENTF_ABSOLUTE | down)?;
     send_mouse(at, MOUSEEVENTF_ABSOLUTE | up)
+}
+
+/// Sends the key with set-1 scan code `scan` (`extended` for an `E0` key)
+/// down or up, as a keyboard does: what raw input and hotkeys see.
+pub fn key(scan: u16, extended: bool, down: bool) -> io::Result<()> {
+    let extended = if extended { KEYEVENTF_EXTENDEDKEY } else { 0 };
+    let up = if down { 0 } else { KEYEVENTF_KEYUP };
+    let input = INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wScan: scan,
+                dwFlags: KEYEVENTF_SCANCODE | extended | up,
+                ..KEYBDINPUT::default()
+            },
+        },
+    };
+    send(&input)
+}
+
+/// Ctrl+Shift and a key (a virtual key code), registered as a hotkey of
+/// this thread, as another program would hold it, until dropped on this
+/// thread.
+pub struct HeldHotkey(i32);
+
+/// Gives each held hotkey its id.
+static HOTKEYS: AtomicU64 = AtomicU64::new(0xA000);
+
+impl HeldHotkey {
+    /// Takes Ctrl+Shift+`key`.
+    ///
+    /// # Errors
+    /// Another program holds it already.
+    #[allow(unsafe_code)]
+    pub fn hold(key: VIRTUAL_KEY) -> io::Result<HeldHotkey> {
+        let id =
+            i32::try_from(HOTKEYS.fetch_add(1, Ordering::Relaxed)).map_err(io::Error::other)?;
+        // SAFETY: a hotkey of this thread, no window.
+        if unsafe { RegisterHotKey(null_mut(), id, MOD_CONTROL | MOD_SHIFT, u32::from(key)) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(HeldHotkey(id))
+    }
+
+    /// Whether another program holds Ctrl+Shift+`key`: this thread cannot
+    /// take it.
+    pub fn taken(key: VIRTUAL_KEY) -> bool {
+        HeldHotkey::hold(key).is_err()
+    }
+}
+
+impl Drop for HeldHotkey {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        // SAFETY: registered by this thread with this id.
+        unsafe { UnregisterHotKey(null_mut(), self.0) };
+    }
+}
+
+/// Where `window` is on the screen, if it is a window.
+#[allow(unsafe_code)]
+fn area_of(window: HWND) -> Option<Area> {
+    let mut rect = RECT::default();
+    // SAFETY: any handle may be asked; `rect` is live.
+    (unsafe { GetWindowRect(window, &mut rect) } != 0).then(|| Area::from(rect))
 }
 
 /// Presses and releases the key `key` (a virtual key code).

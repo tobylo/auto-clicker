@@ -8,11 +8,12 @@
 //! scripts/windows-vm/vm run --timeout 900 --workdir 'C:\work\<dir>' -- cargo test --locked -p auto-clicker --test windows_daemon -- --ignored --test-threads=1 --nocapture
 //! ```
 //!
-//! One test needs an elevated process and passes by otherwise; run it
+//! Two tests need an elevated process and pass by otherwise; run each
 //! alone through the elevated runner:
 //!
 //! ```text
 //! scripts/windows-vm/vm run --elevated --timeout 900 --workdir 'C:\work\<dir>' -- cargo test --locked -p auto-clicker --test windows_daemon -- --ignored --exact an_elevated_watchdog_refuses_before_it_writes_or_starts_anything
+//! scripts/windows-vm/vm run --elevated --timeout 900 --workdir 'C:\work\<dir>' -- cargo test --locked -p auto-clicker --test windows_daemon -- --ignored --exact a_hotkey_start_with_a_program_running_as_administrator_in_front_is_refused
 //! ```
 
 // Windows alone, as the daemon it drives.
@@ -913,4 +914,254 @@ fn the_daemon_is_per_monitor_dpi_aware() {
     );
     ask_to_quit(&daemon);
     assert!(ended(&mut daemon.watchdog, END).success(), "{}", home.log());
+}
+
+// Hotkeys (WN08). Keys are sent by scan code, as a keyboard sends them:
+// what both the hotkeys and raw input see.
+
+/// Ctrl's, Shift's and F6 to F8's scan codes.
+const CTRL: u16 = 0x1d;
+const SHIFT: u16 = 0x2a;
+const F6: u16 = 0x40;
+const F7: u16 = 0x41;
+const F8: u16 = 0x42;
+/// The virtual keys of F6 and F7.
+const VK_F6: u16 = 0x75;
+const VK_F7: u16 = 0x76;
+
+/// A recording holding F13 for 20 s.
+const HELD_F13: &str = "2026-11-09_19-00-00.000.json";
+const HOLDING_F13: &str = r#"{"version":1,"name":"Hold","created":"2026-11-09T19:00:00.000+01:00","duration_us":20000000,"events":[
+[0,"press","KEY_F13"],
+[20000000,"release","KEY_F13"]
+]}"#;
+
+fn key(scan: u16, down: bool) {
+    desktop::key(scan, false, down).unwrap();
+}
+
+/// Ctrl+Shift+`scan`, every key let go at once, as a quick hand does.
+fn combination(scan: u16) {
+    for (scan, down) in [
+        (CTRL, true),
+        (SHIFT, true),
+        (scan, true),
+        (scan, false),
+        (SHIFT, false),
+        (CTRL, false),
+    ] {
+        key(scan, down);
+    }
+}
+
+/// A window of the test's own, clicked so it is in front.
+fn in_front(no_hotkeys: bool) -> desktop::Front {
+    let front = desktop::Front::open(no_hotkeys).unwrap();
+    sleep(REOPEN);
+    desktop::click(front.area().centre(), desktop::Button::Left).unwrap();
+    wait_for("the test window in front", || {
+        front.in_front().then_some(())
+    });
+    front
+}
+
+/// A daemon of its own, with its hotkeys registered.
+fn with_hotkeys(what: &str, config: &str) -> (Home, Daemon) {
+    let home = Home::new(what);
+    home.config(config);
+    let recordings = home.0.join(r"local\auto-clicker\recordings");
+    std::fs::create_dir_all(&recordings).unwrap();
+    std::fs::write(recordings.join(HELD_F13), HOLDING_F13).unwrap();
+    let mut daemon = home.start();
+    home.running(&mut daemon);
+    wait_for("the hotkeys", || {
+        desktop::HeldHotkey::taken(VK_F6).then_some(())
+    });
+    (home, daemon)
+}
+
+/// Waits until F13 reads `down`, at most [`START`].
+fn f13(down: bool) {
+    wait_for("F13", || (desktop::is_down(VK_F13) == down).then_some(()));
+}
+
+/// F13 stays up for a second: nothing started again.
+fn stays_up() {
+    let since = Instant::now();
+    while since.elapsed() < Duration::from_secs(1) {
+        assert!(!desktop::is_down(VK_F13), "started again");
+        sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+#[ignore = "presses hotkeys in the desktop: run in the WN01 VM through `vm run`"]
+fn each_hotkey_starts_and_stops_its_job_while_another_window_has_focus() {
+    let (home, daemon) = with_hotkeys("hotkeys", HOLD_F13);
+    let pid = daemon.process();
+    let front = in_front(false);
+    // Clicking starts only once Ctrl and Shift are both up.
+    key(CTRL, true);
+    key(SHIFT, true);
+    key(F6, true);
+    key(F6, false);
+    sleep(Duration::from_millis(500));
+    assert!(
+        !desktop::is_down(VK_F13),
+        "started with Ctrl and Shift down"
+    );
+    key(SHIFT, false);
+    sleep(Duration::from_millis(300));
+    assert!(!desktop::is_down(VK_F13), "started with Ctrl down");
+    key(CTRL, false);
+    f13(true);
+    combination(F6);
+    released(VK_F13, Instant::now());
+    stays_up();
+    // Playback: the hold recording, the newest.
+    combination(F8);
+    f13(true);
+    combination(F8);
+    released(VK_F13, Instant::now());
+    stays_up();
+    assert!(front.in_front(), "the window lost the focus");
+    // The recording hotkey reaches the controller too, which cannot
+    // record on Windows before WN09 names recordings by the local time.
+    let icon = promoted_icon(pid);
+    combination(F7);
+    popup_once(pid, icon, |text| {
+        text.contains("Not recording: the clock could not be read")
+            || text.contains("Spelar inte in: klockan kunde inte läsas")
+    });
+    drop(home);
+}
+
+#[test]
+#[ignore = "presses hotkeys in the desktop, many times: run in the WN01 VM through `vm run`"]
+fn a_run_stops_by_its_hotkey_behind_any_window_and_never_starts_again() {
+    let (home, daemon) = with_hotkeys("stops", HOLD_F13);
+    let pid = daemon.process();
+    let icon = promoted_icon(pid);
+    // A window that turns hotkeys off: at idle nothing reads the keyboard,
+    // so the hotkey starts nothing.
+    let front = in_front(true);
+    combination(F6);
+    stays_up();
+    drop(front);
+    for round in 0..10 {
+        let no_hotkeys = round % 2 == 0;
+        choose(icon, None, label("Start clicking"));
+        f13(true);
+        let front = in_front(no_hotkeys);
+        let pressed = Instant::now();
+        combination(F6);
+        let took = released(VK_F13, pressed);
+        println!("round {round} (hotkeys off: {no_hotkeys}): released after {took:?}");
+        stays_up();
+        drop(front);
+    }
+    drop(home);
+}
+
+#[test]
+#[ignore = "holds a hotkey in the desktop: run in the WN01 VM through `vm run`"]
+fn a_combination_another_program_holds_is_named_in_the_tray() {
+    let held = desktop::HeldHotkey::hold(VK_F7).unwrap();
+    let (home, daemon) = with_hotkeys("taken", HOLD_F13);
+    let pid = daemon.process();
+    let icon = promoted_icon(pid);
+    let text = popup_once(pid, icon, |text| {
+        text.contains("Ctrl+Shift+F7 does not work: another program uses it")
+            || text.contains("Ctrl+Shift+F7 fungerar inte: ett annat program använder den")
+    });
+    println!("{text}");
+    // The others work.
+    combination(F6);
+    f13(true);
+    combination(F6);
+    released(VK_F13, Instant::now());
+    drop(held);
+    drop(home);
+}
+
+/// A daemon started unelevated by a one-off task of Windows' scheduler,
+/// from an elevated test, which an elevated daemon refuses to be; ended,
+/// with its watchdog and the task, when dropped.
+struct Unelevated {
+    task: String,
+    watchdog: u32,
+}
+
+impl Unelevated {
+    fn start(home: &Home) -> (Unelevated, desktop::Process) {
+        let script = home.0.join("start.cmd");
+        let folder = |name: &str| home.0.join(name).display().to_string();
+        std::fs::write(
+            &script,
+            format!(
+                "set \"APPDATA={}\"\r\nset \"LOCALAPPDATA={}\"\r\nstart \"\" \"{}\"\r\n",
+                folder("roaming"),
+                folder("local"),
+                std::path::Path::new(WATCHDOG)
+                    .canonicalize()
+                    .unwrap()
+                    .display()
+            ),
+        )
+        .unwrap();
+        let task = format!("auto-clicker-test-{}", std::process::id());
+        let script = script.display().to_string();
+        powershell(&format!(
+            "schtasks /create /tn '{task}' /tr '\"{script}\"' /sc once /st 23:59 /rl limited /it /f | Out-Null; schtasks /run /tn '{task}' | Out-Null"
+        ));
+        let watchdog = wait_for("the unelevated watchdog", || {
+            let found =
+                powershell("(Get-Process auto-clicker-watchdog -ErrorAction SilentlyContinue).Id");
+            found.trim().parse::<u32>().ok()
+        });
+        let started = Unelevated { task, watchdog };
+        let pid = wait_for("its daemon", || children(watchdog, DAEMON).first().copied());
+        (started, desktop::Process(pid))
+    }
+}
+
+impl Drop for Unelevated {
+    fn drop(&mut self) {
+        let _ = kill(self.watchdog, true);
+        let task = &self.task;
+        powershell(&format!("schtasks /delete /tn '{task}' /f | Out-Null"));
+    }
+}
+
+#[test]
+#[ignore = "must run elevated, in the desktop: the WN01 VM through `vm run --elevated`"]
+fn a_hotkey_start_with_a_program_running_as_administrator_in_front_is_refused() {
+    // The usual unelevated run of every device test passes it by.
+    if !auto_clicker_backend_windows::is_elevated().unwrap() {
+        println!("not elevated: run this test alone through `vm run --elevated`");
+        return;
+    }
+    let home = Home::new("elevated-front");
+    home.config(HOLD_F13);
+    let (daemon, pid) = Unelevated::start(&home);
+    wait_for("the hotkeys", || {
+        desktop::HeldHotkey::taken(VK_F6).then_some(())
+    });
+    // This test's own window, elevated as the test is, in front.
+    let front = in_front(false);
+    combination(F6);
+    sleep(Duration::from_secs(1));
+    assert!(!desktop::is_down(VK_F13), "clicking started");
+    assert!(front.in_front());
+    let icon = promoted_icon(pid);
+    let text = popup_once(pid, icon, |text| {
+        text.contains(
+            "Not started: Auto Clicker can't click into a program running as administrator",
+        ) || text.contains(
+            "Startade inte: Auto Clicker kan inte klicka i ett program som körs som administratör",
+        )
+    });
+    println!("{text}");
+    drop(daemon);
+    drop(home);
 }

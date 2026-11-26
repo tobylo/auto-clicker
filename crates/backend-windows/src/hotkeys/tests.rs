@@ -1,6 +1,12 @@
 //! The hotkeys' registration on a real message thread. Raw input is
 //! registered per process and hotkeys for the whole session, so the tests
-//! take turns, and use combinations no one else does.
+//! take turns, and use combinations no one else does. `RegisterHotKey`
+//! needs a desktop (over SSH it fails with error 1459), so they run in the
+//! WN01 VM's desktop, from the dev box:
+//!
+//! ```text
+//! scripts/windows-vm/vm run --timeout 900 --workdir 'C:\work\<dir>' -- cargo test --locked -p auto-clicker-backend-windows hotkeys:: -- --ignored
+//! ```
 
 use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -76,6 +82,7 @@ fn free(binding: Binding) -> bool {
 }
 
 #[test]
+#[ignore = "registers hotkeys, which needs a desktop: run in the WN01 VM through `vm run`"]
 fn the_keyboard_is_read_only_while_asked_and_the_hotkeys_go_with_their_reader() {
     let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
     let (thread, _) = started();
@@ -110,6 +117,7 @@ fn the_keyboard_is_read_only_while_asked_and_the_hotkeys_go_with_their_reader() 
 }
 
 #[test]
+#[ignore = "registers hotkeys, which needs a desktop: run in the WN01 VM through `vm run`"]
 fn a_replaced_readers_end_leaves_its_replacements_hotkeys() {
     let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
     let (thread, _) = started();
@@ -139,6 +147,7 @@ fn a_replaced_readers_end_leaves_its_replacements_hotkeys() {
 }
 
 #[test]
+#[ignore = "registers hotkeys, which needs a desktop: run in the WN01 VM through `vm run`"]
 #[allow(unsafe_code)]
 fn a_combination_another_program_holds_is_refused_by_name_and_the_rest_work() {
     let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
@@ -170,6 +179,7 @@ fn a_combination_another_program_holds_is_refused_by_name_and_the_rest_work() {
 }
 
 #[test]
+#[ignore = "registers hotkeys, which needs a desktop: run in the WN01 VM through `vm run`"]
 fn the_windows_end_stops_the_reading_and_frees_the_hotkeys() {
     let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
     let (thread, _) = started();
