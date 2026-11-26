@@ -48,8 +48,10 @@ function Get-RunnerTask([string] $Name) {
 # Whether anything of the setup's is here: its own C:\wn01 (one another
 # account made does not count) or a runner task.
 function Test-SetupPresent {
-    if ((Test-Path -LiteralPath $Root) -and (Test-SetupRoot)) { return $true }
-    return @($Tasks | Where-Object { $null -ne (Get-RunnerTask $_) }).Count -gt 0
+    if (@($Tasks | Where-Object { $null -ne (Get-RunnerTask $_) }).Count -gt 0) { return $true }
+    # A runner a stopped uninstall could not end: a retry finishes the job.
+    if (@(Get-RunnerProcesses).Count -gt 0) { return $true }
+    return (Test-Path -LiteralPath $Root) -and (Test-SetupRoot)
 }
 
 function Remove-RunnerTask([string] $Name) {
@@ -79,9 +81,14 @@ function Remove-Runners {
 # One another account made or can write is left alone, and nothing in it is
 # read.
 function Test-SetupRoot {
-    $item = Get-Item -LiteralPath $Root -Force
+    # A root whose owner or rules cannot be read is not the setup's.
+    try { return Test-SetupRootReadable } catch { return $false }
+}
+
+function Test-SetupRootReadable {
+    $item = Get-Item -LiteralPath $Root -Force -ErrorAction Stop
     if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
-    $acl = Get-Acl -LiteralPath $Root
+    $acl = Get-Acl -LiteralPath $Root -ErrorAction Stop
     if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $Trusted -or -not $acl.AreAccessRulesProtected) { return $false }
     # Synchronize comes with every rule Windows writes.
     $readOnly = [int] [Security.AccessControl.FileSystemRights]'ReadAndExecute, Synchronize'
