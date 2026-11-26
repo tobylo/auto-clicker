@@ -92,10 +92,10 @@ pub fn start_daemon(
     };
     let mut line = command_line(program.as_os_str(), &arguments(handles));
     let program = wide_path(program.as_os_str());
-    let list = AttributeList::with_handles(&inherited)?;
+    let mut list = AttributeList::with_handles(&inherited)?;
     let mut startup = STARTUPINFOEXW::default();
     startup.StartupInfo.cb = u32::try_from(size_of::<STARTUPINFOEXW>()).unwrap_or(u32::MAX);
-    startup.lpAttributeList = list.as_ptr();
+    startup.lpAttributeList = list.as_mut_ptr();
     let mut started = PROCESS_INFORMATION::default();
     // SAFETY: `program` and `line` are NUL-terminated UTF-16, `line`
     // writable as Windows requires, both alive for the call; inheritance is
@@ -179,7 +179,7 @@ impl AttributeList {
             return Err(io::Error::last_os_error());
         }
         let handles: Box<[HANDLE]> = handles.into();
-        let built = AttributeList {
+        let mut built = AttributeList {
             memory,
             _handles: handles,
         };
@@ -187,7 +187,7 @@ impl AttributeList {
         // handles live in `built`, which outlives every use of the list.
         let updated = unsafe {
             UpdateProcThreadAttribute(
-                built.as_ptr(),
+                built.as_mut_ptr(),
                 0,
                 PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
                 built._handles.as_ptr().cast(),
@@ -202,8 +202,9 @@ impl AttributeList {
         Ok(built)
     }
 
-    fn as_ptr(&self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
-        self.memory.as_ptr().cast_mut().cast()
+    /// The list, for Windows to write: from the memory's mutable pointer.
+    fn as_mut_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
+        self.memory.as_mut_ptr().cast()
     }
 }
 
@@ -211,7 +212,7 @@ impl Drop for AttributeList {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
         // SAFETY: the list was initialised and is deleted once.
-        unsafe { DeleteProcThreadAttributeList(self.as_ptr()) };
+        unsafe { DeleteProcThreadAttributeList(self.as_mut_ptr()) };
     }
 }
 
