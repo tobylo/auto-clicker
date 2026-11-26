@@ -606,6 +606,12 @@ fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LR
             Some(0)
         }
         WM_POWERBROADCAST => {
+            if matches!(
+                u32::try_from(wparam),
+                Ok(PBT_APMSUSPEND | PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND)
+            ) {
+                hotkeys::session_changed(hwnd);
+            }
             power(wparam, lparam);
             Some(1)
         }

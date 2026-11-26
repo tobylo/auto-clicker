@@ -332,3 +332,11 @@ fn releases_queued_before_a_hotkey_go_first_however_many() {
     drop(reading);
     thread.quit_and_join(JOIN).unwrap();
 }
+
+#[test]
+fn a_hotkey_on_a_key_raw_input_reports_otherwise_is_not_registered_yet() {
+    for text in ["Ctrl+Alt+SysRq", "Ctrl+Shift+Pause"] {
+        assert!(not_yet(binding(text)).is_some(), "{text}");
+    }
+    assert_eq!(not_yet(binding("Ctrl+Shift+F6")), None);
+}

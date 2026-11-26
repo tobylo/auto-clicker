@@ -1115,15 +1115,47 @@ struct Unelevated {
 
 /// The watchdogs running from `path`.
 fn watchdogs_of(path: &str) -> Vec<u32> {
+    try_watchdogs_of(path).unwrap()
+}
+
+/// The watchdogs running from `path`, or why they could not be listed:
+/// for cleanup, which must not panic while a failed test unwinds.
+fn try_watchdogs_of(path: &str) -> std::io::Result<Vec<u32>> {
     let path = path.replace('\'', "''");
-    powershell(&format!(
+    let script = format!(
         "Get-CimInstance Win32_Process -Filter \"Name = 'auto-clicker-watchdog.exe'\" \
          | Where-Object {{ $_.ExecutablePath -eq '{path}' }} \
          | ForEach-Object {{ $_.ProcessId }}"
-    ))
-    .lines()
-    .filter_map(|line| line.trim().parse().ok())
-    .collect()
+    );
+    let listed = desktop::powershell(&script, Duration::from_secs(60))?;
+    Ok(listed
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect())
+}
+
+/// Runs `script` for cleanup: a failure is ignored rather than a panic
+/// while a failed test unwinds.
+fn quietly(script: &str) {
+    let _ = desktop::powershell(script, Duration::from_secs(60));
+}
+
+/// Ends process `pid` (and its tree when `tree`) for cleanup, never
+/// panicking.
+fn kill_quietly(pid: u32, tree: bool) {
+    let tree = if tree { " /T" } else { "" };
+    let _ = Command::new("cmd")
+        .args(["/c", &format!("taskkill /F{tree} /PID {pid}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Whether process `pid` still runs, for cleanup: not when it cannot be
+/// asked.
+fn alive_quietly(pid: u32) -> bool {
+    let script = format!("[bool](Get-Process -Id {pid} -ErrorAction SilentlyContinue)");
+    desktop::powershell(&script, Duration::from_secs(60)).is_ok_and(|out| out.trim() == "True")
 }
 
 impl Unelevated {
@@ -1191,21 +1223,21 @@ impl Drop for Unelevated {
     /// end whatever is left.
     fn drop(&mut self) {
         if let Some(daemon) = self.daemon {
-            let _ = kill(daemon, false);
+            kill_quietly(daemon, false);
         }
         let task = &self.task;
         // A launch still going would start its watchdog after the look.
-        powershell(&format!("schtasks /end /tn '{task}' 2>&1 | Out-Null"));
+        quietly(&format!("schtasks /end /tn '{task}' 2>&1 | Out-Null"));
         let watchdogs = match self.watchdog {
             Some(watchdog) => vec![watchdog],
             None => {
-                let mut new = watchdogs_of(&self.listed);
+                let mut new = try_watchdogs_of(&self.listed).unwrap_or_default();
                 new.retain(|pid| !self.before.contains(pid));
                 // Held before they are ended, so each id still names the
                 // watchdog found; one that fails the check is left alone.
                 new.retain(|&pid| {
                     desktop::Held::open_checked(desktop::Process(pid), || {
-                        watchdogs_of(&self.listed).contains(&pid)
+                        try_watchdogs_of(&self.listed).is_ok_and(|now| now.contains(&pid))
                     })
                     .map(|held| self.held.push(held))
                     .is_ok()
@@ -1215,12 +1247,12 @@ impl Drop for Unelevated {
         };
         for watchdog in watchdogs {
             let deadline = Instant::now() + Duration::from_secs(5);
-            while self.daemon.is_some() && alive(watchdog) && Instant::now() < deadline {
+            while self.daemon.is_some() && alive_quietly(watchdog) && Instant::now() < deadline {
                 sleep(Duration::from_millis(100));
             }
-            let _ = kill(watchdog, true);
+            kill_quietly(watchdog, true);
         }
-        powershell(&format!("schtasks /delete /tn '{task}' /f | Out-Null"));
+        quietly(&format!("schtasks /delete /tn '{task}' /f | Out-Null"));
     }
 }
 

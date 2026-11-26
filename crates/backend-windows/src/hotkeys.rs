@@ -37,11 +37,12 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::Input::{
     GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
-    RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEKEYBOARD, RegisterRawInputDevices,
+    RIDEV_DEVNOTIFY, RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEKEYBOARD, RegisterRawInputDevices,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, EVENT_SYSTEM_DESKTOPSWITCH, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage,
-    RI_KEY_BREAK, RI_KEY_E0, WINEVENT_OUTOFCONTEXT, WM_APP, WM_HOTKEY, WM_INPUT, WM_QUIT,
+    DefWindowProcW, EVENT_SYSTEM_DESKTOPSWITCH, GIDC_REMOVAL, MSG, PM_REMOVE, PeekMessageW,
+    PostQuitMessage, RI_KEY_BREAK, RI_KEY_E0, WINEVENT_OUTOFCONTEXT, WM_APP, WM_HOTKEY, WM_INPUT,
+    WM_INPUT_DEVICE_CHANGE, WM_QUIT,
 };
 
 use crate::message_thread::Remote;
@@ -286,8 +287,9 @@ pub(crate) fn end(hwnd: HWND) {
     }
 }
 
-/// The session was locked, unlocked or switched: the keys followed are
-/// forgotten (core's [`Registered::session_changed`]).
+/// The session was locked, unlocked or switched, the input desktop
+/// switched, the system slept or woke, or a keyboard went away: the keys
+/// followed are forgotten (core's [`Registered::session_changed`]).
 pub(crate) fn session_changed(hwnd: HWND) {
     with_active(hwnd, |active, keyboard| {
         active.registered.session_changed(keyboard)
@@ -312,6 +314,10 @@ pub(crate) fn answer(
             return Some(None);
         }
         WM_HOTKEYS_CHANGED => Remote::on_thread(|remote| changed(hwnd, remote)),
+        // A keyboard went away: what it held never comes up.
+        WM_INPUT_DEVICE_CHANGE if u32::try_from(wparam) == Ok(GIDC_REMOVAL) => {
+            session_changed(hwnd);
+        }
         _ => return None,
     }
     Some(Some(0))
@@ -446,8 +452,29 @@ fn register(hwnd: HWND, wish: &Wish) -> Active {
     }
 }
 
+/// Keys Windows reports in raw input otherwise than they are sent, which
+/// WN09 measures before reading them back: SysRq (Alt+PrintScreen comes as
+/// plain 0x54), Pause (Ctrl+Pause comes as Break), Hangeul and Hanja. A
+/// hotkey on one could not be stopped behind a game that turns hotkeys
+/// off, so it is not registered yet.
+const READ_BACK_LATER: [u16; 4] = [99, 119, 122, 123];
+
+/// Why `binding` is not registered yet, if it is not.
+fn not_yet(binding: Binding) -> Option<NotRegistered> {
+    READ_BACK_LATER.contains(&binding.key().code()).then(|| {
+        NotRegistered::Failed(
+            "its key cannot be read back on Windows yet"
+                .to_owned()
+                .into(),
+        )
+    })
+}
+
 #[allow(unsafe_code)]
 fn register_one(hwnd: HWND, id: i32, binding: Binding) -> Result<(), NotRegistered> {
+    if let Some(why) = not_yet(binding) {
+        return Err(why);
+    }
     let Some(vk) = virtual_key(binding.key()) else {
         return Err(NotRegistered::Failed(
             "its key has no virtual key on this keyboard layout"
@@ -627,7 +654,7 @@ impl<'a> RawKeyboard<'a> {
 impl Keyboard for RawKeyboard<'_> {
     /// Reads every keyboard, whatever window is in front.
     fn start(&mut self) -> io::Result<()> {
-        RawKeyboard::register(RIDEV_INPUTSINK, self.window).inspect_err(|err| {
+        RawKeyboard::register(RIDEV_INPUTSINK | RIDEV_DEVNOTIFY, self.window).inspect_err(|err| {
             log::line(format_args!(
                 "auto-clicker: the keyboard could not be read for the hotkeys: {err}"
             ));
