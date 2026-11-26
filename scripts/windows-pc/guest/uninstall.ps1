@@ -31,8 +31,20 @@ function Test-ProcessAlive([int] $Id) {
     return $null -ne $process -and -not $process.HasExited
 }
 
+# Task $Name, or $null when Windows says there is none; any other failure
+# to look it up stops the uninstall before C:\wn01 goes, since a task left
+# registered would run whatever a new C:\wn01 held.
+function Get-RunnerTask([string] $Name) {
+    try {
+        return Get-ScheduledTask -TaskName $Name -ErrorAction Stop
+    } catch {
+        if ($_.CategoryInfo.Category -eq 'ObjectNotFound') { return $null }
+        throw
+    }
+}
+
 function Remove-RunnerTask([string] $Name) {
-    if (-not (Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue)) { return }
+    if ($null -eq (Get-RunnerTask $Name)) { return }
     Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $Name -Confirm:$false
     Write-Output "removed task $Name"
@@ -112,8 +124,8 @@ function Test-WinlogonValue([string] $Name) {
 
 # Each check names what it finds left of the setup's.
 $Leftovers = [ordered]@{
-    'task wn01-runner-normal' = { [bool] (Get-ScheduledTask -TaskName 'wn01-runner-normal' -ErrorAction SilentlyContinue) }
-    'task wn01-runner-high' = { [bool] (Get-ScheduledTask -TaskName 'wn01-runner-high' -ErrorAction SilentlyContinue) }
+    'task wn01-runner-normal' = { $null -ne (Get-RunnerTask 'wn01-runner-normal') }
+    'task wn01-runner-high' = { $null -ne (Get-RunnerTask 'wn01-runner-high') }
     'a runner process' = { @(Get-RunnerProcesses).Count -gt 0 }
     $Root = { Test-Path -LiteralPath $Root }
     'Winlogon AutoAdminLogon' = { (Get-ItemProperty -LiteralPath $Winlogon -Name 'AutoAdminLogon' -ErrorAction SilentlyContinue).AutoAdminLogon -ne '0' }

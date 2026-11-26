@@ -18,12 +18,14 @@ SSH_KEY_FILE=""
 # shellcheck disable=SC2016 # PowerShell expands these on the PC.
 REMOTE_PREFIX='Set-ExecutionPolicy -Scope Process Bypass -Force; [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User"); '
 # Before a job is handed to the runner: C:\wn01 must be the setup's, a plain
-# folder the administrators or SYSTEM own, or its run-job.ps1 is not run
+# folder the administrators or SYSTEM own, inheriting nothing, that nobody
+# else can write (0x1200A9 is read and execute), holding run-job.ps1, or it
+# is not run
 # (exit 125, as when the runner cannot start a job). Another account could
 # have made the folder before the setup ran. Anything that cannot be read
 # counts as not the setup's.
 # shellcheck disable=SC2016 # PowerShell expands these on the PC.
-RUN_JOB_PREFIX='$ours = $false; try { $r = Get-Item -LiteralPath C:\wn01 -Force -ErrorAction Stop; $o = (Get-Acl -LiteralPath C:\wn01 -ErrorAction Stop).GetOwner([Security.Principal.SecurityIdentifier]).Value; $ours = $r.PSIsContainer -and -not ($r.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $o -in "S-1-5-32-544", "S-1-5-18" } catch { }; if (-not $ours) { [Console]::Error.WriteLine("C:\wn01 is not the setup'"'"'s: run pc setup"); exit 125 }; '
+RUN_JOB_PREFIX='$ours = $false; try { $r = Get-Item -LiteralPath C:\wn01 -Force -ErrorAction Stop; $a = Get-Acl -LiteralPath C:\wn01 -ErrorAction Stop; $t = "S-1-5-32-544", "S-1-5-18"; $w = @($a.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference.Value -notin $t -and ([int] $_.FileSystemRights -bor 0x1200A9) -ne 0x1200A9 }); $ours = $r.PSIsContainer -and -not ($r.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $a.GetOwner([Security.Principal.SecurityIdentifier]).Value -in $t -and $a.AreAccessRulesProtected -and $w.Count -eq 0 -and (Test-Path -LiteralPath C:\wn01\run-job.ps1 -PathType Leaf) } catch { }; if (-not $ours) { [Console]::Error.WriteLine("C:\wn01 is not the setup'"'"'s, or has no run-job.ps1: run pc setup"); exit 125 }; '
 
 # Where setup and uninstall copy their scripts on the PC: tester's own temp
 # folder, which no other account can write.

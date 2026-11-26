@@ -1,6 +1,6 @@
 # M5: Run on Windows 11
 
-- Milestone M5, scope gate G5 (#107). Investigation X03 (#109), slices WN01 (#108), WN02 to WN12 (#110 to #120), WN06b (#132) and WN06c (#135); [github-map.json](../github-map.json) maps the codes.
+- Milestone M5, scope gate G5 (#107). Investigation X03 (#109), slices WN01 (#108), WN02 to WN12 (#110 to #120), WN06b (#132) and WN06c (#135), and the task WN13 (#133); [github-map.json](../github-map.json) maps the codes.
 - On Windows this brief replaces map D1's tray, D7's paths, file calls and input reader, and D12's layer-shell surfaces; everything else in the map holds on both systems.
 - Maturity: mapped and settled 2026-11-23, before the spike. X03 measured the mechanisms on 2026-11-25 ([decision record 0006](../../decisions/0006-windows.md)); decisions 5, 6 and 9 and invariant N5 changed with the owner that day, and decisions 2, 7 to 10 and 15 gained what the spike measured.
 - Diagram: [what stays, what Windows adds, and a hotkey click with a kill mid-hold](https://prlens.dev/c/IqawE6ShSVjC6_CUfjrqQg).
@@ -79,6 +79,7 @@ About 1,500 added lines each.
 | WN10 | The settings window, hotkey capture and rebinding, and the fixed-point picker on Windows | WN08, WN09 |
 | WN11 | The on-screen display on Windows | WN09 |
 | WN12 | Install, upgrade and uninstall script, guide and README for Windows | WN06b, WN10, WN11 |
+| WN13 | The owner's Windows 11 test PC: the VM's desktop runner, autologon and a `pc` command on the dev box, for measurements that need real hardware | WN01 |
 
 The clicker is usable at the cursor after WN08, with the watchdog in place; a release Windows blocked is sent again once WN06b is in; at a fixed point after WN10.
 
