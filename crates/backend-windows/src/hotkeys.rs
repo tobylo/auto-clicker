@@ -14,7 +14,7 @@
 //! that carry the program's marker are dropped before anything sees them
 //! (decision 8), and nothing here logs a key.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,6 +29,7 @@ use auto_clicker_core::log;
 use windows_sys::Win32::Foundation::{
     ERROR_HOTKEY_ALREADY_REGISTERED, HWND, LPARAM, LRESULT, WPARAM,
 };
+use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyboardLayoutList, HKL, MAPVK_VK_TO_VSC_EX, MAPVK_VSC_TO_VK_EX, MOD_ALT,
     MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, MapVirtualKeyExW, MapVirtualKeyW,
@@ -39,8 +40,8 @@ use windows_sys::Win32::UI::Input::{
     RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEKEYBOARD, RegisterRawInputDevices,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage, RI_KEY_BREAK, RI_KEY_E0, WM_APP,
-    WM_HOTKEY, WM_INPUT, WM_QUIT,
+    DefWindowProcW, EVENT_SYSTEM_DESKTOPSWITCH, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage,
+    RI_KEY_BREAK, RI_KEY_E0, WINEVENT_OUTOFCONTEXT, WM_APP, WM_HOTKEY, WM_INPUT, WM_QUIT,
 };
 
 use crate::message_thread::Remote;
@@ -173,6 +174,67 @@ struct Active {
 
 thread_local! {
     static ACTIVE: RefCell<Option<Active>> = const { RefCell::new(None) };
+    /// The hook on desktop switches while hotkeys are registered, and the
+    /// window it reports to: a handle and a window of this thread.
+    static DESKTOP_HOOK: Cell<Option<(usize, usize)>> = const { Cell::new(None) };
+}
+
+/// Hears the input desktop switch (to UAC's secure desktop and back, say),
+/// which sends no session notice: what the keyboard did meanwhile went
+/// there, so the keys followed are forgotten as on a lock. Out of context,
+/// so it arrives through this thread's message loop and costs nothing
+/// while no switch happens.
+#[allow(unsafe_code)]
+fn watch_desktop(hwnd: HWND) {
+    if DESKTOP_HOOK.get().is_some() {
+        return;
+    }
+    // SAFETY: an out-of-context hook of this thread's, its procedure a
+    // plain function; removed in `unwatch_desktop`.
+    let hook = unsafe {
+        SetWinEventHook(
+            EVENT_SYSTEM_DESKTOPSWITCH,
+            EVENT_SYSTEM_DESKTOPSWITCH,
+            null_mut(),
+            Some(desktop_switched),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        )
+    };
+    if hook.is_null() {
+        log::line(format_args!(
+            "auto-clicker: desktop switches cannot be heard: {}",
+            io::Error::last_os_error()
+        ));
+        return;
+    }
+    DESKTOP_HOOK.set(Some((hook as usize, hwnd as usize)));
+}
+
+#[allow(unsafe_code)]
+fn unwatch_desktop() {
+    if let Some((hook, _)) = DESKTOP_HOOK.take() {
+        // SAFETY: the hook `watch_desktop` set on this thread.
+        unsafe { UnhookWinEvent(hook as HWINEVENTHOOK) };
+    }
+}
+
+/// The hook's procedure: Windows calls it on this thread, in its message
+/// loop.
+#[allow(unsafe_code)]
+unsafe extern "system" fn desktop_switched(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    _window: HWND,
+    _object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    if let Some((_, hwnd)) = DESKTOP_HOOK.get() {
+        session_changed(hwnd as HWND);
+    }
 }
 
 /// The slot changed: registers the wanted reader's hotkeys in place of the
@@ -191,6 +253,7 @@ fn changed(hwnd: HWND, remote: &Remote) {
         end(hwnd);
         if let Some(wish) = &wish {
             ACTIVE.set(Some(register(hwnd, wish)));
+            watch_desktop(hwnd);
         }
     }
     let watching = wish.map(|wish| wish.watching).unwrap_or_default();
@@ -206,6 +269,7 @@ fn changed(hwnd: HWND, remote: &Remote) {
 /// Unregisters every hotkey and stops reading the keyboard: the reader is
 /// gone, or the window is.
 pub(crate) fn end(hwnd: HWND) {
+    unwatch_desktop();
     let Some(mut active) = ACTIVE.take() else {
         return;
     };

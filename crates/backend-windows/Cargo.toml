@@ -37,6 +37,9 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     # Raw keyboard input for the hotkeys' modifiers and stops (WN08).
     "Win32_UI_Input",
+    # Desktop switches, to UAC's secure desktop and back (SetWinEventHook,
+    # WN08).
+    "Win32_UI_Accessibility",
     # Per-monitor DPI awareness (decision 10).
     "Win32_UI_HiDpi",
     # The tray icon (Shell_NotifyIconW).

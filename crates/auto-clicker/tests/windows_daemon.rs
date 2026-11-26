@@ -1161,7 +1161,7 @@ impl Unelevated {
             held: Vec::new(),
         };
         powershell(&format!(
-            "schtasks /create /tn '{task}' /tr '\"{script}\"' /sc once /st 23:59 /rl limited /it /f | Out-Null; schtasks /run /tn '{task}' | Out-Null"
+            "schtasks /create /tn '{task}' /tr '\"{script}\"' /sc once /st 23:59 /rl limited /it /f | Out-Null; schtasks /run /tn '{task}' | Out-Null; schtasks /change /tn '{task}' /disable | Out-Null"
         ));
         let watchdog = wait_for("the unelevated watchdog", || {
             let mut new = watchdogs_of(&listed);

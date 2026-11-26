@@ -101,9 +101,14 @@ fn serve(no_hotkeys: bool, ready: &mpsc::Sender<io::Result<usize>>) {
         CLASSES.fetch_add(1, Ordering::Relaxed)
     ));
     let made = make(&class, no_hotkeys);
-    let failed = made.is_err();
-    let _ = ready.send(made.map(|hwnd| hwnd as usize));
-    if !failed {
+    let window = made.as_ref().ok().copied();
+    // An opener that stopped waiting has no `Front` to close the window.
+    let heard = ready.send(made.map(|hwnd| hwnd as usize)).is_ok();
+    if let Some(hwnd) = window.filter(|_| !heard) {
+        // SAFETY: this thread's window, which no one else knows of.
+        unsafe { DestroyWindow(hwnd) };
+    }
+    if window.is_some() && heard {
         let mut message = MSG::default();
         // SAFETY: `message` is a live `MSG`; every message of this thread.
         while unsafe { GetMessageW(&mut message, null_mut(), 0, 0) } > 0 {
