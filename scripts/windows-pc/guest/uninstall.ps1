@@ -16,6 +16,8 @@ $Root = 'C:\wn01'
 $User = 'tester'
 $Winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 $Tasks = 'wn01-runner-normal', 'wn01-runner-high'
+# Administrators and SYSTEM.
+$Trusted = 'S-1-5-32-544', 'S-1-5-18'
 
 function Get-RunnerProcesses {
     Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
@@ -39,12 +41,19 @@ function Remove-Runners {
 }
 
 # Whether C:\wn01 is the setup's: a plain folder the administrators or
-# SYSTEM own. One another account made is left alone, and nothing in it is
+# SYSTEM own, inheriting nothing, that only they can write (tester may read).
+# One another account made or can write is left alone, and nothing in it is
 # read.
 function Test-SetupRoot {
     $item = Get-Item -LiteralPath $Root -Force
     if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
-    return (Get-Acl -LiteralPath $Root).GetOwner([Security.Principal.SecurityIdentifier]).Value -in 'S-1-5-32-544', 'S-1-5-18'
+    $acl = Get-Acl -LiteralPath $Root
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $Trusted -or -not $acl.AreAccessRulesProtected) { return $false }
+    # Synchronize comes with every rule Windows writes.
+    $readOnly = [int] [Security.AccessControl.FileSystemRights]'ReadAndExecute, Synchronize'
+    $writers = $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) |
+        Where-Object { $_.IdentityReference.Value -notin $Trusted -and ([int] $_.FileSystemRights -bor $readOnly) -ne $readOnly }
+    return @($writers).Count -eq 0
 }
 
 function Restore-Settings {

@@ -27,6 +27,7 @@ $InstallSeconds = 2400
 $script:Changed = New-Object Collections.Generic.List[string]
 # The files a running runner has loaded: a change to them needs a restart.
 $RunnerCode = 'runner.ps1', 'JobRunner.cs'
+$script:ToolchainChanged = $false
 
 # Reports go to the host, not the pipeline, so they never become part of a
 # function's result.
@@ -162,7 +163,10 @@ function Install-RunnerFiles {
         # Code a runner has loaded: both stop first, so none can start
         # between the copy and its time stamp and pass for current; the
         # setup starts them again.
-        if ($name -in $RunnerCode) { 'normal', 'high' | ForEach-Object { Stop-Runner $_ } }
+        # Their tasks are disabled first, so no logon starts a runner on half
+        # the new files; that changes their export, so Install-RunnerTask
+        # registers them again, enabled, once every file is in.
+        if ($name -in $RunnerCode) { 'normal', 'high' | ForEach-Object { Suspend-Runner $_ } }
         Copy-Item -LiteralPath $source -Destination $target -Force
         (Get-Item -LiteralPath $target).LastWriteTime = Get-Date
         Report-Set "file $target"
@@ -200,6 +204,11 @@ function Save-Original([string] $Name, $Value) {
     if ($saved.ContainsKey($Name)) { return }
     $saved[$Name] = $Value
     Write-DurableFile $path ($saved | ConvertTo-Json -Compress)
+}
+
+function Suspend-Runner([string] $Queue) {
+    Disable-ScheduledTask -TaskName "wn01-runner-$Queue" -ErrorAction SilentlyContinue | Out-Null
+    Stop-Runner $Queue
 }
 
 function Stop-Runner([string] $Queue) {
@@ -274,7 +283,8 @@ function Install-RunnerTask([string] $Queue, [string] $RunLevel) {
 # installed files under the current task; a setup stopped half-way leaves a
 # runner older than its files, which the next run restarts.
 function Install-Runner([string] $Queue, [string] $RunLevel) {
-    $changed = Install-RunnerTask $Queue $RunLevel
+    # A runner started before the toolchain changed hands its jobs an old PATH.
+    $changed = (Install-RunnerTask $Queue $RunLevel) -or $script:ToolchainChanged
     if (-not (Test-TesterLoggedOn)) {
         Write-Host "     wn01-runner-$Queue starts at tester's next logon (tester is not logged on)"
         return
@@ -449,6 +459,7 @@ function Install-BuildTools {
         Install-WingetPackage 'Microsoft.VisualStudio.2022.BuildTools' @('--override', "`"--wait --quiet --norestart $add`"")
     }
     Report-Set 'Build Tools with the C++ tools and a Windows SDK'
+    $script:ToolchainChanged = $true
 }
 
 # Runs rustup with these arguments and fails when it does.
@@ -487,6 +498,7 @@ function Install-Rust {
     if ('default' -in $missing) { Invoke-Rustup @('default', 'stable') | Out-Host }
     if ('components' -in $missing) { Invoke-Rustup @('component', 'add', 'clippy', 'rustfmt', '--toolchain', 'stable') | Out-Host }
     Report-Set 'Rust stable with clippy and rustfmt'
+    $script:ToolchainChanged = $true
 }
 
 $Password = [Console]::In.ReadLine()
@@ -496,6 +508,8 @@ try {
     $testerSid = (Get-LocalUser -Name $User).SID.Value
     Install-Folders $testerSid
     Install-RunnerFiles
+    # No sleep during the long installs that follow.
+    Disable-Sleep
     # The toolchain before the runners: a runner started earlier would hand
     # its jobs a PATH without a newly installed cargo.
     Install-BuildTools
@@ -503,7 +517,6 @@ try {
     Install-Runner 'normal' 'Limited'
     Install-Runner 'high' 'Highest'
     Enable-AutoLogon $Password
-    Disable-Sleep
     if ($script:Changed.Count -eq 0) {
         Write-Output 'setup: nothing changed'
     } else {
