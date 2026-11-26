@@ -49,6 +49,12 @@ function Restore-Settings {
     # Each power value under the plan it was read from: "power:<plan>:<name>".
     foreach ($property in @($saved.PSObject.Properties | Where-Object Name -like 'power:*')) {
         $plan, $name = $property.Name.Split(':')[1, 2]
+        $exists = Get-CimInstance -Namespace root\cimv2\power -ClassName Win32_PowerPlan |
+            Where-Object { $_.InstanceID -like "*{$plan}" }
+        if ($null -eq $exists) {
+            Write-Output "power plan $plan is gone: its $name has nothing to go back to"
+            continue
+        }
         & powercfg.exe /setacvalueindex $plan SUB_SLEEP $name ([int] $property.Value)
         if ($LASTEXITCODE -ne 0) { throw "powercfg /setacvalueindex $plan $name failed" }
         Write-Output "put back: power $name on AC in plan $plan = $($property.Value) s"

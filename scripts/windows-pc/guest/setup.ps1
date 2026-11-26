@@ -126,6 +126,8 @@ function Install-RunnerFiles {
     foreach ($name in $RunnerFiles) {
         $source = Join-Path $PSScriptRoot $name
         $target = Join-Path $Root $name
+        # Before anything reads or writes through it.
+        if (Test-Path -LiteralPath $target) { Assert-NoReparsePoint $target }
         if ((Test-Path -LiteralPath $target) -and
             (Get-FileHash -LiteralPath $target).Hash -eq (Get-FileHash -LiteralPath $source).Hash) {
             Report-Ok "file $target"
@@ -149,7 +151,13 @@ function Write-DurableFile([string] $Path, [string] $Text) {
     } finally {
         $stream.Dispose()
     }
-    if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($tmp, $Path, $null) } else { [IO.File]::Move($tmp, $Path) }
+    # Windows PowerShell passes $null to a string parameter as "", which
+    # File.Replace refuses as a backup path.
+    if (Test-Path -LiteralPath $Path) {
+        [IO.File]::Replace($tmp, $Path, [Management.Automation.Language.NullString]::Value)
+    } else {
+        [IO.File]::Move($tmp, $Path)
+    }
 }
 
 # Records a setting's value from before the first setup, once, before the
@@ -190,15 +198,32 @@ function Test-RunnerCurrent([string] $Queue) {
     return $process.StartTime -gt $installed -and $process.StartTime -le $ready.LastWriteTime
 }
 
+# The SID of account $Name, however it is written ("tester" or
+# "COMPUTER\tester"), so the same account compares equal and another does not.
+function Get-AccountSid([string] $Name) {
+    return ([Security.Principal.NTAccount] $Name).Translate([Security.Principal.SecurityIdentifier]).Value
+}
+
 # What matters of a runner task, as text, for a registered task and for one
-# only built, so the two compare. Names lose their computer's prefix.
+# only built, so the two compare.
 function Get-TaskText($Actions, $Triggers, $Principal, $Settings) {
     $action = @($Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join ';'
-    $trigger = @($Triggers | ForEach-Object { "$($_.CimClass.CimClassName):$(($_.UserId -split '\\')[-1]):$($_.Enabled)" }) -join ';'
-    $principal = '{0}:{1}:{2}' -f ($Principal.UserId -split '\\')[-1], $Principal.LogonType, $Principal.RunLevel
-    $limits = '{0}|{1}|{2}|{3}|{4}|{5}|{6}' -f $Settings.Enabled, $Settings.ExecutionTimeLimit, $Settings.MultipleInstances,
-        $Settings.RestartCount, $Settings.RestartInterval, $Settings.DisallowStartIfOnBatteries, $Settings.StopIfGoingOnBatteries
+    $trigger = @($Triggers | ForEach-Object { "$($_.CimClass.CimClassName):$(Get-AccountSid $_.UserId):$($_.Enabled)" }) -join ';'
+    $principal = '{0}:{1}:{2}' -f (Get-AccountSid $Principal.UserId), $Principal.LogonType, $Principal.RunLevel
+    $limits = '{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}' -f $Settings.Enabled, $Settings.AllowDemandStart, $Settings.ExecutionTimeLimit,
+        $Settings.MultipleInstances, $Settings.RestartCount, $Settings.RestartInterval, $Settings.DisallowStartIfOnBatteries,
+        $Settings.StopIfGoingOnBatteries
     return "$action|$trigger|$principal|$limits"
+}
+
+# The registered task as Get-TaskText puts it, or "" for one it cannot
+# read (another kind of trigger, say), which then counts as different.
+function Get-RegisteredTaskText($Task) {
+    try {
+        return Get-TaskText $Task.Actions $Task.Triggers $Task.Principal $Task.Settings
+    } catch {
+        return ''
+    }
 }
 
 # The VM's runner task (scripts/windows-vm/guest/setup.ps1), registered
@@ -210,8 +235,7 @@ function Install-RunnerTask([string] $Queue, [string] $RunLevel) {
     $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel $RunLevel
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
-    if ($null -ne $task -and (Get-TaskText $task.Actions $task.Triggers $task.Principal $task.Settings) -eq
-        (Get-TaskText $action $trigger $principal $settings)) {
+    if ($null -ne $task -and (Get-RegisteredTaskText $task) -eq (Get-TaskText $action $trigger $principal $settings)) {
         Report-Ok "task $name"
         return $false
     }
