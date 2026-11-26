@@ -129,12 +129,7 @@ impl Drop for Home {
 }
 
 fn powershell(script: &str) -> String {
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{script}: {output:?}");
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    desktop::powershell(script, Duration::from_secs(60)).unwrap()
 }
 
 /// Waits for `child` to end, at most `within`.

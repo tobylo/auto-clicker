@@ -10,7 +10,7 @@
 //! pointer leaves, when the menu opens, when Explorer restarts or refuses
 //! the icon (no leave would follow) and when the window goes. It stays on
 //! the screen: one taller than the work area shows from the top and loses
-//! its last lines, which the log also holds.
+//! its last lines.
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -249,7 +249,8 @@ fn place() {
     // UTF-16 alive for the call.
     unsafe { SetWindowTextW(popup, all.as_ptr()) };
     let (width, height) = measure(popup, &title, &body);
-    let (x, y) = position(width, height, anchor(), work_area());
+    let icon = anchor();
+    let (x, y) = position(width, height, icon, work_area(icon));
     // SAFETY: `popup` is live; it is shown without being activated, and
     // repainted whole.
     unsafe {
@@ -324,11 +325,10 @@ fn anchor() -> RECT {
     }
 }
 
-/// The work area (the screen less the taskbar) of the monitor the icon is
+/// The work area (the screen less the taskbar) of the monitor `icon` is
 /// on.
 #[allow(unsafe_code)]
-fn work_area() -> RECT {
-    let icon = anchor();
+fn work_area(icon: RECT) -> RECT {
     let centre = POINT {
         x: icon.left + (icon.right - icon.left) / 2,
         y: icon.top + (icon.bottom - icon.top) / 2,
@@ -356,8 +356,9 @@ fn position(width: i32, height: i32, icon: RECT, work: RECT) -> (i32, i32) {
     let y = if above >= work.top {
         above
     } else {
-        (icon.bottom + GAP).min(work.bottom - height).max(work.top)
+        icon.bottom + GAP
     };
+    let y = y.min(work.bottom - height).max(work.top);
     let x = (centre - width / 2).min(work.right - width).max(work.left);
     (x, y)
 }
@@ -488,6 +489,9 @@ mod tests {
         // Above an icon on a bottom taskbar, centred on it.
         let icon = rect(1700, 1040, 1732, 1080);
         assert_eq!(position(200, 100, icon, work), (1616, 932));
+        // The pointer low on the taskbar: lifted off it.
+        let low = rect(1700, 1060, 1716, 1076);
+        assert_eq!(position(200, 100, low, work), (1608, 932));
         // Pushed left off the screen's right edge.
         assert_eq!(position(500, 100, icon, work).0, 1420);
         // Below an icon on a top taskbar, where above does not fit.

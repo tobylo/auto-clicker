@@ -81,6 +81,7 @@ pub enum MenuEntry {
         checked: Option<bool>,
     },
     /// A submenu, built afresh from the latest content each time it opens.
+    /// Its children are items and separators: submenus go one level deep.
     Submenu {
         label: String,
         children: Vec<MenuEntry>,
@@ -111,10 +112,12 @@ thread_local! {
 }
 
 /// Registers for `TaskbarCreated` and starts the shell thread for `hwnd`,
-/// reached through `remote`; called once the window exists. A shell thread
-/// that cannot start leaves the tray without its icon, and says why.
+/// reached through `remote`; called once the window exists.
+///
+/// # Errors
+/// The shell thread could not start: the tray could never show its icon.
 #[allow(unsafe_code)]
-pub(crate) fn register(hwnd: HWND, remote: Remote) {
+pub(crate) fn register(hwnd: HWND, remote: Remote) -> io::Result<()> {
     let name = wide("TaskbarCreated");
     // SAFETY: `name` is NUL-terminated UTF-16, alive for the call.
     let taskbar_created = unsafe { RegisterWindowMessageW(name.as_ptr()) };
@@ -126,13 +129,9 @@ pub(crate) fn register(hwnd: HWND, remote: Remote) {
         outbox: outbox.clone(),
         hears_restart: taskbar_created != 0,
     };
-    match Shell::spawn(calls) {
-        Ok(shell) => {
-            SHELL.set(Some(shell));
-            OUTBOX.set(Some(outbox));
-        }
-        Err(err) => emit(WindowEvent::TrayUnshown(err)),
-    }
+    SHELL.set(Some(Shell::spawn(calls)?));
+    OUTBOX.set(Some(outbox));
+    Ok(())
 }
 
 /// The tray's part of the window procedure: the answer to one of its own
@@ -155,6 +154,8 @@ pub(crate) fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -
         _ if taskbar != 0 && message == taskbar => {
             popup::hide();
             SHELL.with_borrow(|shell| shell.as_ref().map(Shell::restarted));
+            // A notice the tray acts on, and a wake: named in the log.
+            emit(WindowEvent::TrayRestarted);
         }
         _ => return None,
     }

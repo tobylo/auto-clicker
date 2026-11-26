@@ -3,7 +3,6 @@
 //! they share the screen, so they run one at a time.
 
 use std::path::Path;
-use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -35,13 +34,12 @@ fn wait_for<T>(what: &str, mut ready: impl FnMut() -> Option<T>) -> T {
     }
 }
 
+/// How long a PowerShell step may take: generous, and far under the
+/// runner's deadline, so a stalled one still lets Explorer be resumed.
+const POWERSHELL: Duration = Duration::from_secs(60);
+
 fn powershell(script: &str) -> String {
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{script}: {output:?}");
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    desktop::powershell(script, POWERSHELL).unwrap()
 }
 
 /// Brings the icons of `exe` out of the taskbar's overflow, where Windows
@@ -320,27 +318,36 @@ fn a_quit_with_the_menu_open_closes_it_and_ends_the_thread_in_time() {
 /// test ends.
 struct Suspended;
 
-/// Suspends or resumes every Explorer process through ntdll.
-fn explorer(call: &str) {
-    powershell(&format!(
+/// Suspends or resumes every Explorer process through ntdll; whether each
+/// call succeeded.
+fn explorer(call: &str) -> bool {
+    let script = format!(
         "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; \
          public static class Nt {{ [DllImport(\"ntdll.dll\")] public static extern int \
          NtSuspendProcess(IntPtr h); [DllImport(\"ntdll.dll\")] public static extern int \
          NtResumeProcess(IntPtr h); }}'; \
-         Get-Process explorer | ForEach-Object {{ [void][Nt]::{call}($_.Handle) }}"
-    ));
+         $failed = 0; Get-Process explorer | ForEach-Object {{ \
+         if ([Nt]::{call}($_.Handle) -ne 0) {{ $failed++ }} }}; exit $failed"
+    );
+    desktop::powershell(&script, POWERSHELL).is_ok()
 }
 
 impl Suspended {
     fn explorer() -> Suspended {
-        explorer("NtSuspendProcess");
-        Suspended
+        // Made first, so a suspension that fails part way is undone.
+        let suspended = Suspended;
+        assert!(explorer("NtSuspendProcess"), "Explorer was not suspended");
+        suspended
     }
 }
 
 impl Drop for Suspended {
     fn drop(&mut self) {
-        explorer("NtResumeProcess");
+        let resumed = explorer("NtResumeProcess");
+        assert!(
+            resumed || std::thread::panicking(),
+            "Explorer was not resumed"
+        );
     }
 }
 

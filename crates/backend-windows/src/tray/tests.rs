@@ -145,3 +145,29 @@ fn a_picture_the_taskbar_cannot_take_reaches_the_handler_as_refused() {
     }
     thread.quit_and_join(ARRIVAL).unwrap();
 }
+
+#[test]
+#[allow(unsafe_code)]
+fn explorers_restart_is_heard() {
+    let (thread, received) = started();
+    let name = wide("TaskbarCreated");
+    // SAFETY: `name` is NUL-terminated UTF-16, alive for the call; the
+    // number is the same in every thread.
+    let taskbar_created = unsafe { RegisterWindowMessageW(name.as_ptr()) };
+    let remote = thread.remote();
+    remote.post(taskbar_created, 0, 0).unwrap();
+    remote.post(WM_CLOSE, 0, 0).unwrap();
+    let seen = until_close(&received);
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, WindowEvent::TrayRestarted)),
+        "{seen:?}"
+    );
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, WindowEvent::Other(n) if *n == taskbar_created)),
+        "{seen:?}"
+    );
+    thread.quit_and_join(ARRIVAL).unwrap();
+}

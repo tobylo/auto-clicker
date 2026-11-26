@@ -195,6 +195,9 @@ impl Notices {
                 self.icon_refused = false;
                 log::line(format_args!("auto-clicker: the tray icon is shown again"));
             }
+            WindowEvent::TrayRestarted => log::line(format_args!(
+                "auto-clicker: heard Explorer start; the tray icon is added again"
+            )),
             _ => return false,
         }
         true

@@ -40,6 +40,7 @@ fn followed(event: &WindowEvent) -> Option<String> {
         WindowEvent::TrayMenuFailed(why) => Some(format!("TrayMenuFailed: {why}")),
         WindowEvent::TrayChosen(command) => Some(format!("TrayChosen({command})")),
         WindowEvent::TrayShown => Some("TrayShown".to_owned()),
+        WindowEvent::TrayRestarted => Some("TrayRestarted".to_owned()),
         // A runner has no taskbar; a desktop has one.
         WindowEvent::TrayUnshown(_)
         | WindowEvent::SessionRead(_)
@@ -375,7 +376,10 @@ fn the_display_setting_says_on_or_off() {
 fn content_on_a_gone_window_is_not_kept() {
     let (thread, _received) = started();
     let remote = thread.remote();
+    // Content the window never took before it went: dropped with it.
+    *remote.0.tray.lock().unwrap() = Some(content("never taken"));
     thread.quit_and_join(ARRIVAL).unwrap();
+    assert!(remote.0.tray.lock().unwrap().is_none());
     for _ in 0..2 {
         let err = remote.show_tray(content("gone")).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotConnected);
@@ -389,7 +393,8 @@ fn content_given_while_a_refresh_is_on_its_way_only_replaces_it() {
     thread.quit_and_join(ARRIVAL).unwrap();
     // Content waiting in the slot means a refresh is on its way: the next
     // only replaces it and posts nothing, which here, to a window that is
-    // gone, would fail.
+    // gone, would fail. (The window's end empties the slot; it is filled
+    // again here to show that no post is made.)
     *remote.0.tray.lock().unwrap() = Some(content("waiting"));
     remote.show_tray(content("latest")).unwrap();
     let kept = remote.0.tray.lock().unwrap().take().map(|c| c.title);

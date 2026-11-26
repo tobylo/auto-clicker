@@ -4,7 +4,10 @@
 //! daemon's tests drive Windows without `unsafe` of their own.
 
 use std::io;
+use std::process::{Command, ExitStatus, Stdio};
 use std::ptr::{null, null_mut};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -15,9 +18,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::Shell::{NOTIFYICONIDENTIFIER, Shell_NotifyIconGetRect};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, FindWindowW, GetMenuItemCount, GetMenuItemRect,
-    GetMenuState, GetMenuStringW, GetSystemMetrics, GetWindowRect, GetWindowTextW, HMENU,
-    IsWindowVisible, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MN_GETHMENU,
-    SM_CXSCREEN, SM_CYSCREEN, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WindowFromPoint,
+    GetMenuState, GetMenuStringW, GetSystemMetrics, GetWindowRect, HMENU, IsWindowVisible,
+    MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MN_GETHMENU, SM_CXSCREEN,
+    SM_CYSCREEN, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_GETTEXT, WindowFromPoint,
 };
 
 use crate::message::wide;
@@ -258,12 +261,72 @@ fn visible(window: HWND) -> bool {
     unsafe { IsWindowVisible(window) != 0 }
 }
 
+/// `window`'s text; empty when its thread does not answer within half a
+/// second, which a window of this process would otherwise make wait.
 #[allow(unsafe_code)]
 fn text(window: HWND) -> String {
     let mut text = vec![0u16; 4096];
-    // SAFETY: `text` is a live buffer of the length given.
-    let length = unsafe { GetWindowTextW(window, text.as_mut_ptr(), 4096) };
-    String::from_utf16_lossy(&text[..usize::try_from(length).unwrap_or(0)])
+    let mut length = 0;
+    // SAFETY: `text` is a live buffer of the length given, kept alive past
+    // the call (which ends at its deadline); `length` is live.
+    let answered = unsafe {
+        SendMessageTimeoutW(
+            window,
+            WM_GETTEXT,
+            text.len(),
+            text.as_mut_ptr() as isize,
+            SMTO_ABORTIFHUNG,
+            500,
+            &mut length,
+        )
+    };
+    let length = if answered == 0 {
+        0
+    } else {
+        length.min(text.len())
+    };
+    String::from_utf16_lossy(&text[..length])
+}
+
+/// Runs `script` in PowerShell, waiting at most `within`; its output. One
+/// that runs past its deadline is ended.
+///
+/// # Errors
+/// PowerShell could not start, ran past its deadline, or failed.
+pub fn powershell(script: &str, within: Duration) -> io::Result<String> {
+    let mut child = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let deadline = Instant::now() + within;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("{script}: no end in {within:?}"),
+            ));
+        }
+        sleep(Duration::from_millis(50));
+    };
+    let output = child.wait_with_output()?;
+    succeeded(status, script, &output.stderr)?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn succeeded(status: ExitStatus, script: &str, stderr: &[u8]) -> io::Result<()> {
+    if status.success() {
+        return Ok(());
+    }
+    Err(io::Error::other(format!(
+        "{script}: {status}: {}",
+        String::from_utf8_lossy(stderr)
+    )))
 }
 
 #[allow(unsafe_code)]

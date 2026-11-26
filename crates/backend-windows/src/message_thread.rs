@@ -111,6 +111,9 @@ pub enum WindowEvent {
     TrayUnshown(io::Error),
     /// The tray's icon shows again after the taskbar refused it.
     TrayShown,
+    /// Explorer started again (`TaskbarCreated`): the tray's icon is added
+    /// afresh.
+    TrayRestarted,
     /// A message the thread does not act on, by its number: what woke it.
     Other(u32),
     /// The thread left its message loop and is about to end; always the
@@ -365,6 +368,9 @@ fn run(
             None
         }
     };
+    // The icon goes however `serve` ended, a panic included; after the
+    // window's own end this finds nothing left to remove.
+    tray::remove();
     // An `Ended` after a refused start would reach a controller that never
     // runs; only a thread that was ready reports it.
     if let Some(failure) = failure {
@@ -391,12 +397,19 @@ fn serve(
             return None;
         }
     };
+    // A tray with no thread for its icon would never show it: the start
+    // fails, and leaves no window behind.
+    if let Err(err) = tray::register(hwnd, shared.clone()) {
+        destroy(hwnd);
+        unregister_class(class);
+        let _ = ready.send(Err(err));
+        return None;
+    }
     *shared
         .0
         .window
         .lock()
         .unwrap_or_else(PoisonError::into_inner) = Some(Window(hwnd));
-    tray::register(hwnd, shared.clone());
     // The display first: a registration that fails says so before the
     // session's first read can allow a start.
     watch_display(hwnd);
@@ -757,6 +770,9 @@ fn unwatch(hwnd: HWND) {
                 .window
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner) = None;
+            // Content no refresh will take: the next is told the window is
+            // gone. Any `show_tray` that posted finished under this lock.
+            *shared.0.tray.lock().unwrap_or_else(PoisonError::into_inner) = None;
         }
     });
     // SAFETY: no arguments but the exit code.
