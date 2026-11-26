@@ -318,8 +318,8 @@ fn a_quit_with_the_menu_open_closes_it_and_ends_the_thread_in_time() {
 /// test ends.
 struct Suspended;
 
-/// Suspends or resumes every Explorer process through ntdll; whether each
-/// call succeeded.
+/// Suspends or resumes every Explorer process through ntdll, each tried
+/// even when one fails; whether every call succeeded.
 fn explorer(call: &str) -> bool {
     let script = format!(
         "$ErrorActionPreference = 'Stop'; \
@@ -329,7 +329,8 @@ fn explorer(call: &str) -> bool {
          NtResumeProcess(IntPtr h); }}'; \
          $all = @(Get-Process explorer); \
          if ($all.Count -eq 0) {{ exit 1 }}; $failed = 0; $all | ForEach-Object {{ \
-         if ([Nt]::{call}($_.Handle) -ne 0) {{ $failed++ }} }}; exit $failed"
+         try {{ if ([Nt]::{call}($_.Handle) -ne 0) {{ $failed++ }} }} \
+         catch {{ $failed++ }} }}; exit $failed"
     );
     desktop::powershell(&script, POWERSHELL).is_ok()
 }

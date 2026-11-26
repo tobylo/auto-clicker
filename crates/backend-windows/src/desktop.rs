@@ -3,10 +3,12 @@
 //! user's hand would. Built for tests alone (the `desktop` feature), so the
 //! daemon's tests drive Windows without `unsafe` of their own.
 
-use std::io::{self, Read};
+use std::fs::File;
+use std::io;
+use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use std::ptr::{null, null_mut};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -289,27 +291,24 @@ fn text(window: HWND) -> String {
     String::from_utf16_lossy(&text[..length])
 }
 
-/// Runs `script` in PowerShell, waiting at most `within` for it and its
-/// output; its output. One that runs past its deadline is ended.
+/// Runs `script` in PowerShell, waiting at most `within`; its output. One
+/// that runs past its deadline is ended. Its output goes to files, not
+/// pipes, so nothing waits on reading it, nor on a program the script
+/// started that still holds it.
 ///
 /// # Errors
-/// PowerShell could not start, ran past its deadline, or failed.
+/// PowerShell could not start, ran past its deadline, or failed, or its
+/// output could not be read.
 pub fn powershell(script: &str, within: Duration) -> io::Result<String> {
     let deadline = Instant::now() + within;
+    let stdout = Output::new("out")?;
+    let stderr = Output::new("err")?;
     let mut child = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .stdout(stdout.file()?)
+        .stderr(stderr.file()?)
         .spawn()?;
-    // Read while it runs, so a full pipe never holds it up.
-    let stdout = drained(child.stdout.take());
-    let stderr = drained(child.stderr.take());
-    let timed_out = || {
-        io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("{script}: past {within:?}"),
-        )
-    };
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
@@ -317,39 +316,50 @@ pub fn powershell(script: &str, within: Duration) -> io::Result<String> {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(timed_out());
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("{script}: past {within:?}"),
+            ));
         }
         sleep(Duration::from_millis(50));
     };
-    // A program it started may hold the pipes open: the deadline holds.
-    let left = || deadline.saturating_duration_since(Instant::now());
-    let stdout = stdout.recv_timeout(left()).map_err(|_| timed_out())?;
-    let stderr = stderr.recv_timeout(left()).map_err(|_| timed_out())?;
-    succeeded(status, script, &stderr)?;
-    Ok(String::from_utf8_lossy(&stdout).into_owned())
+    succeeded(status, script, &stderr.read()?)?;
+    stdout.read()
 }
 
-/// Everything `pipe` gives until it closes, read on a thread of its own.
-fn drained(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<Vec<u8>> {
-    let (send, receive) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut read = Vec::new();
-        if let Some(mut pipe) = pipe {
-            let _ = pipe.read_to_end(&mut read);
-        }
-        let _ = send.send(read);
-    });
-    receive
+/// A file a child writes its output to, removed when dropped.
+struct Output(PathBuf);
+
+impl Output {
+    fn new(kind: &str) -> io::Result<Output> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let name = format!("auto-clicker-desktop.{}.{n}.{kind}", std::process::id());
+        let path = std::env::temp_dir().join(name);
+        File::create(&path)?;
+        Ok(Output(path))
+    }
+
+    fn file(&self) -> io::Result<File> {
+        File::create(&self.0)
+    }
+
+    fn read(&self) -> io::Result<String> {
+        Ok(String::from_utf8_lossy(&std::fs::read(&self.0)?).into_owned())
+    }
 }
 
-fn succeeded(status: ExitStatus, script: &str, stderr: &[u8]) -> io::Result<()> {
+impl Drop for Output {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn succeeded(status: ExitStatus, script: &str, stderr: &str) -> io::Result<()> {
     if status.success() {
         return Ok(());
     }
-    Err(io::Error::other(format!(
-        "{script}: {status}: {}",
-        String::from_utf8_lossy(stderr)
-    )))
+    Err(io::Error::other(format!("{script}: {status}: {stderr}")))
 }
 
 #[allow(unsafe_code)]
@@ -406,15 +416,16 @@ mod tests {
         assert_eq!(big.trim_end().len(), 2_097_152);
         let failed = powershell("exit 3", Duration::from_secs(60)).unwrap_err();
         assert_eq!(failed.kind(), io::ErrorKind::Other);
-        // Past its deadline, or a program it started holding its output.
-        for script in [
-            "Start-Sleep -Seconds 60",
-            "Start-Process ping -ArgumentList '-n 60 127.0.0.1' -NoNewWindow",
-        ] {
-            let asked = Instant::now();
-            let late = powershell(script, Duration::from_secs(5)).unwrap_err();
-            assert_eq!(late.kind(), io::ErrorKind::TimedOut, "{script}");
-            assert!(asked.elapsed() < Duration::from_secs(30), "{script}");
-        }
+        // Past its deadline: ended.
+        let asked = Instant::now();
+        let late = powershell("Start-Sleep -Seconds 60", Duration::from_secs(5)).unwrap_err();
+        assert_eq!(late.kind(), io::ErrorKind::TimedOut);
+        assert!(asked.elapsed() < Duration::from_secs(30));
+        // A program it started still holds its output: it is done when it
+        // ends.
+        let asked = Instant::now();
+        let started = "Start-Process ping -ArgumentList '-n 60 127.0.0.1' -NoNewWindow";
+        powershell(started, Duration::from_secs(30)).unwrap();
+        assert!(asked.elapsed() < Duration::from_secs(20));
     }
 }
