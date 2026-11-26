@@ -27,10 +27,11 @@ REMOTE_PREFIX='Set-ExecutionPolicy -Scope Process Bypass -Force; [Console]::Outp
 # shellcheck disable=SC2016 # PowerShell expands these on the PC.
 RUN_JOB_PREFIX='$ours = $false; try { $r = Get-Item -LiteralPath C:\wn01 -Force -ErrorAction Stop; $a = Get-Acl -LiteralPath C:\wn01 -ErrorAction Stop; $t = "S-1-5-32-544", "S-1-5-18"; $w = @($a.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference.Value -notin $t -and ([int] $_.FileSystemRights -bor 0x1200A9) -ne 0x1200A9 }); $ours = $r.PSIsContainer -and -not ($r.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $a.GetOwner([Security.Principal.SecurityIdentifier]).Value -in $t -and $a.AreAccessRulesProtected -and $w.Count -eq 0 -and (Test-Path -LiteralPath C:\wn01\run-job.ps1 -PathType Leaf) } catch { }; if (-not $ours) { [Console]::Error.WriteLine("C:\wn01 is not the setup'"'"'s, or has no run-job.ps1: run pc setup"); exit 125 }; '
 
-# Where setup and uninstall copy their scripts on the PC: tester's own temp
-# folder, which no other account can write.
+# Where setup and uninstall copy their scripts on the PC: a folder of each
+# run's own in tester's temp folder, which no other account can write. Its
+# own, since a run the dev box gave up on may still use the last one.
 STAGE_PARENT='C:\Users\tester\AppData\Local\Temp'
-STAGE="$STAGE_PARENT\\wn13-setup"
+
 # The runner's files, from the VM's guest folder, and the PC's own.
 RUNNER_FILES=(runner.ps1 JobRunner.cs run-job.ps1 click-test.ps1)
 PC_RUNNER_FILES=(screen.ps1 focus.ps1)
@@ -91,18 +92,22 @@ remote_script() {
 # script does, or throws. The script removes the folder when it ends. Each
 # step is checked by hand: callers run this before ||, where errexit is off.
 run_staged() {
-    local seconds="$1" script="$2" local_dir
+    local seconds="$1" script="$2" local_dir name stage
     shift 2
+    name="wn13-setup-$(date -u +%Y%m%d%H%M%S)-$$"
+    stage="$STAGE_PARENT\\$name"
     local_dir="$(mktemp -d)" || die "could not make a local staging folder"
-    # shellcheck disable=SC2064 # The path is fixed now; the trap runs later.
-    trap "rm -rf -- '$local_dir'" EXIT
-    mkdir "$local_dir/wn13-setup" && cp -- "$@" "$local_dir/wn13-setup/" || die "could not stage the setup's files"
-    vm_ssh 60 "$KEYS_DIR" "Remove-Item -LiteralPath '$STAGE' -Recurse -Force -ErrorAction SilentlyContinue; if (Test-Path -LiteralPath '$STAGE') { exit 1 }" </dev/null ||
-        die "could not empty $STAGE on the PC"
-    vm_push 120 "$KEYS_DIR" "$STAGE_PARENT" "$local_dir/wn13-setup" </dev/null || die "could not copy the setup's files to the PC"
+    # A global for the trap, which reads it when it runs: the path is never
+    # pasted into the trap's code.
+    STAGING_DIR="$local_dir"
+    trap 'rm -rf -- "$STAGING_DIR"' EXIT
+    mkdir "$local_dir/$name" && cp -- "$@" "$local_dir/$name/" || die "could not stage the setup's files"
+    vm_ssh 60 "$KEYS_DIR" "if (Test-Path -LiteralPath '$stage') { exit 1 }" </dev/null ||
+        die "$stage is already on the PC"
+    vm_push 120 "$KEYS_DIR" "$STAGE_PARENT" "$local_dir/$name" </dev/null || die "could not copy the setup's files to the PC"
     rm -rf -- "$local_dir"
     trap - EXIT
-    vm_ssh "$seconds" "$KEYS_DIR" "${REMOTE_PREFIX}try { & '$STAGE\\$script'; exit \$LASTEXITCODE } catch { [Console]::Error.WriteLine(\$_); exit 1 }"
+    vm_ssh "$seconds" "$KEYS_DIR" "${REMOTE_PREFIX}try { & '$stage\\$script'; exit \$LASTEXITCODE } catch { [Console]::Error.WriteLine(\$_); exit 1 }"
 }
 
 # Makes tester's password unless the dev box has one, and checks it: 24

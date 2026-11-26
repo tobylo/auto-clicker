@@ -64,7 +64,7 @@ All of them print to stderr as they go, and every wait in them has a deadline.
 
 ```sh
 scripts/windows-pc/pc status
-# Copy the tree at HEAD into an empty C:\work\<name> and build it there.
+# Copy the tree at HEAD into an empty C:\work\<your branch> (here wn13) and build it there.
 git archive --format=tar --prefix=wn13/ HEAD | scripts/windows-pc/pc ssh "New-Item -ItemType Directory -Force C:\work | Out-Null; cmd /c 'rmdir /s /q C:\work\wn13' 2>\$null; if (Test-Path C:\work\wn13) { exit 1 }; cmd /c 'tar -x -f - -C C:\work'; exit \$LASTEXITCODE"
 scripts/windows-pc/pc ssh 'cd C:\work\wn13; cargo build --locked; exit $LASTEXITCODE'
 # Tests run in the desktop: some Windows backend tests need one.

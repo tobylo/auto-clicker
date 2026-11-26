@@ -83,12 +83,23 @@ function Test-SetupRoot {
     return @($writers).Count -eq 0
 }
 
+# tester's account, or $null when it no longer exists; any other failure to
+# read it stops the uninstall while restore.json is still there.
+function Get-TesterAccount {
+    try {
+        return Get-LocalUser -Name $User -ErrorAction Stop
+    } catch {
+        if ($_.FullyQualifiedErrorId -like 'UserNotFound*') { return $null }
+        throw
+    }
+}
+
 function Restore-Settings {
     $path = Join-Path $Root 'restore.json'
     if (-not (Test-Path -LiteralPath $path)) { return }
     $saved = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     # Only for the account it was read from, by SID.
-    $account = Get-LocalUser -Name $User -ErrorAction SilentlyContinue
+    $account = Get-TesterAccount
     $expiry = if ($account) { $saved.PSObject.Properties["passwordNeverExpires:$($account.SID.Value)"] }
     if ($expiry) {
         Set-LocalUser -Name $User -PasswordNeverExpires ([bool] $expiry.Value)
@@ -141,7 +152,21 @@ function Get-Leftovers {
     return @($Leftovers.Keys | Where-Object { & $Leftovers[$_] })
 }
 
+# One setup or uninstall at a time on the PC itself. The dev box's lock is
+# not enough: when the dev box gives up on one, ending its SSH client, the
+# script goes on running here. A holder that died leaves the mutex free.
+$PcMutex = New-Object Threading.Mutex($false, 'Global\wn13-pc-setup')
+$PcMutexHeld = $false
 try {
+    try {
+        $PcMutexHeld = $PcMutex.WaitOne(60000)
+    } catch [Threading.AbandonedMutexException] {
+        $PcMutexHeld = $true
+        Write-Output 'a previous setup or uninstall ended without finishing; going on'
+    }
+    if (-not $PcMutexHeld) {
+        throw 'another setup or uninstall still runs on the PC (one the dev box gave up on, maybe): let it finish, then run this again'
+    }
     Add-Type -Path (Join-Path $PSScriptRoot 'Autologon.cs')
     # Before anything else that can fail: a PC left half uninstalled must
     # not still log tester on at boot.
@@ -165,5 +190,6 @@ try {
 } finally {
     Set-Location C:\
     Remove-Item -LiteralPath $PSScriptRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if ($PcMutexHeld) { $PcMutex.ReleaseMutex() }
 }
 exit 0

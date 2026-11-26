@@ -48,9 +48,9 @@ seconds_arg() {
 # Opens the lock file as fd 9 and waits at most $1 seconds for the lock;
 # fails, holding nothing, when another session keeps it.
 try_lock() {
-    mkdir -p "$STATE_DIR"
-    chmod 700 "$STATE_DIR"
-    exec 9>"$LOCK_FILE"
+    # Checked by hand: callers run this before ||, where errexit is off.
+    mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR" || die "could not make $STATE_DIR private"
+    exec 9>"$LOCK_FILE" || die "could not open $LOCK_FILE"
     flock -w "$1" 9 || {
         exec 9>&-
         return 1
