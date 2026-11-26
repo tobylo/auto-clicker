@@ -233,7 +233,9 @@ function Get-RunnerTask([string] $Name) {
     try {
         return Get-ScheduledTask -TaskName $Name -ErrorAction Stop
     } catch {
-        if ($_.CategoryInfo.Category -eq 'ObjectNotFound') { return $null }
+        # The task query's own "no such task", not any ObjectNotFound (a
+        # missing ScheduledTasks module reports that too).
+        if ($_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') { return $null }
         throw
     }
 }
