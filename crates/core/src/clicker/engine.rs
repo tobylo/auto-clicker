@@ -10,7 +10,7 @@ use tokio::time::Instant;
 use super::timing::{self, Shape};
 use super::{ClickerSettings, Mode, Position, Repeat};
 use crate::input::{Held, Input, InputBackend, InputError};
-use crate::run::{Ended, Interrupted, RunEnd, Signals, Waiter, finish};
+use crate::run::{Ended, Interrupted, RunEnd, Signals, Waiter, finish, with_timer};
 
 /// Runs the clicker with `settings` until it finishes, a signal fires, or a
 /// write fails.
@@ -28,8 +28,12 @@ use crate::run::{Ended, Interrupted, RunEnd, Signals, Waiter, finish};
 /// stop a run with its signal rather than by dropping it. A write error ends
 /// the run and is returned; so is a failed release when the run had ended
 /// without error.
+///
+/// The run waits for its deadlines on the timer its backend makes for it
+/// ([`InputBackend::run_timer`]); if that fails, the run ends with the error
+/// before its first action.
 pub async fn run<B, S, D>(
-    mut input: Input<B>,
+    input: Input<B>,
     settings: &ClickerSettings,
     rng: fastrand::Rng,
     signals: Signals<S, D>,
@@ -39,6 +43,10 @@ where
     S: Future<Output = ()>,
     D: Future<Output = ()>,
 {
+    let (mut timer, mut input) = match with_timer(input) {
+        Ok(started) => started,
+        Err(refused) => return refused,
+    };
     let mut session = Session {
         input: &mut input,
         settings,
@@ -46,6 +54,7 @@ where
         waiter: Waiter {
             stop: pin!(signals.stop),
             shutdown: pin!(signals.shutdown),
+            timer: &mut *timer,
         },
     };
     let outcome = session.drive().await;
@@ -99,7 +108,7 @@ where
 
     /// Presses `item` once and holds it until a signal.
     async fn hold(&mut self, item: Held) -> Result<Ended, InputError> {
-        if let Some(ended) = self.waiter.wait_until(Some(Instant::now())).await {
+        if let Some(ended) = self.waiter.wait_until(Some(Instant::now())).await? {
             return Ok(ended);
         }
         self.aim(item)?;
@@ -112,7 +121,7 @@ where
         let mut deadline = Some(Instant::now());
         let mut actions: u32 = 0;
         loop {
-            if let Some(ended) = self.waiter.wait_until(deadline).await {
+            if let Some(ended) = self.waiter.wait_until(deadline).await? {
                 return Ok(ended);
             }
             let started = Instant::now();
@@ -142,7 +151,7 @@ where
         let Some(gap) = shape.second_press else {
             return Ok(None);
         };
-        if let Some(ended) = self.waiter.wait_until(first.checked_add(gap)).await {
+        if let Some(ended) = self.waiter.wait_until(first.checked_add(gap)).await? {
             return Ok(Some(ended));
         }
         self.tap(item, shape).await
@@ -152,7 +161,7 @@ where
     async fn tap(&mut self, item: Held, shape: Shape) -> Result<Interrupted, InputError> {
         self.press(item)?;
         let held_until = Instant::now().checked_add(shape.hold);
-        if let Some(ended) = self.waiter.wait_until(held_until).await {
+        if let Some(ended) = self.waiter.wait_until(held_until).await? {
             return Ok(Some(ended));
         }
         self.release(item)?;

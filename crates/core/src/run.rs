@@ -7,13 +7,13 @@
 //! [`finish`], so every run stops at once on a signal and leaves nothing
 //! pressed.
 
-use std::future::{Future, pending, poll_fn};
+use std::future::{Future, poll_fn};
 use std::pin::Pin;
 use std::task::Poll;
 
-use tokio::time::{Instant, sleep_until};
+use tokio::time::Instant;
 
-use crate::input::{Input, InputBackend, InputError};
+use crate::input::{Input, InputBackend, InputError, RunTimer};
 
 /// Why a run ended. Whatever the reason, nothing it pressed is still held.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,14 +61,32 @@ pub(crate) fn finish<B: InputBackend>(
     }
 }
 
+/// A started run's timer and input, in the order they are bound.
+pub(crate) type Started<B> = (Box<dyn RunTimer>, Input<B>);
+
+/// Starts a run on `input`: makes its timer before the first deadline. A
+/// run that cannot have one ends at once, pressing nothing. The timer comes
+/// first in the pair, so bound as `let (timer, input)` the input drops
+/// first: a run dropped part way releases what it holds before its timer
+/// ends (on Windows, joins its thread).
+pub(crate) fn with_timer<B: InputBackend>(mut input: Input<B>) -> Result<Started<B>, RunEnd<B>> {
+    match input.run_timer() {
+        Ok(timer) => Ok((timer, input)),
+        Err(err) => Err(finish(input, Err(err))),
+    }
+}
+
 /// `Some(reason)` when a signal ended a wait, `None` when the wait ran out.
 pub(crate) type Interrupted = Option<Ended>;
 
-/// A run's signals, and every wait a run makes. Shutdown wins over a stop
-/// that fires at the same moment.
+/// A run's signals and its timer, and every wait a run makes. Shutdown wins
+/// over a stop that fires at the same moment.
 pub(crate) struct Waiter<'a, S, D> {
     pub(crate) stop: Pin<&'a mut S>,
     pub(crate) shutdown: Pin<&'a mut D>,
+    /// The run's timer, from its backend: the only way it waits for a
+    /// deadline.
+    pub(crate) timer: &'a mut dyn RunTimer,
 }
 
 impl<S, D> Waiter<'_, S, D>
@@ -78,19 +96,21 @@ where
 {
     /// Waits until `deadline`, or forever when there is none (a deadline too
     /// far away to represent). Both signals win over a deadline that is due
-    /// at the same moment.
-    pub(crate) async fn wait_until(&mut self, deadline: Option<Instant>) -> Interrupted {
-        let due = async {
-            match deadline {
-                Some(deadline) => sleep_until(deadline).await,
-                None => pending().await,
-            }
-        };
+    /// at the same moment. Fails when the run's timer does.
+    pub(crate) async fn wait_until(
+        &mut self,
+        deadline: Option<Instant>,
+    ) -> Result<Interrupted, InputError> {
+        let timer = &mut *self.timer;
+        let due = poll_fn(|cx| match deadline {
+            Some(deadline) => timer.poll_until(cx, deadline),
+            None => Poll::Pending,
+        });
         tokio::select! {
             biased;
-            () = &mut self.shutdown => Some(Ended::ShutDown),
-            () = &mut self.stop => Some(Ended::Stopped),
-            () = due => None,
+            () = &mut self.shutdown => Ok(Some(Ended::ShutDown)),
+            () = &mut self.stop => Ok(Some(Ended::Stopped)),
+            due = due => due.map(|()| None),
         }
     }
 

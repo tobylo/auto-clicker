@@ -47,6 +47,7 @@ pub(super) fn inputs() -> Vec<InputFailure> {
         InputFailure::AllowedNow,
         InputFailure::Portal(quoted()),
         InputFailure::SessionLost(quoted()),
+        InputFailure::Timer(quoted()),
     ]
 }
 

@@ -34,7 +34,8 @@ use std::rc::Rc;
 use ashpd::desktop::remote_desktop::DeviceType;
 use ashpd::enumflags2::BitFlags;
 use auto_clicker_core::input::{
-    AbsolutePosition, Button, Input, InputBackend, InputError, Key, PressState,
+    AbsolutePosition, Button, Input, InputBackend, InputError, Key, PressState, RunTimer,
+    TokioTimer,
 };
 use reis::ei;
 use reis::event::DeviceCapability;
@@ -238,6 +239,10 @@ impl InputBackend for PortalBackend {
         self.emit(DeviceCapability::Scroll, "scroll", |s: &ei::Scroll| {
             s.scroll_discrete(0, units);
         })
+    }
+
+    fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError> {
+        Ok(TokioTimer::boxed())
     }
 }
 

@@ -21,6 +21,7 @@ pub enum InputFailure {
     AllowedNow,
     Portal(Quoted),
     SessionLost(Quoted),
+    Timer(Quoted),
 }
 
 impl From<&InputError> for InputFailure {
@@ -36,6 +37,7 @@ impl From<&InputError> for InputFailure {
             InputError::AllowedNow => InputFailure::AllowedNow,
             InputError::Portal(why) => InputFailure::Portal(quoted(why)),
             InputError::SessionLost(why) => InputFailure::SessionLost(quoted(why)),
+            InputError::Timer(e) => InputFailure::Timer(quoted(e)),
         }
     }
 }
@@ -66,6 +68,7 @@ impl fmt::Display for InputFailure {
             InputFailure::AllowedNow => f.write_str("allowed; press Start again"),
             InputFailure::Portal(why) => write!(f, "the remote input portal failed: {why}"),
             InputFailure::SessionLost(why) => write!(f, "the desktop ended remote input: {why}"),
+            InputFailure::Timer(e) => write!(f, "could not start the run's timer: {e}"),
         }
     }
 }

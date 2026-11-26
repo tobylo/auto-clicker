@@ -13,12 +13,14 @@ pub mod fake;
 mod guard;
 mod key_names;
 mod pressed;
+mod timer;
 mod types;
 
 pub use backend::InputBackend;
 pub use error::InputError;
 pub use guard::Input;
 pub use pressed::Held;
+pub use timer::{RunTimer, TokioTimer};
 pub use types::{AbsolutePosition, Button, Key, PressState};
 
 #[cfg(test)]

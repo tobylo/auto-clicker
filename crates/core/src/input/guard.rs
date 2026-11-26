@@ -1,7 +1,7 @@
 //! The only way to press: [`Input`] tracks every press and releases it.
 
 use super::pressed::PressedSet;
-use super::{AbsolutePosition, Button, Held, InputBackend, InputError, Key, PressState};
+use super::{AbsolutePosition, Button, Held, InputBackend, InputError, Key, PressState, RunTimer};
 
 /// Owns an input backend and every button and key pressed through it.
 ///
@@ -57,6 +57,11 @@ impl<B: InputBackend> Input<B> {
 
     pub fn scroll(&mut self, notches: i32) -> Result<(), InputError> {
         self.backend.scroll(notches)
+    }
+
+    /// The timer for a run on this input: see [`InputBackend::run_timer`].
+    pub(crate) fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError> {
+        self.backend.run_timer()
     }
 
     /// Whether `item` is held: pressed and not yet released successfully.

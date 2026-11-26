@@ -338,6 +338,44 @@ async fn a_failed_release_at_the_end_closes_the_devices() {
     assert!(end.input.is_none());
 }
 
+// The run's timer
+
+#[tokio::test(start_paused = true)]
+async fn a_run_whose_timer_cannot_start_presses_nothing() {
+    let (input, calls, log) = timed_input();
+    log.fail_timer_once();
+
+    let end = play(
+        input,
+        &playback(click(), 1.0, times(1)),
+        &Motion::Relative,
+        never(),
+    )
+    .await;
+
+    let refused = matches!(end.result, Err(InputError::Timer(_)));
+    let calls = calls.lock().unwrap().clone();
+    assert_eq!(
+        (refused, calls, end.input.is_some()),
+        (true, Vec::new(), true)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_waits_on_its_backends_timer_and_drops_it_at_the_end() {
+    // The timer never fires for a deadline ahead, so the first event waits
+    // for the stop although its time passes on tokio's clock.
+    let (input, calls, log) = timed_input();
+    log.freeze_timers();
+    let once = playback(click(), 1.0, times(1));
+
+    let end = play(input, &once, &Motion::Relative, stop_after(ms(500))).await;
+
+    let calls = calls.lock().unwrap().clone();
+    let actual = (end.result.unwrap(), calls, log.timers(), log.timer_drops());
+    assert_eq!(actual, (Ended::Stopped, Vec::new(), 1, vec![0]));
+}
+
 // Late wakes and bursts
 
 /// Polls `future` once.

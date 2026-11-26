@@ -10,7 +10,9 @@ use std::time::Duration;
 use tokio::time::{Instant, sleep};
 
 use crate::input::fake::{Call, FakeBackend, FakeLog};
-use crate::input::{AbsolutePosition, Button, Input, InputBackend, InputError, Key, PressState};
+use crate::input::{
+    AbsolutePosition, Button, Input, InputBackend, InputError, Key, PressState, RunTimer,
+};
 use crate::run::Signals;
 
 /// A fresh empty directory under the system temp directory, removed on drop.
@@ -119,6 +121,10 @@ impl InputBackend for Timed {
     fn scroll(&mut self, notches: i32) -> Result<(), InputError> {
         self.note(Call::Scroll(notches));
         self.inner.scroll(notches)
+    }
+
+    fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError> {
+        self.inner.run_timer()
     }
 }
 

@@ -13,7 +13,8 @@ mod error;
 mod hotkeys;
 
 use auto_clicker_core::input::{
-    AbsolutePosition, Button, Input, InputBackend, InputError, Key, PressState,
+    AbsolutePosition, Button, Input, InputBackend, InputError, Key, PressState, RunTimer,
+    TokioTimer,
 };
 use evdev::uinput::VirtualDevice;
 use evdev::{AbsoluteAxisCode, EventType, InputEvent, RelativeAxisCode};
@@ -139,6 +140,10 @@ impl InputBackend for KernelBackend {
 
     fn scroll(&mut self, notches: i32) -> Result<(), InputError> {
         emit(&mut self.mouse, &wheel_events(notches))
+    }
+
+    fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError> {
+        Ok(TokioTimer::boxed())
     }
 }
 

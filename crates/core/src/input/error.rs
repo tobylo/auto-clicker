@@ -6,8 +6,10 @@ use crate::message::InputFailure;
 
 /// Why synthetic input could not be set up or written.
 ///
-/// The first four come from the kernel backend (`/dev/uinput`), the rest
-/// from the portal backend (the RemoteDesktop portal and libei).
+/// The first four come from the kernel backend (`/dev/uinput`), the next
+/// five from the portal backend (the RemoteDesktop portal and libei), and
+/// [`InputError::Timer`] from Windows' backend; Windows' backend also
+/// reports [`InputError::Write`].
 #[derive(Debug)]
 pub enum InputError {
     /// The program may not open `/dev/uinput`.
@@ -33,17 +35,21 @@ pub enum InputError {
     /// The compositor ended the input session, or paused its devices. Says
     /// why. Whatever was held is released by the compositor.
     SessionLost(String),
+    /// The run's timer could not be started, so the run did not begin and
+    /// pressed nothing.
+    Timer(io::Error),
 }
 
 impl InputError {
-    /// The underlying operating-system error, for the kernel backend's
-    /// errors; the portal backend's carry none.
+    /// The underlying operating-system error, for the kernel and Windows
+    /// backends' errors; the portal backend's carry none.
     pub fn io_error(&self) -> Option<&io::Error> {
         match self {
             InputError::NoPermission(e)
             | InputError::UinputMissing(e)
             | InputError::CreateDevice(e)
-            | InputError::Write(e) => Some(e),
+            | InputError::Write(e)
+            | InputError::Timer(e) => Some(e),
             InputError::PortalUnavailable(_)
             | InputError::NotAllowed
             | InputError::AllowedNow

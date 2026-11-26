@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use auto_clicker_core::controller::{HotkeyReader, InputLifetime, OpenInput, Platform, ReadInput};
 use auto_clicker_core::input::{
-    AbsolutePosition, Button, Input, InputBackend, InputError, Key, PressState,
+    AbsolutePosition, Button, Input, InputBackend, InputError, Key, PressState, RunTimer,
 };
 use auto_clicker_core::recording::{LocalTime, recordings_dir};
 
@@ -51,6 +51,10 @@ impl InputBackend for NoOutput {
     }
 
     fn scroll(&mut self, _: i32) -> Result<(), InputError> {
+        match *self {}
+    }
+
+    fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError> {
         match *self {}
     }
 }

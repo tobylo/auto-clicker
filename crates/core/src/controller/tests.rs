@@ -21,7 +21,7 @@ use super::*;
 use crate::clicker::{ClickerSettings, Mode, Repeat};
 use crate::hotkeys::Unavailable;
 use crate::input::fake::{Call, FakeBackend, FakeLog};
-use crate::input::{AbsolutePosition, Button, Key, PressState};
+use crate::input::{AbsolutePosition, Button, Key, PressState, RunTimer};
 use crate::message::{NoOnScreen, NoPointer, NoScreens, Quoted};
 use crate::recording::{LocalTime, Recorder, RecordingFeed};
 use crate::test_support::TempDir;
@@ -251,6 +251,10 @@ impl InputBackend for Devices {
     fn scroll(&mut self, notches: i32) -> Result<(), InputError> {
         self.note(Call::Scroll(notches));
         self.inner.scroll(notches)
+    }
+
+    fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError> {
+        self.inner.run_timer()
     }
 }
 

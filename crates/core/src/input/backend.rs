@@ -1,6 +1,6 @@
 //! The interface every input backend implements.
 
-use super::{AbsolutePosition, Button, InputError, Key, PressState};
+use super::{AbsolutePosition, Button, InputError, Key, PressState, RunTimer};
 
 /// Writes synthetic input to the system.
 ///
@@ -28,6 +28,13 @@ pub trait InputBackend {
 
     /// Turns the vertical wheel by whole notches; positive scrolls up.
     fn scroll(&mut self, notches: i32) -> Result<(), InputError>;
+
+    /// The timer a run waits on for its deadlines, made once at the run's
+    /// start and dropped at its end. Every backend names its own, so one that
+    /// wraps another forwards it rather than falling back to a default:
+    /// Linux's backends return [`TokioTimer::boxed`](super::TokioTimer::boxed).
+    /// An error refuses the run before anything is pressed.
+    fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError>;
 }
 
 impl<B: InputBackend + ?Sized> InputBackend for Box<B> {
@@ -49,5 +56,9 @@ impl<B: InputBackend + ?Sized> InputBackend for Box<B> {
 
     fn scroll(&mut self, notches: i32) -> Result<(), InputError> {
         (**self).scroll(notches)
+    }
+
+    fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError> {
+        (**self).run_timer()
     }
 }

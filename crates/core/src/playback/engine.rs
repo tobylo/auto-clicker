@@ -12,7 +12,7 @@ use super::{Motion, Playback, Speed};
 use crate::clicker::Repeat;
 use crate::input::{Held, Input, InputBackend, InputError};
 use crate::recording::Change;
-use crate::run::{Ended, Interrupted, RunEnd, Signals, Waiter, finish};
+use crate::run::{Ended, Interrupted, RunEnd, Signals, Waiter, finish, with_timer};
 
 /// How many events that are already due fire before the run hands the thread
 /// back. The run's signals fire only while the controller runs, and hotkeys
@@ -44,7 +44,7 @@ const BATCH: u32 = 256;
 /// run ([`crate::clicker::run`]): stop a run with its signal rather than by
 /// dropping it.
 pub async fn play<B, S, D>(
-    mut input: Input<B>,
+    input: Input<B>,
     playback: &Playback,
     motion: &Motion,
     signals: Signals<S, D>,
@@ -54,6 +54,10 @@ where
     S: Future<Output = ()>,
     D: Future<Output = ()>,
 {
+    let (mut timer, mut input) = match with_timer(input) {
+        Ok(started) => started,
+        Err(refused) => return refused,
+    };
     let mut session = Session {
         input: &mut input,
         playback,
@@ -61,6 +65,7 @@ where
         waiter: Waiter {
             stop: pin!(signals.stop),
             shutdown: pin!(signals.shutdown),
+            timer: &mut *timer,
         },
         due_in_a_row: 0,
     };
@@ -135,12 +140,12 @@ where
     /// Plays the recording once, as round `round`. The round begins with a
     /// wait for its own start, so an empty recording still takes its time.
     async fn round(&mut self, schedule: &Schedule, round: u64) -> Result<Interrupted, InputError> {
-        if let Some(ended) = self.wait_for(schedule.at(round, 0)).await {
+        if let Some(ended) = self.wait_for(schedule.at(round, 0)).await? {
             return Ok(Some(ended));
         }
         let playback = self.playback;
         for event in playback.steps(self.motion) {
-            if let Some(ended) = self.wait_for(schedule.at(round, event.at)).await {
+            if let Some(ended) = self.wait_for(schedule.at(round, event.at)).await? {
                 return Ok(Some(ended));
             }
             self.apply(event.change)?;
@@ -150,25 +155,25 @@ where
 
     /// Waits until `deadline`. A deadline too far away to represent ends the
     /// run as finished. After [`BATCH`] deadlines in a row that had already
-    /// passed, hands the thread back once.
-    async fn wait_for(&mut self, deadline: Option<Instant>) -> Interrupted {
+    /// passed, hands the thread back once. Fails when the run's timer does.
+    async fn wait_for(&mut self, deadline: Option<Instant>) -> Result<Interrupted, InputError> {
         let Some(deadline) = deadline else {
-            return Some(Ended::Finished);
+            return Ok(Some(Ended::Finished));
         };
         let waits = deadline > Instant::now();
-        if let Some(ended) = self.waiter.wait_until(Some(deadline)).await {
-            return Some(ended);
+        if let Some(ended) = self.waiter.wait_until(Some(deadline)).await? {
+            return Ok(Some(ended));
         }
         if waits {
             self.due_in_a_row = 0;
-            return None;
+            return Ok(None);
         }
         self.due_in_a_row = self.due_in_a_row.saturating_add(1);
         if self.due_in_a_row < BATCH {
-            return None;
+            return Ok(None);
         }
         self.due_in_a_row = 0;
-        self.waiter.yield_once().await
+        Ok(self.waiter.yield_once().await)
     }
 
     fn apply(&mut self, change: Change) -> Result<(), InputError> {

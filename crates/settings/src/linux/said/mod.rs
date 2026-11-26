@@ -126,6 +126,7 @@ impl Said<'_> {
             InputFailure::AllowedNow => t.invoke_input_allowed_now(),
             InputFailure::Portal(why) => t.invoke_input_portal(s(why)),
             InputFailure::SessionLost(why) => t.invoke_input_session_lost(s(why)),
+            InputFailure::Timer(e) => t.invoke_input_timer(s(e)),
         }
     }
 

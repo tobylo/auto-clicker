@@ -133,6 +133,7 @@ pub(super) fn input(why: &InputFailure) -> String {
         InputFailure::SessionLost(why) => {
             format!("skrivbordet avslutade fjärrinmatningen: {why}")
         }
+        InputFailure::Timer(e) => format!("kunde inte starta körningens timer: {e}"),
     }
 }
 
