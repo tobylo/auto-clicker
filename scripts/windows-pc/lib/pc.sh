@@ -115,9 +115,10 @@ while True:
     fi
     chmod 600 "$file"
     # The file is exactly that line and its newline: the PC reads the first
-    # line, so nothing may come before or after it.
-    text="$(<"$file")"
-    [[ "$text" =~ ^[A-Za-z0-9]{16,128}$ ]] && (($(wc -c <"$file") == ${#text} + 1)) ||
+    # line, so nothing may come before or after it. Its bytes are checked
+    # first, since bash drops a NUL from what it reads.
+    [[ "$(LC_ALL=C tr -d 'A-Za-z0-9\n' <"$file" | wc -c)" == 0 ]] && text="$(<"$file")" &&
+        [[ "$text" =~ ^[A-Za-z0-9]{16,128}$ ]] && (($(wc -c <"$file") == ${#text} + 1)) ||
         die "$file must hold one line of 16 to 128 letters and digits"
 }
 

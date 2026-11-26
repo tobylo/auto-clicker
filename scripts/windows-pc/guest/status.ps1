@@ -24,7 +24,7 @@ function Get-SleepMinutes {
     $index = Get-CimInstance -Namespace root\cimv2\power -ClassName Win32_PowerSettingDataIndex |
         Where-Object { $_.InstanceID -like "*$scheme\AC\{29f6c1db-86da-48c5-9fdb-f2b67b1f44da}" }
     if (@($index).Count -ne 1) { return $null }
-    return [int] $index.SettingIndexValue
+    return [long] $index.SettingIndexValue
 }
 
 # Whether $Process is the runner that wrote $Ready: a PowerShell that

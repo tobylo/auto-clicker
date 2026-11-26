@@ -63,29 +63,46 @@ function Test-Security($Have, $Want) {
     return (Get-RuleText $Have) -eq (Get-RuleText $Want)
 }
 
-function Assert-NoReparsePoint([string] $Path) {
-    if ((Get-Item -LiteralPath $Path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
-        throw "$Path is a junction or link: remove it, then run the setup again"
-    }
-}
-
-# Folder (or file) security with these explicit rules alone.
-function New-Security([bool] $Protected, [object[]] $Rules, [bool] $File) {
-    $security = if ($File) { New-Object Security.AccessControl.FileSecurity } else { New-Object Security.AccessControl.DirectorySecurity }
+# Folder security with these explicit rules alone.
+function New-Security([bool] $Protected, [object[]] $Rules) {
+    $security = New-Object Security.AccessControl.DirectorySecurity
     $security.SetAccessRuleProtection($Protected, $false)
     foreach ($rule in $Rules) { $security.AddAccessRule($rule) }
     return $security
 }
 
-# Gives folder (or, with -File, file) $Path exactly these explicit rules,
-# owned by the administrators; $Protected stops it inheriting from its
-# parent. A missing folder is made. A junction or link is refused: another
-# account may have made it, to point the runner elsewhere.
-function Set-Security([string] $Path, [bool] $Protected, [object[]] $Rules = @(), [switch] $File) {
-    $made = -not $File -and -not (Test-Path -LiteralPath $Path -PathType Container)
+# C:\wn01 is the setup's own: made by it, with its rules, in one step, or
+# found owned by the administrators or SYSTEM. One that another account made
+# (or a junction in its place) is refused, since whatever that account put
+# inside could not be trusted. Once it is the setup's, no other account can
+# add anything to it, so nothing inside needs checking for its origin.
+function Install-Root($Security) {
+    if (-not (Test-Path -LiteralPath $Root)) {
+        [IO.Directory]::CreateDirectory($Root, $Security) | Out-Null
+        Report-Set "made $Root"
+        return
+    }
+    $owner = (Get-Acl -LiteralPath $Root).GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if (-not (Test-SetupFolder (Get-Item -LiteralPath $Root -Force) $owner)) {
+        throw "$Root was not made by the setup (owner $owner): remove it from an elevated prompt (Remove-Item -Recurse -Force $Root), then run the setup again"
+    }
+}
+
+# Whether $Item, owned by $Owner, is a plain folder the administrators or
+# SYSTEM own.
+function Test-SetupFolder($Item, [string] $Owner) {
+    if (-not $Item.PSIsContainer) { return $false }
+    if ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+    return $Owner -in $Admins, $System
+}
+
+# Gives folder $Path exactly these explicit rules, owned by the
+# administrators; $Protected stops it inheriting from its parent. A missing
+# folder is made.
+function Set-Security([string] $Path, [bool] $Protected, [object[]] $Rules = @()) {
+    $made = -not (Test-Path -LiteralPath $Path -PathType Container)
     if ($made) { New-Item -ItemType Directory -Path $Path | Out-Null }
-    Assert-NoReparsePoint $Path
-    $want = New-Security $Protected $Rules $File
+    $want = New-Security $Protected $Rules
     if (-not $made -and (Test-Security (Get-Acl -LiteralPath $Path) $want)) {
         Report-Ok "security of $Path"
         return
@@ -95,17 +112,19 @@ function Set-Security([string] $Path, [bool] $Protected, [object[]] $Rules = @()
     Report-Set "security of $Path"
 }
 
-# The runner's folders, each owned by the administrators, whoever made it.
-# Only administrators and SYSTEM write the runner's files and hand in jobs,
-# so no other account can change the runner or give it a job, and a job in
-# the normal queue cannot hand one to the elevated runner. The unelevated
-# runner writes its own queue's ready, log, work and outbox, and claims a job
-# by moving it out of the inbox, which it can read and delete from but not
-# write to. A moved job keeps the inbox's rules, and the runner removes it
-# with Remove-Item -Force, which writes its attributes first.
+# The runner's folders. Only administrators and SYSTEM write the runner's
+# files and hand in jobs, so no other account can change the runner or give
+# it a job, and a job in the normal queue cannot hand one to the elevated
+# runner. The unelevated runner writes its own queue's ready, log, work and
+# outbox, and claims a job by moving it out of the inbox, which it can read
+# and delete from but not write to. A moved job keeps the inbox's rules, and
+# the runner removes it with Remove-Item -Force, which writes its attributes
+# first.
 function Install-Folders([string] $TesterSid) {
     $full = 'FullControl'
-    Set-Security $Root $true @((New-Rule $Admins $full), (New-Rule $System $full), (New-Rule $TesterSid 'ReadAndExecute'))
+    $rootRules = @((New-Rule $Admins $full), (New-Rule $System $full), (New-Rule $TesterSid 'ReadAndExecute'))
+    Install-Root (New-Security $true $rootRules)
+    Set-Security $Root $true $rootRules
     foreach ($folder in 'queue', 'queue\high', 'queue\high\inbox', 'queue\high\work', 'queue\high\outbox') {
         Set-Security "$Root\$folder" $false
     }
@@ -120,23 +139,19 @@ function Install-Folders([string] $TesterSid) {
 }
 
 # Copies each runner file whose content differs, stamped with the time it
-# was installed (a copy keeps its source's), and gives every one the
-# folder's rules alone.
+# was installed (a copy keeps its source's).
 function Install-RunnerFiles {
     foreach ($name in $RunnerFiles) {
         $source = Join-Path $PSScriptRoot $name
         $target = Join-Path $Root $name
-        # Before anything reads or writes through it.
-        if (Test-Path -LiteralPath $target) { Assert-NoReparsePoint $target }
         if ((Test-Path -LiteralPath $target) -and
             (Get-FileHash -LiteralPath $target).Hash -eq (Get-FileHash -LiteralPath $source).Hash) {
             Report-Ok "file $target"
-        } else {
-            Copy-Item -LiteralPath $source -Destination $target -Force
-            (Get-Item -LiteralPath $target).LastWriteTime = Get-Date
-            Report-Set "file $target"
+            continue
         }
-        Set-Security $target $false -File
+        Copy-Item -LiteralPath $source -Destination $target -Force
+        (Get-Item -LiteralPath $target).LastWriteTime = Get-Date
+        Report-Set "file $target"
     }
 }
 
@@ -228,7 +243,8 @@ function Install-RunnerTask([string] $Queue, [string] $RunLevel) {
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $User
     $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel $RunLevel
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    $want = Get-TaskText $action $trigger $principal $settings
+    # tester's SID too: an account made again under the same name is another.
+    $want = "$(Get-TaskText $action $trigger $principal $settings)|$((Get-LocalUser -Name $User).SID.Value)"
     if (Test-TaskRecorded $name $record $want) {
         Report-Ok "task $name"
         return $false
@@ -358,16 +374,20 @@ function Disable-Sleep {
         Save-Original "power:${plan}:$($setting.name)" $value
         & powercfg.exe /setacvalueindex $plan SUB_SLEEP $setting.name 0
         if ($LASTEXITCODE -ne 0) { throw "powercfg /setacvalueindex $($setting.name) failed" }
-        & powercfg.exe /setactive $plan
-        if ($LASTEXITCODE -ne 0) { throw 'powercfg /setactive failed' }
         Report-Set "power $($setting.name) on AC: never (was $value s)"
     }
+    # Always: a setup stopped between a write and this has the value stored
+    # but not in effect.
+    & powercfg.exe /setactive $plan
+    if ($LASTEXITCODE -ne 0) { throw 'powercfg /setactive failed' }
 }
 
 # Runs an installer, ended after $InstallSeconds, and fails unless it exits
 # with one of $Ok.
 function Invoke-Installer([string] $Path, [string[]] $Arguments, [int[]] $Ok = @(0)) {
     $process = Start-Process -FilePath $Path -ArgumentList $Arguments -PassThru -NoNewWindow
+    # Read once now: without it Windows PowerShell can lose the exit code.
+    $null = $process.Handle
     if (-not $process.WaitForExit($InstallSeconds * 1000)) {
         # winget and Visual Studio's setup start installers of their own.
         & taskkill.exe /T /F /PID $process.Id | Out-Null
@@ -404,7 +424,7 @@ function Install-BuildTools {
     }
     $tools = $null
     if (Test-Path "$installer\vswhere.exe") {
-        $tools = & "$installer\vswhere.exe" -products Microsoft.VisualStudio.Product.BuildTools -property installationPath
+        $tools = & "$installer\vswhere.exe" -products Microsoft.VisualStudio.Product.BuildTools -latest -property installationPath
     }
     $add = '--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'
     if ($tools) {

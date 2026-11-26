@@ -95,10 +95,10 @@ function Get-Leftovers {
 
 try {
     Add-Type -Path (Join-Path $PSScriptRoot 'Autologon.cs')
-    Remove-Runners
-    # Before anything that can fail: a PC left half uninstalled must not
-    # still log tester on at boot.
+    # Before anything else that can fail: a PC left half uninstalled must
+    # not still log tester on at boot.
     Disable-AutoLogon
+    Remove-Runners
     # restore.json goes with C:\wn01 only once every setting is back.
     Restore-Settings
     if (Test-Path -LiteralPath $Root) {
