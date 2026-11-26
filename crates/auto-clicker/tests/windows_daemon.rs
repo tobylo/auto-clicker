@@ -91,6 +91,12 @@ impl Home {
         self.0.join(path)
     }
 
+    /// The watchdog's log so far; empty until it has created it.
+    fn watchdog_log(&self) -> String {
+        std::fs::read_to_string(self.log_path().with_file_name("auto-clicker-watchdog.log"))
+            .unwrap_or_default()
+    }
+
     /// The log so far; empty until the daemon has created it.
     fn log(&self) -> String {
         std::fs::read_to_string(self.log_path()).unwrap_or_default()
@@ -160,6 +166,16 @@ fn kill(pid: u32, tree: bool) -> ExitStatus {
         .stderr(Stdio::null())
         .status()
         .unwrap()
+}
+
+/// A process the test did not start itself, ended when dropped; forgotten
+/// once it ended on its own.
+struct Ended(u32);
+
+impl Drop for Ended {
+    fn drop(&mut self) {
+        let _ = kill(self.0, false);
+    }
 }
 
 /// The processes `pid` started that still run.
@@ -664,6 +680,18 @@ fn a_quit_releases_and_leaves_no_watchdog_behind() {
     assert!(ended(&mut daemon.watchdog, END).success(), "{}", home.log());
     assert!(!desktop::is_down(VK_F13));
     assert!(!alive(daemon.pid));
+    // The release counted as delivered by the daemon, on the real desktop:
+    // nothing was left owed for the watchdog.
+    assert!(
+        !home.log().contains("may not have arrived"),
+        "{}",
+        home.log()
+    );
+    assert!(
+        !home.watchdog_log().contains("released"),
+        "{}",
+        home.watchdog_log()
+    );
 }
 
 #[test]
@@ -708,7 +736,11 @@ fn a_bare_start_launches_the_watchdog_and_exits() {
         .lines()
         .find_map(|line| line.trim().parse::<u32>().ok())
     });
+    // Ended however the test ends: a daemon left running would hold the
+    // session's single instance.
+    let watchdog_guard = Ended(watchdog);
     let pid = wait_for("its daemon", || children(watchdog).first().copied());
+    let daemon_guard = Ended(pid);
     wait_for("the daemon running", || {
         home.log().contains(": running").then_some(())
     });
@@ -727,6 +759,9 @@ fn a_bare_start_launches_the_watchdog_and_exits() {
         );
         sleep(Duration::from_millis(50));
     }
+    // Both ended: their ids may be another process's by now.
+    std::mem::forget(daemon_guard);
+    std::mem::forget(watchdog_guard);
 }
 
 #[test]
@@ -751,6 +786,11 @@ fn the_daemon_is_per_monitor_dpi_aware() {
     let mut daemon = home.start();
     home.running(&mut daemon);
     assert_eq!(desktop::per_monitor_aware(daemon.process()), Some(true));
+    // The question tells the two apart: the watchdog never sets its own.
+    assert_eq!(
+        desktop::per_monitor_aware(desktop::Process(daemon.watchdog.id())),
+        Some(false)
+    );
     ask_to_quit(&daemon);
     assert!(ended(&mut daemon.watchdog, END).success(), "{}", home.log());
 }

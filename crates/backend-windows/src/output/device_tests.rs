@@ -400,7 +400,8 @@ fn clicks_at_10_12_and_15_ms_arrive_on_time() {
         for _ in 0..RUNS {
             // As the daemon sends: every press marked in the watchdog's
             // table, every release checked before and after.
-            let input = Watched::open(Arc::new(Table::private()));
+            let table = Arc::new(Table::private());
+            let input = Watched::open(Arc::clone(&table));
             let signals = Signals {
                 stop: std::future::pending::<()>(),
                 shutdown: std::future::pending::<()>(),
@@ -413,6 +414,9 @@ fn clicks_at_10_12_and_15_ms_arrive_on_time() {
                     .as_ref()
                     .is_some_and(|input: &Input<Watched>| input.held().next().is_none())
             );
+            // Decision 7's check, on the real desktop, counted every
+            // release delivered: nothing is owed.
+            assert_eq!(table.copy(), [0; crate::watchdog::TABLE_LEN]);
             thread::sleep(Duration::from_millis(300));
         }
     }
