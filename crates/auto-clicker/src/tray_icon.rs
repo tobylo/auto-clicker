@@ -1,18 +1,23 @@
-//! The tray icon during a countdown: the time left, drawn in code over a tile
-//! in the job's colour. Plasma shows these pixmaps while the icon has no name.
-//! The digits' shapes and the tile's sampling are core's ([`digits`],
-//! [`tile`]), which the on-screen display draws too.
+//! The tray icon's pictures, drawn in code: during a countdown the time
+//! left over a tile in the job's colour, on both systems; otherwise the
+//! state's picture, which Windows draws here ([`picture`]) and Plasma takes
+//! from the themed icons. The digits' shapes and the tile's sampling are
+//! core's ([`digits`], [`tile`]), which the on-screen display draws too.
 //!
-//! Nothing here keeps state or wakes on its own: the pixmaps are drawn from
-//! the view each time it changes, which a countdown does once a second.
+//! Nothing here keeps state or wakes on its own: the pictures are drawn
+//! from the view each time it changes, which a countdown does once a second.
+
+mod picture;
 
 use auto_clicker_core::controller::Activity;
 use auto_clicker_core::digits::{self, Label, Point, Rect, Rgb, Size};
-use auto_clicker_core::tile::{self, Tile};
+use auto_clicker_core::tile::{self, Pixel, Tile};
 
-/// The sizes Plasma picks from: the default panel's, and larger panels' or
-/// scaled screens'.
-const SIZES: [u16; 3] = [22, 32, 48];
+#[cfg_attr(
+    not(windows),
+    allow(dead_code, reason = "Plasma shows the themed icons")
+)]
+pub use picture::draw;
 
 /// Height of a character, as a share of the icon's side, when it fits.
 const HEIGHT: f32 = 0.74;
@@ -22,22 +27,76 @@ const WIDTH: f32 = 0.88;
 /// The digits' colour.
 const WHITE: Rgb = Rgb(0xff, 0xff, 0xff);
 
-/// Whether `activity` is a countdown, which shows on the icon.
-pub fn counts_down(activity: Activity) -> bool {
-    digits::countdown(activity).is_some()
+/// A square picture, `side` pixels wide: straight (not premultiplied)
+/// RGBA, row by row from the top.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Image {
+    pub side: u16,
+    pub rgba: Vec<u8>,
 }
 
-/// The icon's pixmaps for `activity`: one per size during a countdown, none
-/// otherwise.
-pub fn pixmaps(activity: Activity) -> Vec<ksni::Icon> {
-    let Some((seconds, tile)) = digits::countdown(activity) else {
-        return Vec::new();
-    };
-    let label = Label::of(seconds);
-    SIZES
-        .iter()
-        .map(|&size| render(&label, tile, size))
-        .collect()
+impl Image {
+    /// The picture `side` pixels square whose pixel at each top left
+    /// corner `pixel` gives.
+    fn sampled(side: u16, pixel: impl Fn(Point) -> Pixel) -> Image {
+        let rgba = (0..side)
+            .flat_map(|y| (0..side).map(move |x| (x, y)))
+            .flat_map(|(x, y)| {
+                let Pixel { alpha, colour } = pixel(Point {
+                    x: f32::from(x),
+                    y: f32::from(y),
+                });
+                let Rgb(r, g, b) = colour;
+                [r, g, b, alpha]
+            })
+            .collect();
+        Image { side, rgba }
+    }
+}
+
+/// The state's picture: what the icon shows when no countdown does. Plasma
+/// names a themed icon for each; Windows draws them ([`draw`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Picture {
+    Idle,
+    Clicking,
+    Recording,
+}
+
+impl Picture {
+    /// The picture for `activity`. A countdown shows the idle picture where
+    /// the digits do not show (Plasma's tooltip).
+    pub fn of(activity: Activity) -> Picture {
+        match activity {
+            Activity::Clicking | Activity::Playing => Picture::Clicking,
+            Activity::Recording => Picture::Recording,
+            Activity::Idle
+            | Activity::StartingIn(_)
+            | Activity::WaitingForRelease
+            | Activity::Opening
+            | Activity::RecordingIn(_)
+            | Activity::PlayingIn(_)
+            | Activity::PlayWaitingForRelease
+            | Activity::PlayOpening => Picture::Idle,
+        }
+    }
+}
+
+/// The seconds left of `activity`'s countdown on a tile `side` pixels
+/// square; none when it is no countdown.
+pub fn countdown(activity: Activity, side: u16) -> Option<Image> {
+    let (seconds, tile) = digits::countdown(activity)?;
+    Some(render(&Label::of(seconds), tile, side))
+}
+
+/// What the icon shows for `activity`, `side` pixels square: the countdown,
+/// or else the state's picture.
+#[cfg_attr(
+    not(windows),
+    allow(dead_code, reason = "Plasma shows the themed icons")
+)]
+pub fn image(activity: Activity, side: u16) -> Image {
+    countdown(activity, side).unwrap_or_else(|| draw(Picture::of(activity), side))
 }
 
 /// The rectangles that draw `label` centred on an icon `side` pixels wide,
@@ -78,33 +137,15 @@ impl Scene {
             Some(self.tile)
         }
     }
-
-    /// The pixel whose top left corner is `corner` as ARGB, its samples
-    /// averaged.
-    fn pixel(&self, corner: Point) -> [u8; 4] {
-        tile::sample(corner, |point| self.colour(point)).argb()
-    }
 }
 
-/// `label` on a tile in `tile`'s colour, `size` pixels square, as ARGB32 in
-/// network byte order.
-fn render(label: &Label, tile: Rgb, size: u16) -> ksni::Icon {
+/// `label` on a tile in `tile`'s colour, `size` pixels square.
+fn render(label: &Label, tile: Rgb, size: u16) -> Image {
     let side = f32::from(size);
     let scene = Scene::new(layout(label, side), tile, side);
-    let data = (0..size)
-        .flat_map(|y| (0..size).map(move |x| (x, y)))
-        .flat_map(|(x, y)| {
-            scene.pixel(Point {
-                x: f32::from(x),
-                y: f32::from(y),
-            })
-        })
-        .collect();
-    ksni::Icon {
-        width: i32::from(size),
-        height: i32::from(size),
-        data,
-    }
+    Image::sampled(size, |corner| {
+        tile::sample(corner, |point| scene.colour(point))
+    })
 }
 
 #[cfg(test)]
@@ -114,14 +155,19 @@ mod tests {
 
     use super::*;
 
-    /// The ARGB pixel at (x, y) of `icon`.
-    fn at(icon: &ksni::Icon, x: i32, y: i32) -> [u8; 4] {
-        let index = usize::try_from((y * icon.width + x) * 4).unwrap();
-        icon.data[index..index + 4].try_into().unwrap()
+    /// The sizes drawn: Windows' small icon at 100 % and Plasma's.
+    const SIZES: [u16; 4] = [16, 22, 32, 48];
+    /// Where alpha is in a pixel.
+    const ALPHA: usize = 3;
+
+    /// The RGBA pixel at (x, y) of `icon`.
+    pub fn at(icon: &Image, x: i32, y: i32) -> [u8; 4] {
+        let index = usize::try_from((y * i32::from(icon.side) + x) * 4).unwrap();
+        icon.rgba[index..index + 4].try_into().unwrap()
     }
 
-    fn opaque(Rgb(r, g, b): Rgb) -> [u8; 4] {
-        [0xff, r, g, b]
+    pub fn opaque(Rgb(r, g, b): Rgb) -> [u8; 4] {
+        [r, g, b, 0xff]
     }
 
     /// The smallest rectangle around `rects`.
@@ -135,23 +181,26 @@ mod tests {
     }
 
     #[test]
-    fn only_a_countdown_draws_pixmaps_in_its_jobs_colour() {
+    fn only_a_countdown_draws_digits_in_its_jobs_colour() {
         use Activity::*;
         for (activity, tile) in [
             (StartingIn(5), CLICKING),
             (PlayingIn(5), CLICKING),
             (RecordingIn(5), RECORDING),
         ] {
-            assert!(counts_down(activity), "{activity:?}");
-            let icons = pixmaps(activity);
-            let sizes: Vec<(i32, i32)> = icons.iter().map(|i| (i.width, i.height)).collect();
-            assert_eq!(sizes, [(22, 22), (32, 32), (48, 48)], "{activity:?}");
-            for icon in &icons {
-                let length = usize::try_from(icon.width * icon.height * 4).unwrap();
-                assert_eq!(icon.data.len(), length, "{activity:?}");
+            for size in SIZES {
+                let icon = countdown(activity, size).unwrap();
+                assert_eq!(icon.side, size, "{activity:?}");
+                assert_eq!(
+                    icon.rgba.len(),
+                    usize::from(size).pow(2) * 4,
+                    "{activity:?}"
+                );
                 // The tile's left edge, halfway down: clear of the
                 // corners and the digits.
-                assert_eq!(at(icon, 1, icon.height / 2), opaque(tile), "{activity:?}");
+                let half = i32::from(size) / 2;
+                assert_eq!(at(&icon, 1, half), opaque(tile), "{activity:?}");
+                assert_eq!(image(activity, size), icon, "{activity:?}");
             }
         }
         for activity in [
@@ -164,8 +213,9 @@ mod tests {
             PlayOpening,
             Playing,
         ] {
-            assert!(!counts_down(activity), "{activity:?}");
-            assert!(pixmaps(activity).is_empty(), "{activity:?}");
+            assert!(countdown(activity, 16).is_none(), "{activity:?}");
+            let picture = draw(Picture::of(activity), 16);
+            assert_eq!(image(activity, 16), picture, "{activity:?}");
         }
     }
 
@@ -173,19 +223,19 @@ mod tests {
     fn the_tile_has_rounded_corners_with_smooth_edges() {
         for size in SIZES {
             let icon = render(&Label::of(8), CLICKING, size);
-            let last = icon.width - 1;
+            let last = i32::from(icon.side) - 1;
             for (x, y) in [(0, 0), (last, 0), (0, last), (last, last)] {
-                assert_eq!(at(&icon, x, y)[0], 0, "{size} px corner ({x}, {y})");
+                assert_eq!(at(&icon, x, y)[ALPHA], 0, "{size} px corner ({x}, {y})");
             }
             // Partly on the tile, where the corner's curve passes.
             let radius = (RADIUS * f32::from(size)) as i32;
             let corner = (0..radius).flat_map(|y| (0..radius).map(move |x| (x, y)));
             let partial = corner
-                .map(|(x, y)| at(&icon, x, y)[0])
+                .map(|(x, y)| at(&icon, x, y)[ALPHA])
                 .filter(|&alpha| alpha > 0 && alpha < 0xff)
                 .count();
             assert!(partial >= 2, "{size} px: {partial} smooth pixels");
-            assert_eq!(at(&icon, radius, 0)[0], 0xff, "{size} px top edge");
+            assert_eq!(at(&icon, radius, 0)[ALPHA], 0xff, "{size} px top edge");
         }
     }
 
@@ -203,7 +253,7 @@ mod tests {
                 }
                 // Left of the label, halfway down: the tile.
                 let left = bounds(&rects).x as i32 - 1;
-                let shown = at(&icon, left, icon.height / 2);
+                let shown = at(&icon, left, i32::from(icon.side) / 2);
                 assert_eq!(shown, opaque(RECORDING), "{seconds} at {size} px");
             }
         }

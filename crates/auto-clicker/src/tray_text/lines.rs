@@ -10,7 +10,7 @@ use auto_clicker_core::recording::MAX_DURATION;
 
 use auto_clicker_core::message::Titled;
 
-use super::{notice, problem};
+use super::{SHOWS_ROUTES, notice, problem};
 
 /// Every line of the tooltip for `view`, in Swedish.
 pub(super) fn details(view: &View) -> Vec<String> {
@@ -30,7 +30,9 @@ pub(super) fn details(view: &View) -> Vec<String> {
             describe_playback(&view.playback)
         ),
     ));
-    lines.push(routes_line(view.routes));
+    if SHOWS_ROUTES {
+        lines.push(routes_line(view.routes));
+    }
     if view.activity.recording() {
         let minutes = MAX_DURATION.as_secs() / 60;
         lines.push(format!(

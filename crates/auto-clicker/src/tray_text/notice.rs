@@ -5,6 +5,7 @@ use auto_clicker_core::message::{
 };
 use auto_clicker_core::playback::Fallback;
 
+use super::NO_DATA_DIR;
 use super::lines::recording_name;
 use super::problem::{blocked, input, no_recording, own_key, unavailable};
 
@@ -165,9 +166,7 @@ fn saving(saving: &Saving) -> String {
 
 fn save_failure(why: &SaveFailure) -> String {
     match why {
-        SaveFailure::NoDataDirectory => {
-            "ingen datamapp: varken XDG_DATA_HOME eller HOME är satt".to_owned()
-        }
+        SaveFailure::NoDataDirectory => format!("ingen datamapp: {NO_DATA_DIR}"),
         SaveFailure::Invalid(why) => format!("det inspelade är ingen giltig inspelning: {why}"),
         SaveFailure::Write(why) => why.to_string(),
     }

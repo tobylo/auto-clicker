@@ -561,3 +561,61 @@ fn locking_the_desktop_releases_a_held_button_at_once_and_unlocking_allows_start
     let runs = output.0.lock().unwrap().len();
     assert_eq!(output.presses(runs - 1), [PressState::Down, PressState::Up]);
 }
+
+/// The command of the item labelled `label` in `menu`, or in its submenus.
+fn command_of(menu: &[auto_clicker_backend_windows::MenuEntry], label: &str) -> Option<u32> {
+    use auto_clicker_backend_windows::MenuEntry;
+    menu.iter().find_map(|entry| match entry {
+        MenuEntry::Item {
+            label: shown,
+            command,
+            ..
+        } if shown == label => *command,
+        MenuEntry::Submenu { children, .. } => command_of(children, label),
+        _ => None,
+    })
+}
+
+#[test]
+fn the_trays_choices_reach_the_controller_and_its_news_only_the_log() {
+    use auto_clicker_core::locale::Language;
+
+    use crate::tray_menu::tests::{file, view_listing};
+
+    let (mut notices, mut inbox, _) = notices();
+    let drawn = super::super::tray::content(
+        &view_listing(Activity::Idle, 1),
+        Language::English,
+        16,
+        &notices.commands(),
+    );
+    let start = command_of(&drawn.menu, "Start clicking").unwrap();
+    let play = command_of(&drawn.menu, "Recording 2026-11-09 18:00:00").unwrap();
+    notices.handle(WindowEvent::TrayMenuOpening);
+    notices.handle(WindowEvent::TrayChosen(start));
+    notices.handle(WindowEvent::TrayChosen(play));
+    // A command no menu gave sends nothing.
+    notices.handle(WindowEvent::TrayChosen(9999));
+    notices.handle(WindowEvent::TrayMenuFailed(io::Error::other("no menu")));
+    notices.handle(WindowEvent::TrayUnshown(io::Error::other("refused")));
+    notices.handle(WindowEvent::TrayShown);
+    assert_eq!(
+        drained(&mut inbox),
+        [Message::MenuOpened, Message::Start, Message::Play(file(0))]
+    );
+}
+
+#[test]
+fn a_refused_icon_is_logged_once_until_it_shows_again() {
+    let (mut notices, mut inbox, _) = notices();
+    let refused = || WindowEvent::TrayUnshown(io::Error::other("refused"));
+    assert!(!notices.icon_refused);
+    notices.handle(refused());
+    assert!(notices.icon_refused);
+    notices.handle(refused());
+    notices.handle(WindowEvent::TrayShown);
+    assert!(!notices.icon_refused);
+    notices.handle(refused());
+    assert!(notices.icon_refused);
+    assert_eq!(drained(&mut inbox), []);
+}

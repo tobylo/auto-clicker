@@ -48,6 +48,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use crate::message::wide;
 use crate::session::{SessionState, query};
+use crate::tray::{self, TrayContent, WM_TRAY_REFRESH};
 
 /// Posted by [`Remote::quit`]: destroy the window and end the thread.
 const WM_QUIT_REQUEST: u32 = WM_APP + 1;
@@ -58,7 +59,7 @@ const RETRY_TIMER: usize = 1;
 /// reading the session's state: soon at
 /// first, since early in a logon the service that sends them may not be
 /// ready yet, then less often.
-const RETRY_DELAYS: [Duration; 6] = [
+pub(crate) const RETRY_DELAYS: [Duration; 6] = [
     Duration::from_secs(1),
     Duration::from_secs(2),
     Duration::from_secs(4),
@@ -100,6 +101,19 @@ pub enum WindowEvent {
     EndSession,
     /// Something asked the window to close (`taskkill` without `/F`).
     Close,
+    /// The tray's menu is about to open.
+    TrayMenuOpening,
+    /// The tray's menu could not be built; it did not open.
+    TrayMenuFailed(io::Error),
+    /// An item of the tray's menu was chosen: its command.
+    TrayChosen(u32),
+    /// The taskbar refused the tray's icon; it is tried again later.
+    TrayUnshown(io::Error),
+    /// The tray's icon shows again after the taskbar refused it.
+    TrayShown,
+    /// Explorer started again (`TaskbarCreated`): the tray's icon is added
+    /// afresh.
+    TrayRestarted,
     /// A message the thread does not act on, by its number: what woke it.
     Other(u32),
     /// The thread left its message loop and is about to end; always the
@@ -165,7 +179,16 @@ pub struct MessageThread {
 /// Where the runtime reaches the message thread. Cheap to clone and to
 /// send to another thread.
 #[derive(Clone)]
-pub struct Remote(Arc<Mutex<Option<Window>>>);
+pub struct Remote(Arc<Shared>);
+
+/// What the runtime and the thread share.
+struct Shared {
+    /// The window, until it is destroyed.
+    window: Mutex<Option<Window>>,
+    /// The tray's content not yet taken by the thread: while it is there,
+    /// a refresh is on its way.
+    tray: Mutex<Option<TrayContent>>,
+}
 
 /// A window handle that may cross threads: Windows lets any thread post to
 /// any window.
@@ -191,7 +214,10 @@ impl MessageThread {
         handler: impl FnMut(WindowEvent) + Send + 'static,
         ready_within: Duration,
     ) -> io::Result<MessageThread> {
-        let remote = Remote(Arc::new(Mutex::new(None)));
+        let remote = Remote(Arc::new(Shared {
+            window: Mutex::new(None),
+            tray: Mutex::new(None),
+        }));
         let (ready, readiness) = mpsc::channel();
         let (finished, done) = mpsc::channel();
         let shared = remote.clone();
@@ -250,11 +276,28 @@ impl Remote {
         self.post(WM_QUIT_REQUEST, 0, 0)
     }
 
+    /// Shows `content` in the tray: the thread takes the latest content
+    /// when it gets to it, so content given meanwhile replaces this, and
+    /// one post is on its way at most.
+    ///
+    /// # Errors
+    /// The window is gone ([`io::ErrorKind::NotConnected`]), or Windows
+    /// refused the post; nothing is kept then, and the next content posts
+    /// again.
+    pub fn show_tray(&self, content: TrayContent) -> io::Result<()> {
+        let mut slot = self.0.tray.lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.replace(content).is_some() {
+            return Ok(());
+        }
+        self.post(WM_TRAY_REFRESH, 0, 0)
+            .inspect_err(|_| *slot = None)
+    }
+
     /// Posts `message` to the window, under the lock that its destruction
     /// takes.
     #[allow(unsafe_code)]
-    fn post(&self, message: u32, wparam: WPARAM, lparam: LPARAM) -> io::Result<()> {
-        let window = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+    pub(crate) fn post(&self, message: u32, wparam: WPARAM, lparam: LPARAM) -> io::Result<()> {
+        let window = self.0.window.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(Window(hwnd)) = *window else {
             return Err(io::Error::new(
                 io::ErrorKind::NotConnected,
@@ -325,6 +368,9 @@ fn run(
             None
         }
     };
+    // The icon goes however `serve` ended, a panic included; after the
+    // window's own end this finds nothing left to remove.
+    tray::remove();
     // An `Ended` after a refused start would reach a controller that never
     // runs; only a thread that was ready reports it.
     if let Some(failure) = failure {
@@ -351,7 +397,19 @@ fn serve(
             return None;
         }
     };
-    *shared.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(Window(hwnd));
+    // A tray with no thread for its icon would never show it: the start
+    // fails, and leaves no window behind.
+    if let Err(err) = tray::register(hwnd, shared.clone()) {
+        destroy(hwnd);
+        unregister_class(class);
+        let _ = ready.send(Err(err));
+        return None;
+    }
+    *shared
+        .0
+        .window
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(Window(hwnd));
     // The display first: a registration that fails says so before the
     // session's first read can allow a start.
     watch_display(hwnd);
@@ -367,6 +425,7 @@ fn serve(
     // what it registered for.
     if shared
         .0
+        .window
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .is_some()
@@ -511,6 +570,9 @@ unsafe extern "system" fn window_procedure(
 /// What the window answers to `message`; `None` leaves it to Windows'
 /// default.
 fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+    if let Some(result) = tray::answer(hwnd, message, wparam, lparam) {
+        return Some(result);
+    }
     match message {
         // A notice the program does not follow is still a wake, reported
         // as such.
@@ -549,16 +611,20 @@ fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LR
             watch_session(hwnd);
             Some(0)
         }
+        // An open menu is closed first; the window goes once its loop ends.
         WM_QUIT_REQUEST => {
-            destroy(hwnd);
+            if !tray::quit_waits_for_menu() {
+                destroy(hwnd);
+            }
             Some(0)
         }
         WM_DESTROY => {
             unwatch(hwnd);
             Some(0)
         }
+        // What the user's hand moved around the tray's menu is no wake.
         other => {
-            if READY.get() {
+            if READY.get() && !tray::quiet(other) {
                 emit(WindowEvent::Other(other));
             }
             None
@@ -684,6 +750,7 @@ fn watch_display(hwnd: HWND) {
 fn unwatch(hwnd: HWND) {
     READY.set(false);
     kill_retry_timer(hwnd);
+    tray::remove();
     if SESSION_WATCHED.replace(false) {
         // SAFETY: `hwnd` is still alive (this runs in its `WM_DESTROY`) and
         // was registered. A failure leaves a registration that ends with
@@ -698,7 +765,14 @@ fn unwatch(hwnd: HWND) {
     }
     SHARED.with_borrow(|shared| {
         if let Some(shared) = shared {
-            *shared.0.lock().unwrap_or_else(PoisonError::into_inner) = None;
+            *shared
+                .0
+                .window
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = None;
+            // Content no refresh will take: the next is told the window is
+            // gone. Any `show_tray` that posted finished under this lock.
+            *shared.0.tray.lock().unwrap_or_else(PoisonError::into_inner) = None;
         }
     });
     // SAFETY: no arguments but the exit code.
@@ -706,7 +780,7 @@ fn unwatch(hwnd: HWND) {
 }
 
 #[allow(unsafe_code)]
-fn destroy(hwnd: HWND) {
+pub(crate) fn destroy(hwnd: HWND) {
     // What Windows sends while it takes the window apart is not news.
     READY.set(false);
     // SAFETY: `hwnd` is this thread's window, destroyed on the thread that
@@ -717,7 +791,7 @@ fn destroy(hwnd: HWND) {
 /// Hands `event` to the handler, after any that arrived while it was busy.
 /// A message that arrives while the handler runs (only one sent by Windows
 /// from inside a call the handler makes) waits its turn.
-fn emit(event: WindowEvent) {
+pub(crate) fn emit(event: WindowEvent) {
     PENDING.with_borrow_mut(|pending| pending.push_back(event));
     let Some(handler) = HANDLER.with_borrow_mut(Option::take) else {
         // The handler is busy further up this thread's stack, which drains
@@ -730,6 +804,20 @@ fn emit(event: WindowEvent) {
             handler(next);
         }
     }
+}
+
+/// The tray's content the runtime gave, if any is waiting.
+pub(crate) fn take_tray_content() -> Option<TrayContent> {
+    SHARED.with_borrow(|shared| {
+        shared.as_ref().and_then(|shared| {
+            shared
+                .0
+                .tray
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+        })
+    })
 }
 
 /// The handler while it is called: put back when this is dropped, a panic
@@ -753,4 +841,4 @@ fn panicked(panic: &(dyn Any + Send)) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

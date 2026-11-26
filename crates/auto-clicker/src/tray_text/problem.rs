@@ -7,6 +7,7 @@ use auto_clicker_core::message::{
     ConfigProblem, InputFailure, NoOnScreen, NoPointer, NoPositions, NoScreens, Problem,
 };
 
+use super::NO_CONFIG_DIR;
 use super::lines::key_name;
 
 pub(super) fn swedish(problem: &Problem) -> String {
@@ -81,9 +82,7 @@ fn no_pointer(why: NoPointer) -> &'static str {
 
 fn config(problem: &ConfigProblem) -> String {
     match problem {
-        ConfigProblem::NoDirectory => {
-            "ingen konfigurationsmapp: varken XDG_CONFIG_HOME eller HOME är satt".to_owned()
-        }
+        ConfigProblem::NoDirectory => format!("ingen konfigurationsmapp: {NO_CONFIG_DIR}"),
         ConfigProblem::Unreadable { file, why } => format!("{file}: filen kunde inte läsas: {why}"),
         ConfigProblem::Invalid {
             file,

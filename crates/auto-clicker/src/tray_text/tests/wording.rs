@@ -6,14 +6,14 @@ use auto_clicker_core::hotkeys::{Refusal, Unavailable};
 use auto_clicker_core::input::Key;
 use auto_clicker_core::message::{
     ConfigProblem, Hindrance, InputFailure, Notice, PlayStart, PointScreens, Problem, Quoted,
-    Saving, Start, Stop,
+    SaveFailure, Saving, Start, Stop,
 };
 use auto_clicker_core::playback::Fallback;
 
 use super::super::{details, notice, problem};
 use super::samples::*;
 use super::view;
-use crate::linux::tray_text::Language;
+use crate::tray_text::Language;
 use auto_clicker_core::controller::Activity;
 
 #[test]
@@ -85,20 +85,55 @@ fn the_tooltip_speaks_the_language_line_by_line() {
     shown.playing = Some(generated(None));
     shown.notice = Some(Notice::NothingToPlay);
     shown.problems = vec![Problem::Blocked(Blocked::Locked)];
-    assert_eq!(details(&shown, Language::English), shown.details());
+    // Windows has one route of each kind, and names none.
+    let routes = shown.routes.line();
+    let english: Vec<String> = shown
+        .details()
+        .into_iter()
+        .filter(|line| cfg!(target_os = "linux") || *line != routes)
+        .collect();
+    assert_eq!(details(&shown, Language::English), english);
+    let swedish: Vec<&str> = [
+        "Klickar med vänsterknappen var 100 ms",
+        "Ctrl+Shift+F6 startar och stoppar klickandet",
+        "Ctrl+Shift+F7 startar inspelningen, och stoppar och sparar den",
+        "Meta+P spelar upp den aktuella inspelningen en gång, och stoppar den",
+        "Klickar via /dev/uinput, snabbtangenter från tangentborden",
+        "En inspelning stoppas av sig själv efter 60 minuter",
+        "Spelar upp Inspelning 2026-11-09 18:04:05",
+        "Inget att spela upp: inga inspelningar än",
+        "Kan inte börja klicka: skärmen är låst",
+    ]
+    .into_iter()
+    .filter(|line| cfg!(target_os = "linux") || !line.starts_with("Klickar via"))
+    .collect();
+    assert_eq!(details(&shown, Language::Swedish), swedish);
+}
+
+#[test]
+fn a_missing_folder_is_named_as_each_system_names_it() {
+    let (config, data) = if cfg!(windows) {
+        (
+            "APPDATA är inte satt till en absolut mapp",
+            "LOCALAPPDATA är inte satt till en absolut mapp",
+        )
+    } else {
+        (
+            "varken XDG_CONFIG_HOME eller HOME är satt",
+            "varken XDG_DATA_HOME eller HOME är satt",
+        )
+    };
     assert_eq!(
-        details(&shown, Language::Swedish),
-        [
-            "Klickar med vänsterknappen var 100 ms",
-            "Ctrl+Shift+F6 startar och stoppar klickandet",
-            "Ctrl+Shift+F7 startar inspelningen, och stoppar och sparar den",
-            "Meta+P spelar upp den aktuella inspelningen en gång, och stoppar den",
-            "Klickar via /dev/uinput, snabbtangenter från tangentborden",
-            "En inspelning stoppas av sig själv efter 60 minuter",
-            "Spelar upp Inspelning 2026-11-09 18:04:05",
-            "Inget att spela upp: inga inspelningar än",
-            "Kan inte börja klicka: skärmen är låst",
-        ]
+        problem::swedish(&Problem::Config(ConfigProblem::NoDirectory)),
+        format!("ingen konfigurationsmapp: {config}")
+    );
+    let failed = Notice::Recorded {
+        stop: None,
+        saving: Saving::Failed(SaveFailure::NoDataDirectory),
+    };
+    assert_eq!(
+        notice::swedish(&failed),
+        format!("Inspelningen kunde inte sparas: ingen datamapp: {data}")
     );
 }
 

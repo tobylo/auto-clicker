@@ -20,6 +20,8 @@ use auto_clicker_core::controller::{Blocked, Message, SessionFacts};
 use auto_clicker_core::log;
 use tokio::sync::mpsc;
 
+use super::tray::Commands;
+
 /// How long the thread waits before sleep for the controller to let go of
 /// everything. Windows suspends about two seconds after it tells programs.
 pub const RELEASE_BEFORE_SLEEP: Duration = Duration::from_secs(1);
@@ -62,12 +64,18 @@ impl Mark {
 }
 
 /// The message thread's handler: it folds what Windows says into session
-/// facts and sends the controller what changed.
+/// facts and sends the controller what changed, and sends it what the
+/// tray's menu asks for.
 pub struct Notices {
     session: Session,
     send: mpsc::UnboundedSender<Message>,
     /// The last sleep notice the controller let go for, or [`ENDED`].
     released: Arc<Mark>,
+    /// The menu's commands, shared with the tray that draws it.
+    commands: Commands,
+    /// Whether the taskbar refuses the icon since it last showed: each try
+    /// is reported, and only the first is logged.
+    icon_refused: bool,
 }
 
 impl Notices {
@@ -76,13 +84,23 @@ impl Notices {
             session: Session::default(),
             send,
             released,
+            commands: Commands::default(),
+            icon_refused: false,
         }
+    }
+
+    /// The menu's commands, for the tray to draw the menu with.
+    pub fn commands(&self) -> Commands {
+        self.commands.clone()
     }
 
     /// Handles one event from the message thread. The controller is told,
     /// and any wait is made, before anything is logged: a log write never
     /// holds up a stop.
     pub fn handle(&mut self, event: WindowEvent) {
+        if self.tray(&event) {
+            return;
+        }
         match &event {
             WindowEvent::EndSession => {
                 self.send(Message::Quit);
@@ -147,6 +165,42 @@ impl Notices {
                 }
             }
         }
+    }
+
+    /// Handles `event` if it is the tray's; whether it was. Hovering and
+    /// clicking the icon is the user's hand, not a wake, and is not logged.
+    fn tray(&mut self, event: &WindowEvent) -> bool {
+        match event {
+            // A stop chosen from the menu trims the trip from the click
+            // that opened it, as on Linux.
+            WindowEvent::TrayMenuOpening => self.send(Message::MenuOpened),
+            WindowEvent::TrayChosen(command) => {
+                if let Some(message) = self.commands.message(*command) {
+                    self.send(message);
+                }
+            }
+            WindowEvent::TrayMenuFailed(err) => {
+                log::line(format_args!(
+                    "auto-clicker: the tray's menu could not open: {err}"
+                ));
+            }
+            WindowEvent::TrayUnshown(err) => {
+                if !std::mem::replace(&mut self.icon_refused, true) {
+                    log::line(format_args!(
+                        "auto-clicker: the tray icon is not shown: {err}; trying again"
+                    ));
+                }
+            }
+            WindowEvent::TrayShown => {
+                self.icon_refused = false;
+                log::line(format_args!("auto-clicker: the tray icon is shown again"));
+            }
+            WindowEvent::TrayRestarted => log::line(format_args!(
+                "auto-clicker: heard Explorer start; the tray icon is added again"
+            )),
+            _ => return false,
+        }
+        true
     }
 
     fn send(&self, message: Message) {

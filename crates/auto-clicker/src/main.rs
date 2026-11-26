@@ -6,6 +6,9 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod config;
+mod tray_icon;
+mod tray_menu;
+mod tray_text;
 
 #[cfg(target_os = "linux")]
 mod linux;

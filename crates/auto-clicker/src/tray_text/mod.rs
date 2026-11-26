@@ -1,8 +1,8 @@
-//! What the tray shows, in the user's language: the menu labels, the title
-//! line and the tooltip's lines, notices and problems. The menu is built
-//! in English; [`label`] gives each label in the language shown. Core
-//! gives the rest as values, whose English is their `Display`; the
-//! Swedish forms are here, one module per family of messages.
+//! What the tray shows on either system, in the user's language: the menu
+//! labels, the title line and the tooltip's lines, notices and problems.
+//! The menu is built in English; [`label`] gives each label in the language
+//! shown. Core gives the rest as values, whose English is their `Display`;
+//! the Swedish forms are here, one module per family of messages.
 
 mod lines;
 mod notice;
@@ -21,6 +21,10 @@ const SWEDISH: &[(&str, &str)] = &[
     ("Play", "Spela upp"),
     ("Stop playing", "Sluta spela upp"),
     ("Settings", "Inställningar"),
+    (
+        "Settings (not on Windows yet)",
+        "Inställningar (finns inte på Windows än)",
+    ),
     ("Quit", "Avsluta"),
     ("No recordings yet", "Inga inspelningar än"),
     (
@@ -34,6 +38,22 @@ const SWEDISH: &[(&str, &str)] = &[
     ("Record (needs a restart)", "Spela in (kräver en omstart)"),
     ("Record (movement only)", "Spela in (bara rörelser)"),
 ];
+
+/// Why there is no config folder, in Swedish, as core's `NO_CONFIG_DIR`
+/// says it in English on each system.
+#[cfg(unix)]
+const NO_CONFIG_DIR: &str = "varken XDG_CONFIG_HOME eller HOME är satt";
+#[cfg(windows)]
+const NO_CONFIG_DIR: &str = "APPDATA är inte satt till en absolut mapp";
+/// Why there is no data folder, in Swedish, as core's `NO_DATA_DIR`.
+#[cfg(unix)]
+const NO_DATA_DIR: &str = "varken XDG_DATA_HOME eller HOME är satt";
+#[cfg(windows)]
+const NO_DATA_DIR: &str = "LOCALAPPDATA är inte satt till en absolut mapp";
+
+/// Whether the tooltip names the routes: Linux picks its routes at start,
+/// and Windows has one route of each kind, so it names none.
+const SHOWS_ROUTES: bool = cfg!(target_os = "linux");
 
 /// How a recording's label starts, and its Swedish form.
 const RECORDING: (&str, &str) = ("Recording ", "Inspelning ");
@@ -56,7 +76,12 @@ pub fn label(english: &str, language: Language) -> String {
 /// The tooltip's lines for `view` in `language`.
 pub fn details(view: &View, language: Language) -> Vec<String> {
     match language {
-        Language::English => view.details(),
+        Language::English => {
+            let routes = view.routes.line();
+            let mut lines = view.details();
+            lines.retain(|line| SHOWS_ROUTES || *line != routes);
+            lines
+        }
         Language::Swedish => lines::details(view),
     }
 }
