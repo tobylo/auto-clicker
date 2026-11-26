@@ -180,6 +180,29 @@ fn every_pixel_core_names_is_the_pixel_windows_lands_on() {
     }
 }
 
+/// Core's position for the middle of pixel `offset`, as
+/// `Layout::absolute_at` gives it for a floored recording's point.
+fn middle(offset: u32, size: u32) -> u16 {
+    let scaled = ((f64::from(offset) + 0.5) * 65_536.0 / f64::from(size)).round();
+    u16::try_from(scaled as u64).unwrap()
+}
+
+#[test]
+fn every_pixels_middle_lands_on_that_pixel() {
+    // Two 1920 px screens side by side: the middle of 1919 stays on the
+    // left one, and of 1920 on the right one.
+    for size in [768, 1080, 1920, 3840, 7680, 16_384] {
+        for pixel in 0..size {
+            let sent = snap(middle(pixel, size), size);
+            assert_eq!(
+                lands(sent, 0, size),
+                pixel.cast_signed(),
+                "middle of {pixel} of {size}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_desktop_with_a_negative_origin_lands_on_the_pixel_meant() {
     // A 1920x1080 monitor left of and above a primary 2560x1440 one: the

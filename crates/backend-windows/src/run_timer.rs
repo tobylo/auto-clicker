@@ -21,6 +21,7 @@
 mod display;
 mod throttling;
 
+use std::convert::Infallible;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -57,9 +58,8 @@ pub(crate) struct WaitableTimer {
     /// The number the next new deadline gets.
     next: u64,
     thread: Option<JoinHandle<()>>,
-    /// Sent on once the thread is ready, and closed when it ends, however
-    /// it ends.
-    done: mpsc::Receiver<()>,
+    /// Closed when the thread ends, however it ends.
+    done: mpsc::Receiver<Infallible>,
     _throttling: Throttling,
 }
 
@@ -74,6 +74,9 @@ struct Shared {
 
 #[derive(Default)]
 struct State {
+    /// Whether the thread has started and asked Windows to keep the
+    /// display on: no wait completes before, so neither does a press.
+    ready: bool,
     /// The latest deadline the run asked for.
     request: Option<Request>,
     /// The number of the latest request the timer fired for; 0 for none.
@@ -98,7 +101,9 @@ impl Shared {
 }
 
 impl WaitableTimer {
-    /// Creates the timer and starts its thread.
+    /// Creates the timer and starts its thread. Its first wait completes
+    /// only once the thread is ready, which a stop or a shutdown can
+    /// interrupt like any other wait.
     ///
     /// # Errors
     /// When Windows cannot create the timer, its events or its thread.
@@ -109,33 +114,28 @@ impl WaitableTimer {
             changed: create_event(false)?,
             state: Mutex::default(),
         });
-        let (finished, done) = mpsc::channel::<()>();
+        let (finished, done) = mpsc::channel::<Infallible>();
         let served = Arc::clone(&shared);
         let thread = thread::Builder::new()
             .name("run timer".to_owned())
             .spawn(move || {
                 // Dropped last, on any way out: the joiner hears of the end.
-                let finished = finished;
+                let _finished = finished;
                 #[cfg(test)]
                 let _live = tests::Live::new();
+                #[cfg(test)]
+                tests::slow_start();
                 let _display = DisplayOn::request();
-                // The starter waits for this, so the display is kept on
-                // before the run's first press.
-                let _ = finished.send(());
+                wake(served.lock().make_ready());
                 serve_until_stopped(&served, &timer);
             })?;
-        let started = WaitableTimer {
+        Ok(WaitableTimer {
             shared,
             next: 1,
             thread: Some(thread),
             done,
             _throttling: Throttling::opt_out(),
-        };
-        match started.done.recv_timeout(JOIN_WITHIN) {
-            Ok(()) => Ok(started),
-            // Dropping `started` ends the thread, should it start later.
-            Err(_) => Err(io::Error::other("the run timer's thread did not start")),
-        }
+        })
     }
 }
 
@@ -147,8 +147,12 @@ impl RunTimer for WaitableTimer {
     ) -> Poll<Result<(), InputError>> {
         let deadline = deadline.into_std();
         let mut state = self.shared.lock();
-        if let Some((kind, why)) = &state.failed {
-            return Poll::Ready(Err(InputError::Timer(io::Error::new(*kind, why.clone()))));
+        if let Some(err) = state.error() {
+            return Poll::Ready(Err(err));
+        }
+        if !state.ready {
+            state.wake_later(cx.waker());
+            return Poll::Pending;
         }
         if deadline <= Instant::now() {
             return Poll::Ready(Ok(()));
@@ -160,9 +164,32 @@ impl RunTimer for WaitableTimer {
         state.wake_later(cx.waker());
         Poll::Pending
     }
+
+    fn poll_failed(&mut self, cx: &mut Context<'_>) -> Poll<InputError> {
+        let mut state = self.shared.lock();
+        match state.error() {
+            Some(err) => Poll::Ready(err),
+            None => {
+                state.wake_later(cx.waker());
+                Poll::Pending
+            }
+        }
+    }
 }
 
 impl State {
+    /// Why the thread stopped serving, as the run's error, once it has.
+    fn error(&self) -> Option<InputError> {
+        let (kind, why) = self.failed.as_ref()?;
+        Some(InputError::Timer(io::Error::new(*kind, why.clone())))
+    }
+
+    /// Marks the thread ready, returning the task to wake.
+    fn make_ready(&mut self) -> Option<Waker> {
+        self.ready = true;
+        self.waker.take()
+    }
+
     /// The number of the request for `deadline`: the current one, or a new
     /// one, numbered from `next` and handed to the thread through `changed`.
     fn ask(
@@ -203,11 +230,12 @@ impl Drop for WaitableTimer {
             ));
         }
         match self.done.recv_timeout(JOIN_WITHIN) {
+            Ok(never) => match never {},
             Err(mpsc::RecvTimeoutError::Timeout) => log::line(format_args!(
                 "auto-clicker: the run timer's thread did not end within {JOIN_WITHIN:?}; \
                  it is left to end with the program"
             )),
-            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
                 if let Some(thread) = self.thread.take() {
                     // A panic was already caught and reported by the thread.
                     let _ = thread.join();
@@ -228,11 +256,21 @@ fn serve_until_stopped(shared: &Shared, timer: &OwnedHandle) {
             "the run timer's thread panicked".to_owned(),
         ),
     };
+    fail(shared, failure);
+}
+
+/// Records why the thread stopped serving and wakes the task, whatever it
+/// waits for.
+fn fail(shared: &Shared, failure: (io::ErrorKind, String)) {
     let waker = {
         let mut state = shared.lock();
         state.failed = Some(failure);
         state.waker.take()
     };
+    wake(waker);
+}
+
+fn wake(waker: Option<Waker>) {
     if let Some(waker) = waker {
         waker.wake();
     }
@@ -270,9 +308,7 @@ fn fire(shared: &Shared, request: Request) {
         state.fired = request.number;
         state.waker.take()
     };
-    if let Some(waker) = waker {
-        waker.wake();
-    }
+    wake(waker);
 }
 
 #[allow(unsafe_code)]

@@ -96,7 +96,8 @@ where
 {
     /// Waits until `deadline`, or forever when there is none (a deadline too
     /// far away to represent). Both signals win over a deadline that is due
-    /// at the same moment. Fails when the run's timer does.
+    /// at the same moment. Fails when the run's timer does, with or without
+    /// a deadline.
     pub(crate) async fn wait_until(
         &mut self,
         deadline: Option<Instant>,
@@ -104,7 +105,7 @@ where
         let timer = &mut *self.timer;
         let due = poll_fn(|cx| match deadline {
             Some(deadline) => timer.poll_until(cx, deadline),
-            None => Poll::Pending,
+            None => timer.poll_failed(cx).map(Err),
         });
         tokio::select! {
             biased;
@@ -114,12 +115,16 @@ where
         }
     }
 
-    /// Waits for stop or shutdown.
-    pub(crate) async fn until_signal(&mut self) -> Ended {
+    /// Waits for stop or shutdown. Fails when the run's timer does, so a
+    /// hold whose timer stopped working ends and lets go.
+    pub(crate) async fn until_signal(&mut self) -> Result<Ended, InputError> {
+        let timer = &mut *self.timer;
+        let failed = poll_fn(|cx| timer.poll_failed(cx));
         tokio::select! {
             biased;
-            () = &mut self.shutdown => Ended::ShutDown,
-            () = &mut self.stop => Ended::Stopped,
+            () = &mut self.shutdown => Ok(Ended::ShutDown),
+            () = &mut self.stop => Ok(Ended::Stopped),
+            err = failed => Err(err),
         }
     }
 

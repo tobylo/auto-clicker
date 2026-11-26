@@ -5,8 +5,9 @@ use std::future::{Future, pending, poll_fn};
 use std::num::NonZeroU32;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, MutexGuard};
+use std::task::Wake;
 
 use auto_clicker_core::clicker::{ClickerSettings, Interval, Mode, Repeat, run};
 use auto_clicker_core::input::fake::{Call, FakeBackend, FakeLog};
@@ -37,6 +38,18 @@ impl Drop for Live {
     }
 }
 
+/// How long a timer thread waits before it asks to keep the display on and
+/// is ready, in ms; 0 in all but the test that sets it.
+static SLOW_START: AtomicU64 = AtomicU64::new(0);
+
+/// Called by each timer thread as it starts.
+pub(super) fn slow_start() {
+    let wait = SLOW_START.load(Ordering::SeqCst);
+    if wait > 0 {
+        thread::sleep(ms(wait));
+    }
+}
+
 /// Taken by every test that starts a timer, so no other test's thread or
 /// opt-out is counted in its checks.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
@@ -56,9 +69,22 @@ fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
 
+/// Whether the display state can tell this program's request apart:
+/// Windows reports one state for every process, so while another program
+/// keeps the display on (a video playing, say), the checks on it are left
+/// out.
+fn display_is_ours() -> bool {
+    let ours = !display_kept_on().unwrap();
+    if !ours {
+        eprintln!("another program keeps the display on: its checks are left out");
+    }
+    ours
+}
+
 /// Nothing of a run is left: no timer thread, Windows manages throttling
-/// again, and the display is kept on only if something else asks for it.
-fn assert_idle(case: &str) {
+/// again, and, when `display` says the state is ours to check, the display
+/// is no longer kept on.
+fn assert_idle(case: &str, display: bool) {
     assert_eq!(
         LIVE.load(Ordering::SeqCst),
         0,
@@ -69,7 +95,7 @@ fn assert_idle(case: &str) {
         "{case}: still opted out"
     );
     assert!(
-        !display_kept_on().unwrap(),
+        !display || !display_kept_on().unwrap(),
         "{case}: the display is still kept on"
     );
 }
@@ -89,6 +115,7 @@ fn a_due_time_is_relative_in_100_ns_units_and_never_zero() {
 #[test]
 fn waits_until_each_deadline_and_not_before() {
     let _serial = one_at_a_time();
+    let display = display_is_ours();
     runtime().block_on(async {
         let mut timer = WaitableTimer::start().unwrap();
         let start = tokio::time::Instant::now();
@@ -101,7 +128,7 @@ fn waits_until_each_deadline_and_not_before() {
             assert!(woke < deadline + ms(500), "woke {:?} late", woke - deadline);
         }
     });
-    assert_idle("after the waits");
+    assert_idle("after the waits", display);
 }
 
 #[test]
@@ -128,12 +155,64 @@ fn only_the_latest_deadline_completes_a_wait() {
 #[test]
 fn a_deadline_already_past_is_ready_at_once() {
     let _serial = one_at_a_time();
+    runtime().block_on(async {
+        let mut timer = WaitableTimer::start().unwrap();
+        // The first wait waits for the thread.
+        wait(&mut timer, tokio::time::Instant::now()).await;
+        let waker = std::task::Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        let past = tokio::time::Instant::now();
+        thread::sleep(ms(1));
+        assert!(timer.poll_until(&mut cx, past).is_ready());
+    });
+}
+
+/// Counts its wakes.
+#[derive(Default)]
+struct Wakes(AtomicUsize);
+
+impl Wake for Wakes {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn no_wait_completes_before_the_thread_is_ready() {
+    let _serial = one_at_a_time();
+    SLOW_START.store(300, Ordering::SeqCst);
     let mut timer = WaitableTimer::start().unwrap();
-    let waker = std::task::Waker::noop();
-    let mut cx = Context::from_waker(waker);
+    SLOW_START.store(0, Ordering::SeqCst);
+    let wakes = Arc::new(Wakes::default());
+    let waker = Arc::clone(&wakes).into();
+    let mut cx = Context::from_waker(&waker);
     let past = tokio::time::Instant::now();
-    thread::sleep(ms(1));
+    // Already due, but the thread has not asked for the display yet.
+    assert!(timer.poll_until(&mut cx, past).is_pending());
+    let until = Instant::now() + Duration::from_secs(5);
+    while wakes.0.load(Ordering::SeqCst) == 0 && Instant::now() < until {
+        thread::sleep(ms(10));
+    }
+    // Woken once ready, and ready then.
+    assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
     assert!(timer.poll_until(&mut cx, past).is_ready());
+}
+
+#[test]
+fn a_failed_thread_wakes_a_wait_without_a_deadline_with_the_error() {
+    let _serial = one_at_a_time();
+    let mut timer = WaitableTimer::start().unwrap();
+    let wakes = Arc::new(Wakes::default());
+    let waker = Arc::clone(&wakes).into();
+    let mut cx = Context::from_waker(&waker);
+    assert!(timer.poll_failed(&mut cx).is_pending());
+    fail(&timer.shared, (io::ErrorKind::Other, "broken".to_owned()));
+    assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+    let failed = timer.poll_failed(&mut cx);
+    assert!(
+        matches!(&failed, Poll::Ready(InputError::Timer(err)) if err.to_string() == "broken"),
+        "{failed:?}"
+    );
 }
 
 // Every way a run ends
@@ -359,11 +438,12 @@ fn cases() -> [Case; 6] {
 #[test]
 fn every_way_a_run_ends_leaves_no_thread_and_hands_throttling_back() {
     let _serial = one_at_a_time();
-    assert_idle("before the runs");
+    let display = display_is_ours();
+    assert_idle("before the runs", display);
     for case in cases() {
         let name = case.name;
         let ran = run_case(case.opened, &case.settings, case.signals, case.drop_after);
-        assert_idle(name);
+        assert_idle(name, display);
         // Opted out and the display kept on during the run, at every press.
         assert!(!ran.during.is_empty(), "{name}: nothing pressed");
         assert!(
@@ -386,4 +466,17 @@ fn every_way_a_run_ends_leaves_no_thread_and_hands_throttling_back() {
             .and_then(|result| result.as_ref().ok().copied());
         assert_eq!(ended, case.ended, "{name}");
     }
+}
+
+#[test]
+fn a_stop_while_the_thread_starts_ends_the_run_with_nothing_pressed() {
+    let _serial = one_at_a_time();
+    SLOW_START.store(300, Ordering::SeqCst);
+    let slow = clicks(Duration::from_secs(10), None);
+    let ran = run_case(open(false), &slow, signals(after(ms(50)), never()), None);
+    SLOW_START.store(0, Ordering::SeqCst);
+
+    let ended = ran.result.and_then(Result::ok);
+    assert_eq!((ended, ran.calls), (Some(Ended::Stopped), Vec::new()));
+    assert!(ran.took < Duration::from_secs(1), "took {:?}", ran.took);
 }

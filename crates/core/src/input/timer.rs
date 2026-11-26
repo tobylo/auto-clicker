@@ -25,6 +25,11 @@ pub trait RunTimer: Send {
         cx: &mut Context<'_>,
         deadline: Instant,
     ) -> Poll<Result<(), InputError>>;
+
+    /// Ready with the error once the timer stopped working, for a wait with
+    /// no deadline (a hold): the run then ends as with any error. A timer
+    /// that cannot fail stays pending.
+    fn poll_failed(&mut self, cx: &mut Context<'_>) -> Poll<InputError>;
 }
 
 /// The run timer of Linux's backends and of every test backend: tokio's
@@ -58,6 +63,10 @@ impl RunTimer for TokioTimer {
             None => self.sleep.insert(Box::pin(sleep_until(deadline))),
         };
         sleep.as_mut().poll(cx).map(Ok)
+    }
+
+    fn poll_failed(&mut self, _cx: &mut Context<'_>) -> Poll<InputError> {
+        Poll::Pending
     }
 }
 

@@ -78,7 +78,7 @@ export global Texts {
     public pure function input-allowed-now() -> string { @tr("allowed; press Start again") }
     public pure function input-portal(why: string) -> string { @tr("the remote input portal failed: {}", why) }
     public pure function input-session-lost(why: string) -> string { @tr("the desktop ended remote input: {}", why) }
-    public pure function input-timer(why: string) -> string { @tr("could not start the run's timer: {}", why) }
+    public pure function input-timer(why: string) -> string { @tr("the run's timer failed: {}", why) }
     public pure function hotkeys-no-keyboard() -> string { @tr("hotkeys are unavailable: no keyboard found") }
     public pure function hotkeys-no-permission() -> string { @tr("hotkeys are unavailable: keyboards cannot be read; add your user to the input group and log in again, or set hotkeys = \"portal\" under [input] for the desktop's shortcuts") }
     public pure function hotkeys-read-failed(why: string) -> string { @tr("hotkeys are unavailable: a keyboard cannot be read: {}", why) }

@@ -106,14 +106,15 @@ where
         }
     }
 
-    /// Presses `item` once and holds it until a signal.
+    /// Presses `item` once and holds it until a signal, or until the run's
+    /// timer fails.
     async fn hold(&mut self, item: Held) -> Result<Ended, InputError> {
         if let Some(ended) = self.waiter.wait_until(Some(Instant::now())).await? {
             return Ok(ended);
         }
         self.aim(item)?;
         self.press(item)?;
-        Ok(self.waiter.until_signal().await)
+        self.waiter.until_signal().await
     }
 
     /// One action per interval, until the repeat count or a signal.

@@ -7,7 +7,7 @@
 
 mod receiver;
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::num::NonZeroU32;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
@@ -15,7 +15,7 @@ use std::thread;
 use std::time::Duration;
 
 use auto_clicker_core::clicker::{ClickerSettings, Interval, Mode, Repeat, run};
-use auto_clicker_core::input::{AbsolutePosition, Button, Input, Key, PressState};
+use auto_clicker_core::input::{AbsolutePosition, Button, Input, Key};
 use auto_clicker_core::run::{Ended, Signals};
 use windows_sys::Win32::Foundation::POINT;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -104,10 +104,13 @@ impl Receiver {
 }
 
 impl Drop for Receiver {
+    /// Ends a receiver still running, after a failed test included, so its
+    /// window does not stay in front of the next test.
     fn drop(&mut self) {
-        if let Some(mut input) = self.input.take() {
-            let _ = input.flush();
+        drop(self.input.take());
+        if !matches!(self.child.try_wait(), Ok(Some(_))) {
             let _ = self.child.kill();
+            let _ = self.child.wait();
         }
     }
 }
@@ -135,7 +138,7 @@ fn position(offset: u32, size: u32) -> u16 {
 }
 
 /// Moves the pointer to the middle of the receiver's window.
-fn aim_at_receiver(output: &mut Output) {
+fn aim_at_receiver(output: &mut Input<Output>) {
     let (x, y, width, height) = receiver::RECT;
     let (screen_width, screen_height) = screen();
     let middle = AbsolutePosition {
@@ -146,8 +149,10 @@ fn aim_at_receiver(output: &mut Output) {
     thread::sleep(Duration::from_millis(100));
 }
 
-fn output() -> Output {
-    Output { _private: () }
+/// Output behind the guard, so a press whose release fails is still let
+/// go when the test ends, however it ends.
+fn output() -> Input<Output> {
+    Output::open()
 }
 
 /// The marker as the receiver prints extra information.
@@ -197,8 +202,8 @@ fn every_named_key_reaches_a_window_as_itself_with_the_marker() {
     let mut output = output();
     for &key in &keys {
         for _ in 0..taps(key) {
-            output.key(key, PressState::Down).unwrap();
-            output.key(key, PressState::Up).unwrap();
+            output.press_key(key).unwrap();
+            output.release_key(key).unwrap();
             thread::sleep(Duration::from_millis(5));
         }
     }
@@ -219,8 +224,8 @@ fn every_button_and_the_wheel_reach_a_window_with_the_marker() {
     let mut output = output();
     aim_at_receiver(&mut output);
     for button in Button::ALL {
-        output.button(button, PressState::Down).unwrap();
-        output.button(button, PressState::Up).unwrap();
+        output.press_button(button).unwrap();
+        output.release_button(button).unwrap();
         thread::sleep(Duration::from_millis(20));
     }
     output.scroll(1).unwrap();
@@ -278,7 +283,7 @@ fn relative_moves_move_the_pointer_their_way() {
 
 /// Sends `position` and returns where the pointer landed once it moved, or
 /// where it is after a short wait.
-fn land(output: &mut Output, position: AbsolutePosition, from: (i32, i32)) -> (i32, i32) {
+fn land(output: &mut Input<Output>, position: AbsolutePosition, from: (i32, i32)) -> (i32, i32) {
     output.move_absolute(position).unwrap();
     for _ in 0..20 {
         let now = cursor();

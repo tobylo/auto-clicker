@@ -602,6 +602,22 @@ async fn a_timer_that_fails_ends_the_run_and_releases() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_timer_that_fails_during_a_hold_ends_it_and_releases() {
+    for mode in [Mode::HoldButton, Mode::HoldKey] {
+        let (input, calls, log) = open();
+        log.break_timers();
+
+        // The stop only bounds the test: the failure ends the hold first.
+        let hold = settings(mode, 100);
+        let outcome = run_on(input, &calls, hold, stop_after(ms(1000))).await;
+
+        let failed = matches!(outcome.result, Err(InputError::Timer(_)));
+        let actual = (failed, outcome.calls.len(), outcome.held);
+        assert_eq!(actual, (true, 2, Vec::new()), "{mode:?}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn every_way_a_run_ends_drops_its_timer() {
     let (input, calls, finished) = open();
     run_on(input, &calls, counted(Mode::Click, 10, 2), never()).await;

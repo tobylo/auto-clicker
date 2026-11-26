@@ -68,7 +68,7 @@ impl fmt::Display for InputFailure {
             InputFailure::AllowedNow => f.write_str("allowed; press Start again"),
             InputFailure::Portal(why) => write!(f, "the remote input portal failed: {why}"),
             InputFailure::SessionLost(why) => write!(f, "the desktop ended remote input: {why}"),
-            InputFailure::Timer(e) => write!(f, "could not start the run's timer: {e}"),
+            InputFailure::Timer(e) => write!(f, "the run's timer failed: {e}"),
         }
     }
 }

@@ -109,10 +109,7 @@ fn input_failures_read_as_before() {
             InputFailure::SessionLost(q()),
             "the desktop ended remote input: why",
         ),
-        (
-            InputFailure::Timer(q()),
-            "could not start the run's timer: why",
-        ),
+        (InputFailure::Timer(q()), "the run's timer failed: why"),
     ]);
 }
 

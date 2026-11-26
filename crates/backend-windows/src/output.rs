@@ -12,6 +12,7 @@ use std::io;
 use auto_clicker_core::input::{
     AbsolutePosition, Button, Input, InputBackend, InputError, Key, PressState, RunTimer,
 };
+use windows_sys::Win32::Foundation::SetLastError;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
     KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
@@ -150,11 +151,15 @@ fn virtual_desktop() -> Option<(u32, u32)> {
 
 /// `position` as Windows must be sent it to land on the pixel core means.
 ///
-/// Core names pixel `p` of an axis `size` pixels long by
-/// `round(p * 65536 / size)`, from the box's left or top edge. Windows
-/// truncates instead, landing value `v` at `floor(v * size / 65536)`
-/// (measured in the VM: a rounded value lands a pixel short about half the
-/// time), so each axis is sent as the smallest value that lands on `p`.
+/// A value `v` stands for the point `v * size / 65536` pixels along an axis
+/// `size` pixels long, from the box's left or top edge, and Windows
+/// truncates it, landing on `floor(v * size / 65536)`. Core names whole
+/// pixel `p` by `round(p * 65536 / size)`, which stands for a point up to
+/// half a step (`size / 131072` px) either side of `p`: truncated, it lands
+/// a pixel short about half the time (measured in the VM). So each axis is
+/// read as the pixel its point falls in once moved on by half a step, and
+/// sent as the smallest value that lands there. That keeps whole pixels on
+/// `p` and a pixel's middle (a floored recording's, `p + 0.5`) on `p` too.
 /// Measured from the box's corner, a negative origin needs nothing more.
 /// Without a size, the position goes as it is.
 fn on_pixels(position: AbsolutePosition, desktop: Option<(u32, u32)>) -> AbsolutePosition {
@@ -167,11 +172,14 @@ fn on_pixels(position: AbsolutePosition, desktop: Option<(u32, u32)>) -> Absolut
     }
 }
 
-/// One axis of [`on_pixels`]: the pixel `value` names, rounded back, and
-/// the smallest value Windows truncates onto it.
+/// One axis of [`on_pixels`]: the pixel `value` stands in, moved on by half
+/// a step, `floor((2 * value + 1) * size / 131072)`, and the smallest value
+/// Windows truncates onto it. Exact for axes under 32,768 px, where half a
+/// step stays under a quarter pixel. In `u64` it cannot overflow: both
+/// factors are below 2^32.
 fn snap(value: u16, size: u32) -> u16 {
     let size = u64::from(size.max(1));
-    let pixel = ((u64::from(value) * size + 32_768) / 65_536).min(size - 1);
+    let pixel = ((2 * u64::from(value) + 1) * size / 131_072).min(size - 1);
     let lowest = (pixel * 65_536).div_ceil(size);
     u16::try_from(lowest).unwrap_or(u16::MAX)
 }
@@ -255,6 +263,9 @@ fn marker() -> usize {
 #[allow(unsafe_code)]
 fn send(event: &INPUT) -> Result<(), InputError> {
     let size = i32::try_from(size_of::<INPUT>()).unwrap_or(i32::MAX);
+    // SAFETY: plain value. Cleared, so a refusal that sets no error is not
+    // read as an earlier call's.
+    unsafe { SetLastError(0) };
     // SAFETY: `event` points at one initialised INPUT, alive for the call,
     // and `size` is that struct's size.
     let inserted = unsafe { SendInput(1, event, size) };

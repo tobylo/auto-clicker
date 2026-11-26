@@ -421,8 +421,8 @@ msgstr "portalen för fjärrinmatning misslyckades: {}"
 msgid "the desktop ended remote input: {}"
 msgstr "skrivbordet avslutade fjärrinmatningen: {}"
 
-msgid "could not start the run's timer: {}"
-msgstr "kunde inte starta körningens timer: {}"
+msgid "the run's timer failed: {}"
+msgstr "körningens timer misslyckades: {}"
 
 msgid "hotkeys are unavailable: no keyboard found"
 msgstr "snabbtangenterna är inte tillgängliga: inget tangentbord hittades"

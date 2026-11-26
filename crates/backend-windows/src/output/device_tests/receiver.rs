@@ -1,7 +1,10 @@
 //! The receiving end of the device tests: a plain visible window in a
 //! process of its own, so the clicking process has no window, as the
-//! daemon has none. It notes every key and mouse message with its arrival
-//! time and its extra information, and prints them when its input closes.
+//! daemon has none. It notes every key and mouse message that carries the
+//! program's marker, with its arrival time and its extra information, and
+//! prints them when its input closes. Input without the marker (someone at
+//! the keyboard) is never noted: an event that lost its marker shows as
+//! missing.
 //!
 //! Lines on standard output, after the test harness's own:
 //! - `rx ready <hwnd>` once the window is in front;
@@ -28,11 +31,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::message::wide;
-use crate::output::{key_event, keys, send};
+use crate::output::{key_event, keys, marker, send};
 use auto_clicker_core::input::PressState;
 
-/// The extra information on the receiver's own taps, which it leaves out:
-/// they can arrive after it starts noting.
+/// The extra information on the receiver's own taps, which, without the
+/// marker, it leaves out: they can arrive after it starts noting.
 const OWN: usize = 0xF24;
 
 /// Where the window sits: the tests aim the pointer at its middle.
@@ -52,7 +55,7 @@ struct Noted {
 }
 
 fn note(line: impl FnOnce(u128) -> String) {
-    if extra() == OWN {
+    if extra() != marker() {
         return;
     }
     NOTED.with(|noted| {

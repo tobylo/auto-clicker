@@ -72,8 +72,9 @@ impl FakeLog {
         self.lock().ahead = Some(Ahead::Never);
     }
 
-    /// Makes later run timers fail for a deadline ahead, as a timer that
-    /// stopped working does; one already past is still ready.
+    /// Makes later run timers fail for a deadline ahead and for a wait with
+    /// none (a hold), as a timer that stopped working does; a deadline
+    /// already past is still ready.
     pub fn break_timers(&self) {
         self.lock().ahead = Some(Ahead::Fail);
     }
@@ -135,6 +136,10 @@ impl RunTimer for NotedTimer {
     ) -> Poll<Result<(), InputError>> {
         self.inner.poll_until(cx, deadline)
     }
+
+    fn poll_failed(&mut self, cx: &mut Context<'_>) -> Poll<InputError> {
+        self.inner.poll_failed(cx)
+    }
 }
 
 impl Drop for NotedTimer {
@@ -166,11 +171,21 @@ impl RunTimer for Stuck {
         }
         match self.0 {
             Ahead::Never => Poll::Pending,
-            Ahead::Fail => Poll::Ready(Err(InputError::Timer(std::io::Error::other(
-                "injected timer failure",
-            )))),
+            Ahead::Fail => Poll::Ready(Err(broken())),
         }
     }
+
+    fn poll_failed(&mut self, _cx: &mut Context<'_>) -> Poll<InputError> {
+        match self.0 {
+            Ahead::Never => Poll::Pending,
+            Ahead::Fail => Poll::Ready(broken()),
+        }
+    }
+}
+
+/// The error a broken run timer fails with.
+fn broken() -> InputError {
+    InputError::Timer(std::io::Error::other("injected timer failure"))
 }
 
 /// An input backend that records calls instead of touching a device.
