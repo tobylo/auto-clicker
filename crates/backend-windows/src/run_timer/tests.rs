@@ -198,9 +198,12 @@ fn only_the_latest_deadline_completes_a_wait() {
     let _serial = one_at_a_time();
     runtime().block_on(async {
         let mut timer = WaitableTimer::start().unwrap();
+        // Once ready, so the near deadline reaches the thread.
+        wait(&mut timer, tokio::time::Instant::now()).await;
         let start = tokio::time::Instant::now();
         let near = start + ms(20);
-        let far = start + ms(400);
+        // Far enough that a slow runner is still short of it at the check.
+        let far = start + ms(2_000);
         let waker = std::task::Waker::noop();
         let mut cx = Context::from_waker(waker);
         // Asked for the near deadline, then moved on to the far one.

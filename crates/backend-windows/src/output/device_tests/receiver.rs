@@ -22,10 +22,11 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetForegroundWindow, GetMessageExtraInfo,
-    GetMessageW, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SW_SHOWNORMAL,
-    SetForegroundWindow, ShowWindow, WM_CLOSE, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
+    GetMessageExtraInfo, GetMessageW, MSG, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage,
+    RegisterClassW, SW_SHOWNORMAL, SetForegroundWindow, ShowWindow, WM_CLOSE, WM_DESTROY,
+    WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+    WM_MBUTTONUP, WM_MOUSEFIRST, WM_MOUSELAST, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
     WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_OVERLAPPEDWINDOW,
     WS_VISIBLE,
 };
@@ -129,6 +130,14 @@ unsafe extern "system" fn procedure(
             note(|at| format!("rx wheel {at} {delta} {:#x}", extra()));
             return 0;
         }
+        WM_CLOSE => {
+            // Windows hands out posted messages, this one too, before queued
+            // input: note the input still queued before closing.
+            drain_input(window);
+            // SAFETY: the window this procedure belongs to, on its thread.
+            unsafe { DestroyWindow(window) };
+            return 0;
+        }
         WM_DESTROY => {
             // SAFETY: on the window's own thread.
             unsafe { PostQuitMessage(0) };
@@ -138,6 +147,20 @@ unsafe extern "system" fn procedure(
     }
     // SAFETY: the arguments this procedure was given.
     unsafe { DefWindowProcW(window, message, wparam, lparam) }
+}
+
+/// Handles every key and mouse message queued for `window`.
+#[allow(unsafe_code)]
+fn drain_input(window: HWND) {
+    for (first, last) in [(WM_KEYFIRST, WM_KEYLAST), (WM_MOUSEFIRST, WM_MOUSELAST)] {
+        // SAFETY: an all-zero MSG is valid; on the window's own thread.
+        unsafe {
+            let mut message: MSG = std::mem::zeroed();
+            while PeekMessageW(&raw mut message, window, first, last, PM_REMOVE) != 0 {
+                DispatchMessageW(&raw const message);
+            }
+        }
+    }
 }
 
 /// Runs the receiver: the window, until standard input closes or its
