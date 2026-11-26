@@ -227,17 +227,6 @@ impl Registered {
     /// state while reading goes on. A wait for the modifiers is lost: the
     /// key state reads every key up while another desktop has the input.
     pub fn session_changed(&mut self, keyboard: &mut impl Keyboard) -> Vec<HotkeyEvent> {
-        self.forget(keyboard, true)
-    }
-
-    /// A keyboard went away: what it held never comes up, and the key state
-    /// may still show it down, so the keys followed are forgotten as on a
-    /// session change, but not taken from the key state again.
-    pub fn keyboard_removed(&mut self, keyboard: &mut impl Keyboard) -> Vec<HotkeyEvent> {
-        self.forget(keyboard, false)
-    }
-
-    fn forget(&mut self, keyboard: &mut impl Keyboard, reseed: bool) -> Vec<HotkeyEvent> {
         self.held.clear();
         self.seeded.clear();
         self.unpaired.clear();
@@ -246,7 +235,7 @@ impl Registered {
             self.owed = false;
             events.push(HotkeyEvent::ReleaseLost);
         }
-        if self.reading && reseed {
+        if self.reading {
             self.seed(keyboard);
         }
         self.settle(keyboard, &mut events);

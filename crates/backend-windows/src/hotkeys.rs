@@ -316,9 +316,7 @@ pub(crate) fn answer(
         WM_HOTKEYS_CHANGED => Remote::on_thread(|remote| changed(hwnd, remote)),
         // A keyboard went away: what it held never comes up.
         WM_INPUT_DEVICE_CHANGE if u32::try_from(wparam) == Ok(GIDC_REMOVAL) => {
-            with_active(hwnd, |active, keyboard| {
-                active.registered.keyboard_removed(keyboard)
-            });
+            session_changed(hwnd);
         }
         _ => return None,
     }

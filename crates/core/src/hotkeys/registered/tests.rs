@@ -599,19 +599,3 @@ fn a_session_change_during_the_modifier_wait_loses_it() {
     let changed = hotkeys.session_changed(&mut keyboard);
     assert_eq!(after(changed, &keyboard), (vec![ReleaseLost], false));
 }
-
-#[test]
-fn a_keyboards_removal_takes_nothing_from_the_key_state_again() {
-    let mut keyboard = FakeKeyboard::default();
-    let mut hotkeys = registered();
-    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
-    hotkeys.key(F6, true, &mut keyboard);
-    // Unplugged with F6 down: the key state may still say so.
-    keyboard.down = vec![F6];
-    assert_eq!(hotkeys.keyboard_removed(&mut keyboard), []);
-    keyboard.down.clear();
-    assert_eq!(
-        press(&mut hotkeys, &mut keyboard, F6),
-        [Fired(CLICKING), ModifiersReleased]
-    );
-}
