@@ -86,7 +86,8 @@ impl Table {
     #[cfg(test)]
     pub(crate) fn private() -> Table {
         let cells: Box<[AtomicU8]> = (0..TABLE_LEN).map(|_| AtomicU8::new(FREE)).collect();
-        let first = NonNull::from(&cells[0]);
+        // From the whole slice, so the pointer may reach every cell.
+        let first = NonNull::from(&*cells).cast::<AtomicU8>();
         Table {
             cells: first,
             _keep: Keep::Own { _cells: cells },
