@@ -1202,14 +1202,14 @@ impl Drop for Unelevated {
                 let mut new = watchdogs_of(&self.listed);
                 new.retain(|pid| !self.before.contains(pid));
                 // Held before they are ended, so each id still names the
-                // watchdog found.
-                for &pid in &new {
-                    if let Ok(held) = desktop::Held::open_checked(desktop::Process(pid), || {
+                // watchdog found; one that fails the check is left alone.
+                new.retain(|&pid| {
+                    desktop::Held::open_checked(desktop::Process(pid), || {
                         watchdogs_of(&self.listed).contains(&pid)
-                    }) {
-                        self.held.push(held);
-                    }
-                }
+                    })
+                    .map(|held| self.held.push(held))
+                    .is_ok()
+                });
                 new
             }
         };
