@@ -86,15 +86,21 @@ pub fn context() -> Context {
     #[allow(unsafe_code)]
     let window = unsafe { GetForegroundWindow() };
     let foreground = window as usize;
-    let foreground_allowed = !window.is_null()
-        && match (window_integrity(window), own_integrity()) {
-            (Some(theirs), Some(ours)) => theirs <= ours,
-            _ => false,
-        };
+    let foreground_allowed =
+        !window.is_null() && not_above(window_integrity(window), own_integrity());
     Context {
         desktop_has_input,
         foreground,
         foreground_allowed,
+    }
+}
+
+/// Whether `theirs`, an integrity level, is known and not above `ours`,
+/// itself known: one that cannot be read may be above it.
+fn not_above(theirs: Option<u32>, ours: Option<u32>) -> bool {
+    match (theirs, ours) {
+        (Some(theirs), Some(ours)) => theirs <= ours,
+        _ => false,
     }
 }
 
@@ -239,8 +245,37 @@ mod tests {
         assert_eq!(judge(locked, locked, &refused), Delivery::Blocked);
     }
 
+    /// Windows' integrity levels: low, medium, high and system.
+    const LOW: u32 = 0x1000;
+    const MEDIUM: u32 = 0x2000;
+    const HIGH: u32 = 0x3000;
+    const SYSTEM: u32 = 0x4000;
+
     #[test]
-    fn this_programs_own_integrity_can_be_read() {
-        assert!(own_integrity().is_some());
+    fn a_window_counts_only_when_its_integrity_is_known_and_not_above_ours() {
+        assert!(not_above(Some(MEDIUM), Some(MEDIUM)));
+        assert!(not_above(Some(LOW), Some(MEDIUM)));
+        // Elevated Task Manager in front of an unelevated program.
+        assert!(!not_above(Some(HIGH), Some(MEDIUM)));
+        // A process that does not let this one look, or not knowing our own.
+        assert!(!not_above(None, Some(MEDIUM)));
+        assert!(!not_above(Some(LOW), None));
+    }
+
+    #[test]
+    fn this_programs_own_integrity_is_one_of_windows_levels() {
+        // Unelevated in a desktop, high over the test VM's SSH.
+        let own = own_integrity().unwrap();
+        assert!([LOW, MEDIUM, HIGH, SYSTEM].contains(&own), "{own:#x}");
+        // Read through a handle as for another process's window, the same.
+        let pid = std::process::id();
+        // SAFETY: plain call; the handle is owned below.
+        #[allow(unsafe_code)]
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        assert!(!process.is_null());
+        // SAFETY: a new handle that nothing else owns.
+        #[allow(unsafe_code)]
+        let process = unsafe { OwnedHandle::from_raw_handle(process) };
+        assert_eq!(integrity(process.as_raw_handle()).unwrap(), own);
     }
 }

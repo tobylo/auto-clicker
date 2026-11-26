@@ -27,6 +27,7 @@ fn the_command_line_quotes_what_needs_it_as_the_c_runtime_reads_it() {
         r"C:\dir\",
         r"C:\a b\",
         r"x\\y",
+        r#"a\"b c"#,
     ]
     .iter()
     .map(OsString::from)
@@ -37,7 +38,7 @@ fn the_command_line_quotes_what_needs_it_as_the_c_runtime_reads_it() {
             OsStr::new(r"C:\Program Files\a.exe"),
             &arguments
         )),
-        r#""C:\Program Files\a.exe" --table 1234 "a b" "" "say \"hi\"" C:\dir\ "C:\a b\\" x\\y"#
+        r#""C:\Program Files\a.exe" --table 1234 "a b" "" "say \"hi\"" C:\dir\ "C:\a b\\" x\\y "a\\\"b c""#
     );
 }
 

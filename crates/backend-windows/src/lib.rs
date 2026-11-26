@@ -32,9 +32,7 @@ pub use elevation::is_elevated;
 pub use instance::{ClaimError, Instance, claim};
 pub use language::display_languages;
 pub use message::show_error;
-pub use message_thread::{
-    JoinError, MessageThread, Remote, SessionChange, WatchdogWait, WindowEvent,
-};
+pub use message_thread::{JoinError, MessageThread, Remote, SessionChange, WindowEvent};
 pub use output::{MARKER, Output, received_key};
 pub use session::SessionState;
 pub use tray::{MenuEntry, TrayContent, TrayIcon, icon_side};

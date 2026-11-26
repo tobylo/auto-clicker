@@ -10,6 +10,10 @@
 // No console window opens on Windows: the watchdog writes to its log file.
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
+// The daemon's own elevation check, shared.
+#[cfg(windows)]
+#[path = "../windows/elevation.rs"]
+mod elevation;
 #[cfg(windows)]
 mod windows;
 

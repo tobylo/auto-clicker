@@ -170,3 +170,23 @@ fn moves_and_scrolls_leave_the_table_alone() {
     input.scroll(1).unwrap();
     assert_eq!(table.copy(), [0; crate::watchdog::TABLE_LEN]);
 }
+
+#[test]
+fn moves_and_scrolls_go_through_to_the_output() {
+    use auto_clicker_core::input::fake::{Call, FakeBackend};
+    let (output, log) = FakeBackend::new();
+    let table = Arc::new(Table::private());
+    let mut watched = Watched::over(output, Script(VecDeque::new()), table);
+    let point = AbsolutePosition { x: 100, y: 200 };
+    watched.move_relative(3, 4).unwrap();
+    watched.move_absolute(point).unwrap();
+    watched.scroll(-1).unwrap();
+    assert_eq!(
+        log.calls(),
+        [
+            Call::MoveRelative(3, 4),
+            Call::MoveAbsolute(point),
+            Call::Scroll(-1)
+        ]
+    );
+}

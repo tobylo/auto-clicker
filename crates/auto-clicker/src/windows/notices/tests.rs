@@ -492,15 +492,11 @@ fn a_lock_from_the_message_thread_releases_a_held_button_at_once() {
 fn the_watchdogs_end_stops_a_hold_at_once_releases_and_quits() {
     let output = FakeOutput::default();
     let (controller, links) = holding(output.clone());
+    // The session is open: a start is allowed.
     let mut handler = Notices::new(links.send.clone(), Arc::new(Mark::default()));
-    let ended = handler.watchdog_ended();
     handler.handle(WindowEvent::SessionRead(Ok(UNLOCKED)));
-    let (events, heard) = std_mpsc::channel::<WindowEvent>();
-    let message_thread = thread::spawn(move || {
-        for event in heard {
-            handler.handle(event);
-        }
-    });
+    let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let told = on_watchdog_end(links.send.clone(), Arc::clone(&ended));
     let view = links.view.clone();
     let send = links.send.clone();
     let steps = async {
@@ -510,7 +506,8 @@ fn the_watchdogs_end_stops_a_hold_at_once_releases_and_quits() {
         })
         .await;
         let ending = Instant::now();
-        events.send(WindowEvent::WatchdogEnded).unwrap();
+        // From a thread of its own, as the wait calls it.
+        thread::spawn(told).join().unwrap();
         until(Duration::from_secs(10), "released", || {
             output.presses(0) == [PressState::Down, PressState::Up]
         })
@@ -520,8 +517,6 @@ fn the_watchdogs_end_stops_a_hold_at_once_releases_and_quits() {
     // The controller ends on its own: the watchdog's end quits it.
     runtime().block_on(async { tokio::join!(controller.run(), steps) });
     assert!(ended.load(std::sync::atomic::Ordering::Acquire));
-    drop(events);
-    message_thread.join().unwrap();
 }
 
 /// Starts a hold, and once it holds, whether it took.

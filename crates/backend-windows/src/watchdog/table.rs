@@ -150,10 +150,6 @@ impl Owed {
     pub fn items(&self) -> &[Held] {
         &self.items
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
 }
 
 /// The key or button with Linux code `code`, if there is one.

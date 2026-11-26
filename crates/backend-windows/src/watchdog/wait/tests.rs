@@ -3,7 +3,6 @@ use std::process::{Child, Command, Stdio};
 use std::time::Instant;
 
 use super::*;
-use crate::message_thread::tests::{JOIN, next_followed, started};
 
 /// Far below the waits these tests interrupt (forever), far above what
 /// stopping takes.
@@ -21,31 +20,36 @@ fn stand_in() -> (Child, OwnedHandle) {
     (child, handle)
 }
 
+/// A wait on `handle` that sends on the channel it returns when it calls.
+fn waiting(handle: OwnedHandle) -> (WatchdogWait, mpsc::Receiver<()>) {
+    let (called, calls) = mpsc::channel();
+    let wait = wait_for_watchdog(handle, move || called.send(()).unwrap()).unwrap();
+    (wait, calls)
+}
+
 #[test]
-fn the_watchdogs_end_reaches_the_handler_at_once() {
-    let (thread, received) = started();
+fn the_watchdogs_end_is_told_at_once() {
     let (mut child, handle) = stand_in();
-    let wait = thread.remote().wait_for_watchdog(handle).unwrap();
+    let (wait, calls) = waiting(handle);
     child.kill().unwrap();
     let killed = Instant::now();
-    assert_eq!(next_followed(&received, 1), ["WatchdogEnded"]);
+    calls.recv_timeout(AT_ONCE).unwrap();
     assert!(killed.elapsed() < AT_ONCE, "{:?}", killed.elapsed());
     assert!(wait.stop(AT_ONCE));
+    // Told once.
+    assert!(calls.try_recv().is_err());
     let _ = child.wait();
-    thread.quit_and_join(JOIN).unwrap();
 }
 
 #[test]
 fn a_stopped_wait_ends_at_once_and_says_nothing() {
-    let (thread, received) = started();
     let (mut child, handle) = stand_in();
-    let wait = thread.remote().wait_for_watchdog(handle).unwrap();
+    let (wait, calls) = waiting(handle);
     let stopping = Instant::now();
     assert!(wait.stop(AT_ONCE));
     assert!(stopping.elapsed() < AT_ONCE, "{:?}", stopping.elapsed());
     child.kill().unwrap();
     let _ = child.wait();
-    thread.quit_and_join(JOIN).unwrap();
-    // Only the thread's own end follows.
-    assert_eq!(next_followed(&received, 1), ["Ended"]);
+    // The thread is gone, and with it the sender: nothing was told.
+    assert_eq!(calls.recv(), Err(mpsc::RecvError));
 }

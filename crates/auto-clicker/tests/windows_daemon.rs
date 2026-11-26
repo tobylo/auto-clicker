@@ -59,10 +59,16 @@ impl Home {
     /// Starts the watchdog, as login does, and finds the daemon it starts.
     fn start(&self) -> Daemon {
         let watchdog = self.command(WATCHDOG).spawn().unwrap();
-        let pid = wait_for("the watchdog's daemon", || {
-            children(watchdog.id()).first().copied()
-        });
-        Daemon { watchdog, pid }
+        // Ended and reaped from here on, should its daemon never show.
+        let mut daemon = Daemon {
+            watchdog,
+            pid: None,
+        };
+        let id = daemon.watchdog.id();
+        daemon.pid = Some(wait_for("the watchdog's daemon", || {
+            children(id).first().copied()
+        }));
+        daemon
     }
 
     /// `program`, with this home's folders and no console.
@@ -128,12 +134,18 @@ impl Home {
 /// the session's single instance. The watchdog's exit code is its daemon's.
 struct Daemon {
     watchdog: Child,
-    pid: u32,
+    /// The daemon's process id, once found.
+    pid: Option<u32>,
 }
 
 impl Daemon {
+    /// The daemon's process id.
+    fn id(&self) -> u32 {
+        self.pid.unwrap()
+    }
+
     fn process(&self) -> desktop::Process {
-        desktop::Process(self.pid)
+        desktop::Process(self.id())
     }
 }
 
@@ -142,7 +154,15 @@ impl Drop for Daemon {
     /// on its own. A watchdog killed first would leave the daemon's
     /// message box in front of the next test.
     fn drop(&mut self) {
-        let _ = kill(self.pid, false);
+        // Only while the watchdog runs: it holds the daemon's process, so
+        // the id is still the daemon's and not another process's.
+        // A daemon not found yet goes with its watchdog's tree.
+        if let Ok(None) = self.watchdog.try_wait() {
+            let _ = match self.pid {
+                Some(pid) => kill(pid, false),
+                None => kill(self.watchdog.id(), true),
+            };
+        }
         let deadline = Instant::now() + END;
         while matches!(self.watchdog.try_wait(), Ok(None)) && Instant::now() < deadline {
             sleep(Duration::from_millis(20));
@@ -226,7 +246,7 @@ fn ended(child: &mut Child, within: Duration) -> ExitStatus {
 /// Asks the daemon to close its window, as `taskkill` without `/F` does.
 fn ask_to_quit(daemon: &Daemon) {
     let status = Command::new("taskkill")
-        .args(["/PID", &daemon.pid.to_string()])
+        .args(["/PID", &daemon.id().to_string()])
         .stdout(Stdio::null())
         .status()
         .unwrap();
@@ -243,7 +263,9 @@ fn a_second_daemon_in_the_session_exits_with_the_reason() {
     let mut second = home.start();
     // It says why in a message box, its only window; closing it ends it,
     // and its watchdog with it.
-    close_message_box(second.pid, || second.watchdog.try_wait().unwrap().is_none());
+    close_message_box(second.id(), || {
+        second.watchdog.try_wait().unwrap().is_none()
+    });
     assert_eq!(ended(&mut second.watchdog, END).code(), Some(3));
     // The second wrote nothing: the log is the first one's alone.
     assert_eq!(said(&home.log()), said(&before));
@@ -389,7 +411,7 @@ fn an_idle_daemon_wakes_for_nothing_of_its_own() {
 
 /// The threads of the daemon and its watchdog, and their switches so far.
 fn both(daemon: &Daemon) -> BTreeMap<u32, u64> {
-    let mut threads = switches(daemon.pid);
+    let mut threads = switches(daemon.id());
     threads.extend(switches(daemon.watchdog.id()));
     threads
 }
@@ -640,7 +662,7 @@ fn killing_the_daemon_while_it_holds_a_key_or_a_button_releases_it() {
     ] {
         let (home, mut daemon) = holding(what, config, key);
         let killing = Instant::now();
-        assert!(kill(daemon.pid, false).success());
+        assert!(kill(daemon.id(), false).success());
         println!(
             "{what}: released {:?} after the kill",
             released(key, killing)
@@ -660,7 +682,7 @@ fn killing_the_daemon_while_it_holds_a_key_or_a_button_releases_it() {
 fn ending_the_daemons_process_tree_while_it_holds_a_key_releases_it() {
     let (home, mut daemon) = holding("tree", HOLD_F13, VK_F13);
     let killing = Instant::now();
-    assert!(kill(daemon.pid, true).success());
+    assert!(kill(daemon.id(), true).success());
     println!(
         "released {:?} after the tree's end",
         released(VK_F13, killing)
@@ -679,7 +701,7 @@ fn a_quit_releases_and_leaves_no_watchdog_behind() {
     ask_to_quit(&daemon);
     assert!(ended(&mut daemon.watchdog, END).success(), "{}", home.log());
     assert!(!desktop::is_down(VK_F13));
-    assert!(!alive(daemon.pid));
+    assert!(!alive(daemon.id()));
     // The release counted as delivered by the daemon, on the real desktop:
     // nothing was left owed for the watchdog.
     assert!(
@@ -707,9 +729,9 @@ fn the_watchdogs_end_stops_a_hold_at_once_and_the_daemon_says_why() {
     );
     // The daemon let go of its name before its message: a new start is
     // not told it is already running.
-    close_message_box(daemon.pid, || alive(daemon.pid));
+    close_message_box(daemon.id(), || alive(daemon.id()));
     let deadline = Instant::now() + END;
-    while alive(daemon.pid) {
+    while alive(daemon.id()) {
         assert!(Instant::now() < deadline, "the daemon outlived its message");
         sleep(Duration::from_millis(50));
     }

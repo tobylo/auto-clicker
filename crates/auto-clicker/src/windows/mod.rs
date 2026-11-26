@@ -17,6 +17,7 @@
 //! with anything else, it refuses, so a bad start cannot loop. Should the
 //! watchdog end, the daemon stops, releases and quits, saying why.
 
+pub mod elevation;
 mod notices;
 mod platform;
 mod tray;
@@ -24,13 +25,14 @@ mod tray;
 use std::io;
 use std::process::{Command, ExitCode};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use auto_clicker_backend_windows::watchdog::{self as launch, Attached, Launch, WATCHDOG, attach};
+use auto_clicker_backend_windows::watchdog::{
+    self as launch, Attached, Launch, WATCHDOG, attach, wait_for_watchdog,
+};
 use auto_clicker_backend_windows::{
-    ClaimError, Instance, JoinError, MessageThread, become_per_monitor_aware, claim,
-    display_languages, is_elevated, show_error,
+    ClaimError, Instance, JoinError, MessageThread, become_per_monitor_aware, claim, show_error,
 };
 use auto_clicker_core::controller::Controller;
 use auto_clicker_core::dirs::{NO_DATA_DIR, log_path};
@@ -40,7 +42,8 @@ use auto_clicker_core::recording::CurrentFile;
 use tokio::sync::watch;
 
 use crate::config::load_config;
-use notices::{ENDED, Mark, Notices};
+use elevation::language;
+use notices::{ENDED, Mark, Notices, on_watchdog_end};
 use platform::Windows;
 
 /// The message box's title.
@@ -49,8 +52,6 @@ const TITLE: &str = "Auto Clicker";
 const INSTANCE_NAME: &str = "io.github.tobylo.AutoClicker";
 /// Another daemon runs in this session.
 const EXIT_ALREADY_RUNNING: u8 = 3;
-/// The daemon refused to run elevated, or could not tell whether it was.
-const EXIT_ELEVATED: u8 = 4;
 /// The daemon was started with arguments or handles it does not take, or
 /// started bare and could not start its watchdog.
 const EXIT_LAUNCH: u8 = 5;
@@ -68,9 +69,8 @@ pub fn main() -> ExitCode {
     // Before any window exists, which would fix the awareness; every size
     // the daemon reads is then in physical pixels.
     let aware = become_per_monitor_aware();
-    if let Some(refusal) = refusal(is_elevated()) {
-        show_error(TITLE, &refusal.text(language()));
-        return ExitCode::from(EXIT_ELEVATED);
+    if let Some(code) = elevation::refused() {
+        return code;
     }
     let attached = match launch::parse(std::env::args_os().skip(1)) {
         Ok(Launch::Bare) => return start_watchdog(),
@@ -208,74 +208,6 @@ fn claim_text(err: &ClaimError, language: Language) -> String {
     }
 }
 
-/// Why the daemon does not start, given whether it runs elevated; none when
-/// it may. Not knowing refuses too.
-fn refusal(elevated: io::Result<bool>) -> Option<Refusal> {
-    match elevated {
-        Ok(false) => None,
-        Ok(true) => Some(Refusal::Elevated),
-        Err(err) => Some(Refusal::Unknown(err)),
-    }
-}
-
-/// Why an elevated daemon does not start.
-#[derive(Debug)]
-enum Refusal {
-    /// It runs elevated.
-    Elevated,
-    /// Windows could not say whether it does.
-    Unknown(io::Error),
-}
-
-impl Refusal {
-    /// What the message box says, in `language`.
-    fn text(&self, language: Language) -> String {
-        let why = match (self, language) {
-            (Refusal::Elevated, Language::English) => {
-                "Auto Clicker does not run as administrator.".to_owned()
-            }
-            (Refusal::Elevated, Language::Swedish) => {
-                "Auto Clicker körs inte som administratör.".to_owned()
-            }
-            (Refusal::Unknown(err), Language::English) => format!(
-                "Auto Clicker could not tell whether it runs as administrator ({err}), so it does not start."
-            ),
-            (Refusal::Unknown(err), Language::Swedish) => format!(
-                "Auto Clicker kunde inte avgöra om det körs som administratör ({err}), så det startar inte."
-            ),
-        };
-        format!("{why}\n\n{}", reason(language))
-    }
-}
-
-/// Why the daemon never runs as administrator, and what to do instead.
-fn reason(language: Language) -> &'static str {
-    match language {
-        Language::English => {
-            "As administrator, the input it sends would reach other programs running as \
-             administrator, and it would read its settings and recordings, which any of your \
-             programs can change, with an administrator's rights.\n\n\
-             Start it without \"Run as administrator\". With User Account Control turned off, \
-             every program runs as administrator, and Auto Clicker cannot run."
-        }
-        Language::Swedish => {
-            "Som administratör skulle indata som programmet skickar nå andra program som körs \
-             som administratör, och det skulle läsa sina inställningar och inspelningar, som \
-             alla dina program kan ändra, med administratörens rättigheter.\n\n\
-             Starta det utan \"Kör som administratör\". Med Kontroll av användarkonto (UAC) \
-             avstängd körs alla program som administratör, och då kan Auto Clicker inte köras."
-        }
-    }
-}
-
-/// The language the user reads Windows in; English when Windows cannot
-/// say, since a refusing daemon has nowhere to log that.
-fn language() -> Language {
-    display_languages().map_or(Language::English, |names| {
-        Language::from_tags(names.iter().map(String::as_str))
-    })
-}
-
 /// Runs the controller beside the message thread until Quit, logoff, the
 /// watchdog's end or the message thread's end; then ends the message
 /// thread. The status, and whether the watchdog ended.
@@ -295,7 +227,6 @@ fn run(attached: Attached) -> (ExitCode, bool) {
     let released = Arc::new(Mark::default());
     let mut notices = Notices::new(links.send.clone(), Arc::clone(&released));
     let commands = notices.commands();
-    let watchdog_ended = notices.watchdog_ended();
     let thread =
         match MessageThread::spawn(move |event| notices.handle(event), MESSAGE_THREAD_START) {
             Ok(thread) => thread,
@@ -307,7 +238,9 @@ fn run(attached: Attached) -> (ExitCode, bool) {
             }
         };
     // No run starts unwatched: the controller has not run yet.
-    let wait = match thread.remote().wait_for_watchdog(watchdog) {
+    let watchdog_ended = Arc::new(AtomicBool::new(false));
+    let told = on_watchdog_end(links.send.clone(), Arc::clone(&watchdog_ended));
+    let wait = match wait_for_watchdog(watchdog, told) {
         Ok(wait) => wait,
         Err(err) => {
             let _ = end(thread);
@@ -466,25 +399,39 @@ mod tests {
     }
 
     #[test]
-    fn only_a_process_known_not_to_be_elevated_starts() {
-        assert!(refusal(Ok(false)).is_none());
-        assert!(matches!(refusal(Ok(true)), Some(Refusal::Elevated)));
-        let unknown = refusal(Err(io::Error::from_raw_os_error(5)));
-        assert!(matches!(unknown, Some(Refusal::Unknown(_))));
+    fn a_refused_launch_says_why_in_the_users_language() {
+        let arguments = LaunchRefusal::Arguments("got --quit".to_owned());
+        let english = arguments.text(Language::English);
+        assert!(english.contains("(got --quit)") && english.contains("without arguments"));
+        let svenska = arguments.text(Language::Swedish);
+        assert!(svenska.contains("(got --quit)") && svenska.contains("utan argument"));
+        let handles = LaunchRefusal::Handles(io::Error::other("no section"));
+        assert!(
+            handles
+                .text(Language::English)
+                .contains("take over from its watchdog (no section)")
+        );
+        assert!(
+            handles
+                .text(Language::Swedish)
+                .contains("sin vakt (no section)")
+        );
+        let missing = LaunchRefusal::NoWatchdog(io::Error::other("not found"));
+        let english = missing.text(Language::English);
+        assert!(
+            english.contains(WATCHDOG) && english.contains("(not found)"),
+            "{english}"
+        );
+        let svenska = missing.text(Language::Swedish);
+        assert!(
+            svenska.contains(WATCHDOG) && svenska.contains("samma mapp"),
+            "{svenska}"
+        );
     }
 
     #[test]
-    fn the_refusal_says_why_in_the_users_language() {
-        let elevated = Refusal::Elevated.text(Language::English);
-        assert!(elevated.starts_with("Auto Clicker does not run as administrator."));
-        assert!(elevated.contains("User Account Control turned off"));
-        let swedish = Refusal::Elevated.text(Language::Swedish);
-        assert!(swedish.starts_with("Auto Clicker körs inte som administratör."));
-        assert!(swedish.contains("Kontroll av användarkonto"));
-        let unknown = Refusal::Unknown(io::Error::other("no token")).text(Language::English);
-        assert!(unknown.contains("(no token)"), "{unknown}");
-        assert!(unknown.contains("Run as administrator"));
-        let okänt = Refusal::Unknown(io::Error::other("no token")).text(Language::Swedish);
-        assert!(okänt.contains("(no token)") && okänt.contains("Kör som administratör"));
+    fn a_daemon_whose_watchdog_ended_says_how_to_start_again() {
+        assert!(watchdog_ended_text(Language::English).contains("run auto-clicker.exe"));
+        assert!(watchdog_ended_text(Language::Swedish).contains("kör auto-clicker.exe"));
     }
 }

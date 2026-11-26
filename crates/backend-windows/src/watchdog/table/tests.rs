@@ -57,7 +57,7 @@ fn a_hostile_table_yields_releases_of_real_keys_and_buttons_only() {
 
 #[test]
 fn any_value_but_zero_owes_and_an_empty_table_owes_nothing() {
-    assert!(Owed::parse(&[0; TABLE_LEN]).is_empty());
+    assert!(Owed::parse(&[0; TABLE_LEN]).items().is_empty());
     let mut bytes = [0u8; TABLE_LEN];
     bytes[17] = 0x80;
     bytes[0x110] = 2;
