@@ -520,3 +520,22 @@ fn letting_go_of_a_key_lets_go_of_its_seeded_aliases() {
         [Fired(CLICKING), ModifiersReleased]
     );
 }
+
+#[test]
+fn letting_go_of_a_key_leaves_an_alias_whose_own_state_is_down() {
+    // Y and Z: one hotkey's keys across two layouts, each with a state of
+    // its own.
+    const Y: u16 = 21;
+    const Z: u16 = 44;
+    let y = Binding::parse("Ctrl+Shift+Y").unwrap();
+    let both = |binding: Binding| vec![binding.key(), Key::new(Z).unwrap()];
+    let mut hotkeys = Registered::new(vec![(CLICKING, y)], both);
+    let mut keyboard = holding(&[Y, Z]);
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    keyboard.down.retain(|&code| code != Z);
+    hotkeys.key(Z, false, &mut keyboard);
+    hotkeys.key(CTRL, true, &mut keyboard);
+    hotkeys.key(SHIFT, true, &mut keyboard);
+    // Y, still held since before, repeats: no press.
+    assert_eq!(hotkeys.key(Y, true, &mut keyboard), []);
+}

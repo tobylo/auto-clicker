@@ -1104,6 +1104,10 @@ struct Unelevated {
     task: String,
     watchdog: Option<u32>,
     daemon: Option<u32>,
+    /// This build's watchdog, as the process list names it, and those that
+    /// ran before the task: any other is the task's, should finding it fail.
+    listed: String,
+    before: Vec<u32>,
 }
 
 /// The watchdogs running from `path`.
@@ -1149,6 +1153,8 @@ impl Unelevated {
             task: task.clone(),
             watchdog: None,
             daemon: None,
+            listed: listed.clone(),
+            before: before.clone(),
         };
         powershell(&format!(
             "schtasks /create /tn '{task}' /tr '\"{script}\"' /sc once /st 23:59 /rl limited /it /f | Out-Null; schtasks /run /tn '{task}' | Out-Null"
@@ -1172,9 +1178,17 @@ impl Drop for Unelevated {
         if let Some(daemon) = self.daemon {
             let _ = kill(daemon, false);
         }
-        if let Some(watchdog) = self.watchdog {
+        let watchdogs = match self.watchdog {
+            Some(watchdog) => vec![watchdog],
+            None => {
+                let mut new = watchdogs_of(&self.listed);
+                new.retain(|pid| !self.before.contains(pid));
+                new
+            }
+        };
+        for watchdog in watchdogs {
             let deadline = Instant::now() + Duration::from_secs(5);
-            while alive(watchdog) && Instant::now() < deadline {
+            while self.daemon.is_some() && alive(watchdog) && Instant::now() < deadline {
                 sleep(Duration::from_millis(100));
             }
             let _ = kill(watchdog, true);
