@@ -250,11 +250,14 @@ impl Held {
     /// No such process, it cannot be opened, or it is not the one meant.
     pub fn open_checked(pid: Process, still: impl FnOnce() -> bool) -> io::Result<Held> {
         let mut held = Held::open(pid)?;
-        if still() {
-            return Ok(held);
-        }
+        // Let go until the check says otherwise, a check that panics
+        // included.
         held.armed = false;
-        Err(io::Error::other("the process id passed to another process"))
+        if !still() {
+            return Err(io::Error::other("the process id passed to another process"));
+        }
+        held.armed = true;
+        Ok(held)
     }
 }
 

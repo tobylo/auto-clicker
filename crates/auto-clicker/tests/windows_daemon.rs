@@ -798,7 +798,8 @@ fn a_bare_start_launches_the_watchdog_and_exits() {
 #[ignore = "must run elevated, in the desktop: the WN01 VM through `vm run --elevated`"]
 fn an_elevated_watchdog_refuses_before_it_writes_or_starts_anything() {
     // The usual unelevated run of every device test passes it by.
-    if auto_clicker_backend_windows::is_elevated().ok() != Some(true) {
+    // Not knowing fails the test rather than passing it by.
+    if !auto_clicker_backend_windows::is_elevated().unwrap() {
         println!("not elevated: run this test alone through `vm run --elevated`");
         return;
     }
