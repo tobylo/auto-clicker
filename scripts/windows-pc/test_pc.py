@@ -87,6 +87,23 @@ class PcTest(unittest.TestCase):
                 self.configure(text)
                 self.assert_refused(self.pc("status"), message)
 
+    def test_bad_password_files_are_refused_before_the_pc_is_reached(self):
+        # The config names an address nothing answers at: a refusal that
+        # names the password file came before any connection.
+        cases = {
+            "too short": "abc123\n",
+            "two lines": "abcdefghijklmnop1A\nabcdefghijklmnop1A\n",
+            "a symbol": "abcdefghijklmnop1A!\n",
+            "empty": "",
+        }
+        for name, text in cases.items():
+            with self.subTest(name):
+                self.configure(f"host=192.0.2.1\nkey={self.key}\n")
+                self.write("password", text)
+                self.assert_refused(self.pc("setup"), "must hold one line of 16 to 128 letters and digits")
+                mode = os.stat(os.path.join(self.state, "password")).st_mode & 0o777
+                self.assertEqual(mode, 0o600, name)
+
     def test_missing_known_hosts_is_refused(self):
         self.configure(f"host=a\nkey={self.key}\n", known_hosts=False)
         self.assert_refused(self.pc("status"), "known_hosts")

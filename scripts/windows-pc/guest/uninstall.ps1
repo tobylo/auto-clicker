@@ -46,15 +46,15 @@ function Restore-Settings {
         Set-LocalUser -Name $User -PasswordNeverExpires ([bool] $saved.passwordNeverExpires)
         Write-Output "put back: tester's password never expires = $($saved.passwordNeverExpires)"
     }
-    foreach ($name in 'STANDBYIDLE', 'HIBERNATEIDLE') {
-        if (-not $saved.PSObject.Properties[$name]) { continue }
-        $seconds = [int] $saved.$name
-        & powercfg.exe /setacvalueindex SCHEME_CURRENT SUB_SLEEP $name $seconds
-        if ($LASTEXITCODE -ne 0) { throw "powercfg /setacvalueindex $name failed" }
-        & powercfg.exe /setactive SCHEME_CURRENT
-        if ($LASTEXITCODE -ne 0) { throw 'powercfg /setactive failed' }
-        Write-Output "put back: power $name on AC = $seconds s"
+    # Each power value under the plan it was read from: "power:<plan>:<name>".
+    foreach ($property in @($saved.PSObject.Properties | Where-Object Name -like 'power:*')) {
+        $plan, $name = $property.Name.Split(':')[1, 2]
+        & powercfg.exe /setacvalueindex $plan SUB_SLEEP $name ([int] $property.Value)
+        if ($LASTEXITCODE -ne 0) { throw "powercfg /setacvalueindex $plan $name failed" }
+        Write-Output "put back: power $name on AC in plan $plan = $($property.Value) s"
     }
+    & powercfg.exe /setactive SCHEME_CURRENT
+    if ($LASTEXITCODE -ne 0) { throw 'powercfg /setactive failed' }
 }
 
 function Disable-AutoLogon {

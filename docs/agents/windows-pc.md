@@ -16,7 +16,7 @@ Besides the VM ([windows-vm.md](windows-vm.md)), sessions run Windows device tes
 
 ## Files on the dev box
 
-Everything lives in `~/.local/share/auto-clicker-pc/` (mode 700; `WN13_STATE_DIR` changes it), outside the repository:
+Everything lives in `~/.local/share/auto-clicker-pc/` (mode 700; `WN13_STATE_DIR` changes it, for tests: commands from two state directories would not share a lock), outside the repository:
 
 - `config`: where the PC is, kept off the repository. It holds two lines and nothing else but blank lines and `#` comments; `pc` refuses anything else:
 
@@ -36,11 +36,11 @@ Everything lives in `~/.local/share/auto-clicker-pc/` (mode 700; `WN13_STATE_DIR
 
 ## On the PC
 
-- `C:\wn01`: the runner's files, copied from `scripts/windows-vm/guest/` (`runner.ps1`, `JobRunner.cs`, `run-job.ps1`, `click-test.ps1`), plus the PC's `screen.ps1` and `focus.ps1`. It also holds the queues, and `restore.json`, which records what a Windows setting was before the setup changed it.
-  - The runner's files and the queues are written by administrators and SYSTEM only.
+- `C:\wn01`: the runner's files, copied from `scripts/windows-vm/guest/` (`runner.ps1`, `JobRunner.cs`, `run-job.ps1`, `click-test.ps1`), plus the PC's `screen.ps1` and `focus.ps1`. It also holds the queues, and `restore.json`, which records what a Windows setting was before the setup changed it (a power setting under the plan it belongs to), written to disk before the setting changes.
+  - The runner's files and the queues are owned and written by administrators and SYSTEM only. The setup puts that right on every folder and file it installs, whoever made it, and refuses a junction or link in their place.
   - The unelevated runner writes its own queue's `ready`, log, `work` and `outbox`, and claims a job by moving it out of its inbox, which it cannot write.
-  - So nothing unelevated, a job in the normal queue included, can change the runner or hand the elevated runner a job.
-- Two scheduled tasks, `wn01-runner-normal` (unelevated) and `wn01-runner-high` (elevated), start the runners at tester's logon. Each task's description holds a hash of its definition.
+  - So no other account can change the runner or hand it a job, and a job in the normal queue cannot hand one to the elevated runner. Programs running as tester are trusted as tester, elevated or not: Windows does not treat UAC as a security boundary, and the setup runs elevated over SSH from tester's own temporary folder and checks tester's Rust toolchain.
+- Two scheduled tasks, `wn01-runner-normal` (unelevated) and `wn01-runner-high` (elevated), start the runners at tester's logon. The setup compares each task's action, trigger, principal and settings with what it registers, and restarts a runner that started before its files were last installed.
 - `C:\work`: where tests build and run. It is not the setup's: `pc uninstall` leaves it alone.
 
 ## Commands

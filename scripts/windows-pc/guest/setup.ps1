@@ -25,13 +25,16 @@ $Winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 # Each install's own bound; the dev box bounds the whole setup too.
 $InstallSeconds = 2400
 $script:Changed = New-Object Collections.Generic.List[string]
-$script:FilesChanged = $false
+# The files a running runner has loaded: a change to them needs a restart.
+$RunnerCode = 'runner.ps1', 'JobRunner.cs'
 
-function Report-Ok([string] $What) { Write-Output "ok   $What" }
+# Reports go to the host, not the pipeline, so they never become part of a
+# function's result.
+function Report-Ok([string] $What) { Write-Host "ok   $What" }
 
 function Report-Set([string] $What) {
     $script:Changed.Add($What)
-    Write-Output "set  $What"
+    Write-Host "set  $What"
 }
 
 function New-Rule([string] $Sid, [string] $Rights, [string] $Inherit = 'ContainerInherit, ObjectInherit', [string] $Propagate = 'None') {
@@ -50,53 +53,75 @@ function Get-RuleText($Acl) {
     return (@($rules) | Sort-Object) -join ';'
 }
 
-# Whether folder security $Have is owned by the administrators or SYSTEM,
-# and protects and lists its explicit rules as $Want does.
-function Test-FolderSecurity($Have, $Want) {
+# Whether the security $Have of a folder or file is owned by the
+# administrators or SYSTEM, and protects and lists its explicit rules as
+# $Want does.
+function Test-Security($Have, $Want) {
     $owner = $Have.GetOwner([Security.Principal.SecurityIdentifier]).Value
     if ($owner -notin $Admins, $System) { return $false }
     if ($Have.AreAccessRulesProtected -ne $Want.AreAccessRulesProtected) { return $false }
     return (Get-RuleText $Have) -eq (Get-RuleText $Want)
 }
 
-# Makes folder $Path with exactly these explicit rules, owned by the
-# administrators; $Protected stops it inheriting from its parent.
-function Set-Folder([string] $Path, [bool] $Protected, [object[]] $Rules) {
-    $made = -not (Test-Path -LiteralPath $Path -PathType Container)
+function Assert-NoReparsePoint([string] $Path) {
+    if ((Get-Item -LiteralPath $Path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "$Path is a junction or link: remove it, then run the setup again"
+    }
+}
+
+# Folder (or file) security with these explicit rules alone.
+function New-Security([bool] $Protected, [object[]] $Rules, [bool] $File) {
+    $security = if ($File) { New-Object Security.AccessControl.FileSecurity } else { New-Object Security.AccessControl.DirectorySecurity }
+    $security.SetAccessRuleProtection($Protected, $false)
+    foreach ($rule in $Rules) { $security.AddAccessRule($rule) }
+    return $security
+}
+
+# Gives folder (or, with -File, file) $Path exactly these explicit rules,
+# owned by the administrators; $Protected stops it inheriting from its
+# parent. A missing folder is made. A junction or link is refused: another
+# account may have made it, to point the runner elsewhere.
+function Set-Security([string] $Path, [bool] $Protected, [object[]] $Rules = @(), [switch] $File) {
+    $made = -not $File -and -not (Test-Path -LiteralPath $Path -PathType Container)
     if ($made) { New-Item -ItemType Directory -Path $Path | Out-Null }
-    $want = New-Object Security.AccessControl.DirectorySecurity
-    $want.SetAccessRuleProtection($Protected, $false)
-    foreach ($rule in $Rules) { $want.AddAccessRule($rule) }
-    if (-not $made -and (Test-FolderSecurity (Get-Acl -LiteralPath $Path) $want)) {
-        Report-Ok "folder $Path"
+    Assert-NoReparsePoint $Path
+    $want = New-Security $Protected $Rules $File
+    if (-not $made -and (Test-Security (Get-Acl -LiteralPath $Path) $want)) {
+        Report-Ok "security of $Path"
         return
     }
     $want.SetOwner((New-Object Security.Principal.SecurityIdentifier $Admins))
     Set-Acl -LiteralPath $Path -AclObject $want
-    Report-Set "folder $Path"
+    Report-Set "security of $Path"
 }
 
-# The runner's folders. Only administrators and SYSTEM write the runner's
-# files and hand in jobs, so nothing unelevated (a job in the normal queue
-# included) can change the runner or give the elevated one a job. The
-# unelevated runner writes its own queue's ready, log, work and outbox, and
-# claims a job by moving it out of the inbox, which it can read and delete
-# from but not write to. A moved job keeps the inbox's rules, and the runner
-# removes it with Remove-Item -Force, which writes its attributes first.
+# The runner's folders, each owned by the administrators, whoever made it.
+# Only administrators and SYSTEM write the runner's files and hand in jobs,
+# so no other account can change the runner or give it a job, and a job in
+# the normal queue cannot hand one to the elevated runner. The unelevated
+# runner writes its own queue's ready, log, work and outbox, and claims a job
+# by moving it out of the inbox, which it can read and delete from but not
+# write to. A moved job keeps the inbox's rules, and the runner removes it
+# with Remove-Item -Force, which writes its attributes first.
 function Install-Folders([string] $TesterSid) {
     $full = 'FullControl'
-    Set-Folder $Root $true @((New-Rule $Admins $full), (New-Rule $System $full), (New-Rule $TesterSid 'ReadAndExecute'))
-    Set-Folder "$Root\queue" $false @()
-    Set-Folder "$Root\queue\high" $false @()
-    Set-Folder "$Root\queue\normal" $false @(New-Rule $TesterSid 'Modify')
-    Set-Folder "$Root\queue\normal\inbox" $true @(
+    Set-Security $Root $true @((New-Rule $Admins $full), (New-Rule $System $full), (New-Rule $TesterSid 'ReadAndExecute'))
+    foreach ($folder in 'queue', 'queue\high', 'queue\high\inbox', 'queue\high\work', 'queue\high\outbox') {
+        Set-Security "$Root\$folder" $false
+    }
+    Set-Security "$Root\queue\normal" $false @(New-Rule $TesterSid 'Modify')
+    Set-Security "$Root\queue\normal\inbox" $true @(
         (New-Rule $Admins $full), (New-Rule $System $full),
         (New-Rule $TesterSid 'ReadAndExecute' 'None'),
         (New-Rule $TesterSid 'ReadAndExecute, Delete, WriteAttributes' 'ObjectInherit' 'InheritOnly'))
+    foreach ($folder in 'queue\normal\work', 'queue\normal\outbox') {
+        Set-Security "$Root\$folder" $false
+    }
 }
 
-# Copies each runner file whose content differs, and notes in
-# $script:FilesChanged whether any did.
+# Copies each runner file whose content differs, stamped with the time it
+# was installed (a copy keeps its source's), and gives every one the
+# folder's rules alone.
 function Install-RunnerFiles {
     foreach ($name in $RunnerFiles) {
         $source = Join-Path $PSScriptRoot $name
@@ -104,15 +129,31 @@ function Install-RunnerFiles {
         if ((Test-Path -LiteralPath $target) -and
             (Get-FileHash -LiteralPath $target).Hash -eq (Get-FileHash -LiteralPath $source).Hash) {
             Report-Ok "file $target"
-            continue
+        } else {
+            Copy-Item -LiteralPath $source -Destination $target -Force
+            (Get-Item -LiteralPath $target).LastWriteTime = Get-Date
+            Report-Set "file $target"
         }
-        Copy-Item -LiteralPath $source -Destination $target -Force
-        Report-Set "file $target"
-        $script:FilesChanged = $true
+        Set-Security $target $false -File
     }
 }
 
-# Records a setting's value from before the first setup, once.
+# Writes $Text to $Path whole or not at all, on disk before it returns.
+function Write-DurableFile([string] $Path, [string] $Text) {
+    $tmp = "$Path.tmp"
+    $bytes = (New-Object Text.UTF8Encoding $false).GetBytes($Text)
+    $stream = New-Object IO.FileStream $tmp, 'Create', 'Write', 'None', 4096, 'WriteThrough'
+    try {
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+    } finally {
+        $stream.Dispose()
+    }
+    if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($tmp, $Path, $null) } else { [IO.File]::Move($tmp, $Path) }
+}
+
+# Records a setting's value from before the first setup, once, before the
+# setting is changed.
 function Save-Original([string] $Name, $Value) {
     $path = Join-Path $Root 'restore.json'
     $saved = @{}
@@ -121,8 +162,7 @@ function Save-Original([string] $Name, $Value) {
     }
     if ($saved.ContainsKey($Name)) { return }
     $saved[$Name] = $Value
-    [IO.File]::WriteAllText("$path.tmp", ($saved | ConvertTo-Json -Compress))
-    Move-Item -LiteralPath "$path.tmp" -Destination $path -Force
+    Write-DurableFile $path ($saved | ConvertTo-Json -Compress)
 }
 
 function Stop-Runner([string] $Queue) {
@@ -137,42 +177,65 @@ function Test-TesterLoggedOn {
     return (Get-CimInstance Win32_ComputerSystem).UserName -eq "$env:COMPUTERNAME\$User"
 }
 
-# The VM's runner task (scripts/windows-vm/guest/setup.ps1), with a hash of
-# its definition in its description so a second run can tell it is current.
-# Re-registered when the definition differs; restarted when it was, when
-# the runner's files changed, or when it is not running.
-function Install-Runner([string] $Queue, [string] $RunLevel, [bool] $FilesChanged) {
+# Whether queue $Queue's runner runs the installed code: the process its
+# `ready` names is a PowerShell that started after the runner's files were
+# installed. False when it does not run.
+function Test-RunnerCurrent([string] $Queue) {
+    $ready = Get-Item -LiteralPath (Join-Path $Root "queue\$Queue\ready") -ErrorAction SilentlyContinue
+    if ($null -eq $ready) { return $false }
+    $process = Get-Process -Id ([int] (Get-Content -LiteralPath $ready.FullName)) -ErrorAction SilentlyContinue
+    if ($null -eq $process -or $process.ProcessName -ne 'powershell') { return $false }
+    $installed = ($RunnerCode | ForEach-Object { (Get-Item -LiteralPath (Join-Path $Root $_)).LastWriteTime } |
+            Measure-Object -Maximum).Maximum
+    return $process.StartTime -gt $installed -and $process.StartTime -le $ready.LastWriteTime
+}
+
+# What matters of a runner task, as text, for a registered task and for one
+# only built, so the two compare. Names lose their computer's prefix.
+function Get-TaskText($Actions, $Triggers, $Principal, $Settings) {
+    $action = @($Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join ';'
+    $trigger = @($Triggers | ForEach-Object { "$($_.CimClass.CimClassName):$(($_.UserId -split '\\')[-1]):$($_.Enabled)" }) -join ';'
+    $principal = '{0}:{1}:{2}' -f ($Principal.UserId -split '\\')[-1], $Principal.LogonType, $Principal.RunLevel
+    $limits = '{0}|{1}|{2}|{3}|{4}|{5}|{6}' -f $Settings.Enabled, $Settings.ExecutionTimeLimit, $Settings.MultipleInstances,
+        $Settings.RestartCount, $Settings.RestartInterval, $Settings.DisallowStartIfOnBatteries, $Settings.StopIfGoingOnBatteries
+    return "$action|$trigger|$principal|$limits"
+}
+
+# The VM's runner task (scripts/windows-vm/guest/setup.ps1), registered
+# again when what is registered differs; returns whether it was.
+function Install-RunnerTask([string] $Queue, [string] $RunLevel) {
     $name = "wn01-runner-$Queue"
-    $arguments = "--headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Root\runner.ps1 -Queue $Queue"
-    $definition = "conhost.exe|$arguments|AtLogOn:$User|Interactive:$RunLevel|limit 0|IgnoreNew|restart 3 x 1 min|batteries"
-    $sha = [Security.Cryptography.SHA256]::Create()
-    $hash = -join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($definition)) | ForEach-Object { $_.ToString('x2') })
-    $description = "Desktop runner for pc run ($Queue queue). Definition $hash"
+    $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Root\runner.ps1 -Queue $Queue"
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $User
+    $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel $RunLevel
+    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
-    $restart = $FilesChanged
-    if ($null -eq $task -or $task.Description -ne $description) {
-        Stop-Runner $Queue
-        $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument $arguments
-        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $User
-        $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel $RunLevel
-        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-        Register-ScheduledTask -TaskName $name -Description $description -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-        Report-Set "task $name"
-        $restart = $true
-    } else {
+    if ($null -ne $task -and (Get-TaskText $task.Actions $task.Triggers $task.Principal $task.Settings) -eq
+        (Get-TaskText $action $trigger $principal $settings)) {
         Report-Ok "task $name"
+        return $false
     }
+    Stop-Runner $Queue
+    Register-ScheduledTask -TaskName $name -Description "Desktop runner for pc run ($Queue queue)" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    Report-Set "task $name"
+    return $true
+}
+
+# The runner task, and its runner started again unless it already runs the
+# installed files under the current task; a setup stopped half-way leaves a
+# runner older than its files, which the next run restarts.
+function Install-Runner([string] $Queue, [string] $RunLevel) {
+    $changed = Install-RunnerTask $Queue $RunLevel
     if (-not (Test-TesterLoggedOn)) {
-        Write-Output "     $name starts at tester's next logon (tester is not logged on)"
+        Write-Host "     wn01-runner-$Queue starts at tester's next logon (tester is not logged on)"
         return
     }
-    $running = (Get-ScheduledTask -TaskName $name).State -eq 'Running'
-    if ($running -and -not $restart) {
-        Report-Ok "runner $Queue running"
+    if (-not $changed -and (Test-RunnerCurrent $Queue)) {
+        Report-Ok "runner $Queue runs the installed files"
         return
     }
-    if ($running) { Stop-Runner $Queue }
-    Start-ScheduledTask -TaskName $name
+    Stop-Runner $Queue
+    Start-ScheduledTask -TaskName "wn01-runner-$Queue"
     Report-Set "runner $Queue started"
 }
 
@@ -233,30 +296,38 @@ function Enable-AutoLogon([string] $Password) {
     Remove-RegistryValue 'DefaultPassword'
 }
 
-# The AC value in seconds of power setting $Guid (SUB_SLEEP) in the
-# active plan, read through CIM, whose names do not depend on the language.
-function Get-SleepSetting([string] $Guid) {
-    $scheme = (Get-CimInstance -Namespace root\cimv2\power -ClassName Win32_PowerPlan -Filter 'IsActive = True').InstanceID -replace '^.*\\', ''
+# The active power plan's GUID.
+function Get-ActivePlan {
+    $plan = Get-CimInstance -Namespace root\cimv2\power -ClassName Win32_PowerPlan -Filter 'IsActive = True'
+    if (@($plan).Count -ne 1) { throw 'could not read the active power plan' }
+    return $plan.InstanceID -replace '^.*\\\{(.*)\}$', '$1'
+}
+
+# The AC value in seconds of SUB_SLEEP setting $Guid in power plan $Plan,
+# read through CIM, whose names do not depend on the language.
+function Get-SleepSetting([string] $Plan, [string] $Guid) {
     $index = Get-CimInstance -Namespace root\cimv2\power -ClassName Win32_PowerSettingDataIndex |
-        Where-Object { $_.InstanceID -like "*$scheme\AC\{$Guid}" }
+        Where-Object { $_.InstanceID -like "*{$Plan}\AC\{$Guid}" }
     # One instance, or the read failed: never taken as "never sleeps".
     if (@($index).Count -ne 1) { throw "could not read power setting $Guid" }
     return [int] $index.SettingIndexValue
 }
 
 # Nobody wakes the PC: it never sleeps or hibernates on AC while set up.
+# The value found is recorded under its plan, which uninstall puts back.
 function Disable-Sleep {
+    $plan = Get-ActivePlan
     foreach ($setting in @{ name = 'STANDBYIDLE'; guid = '29f6c1db-86da-48c5-9fdb-f2b67b1f44da' },
         @{ name = 'HIBERNATEIDLE'; guid = '9d7815a6-7ee4-497e-8888-515a05f02364' }) {
-        $value = Get-SleepSetting $setting.guid
+        $value = Get-SleepSetting $plan $setting.guid
         if ($value -eq 0) {
             Report-Ok "power $($setting.name) on AC: never"
             continue
         }
-        Save-Original $setting.name $value
-        & powercfg.exe /setacvalueindex SCHEME_CURRENT SUB_SLEEP $setting.name 0
+        Save-Original "power:${plan}:$($setting.name)" $value
+        & powercfg.exe /setacvalueindex $plan SUB_SLEEP $setting.name 0
         if ($LASTEXITCODE -ne 0) { throw "powercfg /setacvalueindex $($setting.name) failed" }
-        & powercfg.exe /setactive SCHEME_CURRENT
+        & powercfg.exe /setactive $plan
         if ($LASTEXITCODE -ne 0) { throw 'powercfg /setactive failed' }
         Report-Set "power $($setting.name) on AC: never (was $value s)"
     }
@@ -267,7 +338,8 @@ function Disable-Sleep {
 function Invoke-Installer([string] $Path, [string[]] $Arguments, [int[]] $Ok = @(0)) {
     $process = Start-Process -FilePath $Path -ArgumentList $Arguments -PassThru -NoNewWindow
     if (-not $process.WaitForExit($InstallSeconds * 1000)) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        # winget and Visual Studio's setup start installers of their own.
+        & taskkill.exe /T /F /PID $process.Id | Out-Null
         throw "$Path did not finish within $InstallSeconds s"
     }
     if ($process.ExitCode -notin $Ok) { throw "$Path exited with $($process.ExitCode)" }
@@ -357,8 +429,8 @@ try {
     $testerSid = (Get-LocalUser -Name $User).SID.Value
     Install-Folders $testerSid
     Install-RunnerFiles
-    Install-Runner 'normal' 'Limited' $script:FilesChanged
-    Install-Runner 'high' 'Highest' $script:FilesChanged
+    Install-Runner 'normal' 'Limited'
+    Install-Runner 'high' 'Highest'
     Enable-AutoLogon $Password
     Disable-Sleep
     Install-BuildTools

@@ -126,8 +126,8 @@ cmd_setup() {
     for name in "${RUNNER_FILES[@]}"; do files+=("$RUNNER_GUEST_DIR/$name"); done
     for name in "${PC_RUNNER_FILES[@]}" setup.ps1 Autologon.cs; do files+=("$PC_GUEST_DIR/$name"); done
     take_lock 600
-    require_running
     ensure_password
+    require_running
     log "setting the PC up (deadline 3600 s)"
     run_staged 3600 setup.ps1 "${files[@]}" <"$STATE_DIR/password" || die "the setup failed"
     if tester_logged_on; then
