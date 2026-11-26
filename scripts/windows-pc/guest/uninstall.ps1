@@ -172,18 +172,24 @@ function Lock-Setup {
     }
 }
 
+# Removes staging folders other runs left (one whose script never started)
+# once a day old: a run waits at most a minute for the lock, so none that
+# old is in use. Housekeeping that never fails the run.
+function Remove-OldStages {
+    $cutoff = (Get-Date).AddDays(-1)
+    Get-ChildItem -LiteralPath (Split-Path $PSScriptRoot) -Directory -Filter 'wn13-setup-*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -ne $PSScriptRoot -and $_.LastWriteTime -lt $cutoff } |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 $SetupLock = $null
 try {
     $SetupLock = Lock-Setup
-    # Holding the lock, no other run is going: what other runs staged and
-    # left (one whose script never started) can go.
-    Get-ChildItem -LiteralPath (Split-Path $PSScriptRoot) -Directory -Filter 'wn13-setup-*' |
-        Where-Object { $_.FullName -ne $PSScriptRoot } |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     Add-Type -Path (Join-Path $PSScriptRoot 'Autologon.cs')
     # Before anything else that can fail: a PC left half uninstalled must
     # not still log tester on at boot.
     Disable-AutoLogon
+    Remove-OldStages
     Remove-Runners
     if ((Test-Path -LiteralPath $Root) -and -not (Test-SetupRoot)) {
         Write-Output "$Root was not made by the setup: left alone, and no setting put back from it"

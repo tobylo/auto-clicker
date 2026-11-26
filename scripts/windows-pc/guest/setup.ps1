@@ -475,7 +475,7 @@ function Invoke-Installer([string] $Path, [string[]] $Arguments, [int[]] $Ok = @
     $null = $process.Handle
     if (-not $process.WaitForExit($InstallSeconds * 1000)) {
         # winget and Visual Studio's setup start installers of their own.
-        & taskkill.exe /T /F /PID $process.Id | Out-Null
+        Stop-Tree $process.Id
         throw "$Path did not finish within $InstallSeconds s"
     }
     if ($process.ExitCode -notin $Ok) { throw "$Path exited with $($process.ExitCode)" }
@@ -522,6 +522,16 @@ function Install-BuildTools {
     Report-Set 'Build Tools with the C++ tools and a Windows SDK'
 }
 
+# Ends process $Id and everything it started, within 30 s.
+function Stop-Tree([int] $Id) {
+    $kill = Start-Process -FilePath taskkill.exe -ArgumentList '/T', '/F', '/PID', $Id -PassThru -NoNewWindow
+    $null = $kill.Handle
+    if (-not $kill.WaitForExit(30000)) {
+        $kill.Kill()
+        throw "process $Id and what it started could not be ended within 30 s"
+    }
+}
+
 # Runs $Path with $Arguments, ending it and everything it started after
 # $Seconds, and returns its exit code and its stdout's lines; its stderr is
 # shown when it fails. Nothing the setup runs while it holds its lock may
@@ -536,7 +546,7 @@ function Invoke-Bounded([string] $Path, [string[]] $Arguments, [int] $Seconds) {
     $out = $process.StandardOutput.ReadToEndAsync()
     $err = $process.StandardError.ReadToEndAsync()
     if (-not $process.WaitForExit($Seconds * 1000)) {
-        & taskkill.exe /T /F /PID $process.Id | Out-Null
+        Stop-Tree $process.Id
         throw "$Path $($info.Arguments) did not finish within $Seconds s"
     }
     # Its output once the pipes close, which a child it left may delay.
@@ -608,14 +618,20 @@ function Lock-Setup {
     }
 }
 
+# Removes staging folders other runs left (one whose script never started)
+# once a day old: a run waits at most a minute for the lock, so none that
+# old is in use. Housekeeping that never fails the run.
+function Remove-OldStages {
+    $cutoff = (Get-Date).AddDays(-1)
+    Get-ChildItem -LiteralPath (Split-Path $PSScriptRoot) -Directory -Filter 'wn13-setup-*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -ne $PSScriptRoot -and $_.LastWriteTime -lt $cutoff } |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 $SetupLock = $null
 try {
     $SetupLock = Lock-Setup
-    # Holding the lock, no other run is going: what other runs staged and
-    # left (one whose script never started) can go.
-    Get-ChildItem -LiteralPath (Split-Path $PSScriptRoot) -Directory -Filter 'wn13-setup-*' |
-        Where-Object { $_.FullName -ne $PSScriptRoot } |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+    Remove-OldStages
     Add-Type -Path (Join-Path $PSScriptRoot 'Autologon.cs')
     $testerSid = (Get-LocalUser -Name $User).SID.Value
     Install-Folders $testerSid
