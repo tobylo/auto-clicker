@@ -587,3 +587,15 @@ fn a_session_change_forgets_a_stop_key_let_go_of_on_another_desktop() {
         [Fired(CLICKING), ModifiersReleased]
     );
 }
+
+#[test]
+fn a_session_change_during_the_modifier_wait_loses_it() {
+    let mut keyboard = holding(&[CTRL, SHIFT]);
+    let mut hotkeys = registered();
+    hotkeys.hotkey(CLICKING, &mut keyboard);
+    hotkeys.watch(WAITING, &mut keyboard);
+    // UAC's desktop has the input: the key state reads every key up.
+    keyboard.down.clear();
+    let changed = hotkeys.session_changed(&mut keyboard);
+    assert_eq!(after(changed, &keyboard), (vec![ReleaseLost], false));
+}

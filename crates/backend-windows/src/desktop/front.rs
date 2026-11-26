@@ -41,7 +41,8 @@ impl Front {
     /// # Errors
     /// The window or its registration could not be made.
     pub fn open(no_hotkeys: bool) -> io::Result<Front> {
-        let (ready, made) = mpsc::channel();
+        // A rendezvous: a window sent is one the opener took.
+        let (ready, made) = mpsc::sync_channel(0);
         let thread = thread::spawn(move || serve(no_hotkeys, &ready));
         let window = made
             .recv_timeout(Duration::from_secs(10))
@@ -94,7 +95,7 @@ impl Drop for Front {
 
 /// The window's thread: makes it, says so, and runs its messages.
 #[allow(unsafe_code)]
-fn serve(no_hotkeys: bool, ready: &mpsc::Sender<io::Result<usize>>) {
+fn serve(no_hotkeys: bool, ready: &mpsc::SyncSender<io::Result<usize>>) {
     let class = wide(&format!(
         "auto-clicker-test.front.{}.{}",
         std::process::id(),

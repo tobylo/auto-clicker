@@ -220,15 +220,21 @@ impl Registered {
         events
     }
 
-    /// The session was locked, unlocked or switched: what the keyboard did
-    /// meanwhile went to another desktop, releases included. Every key
-    /// followed is forgotten, with any press still waiting for its other
-    /// half, and taken afresh from the key state while reading goes on.
+    /// The session was locked, unlocked or switched, or the input desktop
+    /// changed: what the keyboard did meanwhile went to another desktop,
+    /// releases included. Every key followed is forgotten, with any press
+    /// still waiting for its other half, and taken afresh from the key
+    /// state while reading goes on. A wait for the modifiers is lost: the
+    /// key state reads every key up while another desktop has the input.
     pub fn session_changed(&mut self, keyboard: &mut impl Keyboard) -> Vec<HotkeyEvent> {
         self.held.clear();
         self.seeded.clear();
         self.unpaired.clear();
         let mut events = Vec::new();
+        if self.owed {
+            self.owed = false;
+            events.push(HotkeyEvent::ReleaseLost);
+        }
         if self.reading {
             self.seed(keyboard);
         }
