@@ -191,9 +191,13 @@ impl Registered {
     /// the user's own press put down stays down. Nothing fires.
     pub fn own_release(&mut self, code: u16, keyboard: &mut impl Keyboard) -> Vec<HotkeyEvent> {
         let mut events = Vec::new();
-        if self.reading && self.seeded.contains(&code) {
-            self.seeded.retain(|&seeded| seeded != code);
-            self.held.retain(|&held| held != code);
+        if self.reading {
+            if self.seeded.contains(&code) {
+                self.seeded.retain(|&seeded| seeded != code);
+                self.held.retain(|&held| held != code);
+            }
+            // Its aliases may have been seeded from its state while it was
+            // not (the program held it then).
             self.forget_seeded_aliases(code, keyboard);
             self.settle(keyboard, &mut events);
         }

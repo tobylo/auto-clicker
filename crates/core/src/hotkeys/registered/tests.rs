@@ -546,14 +546,18 @@ fn the_programs_release_lets_go_of_its_seeded_aliases_too() {
     const KEYPAD_ENTER: u16 = 96;
     let enter = Binding::parse("Ctrl+Shift+Enter").unwrap();
     let both = |binding: Binding| vec![binding.key(), Key::new(KEYPAD_ENTER).unwrap()];
-    let mut hotkeys = Registered::new(vec![(CLICKING, enter)], both);
-    // The program's keypad Enter, which the key state shows as both.
-    let mut keyboard = holding(&[ENTER, KEYPAD_ENTER]);
-    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
-    keyboard.down.clear();
-    hotkeys.own_release(KEYPAD_ENTER, &mut keyboard);
-    assert_eq!(
-        press(&mut hotkeys, &mut keyboard, ENTER),
-        [Fired(CLICKING), ModifiersReleased]
-    );
+    // The program's keypad Enter, which the key state shows as both, or
+    // as Enter alone while the program's own key is left out.
+    for seeded in [&[ENTER, KEYPAD_ENTER][..], &[ENTER]] {
+        let mut hotkeys = Registered::new(vec![(CLICKING, enter)], both);
+        let mut keyboard = holding(seeded);
+        hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+        keyboard.down.clear();
+        hotkeys.own_release(KEYPAD_ENTER, &mut keyboard);
+        assert_eq!(
+            press(&mut hotkeys, &mut keyboard, ENTER),
+            [Fired(CLICKING), ModifiersReleased],
+            "{seeded:?}"
+        );
+    }
 }
