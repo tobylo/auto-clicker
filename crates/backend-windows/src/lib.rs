@@ -3,14 +3,17 @@
 //! uses `unsafe`. It answers whether the process runs elevated, reads the
 //! user's display languages, shows a message, claims the daemon's single
 //! instance and runs the message thread, which hears the session's and the
-//! power notices and shows the tray icon; input and the rest arrive with
-//! the later M5 slices.
+//! power notices and shows the tray icon, sends input, and keeps the table
+//! the watchdog releases from should the daemon die; hotkeys and the rest
+//! arrive with the later M5 slices.
 
 // Windows alone; on other systems the crate is empty.
 #![cfg(windows)]
 
+mod delivery;
 #[cfg(any(test, feature = "desktop"))]
 pub mod desktop;
+mod dpi;
 mod elevation;
 mod instance;
 mod language;
@@ -20,7 +23,11 @@ mod output;
 mod run_timer;
 mod session;
 mod tray;
+pub mod watchdog;
+mod watched;
 
+pub use delivery::{Context, Delivery};
+pub use dpi::become_per_monitor_aware;
 pub use elevation::is_elevated;
 pub use instance::{ClaimError, Instance, claim};
 pub use language::display_languages;
@@ -29,3 +36,4 @@ pub use message_thread::{JoinError, MessageThread, Remote, SessionChange, Window
 pub use output::{MARKER, Output, received_key};
 pub use session::SessionState;
 pub use tray::{MenuEntry, TrayContent, TrayIcon, icon_side};
+pub use watched::{Desktop, Probe, Watched};

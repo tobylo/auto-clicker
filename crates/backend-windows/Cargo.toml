@@ -21,16 +21,22 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Security",
     # The module handle a window class is registered for.
     "Win32_System_LibraryLoader",
+    # The watchdog's shared table (an unnamed section).
+    "Win32_System_Memory",
     # The display turning off or on (RegisterPowerSettingNotification).
     "Win32_System_Power",
     # Session notices and the session's state (WTS).
     "Win32_System_RemoteDesktop",
+    # Whether the user's desktop has input (OpenInputDesktop, decision 7).
+    "Win32_System_StationsAndDesktops",
     # GUID_SESSION_DISPLAY_STATUS.
     "Win32_System_SystemServices",
     "Win32_System_Threading",
     # SendInput (WN04), and the tray menu's double-click time, which tells
     # a click that closed it from one that opens it again.
     "Win32_UI_Input_KeyboardAndMouse",
+    # Per-monitor DPI awareness (decision 10).
+    "Win32_UI_HiDpi",
     # The tray icon (Shell_NotifyIconW).
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

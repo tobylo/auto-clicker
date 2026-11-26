@@ -12,6 +12,7 @@
 //! every wait. Neither the controller's stop nor its release ever waits on
 //! the message thread, so neither wait can deadlock.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -343,6 +344,21 @@ impl Session {
             sleeping: false,
         }
         .blocked()
+    }
+}
+
+/// What the daemon does once its watchdog ended: nothing would release
+/// what it holds should it die now, so it raises `ended`, then tells the
+/// controller to quit, which stops any run at once and releases. Called on
+/// the wait's own thread; a controller already gone is already quitting.
+pub fn on_watchdog_end(
+    send: mpsc::UnboundedSender<Message>,
+    ended: Arc<AtomicBool>,
+) -> impl FnOnce() + Send + 'static {
+    move || {
+        ended.store(true, Ordering::Release);
+        let _ = send.send(Message::Quit);
+        log::line(format_args!("auto-clicker: the watchdog ended; quitting"));
     }
 }
 
