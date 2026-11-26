@@ -22,9 +22,11 @@ mod display;
 mod throttling;
 
 use std::convert::Infallible;
+use std::future::Future;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::pin::Pin;
 use std::ptr::{null, null_mut};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::task::{Context, Poll, Waker};
@@ -33,6 +35,7 @@ use std::time::{Duration, Instant};
 
 use auto_clicker_core::input::{InputError, RunTimer};
 use auto_clicker_core::log;
+use tokio::time::{Sleep, sleep_until};
 use windows_sys::Win32::Foundation::{HANDLE, WAIT_FAILED, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Threading::{
     CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateEventW, CreateWaitableTimerExW, INFINITE,
@@ -46,9 +49,11 @@ use throttling::Throttling;
 #[cfg(test)]
 pub(crate) use throttling::execution_speed_managed;
 
-/// How long dropping a timer waits for its thread. The thread only waits on
-/// handles, so it ends at once when told to; past this, it is left to end
-/// with the process rather than holding up the run's end.
+/// How long dropping a timer waits for its thread, and how long the run
+/// waits for a new thread to be ready. The thread only waits on handles, so
+/// it ends at once when told to; past this, it is left to end with the
+/// process rather than holding up the run's end. A thread not ready by then
+/// fails the run.
 const JOIN_WITHIN: Duration = Duration::from_secs(1);
 
 /// One run's timer. Dropping it ends its thread and, after the last run's
@@ -60,6 +65,11 @@ pub(crate) struct WaitableTimer {
     thread: Option<JoinHandle<()>>,
     /// Closed when the thread ends, however it ends.
     done: mpsc::Receiver<Infallible>,
+    /// When the thread must be ready by.
+    ready_by: Instant,
+    /// The run's wake at `ready_by`, while it waits for the thread to be
+    /// ready; tokio's own timer, coarse but enough for a deadline this long.
+    ready_wake: Option<Pin<Box<Sleep>>>,
     _throttling: Throttling,
 }
 
@@ -103,7 +113,8 @@ impl Shared {
 impl WaitableTimer {
     /// Creates the timer and starts its thread. Its first wait completes
     /// only once the thread is ready, which a stop or a shutdown can
-    /// interrupt like any other wait.
+    /// interrupt like any other wait, and fails if the thread is not ready
+    /// within [`JOIN_WITHIN`].
     ///
     /// # Errors
     /// When Windows cannot create the timer, its events or its thread.
@@ -130,6 +141,8 @@ impl WaitableTimer {
             next: 1,
             thread: Some(thread),
             done,
+            ready_by: Instant::now() + JOIN_WITHIN,
+            ready_wake: None,
             _throttling: Throttling::opt_out(),
         })
     }
@@ -141,15 +154,12 @@ impl RunTimer for WaitableTimer {
         cx: &mut Context<'_>,
         deadline: tokio::time::Instant,
     ) -> Poll<Result<(), InputError>> {
+        match self.poll_ready(cx) {
+            Poll::Ready(Ok(())) => {}
+            waiting_or_failed => return waiting_or_failed,
+        }
         let deadline = deadline.into_std();
         let mut state = self.shared.lock();
-        if let Some(err) = state.error() {
-            return Poll::Ready(Err(err));
-        }
-        if !state.ready {
-            state.wake_later(cx.waker());
-            return Poll::Pending;
-        }
         if deadline <= Instant::now() {
             return Poll::Ready(Ok(()));
         }
@@ -162,6 +172,11 @@ impl RunTimer for WaitableTimer {
     }
 
     fn poll_failed(&mut self, cx: &mut Context<'_>) -> Poll<InputError> {
+        match self.poll_ready(cx) {
+            Poll::Ready(Err(err)) => return Poll::Ready(err),
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(Ok(())) => {}
+        }
         let mut state = self.shared.lock();
         match state.error() {
             Some(err) => Poll::Ready(err),
@@ -170,6 +185,34 @@ impl RunTimer for WaitableTimer {
                 Poll::Pending
             }
         }
+    }
+}
+
+impl WaitableTimer {
+    /// Ready once the thread is ready; an error once it failed, or when it
+    /// is not ready by [`WaitableTimer::ready_by`].
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), InputError>> {
+        {
+            let mut state = self.shared.lock();
+            if let Some(err) = state.error() {
+                return Poll::Ready(Err(err));
+            }
+            if state.ready {
+                self.ready_wake = None;
+                return Poll::Ready(Ok(()));
+            }
+            state.wake_later(cx.waker());
+        }
+        let by = tokio::time::Instant::from_std(self.ready_by);
+        let wake = self
+            .ready_wake
+            .get_or_insert_with(|| Box::pin(sleep_until(by)));
+        wake.as_mut().poll(cx).map(|()| {
+            Err(InputError::Timer(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("the run timer's thread was not ready within {JOIN_WITHIN:?}"),
+            )))
+        })
     }
 }
 

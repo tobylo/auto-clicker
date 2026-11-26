@@ -114,6 +114,12 @@ where
     D: Future<Output = ()>,
 {
     async fn drive(&mut self) -> Result<Ended, InputError> {
+        // A deadline already past completes once the run's timer is ready
+        // (on Windows, its thread), so the recording's clock starts then
+        // rather than its first events falling due together.
+        if let Some(ended) = self.waiter.wait_until(Some(Instant::now())).await? {
+            return Ok(ended);
+        }
         let schedule = Schedule {
             start: Instant::now(),
             round_us: self.playback.recording.duration_us(),

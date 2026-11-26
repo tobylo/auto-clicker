@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use tokio::time::Instant;
 
@@ -35,6 +36,8 @@ struct State {
     ahead: Option<Ahead>,
     /// For each run timer dropped, how many calls had been made by then.
     timer_drops: Vec<usize>,
+    /// How long new run timers take to be ready, as Windows' thread does.
+    timer_start: Option<Duration>,
 }
 
 /// The test's view of a [`FakeBackend`], valid after the `Input` that owns
@@ -79,6 +82,12 @@ impl FakeLog {
         self.lock().ahead = Some(Ahead::Fail);
     }
 
+    /// Makes later run timers complete no wait until `after` from when they
+    /// are made, as a timer whose thread is slow to start does.
+    pub fn slow_timers(&self, after: Duration) {
+        self.lock().timer_start = Some(after);
+    }
+
     /// For each run timer dropped so far, how many calls had been made when
     /// it was dropped.
     pub fn timer_drops(&self) -> Vec<usize> {
@@ -92,9 +101,13 @@ impl FakeLog {
             state.timer_failures -= 1;
             return Err(InputError::Timer(std::io::Error::other("injected failure")));
         }
-        let inner = match state.ahead {
-            Some(ahead) => Box::new(Stuck(ahead)),
-            None => TokioTimer::boxed(),
+        let inner: Box<dyn RunTimer> = match (state.ahead, state.timer_start) {
+            (Some(ahead), _) => Box::new(Stuck(ahead)),
+            (None, Some(after)) => Box::new(SlowToStart {
+                ready_at: Instant::now() + after,
+                inner: TokioTimer::default(),
+            }),
+            (None, None) => TokioTimer::boxed(),
         };
         Ok(Box::new(NotedTimer {
             inner,
@@ -147,6 +160,26 @@ impl Drop for NotedTimer {
         let mut state = self.log.lock();
         let calls = state.calls.len();
         state.timer_drops.push(calls);
+    }
+}
+
+/// A run timer that completes no wait before `ready_at`.
+struct SlowToStart {
+    ready_at: Instant,
+    inner: TokioTimer,
+}
+
+impl RunTimer for SlowToStart {
+    fn poll_until(
+        &mut self,
+        cx: &mut Context<'_>,
+        deadline: Instant,
+    ) -> Poll<Result<(), InputError>> {
+        self.inner.poll_until(cx, deadline.max(self.ready_at))
+    }
+
+    fn poll_failed(&mut self, cx: &mut Context<'_>) -> Poll<InputError> {
+        self.inner.poll_failed(cx)
     }
 }
 

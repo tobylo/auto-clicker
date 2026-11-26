@@ -200,22 +200,41 @@ impl Wake for Wakes {
 #[test]
 fn no_wait_completes_before_the_thread_is_ready() {
     let _serial = one_at_a_time();
+    // Reset only once the thread is past it: it reads it as it starts.
     SLOW_START.store(300, Ordering::SeqCst);
-    let mut timer = WaitableTimer::start().unwrap();
+    runtime().block_on(async {
+        let mut timer = WaitableTimer::start().unwrap();
+        let wakes = Arc::new(Wakes::default());
+        let waker = Arc::clone(&wakes).into();
+        let mut cx = Context::from_waker(&waker);
+        let past = tokio::time::Instant::now();
+        // Already due, but the thread has not asked for the display yet.
+        assert!(timer.poll_until(&mut cx, past).is_pending());
+        let until = Instant::now() + Duration::from_secs(5);
+        while wakes.0.load(Ordering::SeqCst) == 0 && Instant::now() < until {
+            thread::sleep(ms(10));
+        }
+        // Woken once ready, and ready then.
+        assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+        assert!(timer.poll_until(&mut cx, past).is_ready());
+    });
     SLOW_START.store(0, Ordering::SeqCst);
-    let wakes = Arc::new(Wakes::default());
-    let waker = Arc::clone(&wakes).into();
-    let mut cx = Context::from_waker(&waker);
-    let past = tokio::time::Instant::now();
-    // Already due, but the thread has not asked for the display yet.
-    assert!(timer.poll_until(&mut cx, past).is_pending());
-    let until = Instant::now() + Duration::from_secs(5);
-    while wakes.0.load(Ordering::SeqCst) == 0 && Instant::now() < until {
-        thread::sleep(ms(10));
-    }
-    // Woken once ready, and ready then.
-    assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
-    assert!(timer.poll_until(&mut cx, past).is_ready());
+}
+
+#[test]
+fn a_thread_not_ready_within_a_second_fails_the_run_with_nothing_pressed() {
+    let _serial = one_at_a_time();
+    // Ready after 5 s unless stopped first, as the run's end does.
+    SLOW_START.store(5_000, Ordering::SeqCst);
+    let slow = clicks(Duration::from_secs(10), None);
+    let ran = run_case(open(false), &slow, signals(never(), never()), None);
+    SLOW_START.store(0, Ordering::SeqCst);
+
+    let failed = matches!(&ran.result, Some(Err(InputError::Timer(err))) if err.kind() == io::ErrorKind::TimedOut);
+    assert!(failed, "{:?}", ran.result);
+    assert_eq!(ran.calls, Vec::new());
+    let took = ran.took;
+    assert!(took >= JOIN_WITHIN && took < ms(3_000), "took {took:?}");
 }
 
 #[test]
@@ -282,18 +301,21 @@ fn a_thread_that_fails_while_serving_ends_a_hold_and_lets_go() {
 #[test]
 fn a_failed_thread_wakes_a_wait_without_a_deadline_with_the_error() {
     let _serial = one_at_a_time();
-    let mut timer = WaitableTimer::start().unwrap();
-    let wakes = Arc::new(Wakes::default());
-    let waker = Arc::clone(&wakes).into();
-    let mut cx = Context::from_waker(&waker);
-    assert!(timer.poll_failed(&mut cx).is_pending());
-    fail(&timer.shared, (io::ErrorKind::Other, "broken".to_owned()));
-    assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
-    let failed = timer.poll_failed(&mut cx);
-    assert!(
-        matches!(&failed, Poll::Ready(InputError::Timer(err)) if err.to_string() == "broken"),
-        "{failed:?}"
-    );
+    runtime().block_on(async {
+        let mut timer = WaitableTimer::start().unwrap();
+        wait(&mut timer, tokio::time::Instant::now()).await;
+        let wakes = Arc::new(Wakes::default());
+        let waker = Arc::clone(&wakes).into();
+        let mut cx = Context::from_waker(&waker);
+        assert!(timer.poll_failed(&mut cx).is_pending());
+        fail(&timer.shared, (io::ErrorKind::Other, "broken".to_owned()));
+        assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+        let failed = timer.poll_failed(&mut cx);
+        assert!(
+            matches!(&failed, Poll::Ready(InputError::Timer(err)) if err.to_string() == "broken"),
+            "{failed:?}"
+        );
+    });
 }
 
 // Every way a run ends

@@ -377,6 +377,27 @@ async fn a_run_waits_on_its_backends_timer_and_drops_it_at_the_end() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn the_recordings_clock_starts_once_the_timer_is_ready() {
+    let (input, calls, log) = timed_input();
+    log.slow_timers(ms(300));
+
+    let end = play(
+        input,
+        &playback(click(), 1.0, times(1)),
+        &Motion::Relative,
+        never(),
+    )
+    .await;
+
+    // The click's 20 ms between press and release is kept.
+    let at: Vec<Duration> = calls.lock().unwrap().iter().map(|(at, _)| *at).collect();
+    assert_eq!(
+        (end.result.unwrap(), at),
+        (Ended::Finished, vec![ms(310), ms(330)])
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_timer_that_fails_ends_playing_with_nothing_more_sent() {
     // The stop only bounds the test: the failure ends the run first.
     let (input, calls, log) = timed_input();
