@@ -4,7 +4,8 @@
 //! daemon's tests drive Windows without `unsafe` of their own.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read};
+use std::io;
+use std::os::windows::fs::FileExt;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use std::ptr::{null, null_mut};
@@ -335,16 +336,27 @@ struct Output {
 }
 
 impl Output {
+    /// The next free name for `kind`: one a run that ended without
+    /// cleaning up left behind is passed over, never opened.
     fn new(kind: &str) -> io::Result<Output> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let name = format!("auto-clicker-desktop.{}.{n}.{kind}", std::process::id());
-        let path = std::env::temp_dir().join(name);
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
-        Ok(Output { path, file })
+        let mut left_behind = None;
+        for _ in 0..64 {
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let name = format!("auto-clicker-desktop.{}.{n}.{kind}", std::process::id());
+            let path = std::env::temp_dir().join(name);
+            match OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(file) => return Ok(Output { path, file }),
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => left_behind = Some(err),
+                Err(err) => return Err(err),
+            }
+        }
+        Err(left_behind.unwrap_or_else(|| io::Error::other("no free name")))
     }
 
     /// The file for the child to write to: the one made here.
@@ -352,14 +364,20 @@ impl Output {
         self.file.try_clone()
     }
 
-    /// What it holds now: a program the script started may write on, and
-    /// is not waited for.
+    /// What it holds now, read through the file made here: a program the
+    /// script started may write on, and is not waited for.
     fn read(&self) -> io::Result<String> {
-        let length = self.file.metadata()?.len();
-        let mut read = Vec::new();
-        File::open(&self.path)?
-            .take(length)
-            .read_to_end(&mut read)?;
+        let length = usize::try_from(self.file.metadata()?.len()).map_err(io::Error::other)?;
+        let mut read = vec![0; length];
+        let mut done = 0;
+        while done < length {
+            let offset = u64::try_from(done).map_err(io::Error::other)?;
+            match self.file.seek_read(&mut read[done..], offset)? {
+                0 => break,
+                count => done += count,
+            }
+        }
+        read.truncate(done);
         Ok(String::from_utf8_lossy(&read).into_owned())
     }
 }
@@ -423,6 +441,34 @@ fn send(input: &INPUT) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_left_behind_is_passed_over_and_kept() {
+        let first = Output::new("left").unwrap();
+        // The name `by` after the first: `<prefix>.<pid>.<n>.left`.
+        let name = first
+            .path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let parts: Vec<&str> = name.split('.').collect();
+        let at: u64 = parts[2].parse().unwrap();
+        let next = |by: u64| {
+            let name = format!("{}.{}.{}.left", parts[0], parts[1], at + by);
+            first.path.with_file_name(name)
+        };
+        // What a run that crashed left at the next two names.
+        for by in [1, 2] {
+            std::fs::write(next(by), "kept").unwrap();
+        }
+        let made = Output::new("left").unwrap();
+        assert!(made.read().unwrap().is_empty());
+        for by in [1, 2] {
+            assert_eq!(std::fs::read_to_string(next(by)).unwrap(), "kept");
+            std::fs::remove_file(next(by)).unwrap();
+        }
+    }
 
     #[test]
     fn powershell_gives_all_its_output_and_keeps_its_deadline() {
