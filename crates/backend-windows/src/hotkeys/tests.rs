@@ -277,3 +277,45 @@ fn a_tap_seen_both_ways_while_stops_are_read_fires_once() {
     drop(reading);
     thread.quit_and_join(JOIN).unwrap();
 }
+
+#[test]
+#[ignore = "registers hotkeys and presses keys, which needs a desktop: run in the WN01 VM through `vm run`"]
+fn releases_queued_past_one_turn_go_before_a_newer_hotkey() {
+    use crate::desktop::keys;
+    const MODIFIERS: [u16; 3] = [0x1d, 0x38, 0x2a];
+    // F24, which no hotkey uses, and F22, `rare`'s recording hotkey.
+    const FILLER: u16 = 0x76;
+    const F22: u16 = 0x6d;
+    let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
+    let (thread, _) = started();
+    let (sink, received) = sink();
+    let reading = thread.remote().read_hotkeys(rare(), own(), sink).unwrap();
+    next(&received);
+    next(&received);
+    let stops = Watching {
+        release: false,
+        stops: vec![Action::ToggleClicking],
+    };
+    reading.watch(stops).unwrap();
+    reads(1);
+    // In one go: the modifiers down, more input than one turn handles, the
+    // modifiers up, then down again with F22, and kept down.
+    let mut tap: Vec<(u16, bool)> = MODIFIERS.iter().map(|&scan| (scan, true)).collect();
+    for _ in 0..DRAINED {
+        tap.extend([(FILLER, true), (FILLER, false)]);
+    }
+    tap.extend(MODIFIERS.iter().map(|&scan| (scan, false)));
+    tap.extend(MODIFIERS.iter().map(|&scan| (scan, true)));
+    tap.extend([(F22, true), (F22, false)]);
+    keys(&tap).unwrap();
+    // The older releases do not end the newer press's wait.
+    assert_eq!(
+        arrived(&received, Duration::from_millis(500)),
+        [HotkeyEvent::Fired(Action::ToggleRecording)]
+    );
+    let up: Vec<(u16, bool)> = MODIFIERS.iter().map(|&scan| (scan, false)).collect();
+    keys(&up).unwrap();
+    assert_eq!(next(&received), HotkeyEvent::ModifiersReleased);
+    drop(reading);
+    thread.quit_and_join(JOIN).unwrap();
+}
