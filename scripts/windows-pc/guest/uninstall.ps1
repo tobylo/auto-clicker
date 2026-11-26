@@ -45,8 +45,10 @@ function Get-RunnerTask([string] $Name) {
     }
 }
 
+# Whether anything of the setup's is here: its own C:\wn01 (one another
+# account made does not count) or a runner task.
 function Test-SetupPresent {
-    if (Test-Path -LiteralPath $Root) { return $true }
+    if ((Test-Path -LiteralPath $Root) -and (Test-SetupRoot)) { return $true }
     return @($Tasks | Where-Object { $null -ne (Get-RunnerTask $_) }).Count -gt 0
 }
 
@@ -193,10 +195,10 @@ try {
     Add-Type -Path (Join-Path $PSScriptRoot 'Autologon.cs')
     # The setup makes C:\wn01 before it touches automatic logon, and this
     # turns automatic logon off before it removes C:\wn01: with neither the
-    # folder nor a runner task here, nothing is the setup's, and automatic
-    # logon set up some other way is left as it is.
+    # setup's own folder nor a runner task here, nothing is the setup's, and
+    # automatic logon set up some other way is left as it is.
     if (-not (Test-SetupPresent)) {
-        Write-Output 'uninstall: nothing of the setup''s is on this PC (no C:\wn01, no runner task); automatic logon is left as it is'
+        Write-Output 'uninstall: nothing of the setup''s is on this PC (no C:\wn01 of its own, no runner task); automatic logon is left as it is'
         exit 0
     }
     # Before anything else that can fail: a PC left half uninstalled must
