@@ -154,19 +154,27 @@ function Get-Leftovers {
 
 # One setup or uninstall at a time on the PC itself. The dev box's lock is
 # not enough: when the dev box gives up on one, ending its SSH client, the
-# script goes on running here. A holder that died leaves the mutex free.
-$PcMutex = New-Object Threading.Mutex($false, 'Global\wn13-pc-setup')
-$PcMutexHeld = $false
+# script goes on running here. The lock is a file in tester's own profile,
+# which no other account can reach, held open without sharing; Windows lets
+# it go when the process ends, however it ends.
+function Lock-Setup {
+    $path = Join-Path $env:LOCALAPPDATA 'wn13-pc-setup.lock'
+    $deadline = (Get-Date).AddSeconds(60)
+    while ($true) {
+        try {
+            return [IO.File]::Open($path, 'OpenOrCreate', 'ReadWrite', 'None')
+        } catch [IO.IOException] {
+            if ((Get-Date) -gt $deadline) {
+                throw 'another setup or uninstall still runs on the PC (one the dev box gave up on, maybe): let it finish, then run this again'
+            }
+            Start-Sleep -Seconds 1
+        }
+    }
+}
+
+$SetupLock = $null
 try {
-    try {
-        $PcMutexHeld = $PcMutex.WaitOne(60000)
-    } catch [Threading.AbandonedMutexException] {
-        $PcMutexHeld = $true
-        Write-Output 'a previous setup or uninstall ended without finishing; going on'
-    }
-    if (-not $PcMutexHeld) {
-        throw 'another setup or uninstall still runs on the PC (one the dev box gave up on, maybe): let it finish, then run this again'
-    }
+    $SetupLock = Lock-Setup
     Add-Type -Path (Join-Path $PSScriptRoot 'Autologon.cs')
     # Before anything else that can fail: a PC left half uninstalled must
     # not still log tester on at boot.
@@ -190,6 +198,6 @@ try {
 } finally {
     Set-Location C:\
     Remove-Item -LiteralPath $PSScriptRoot -Recurse -Force -ErrorAction SilentlyContinue
-    if ($PcMutexHeld) { $PcMutex.ReleaseMutex() }
+    if ($SetupLock) { $SetupLock.Dispose() }
 }
 exit 0

@@ -104,7 +104,11 @@ run_staged() {
     mkdir "$local_dir/$name" && cp -- "$@" "$local_dir/$name/" || die "could not stage the setup's files"
     vm_ssh 60 "$KEYS_DIR" "if (Test-Path -LiteralPath '$stage') { exit 1 }" </dev/null ||
         die "$stage is already on the PC"
-    vm_push 120 "$KEYS_DIR" "$STAGE_PARENT" "$local_dir/$name" </dev/null || die "could not copy the setup's files to the PC"
+    if ! vm_push 120 "$KEYS_DIR" "$STAGE_PARENT" "$local_dir/$name" </dev/null; then
+        # What reached the PC goes too, as far as it can within 30 s.
+        vm_ssh 30 "$KEYS_DIR" "Remove-Item -LiteralPath '$stage' -Recurse -Force -ErrorAction SilentlyContinue" </dev/null >/dev/null 2>&1 || true
+        die "could not copy the setup's files to the PC"
+    fi
     rm -rf -- "$local_dir"
     trap - EXIT
     vm_ssh "$seconds" "$KEYS_DIR" "${REMOTE_PREFIX}try { & '$stage\\$script'; exit \$LASTEXITCODE } catch { [Console]::Error.WriteLine(\$_); exit 1 }"

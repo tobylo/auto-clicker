@@ -87,6 +87,7 @@ scripts/windows-pc/pc screen .claude/local/after-test.png
 ## When something fails
 
 - **`pc` says the PC does not answer:** it is off, its address changed (update `host=`), or its host key changed (Windows reinstalled; record the new key in `known_hosts` only after the owner confirms it). Since the setup turns sleep off, it should not be asleep.
+- **`pc setup` or `pc uninstall` says another one still runs on the PC:** a setup or uninstall the dev box gave up on (its deadline passed, or the session ended) goes on running on the PC, and holds a lock there until it ends. Wait for it, then run the command again.
 - **The runners do not run** (`pc status` says so): run `pc setup`, which starts them when tester is logged on. After a restart they start at tester's automatic logon, about a minute after boot.
 - **Look at the screen:** `pc screen`.
 - **Logs on the PC:** `C:\wn01\queue\<queue>\runner.log` holds the runner's errors.
