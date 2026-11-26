@@ -49,11 +49,11 @@ use throttling::Throttling;
 #[cfg(test)]
 pub(crate) use throttling::execution_speed_managed;
 
-/// How long dropping a timer waits for its thread, and how long the run
+/// How long dropping a timer waits for its thread, and the longest a run
 /// waits for a new thread to be ready. The thread only waits on handles, so
 /// it ends at once when told to; past this, it is left to end with the
-/// process rather than holding up the run's end. A thread not ready by then
-/// fails the run.
+/// process rather than holding up the run's end. A run still waiting for its
+/// thread then fails; a thread found ready is used, however late.
 const JOIN_WITHIN: Duration = Duration::from_secs(1);
 
 /// One run's timer. Dropping it ends its thread and, after the last run's
@@ -65,12 +65,17 @@ pub(crate) struct WaitableTimer {
     thread: Option<JoinHandle<()>>,
     /// Closed when the thread ends, however it ends.
     done: mpsc::Receiver<Infallible>,
-    /// When the thread must be ready by.
-    ready_by: Instant,
-    /// The run's wake at `ready_by`, while it waits for the thread to be
-    /// ready; tokio's own timer, coarse but enough for a deadline this long.
-    ready_wake: Option<Pin<Box<Sleep>>>,
+    starting: Starting,
     _throttling: Throttling,
+}
+
+/// How long the run waits for the thread to be ready.
+struct Starting {
+    /// The most it waits until.
+    by: Instant,
+    /// The run's wake at `by`, while it waits; tokio's own timer, coarse but
+    /// enough for a deadline this long.
+    wake: Option<Pin<Box<Sleep>>>,
 }
 
 /// What the run's task and the thread share.
@@ -141,8 +146,10 @@ impl WaitableTimer {
             next: 1,
             thread: Some(thread),
             done,
-            ready_by: Instant::now() + JOIN_WITHIN,
-            ready_wake: None,
+            starting: Starting {
+                by: Instant::now() + JOIN_WITHIN,
+                wake: None,
+            },
             _throttling: Throttling::opt_out(),
         })
     }
@@ -154,12 +161,14 @@ impl RunTimer for WaitableTimer {
         cx: &mut Context<'_>,
         deadline: tokio::time::Instant,
     ) -> Poll<Result<(), InputError>> {
-        match self.poll_ready(cx) {
+        let deadline = deadline.into_std();
+        // One lock for the checks and the waker: a failure recorded after
+        // them wakes the waker kept here.
+        let mut state = self.shared.lock();
+        match self.starting.poll(&mut state, cx) {
             Poll::Ready(Ok(())) => {}
             waiting_or_failed => return waiting_or_failed,
         }
-        let deadline = deadline.into_std();
-        let mut state = self.shared.lock();
         if deadline <= Instant::now() {
             return Poll::Ready(Ok(()));
         }
@@ -172,15 +181,11 @@ impl RunTimer for WaitableTimer {
     }
 
     fn poll_failed(&mut self, cx: &mut Context<'_>) -> Poll<InputError> {
-        match self.poll_ready(cx) {
-            Poll::Ready(Err(err)) => return Poll::Ready(err),
-            Poll::Pending => return Poll::Pending,
-            Poll::Ready(Ok(())) => {}
-        }
         let mut state = self.shared.lock();
-        match state.error() {
-            Some(err) => Poll::Ready(err),
-            None => {
+        match self.starting.poll(&mut state, cx) {
+            Poll::Ready(Err(err)) => Poll::Ready(err),
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(())) => {
                 state.wake_later(cx.waker());
                 Poll::Pending
             }
@@ -188,25 +193,21 @@ impl RunTimer for WaitableTimer {
     }
 }
 
-impl WaitableTimer {
-    /// Ready once the thread is ready; an error once it failed, or when it
-    /// is not ready by [`WaitableTimer::ready_by`].
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), InputError>> {
-        {
-            let mut state = self.shared.lock();
-            if let Some(err) = state.error() {
-                return Poll::Ready(Err(err));
-            }
-            if state.ready {
-                self.ready_wake = None;
-                return Poll::Ready(Ok(()));
-            }
-            state.wake_later(cx.waker());
+impl Starting {
+    /// Under the run's lock on `state`: ready once the thread is ready and
+    /// has not failed; an error once it failed, or when the run has waited
+    /// for it until [`Starting::by`]. Keeps the task's waker while waiting.
+    fn poll(&mut self, state: &mut State, cx: &mut Context<'_>) -> Poll<Result<(), InputError>> {
+        if let Some(err) = state.error() {
+            return Poll::Ready(Err(err));
         }
-        let by = tokio::time::Instant::from_std(self.ready_by);
-        let wake = self
-            .ready_wake
-            .get_or_insert_with(|| Box::pin(sleep_until(by)));
+        if state.ready {
+            self.wake = None;
+            return Poll::Ready(Ok(()));
+        }
+        state.wake_later(cx.waker());
+        let by = tokio::time::Instant::from_std(self.by);
+        let wake = self.wake.get_or_insert_with(|| Box::pin(sleep_until(by)));
         wake.as_mut().poll(cx).map(|()| {
             Err(InputError::Timer(io::Error::new(
                 io::ErrorKind::TimedOut,
