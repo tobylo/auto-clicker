@@ -76,6 +76,10 @@ pub struct Registered {
     /// The keys down while reading, among the modifiers and the hotkeys'
     /// keys: nothing else is kept.
     held: Vec<u16>,
+    /// Those of `held` known only from the key state, which may have
+    /// counted a key the program had just let go of: no raw event of the
+    /// user's has confirmed them yet.
+    seeded: Vec<u16>,
     /// An activation's modifiers have not been seen coming up yet: a
     /// [`HotkeyEvent::ModifiersReleased`] or [`HotkeyEvent::ReleaseLost`]
     /// is owed.
@@ -95,6 +99,7 @@ impl Registered {
             watching: Watching::default(),
             reading: false,
             held: Vec::new(),
+            seeded: Vec::new(),
             owed: false,
             released: false,
             unpaired: Vec::new(),
@@ -133,6 +138,8 @@ impl Registered {
             return events;
         }
         let was_down = self.held.contains(&code);
+        // The user's own event: the key state's word on it is settled.
+        self.seeded.retain(|&seeded| seeded != code);
         if down && !was_down {
             self.held.push(code);
             self.pressed(code, &mut events);
@@ -150,10 +157,12 @@ impl Registered {
     }
 
     /// The program let go of a key it held, read from raw input: should the
-    /// key state have counted it as the user's, it is up now. Nothing fires.
+    /// key state alone have counted it as the user's, it is up now. A key
+    /// the user's own press put down stays down. Nothing fires.
     pub fn own_release(&mut self, code: u16, keyboard: &mut impl Keyboard) -> Vec<HotkeyEvent> {
         let mut events = Vec::new();
-        if self.reading {
+        if self.reading && self.seeded.contains(&code) {
+            self.seeded.retain(|&seeded| seeded != code);
             self.held.retain(|&held| held != code);
             self.settle(keyboard, &mut events);
         }
@@ -256,6 +265,7 @@ impl Registered {
         for code in MODIFIER_CODES.into_iter().chain(hotkeys) {
             if keyboard.held(code) && !self.held.contains(&code) {
                 self.held.push(code);
+                self.seeded.push(code);
             }
         }
     }
@@ -294,6 +304,7 @@ impl Registered {
             keyboard.stop();
             self.reading = false;
             self.held.clear();
+            self.seeded.clear();
             self.unpaired.clear();
         }
     }
@@ -304,6 +315,7 @@ impl Registered {
         if keyboard.start().is_ok() {
             self.reading = true;
             self.held.clear();
+            self.seeded.clear();
             self.seed(keyboard);
         } else if self.owed {
             self.owed = false;

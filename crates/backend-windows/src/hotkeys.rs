@@ -38,8 +38,8 @@ use windows_sys::Win32::UI::Input::{
     RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEKEYBOARD, RegisterRawInputDevices,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, MSG, PM_REMOVE, PeekMessageW, RI_KEY_BREAK, RI_KEY_E0, WM_APP, WM_HOTKEY,
-    WM_INPUT,
+    DefWindowProcW, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage, RI_KEY_BREAK, RI_KEY_E0, WM_APP,
+    WM_HOTKEY, WM_INPUT, WM_QUIT,
 };
 
 use crate::message_thread::Remote;
@@ -288,15 +288,29 @@ enum KeyEvent {
     OwnPress,
 }
 
-/// Handles every `WM_INPUT` waiting in the queue, in order.
+/// At most this many `WM_INPUT` are handled ahead of a hotkey: one press
+/// queues a few, and input that never stops coming cannot hold the hotkey
+/// back.
+const DRAINED: usize = 256;
+
+/// Handles the `WM_INPUT` waiting in the queue, in order, up to
+/// [`DRAINED`]. A `WM_QUIT`, which `PeekMessage` takes whatever the
+/// filter, is posted again for the thread's loop.
 #[allow(unsafe_code)]
 fn drain_input(hwnd: HWND) {
     let mut message = MSG::default();
-    loop {
+    for _ in 0..DRAINED {
         // SAFETY: `message` is a live, writable `MSG`; only this window's
-        // `WM_INPUT` is taken.
+        // `WM_INPUT` is taken, and `WM_QUIT`.
         let got = unsafe { PeekMessageW(&mut message, hwnd, WM_INPUT, WM_INPUT, PM_REMOVE) };
         if got == 0 {
+            return;
+        }
+        if message.message == WM_QUIT {
+            // The exit code `PostQuitMessage` put in `wParam`.
+            let code = i32::try_from(message.wParam).unwrap_or(i32::MAX);
+            // SAFETY: plain call; the thread's loop ends on it.
+            unsafe { PostQuitMessage(code) };
             return;
         }
         input(hwnd, message.lParam);
@@ -468,7 +482,8 @@ fn key_event(lparam: LPARAM) -> Option<KeyEvent> {
 
 /// Raw keyboard input for this thread's window, and the user's key state:
 /// a key the program holds (in the watchdog's table) is never read as the
-/// user's, since its marked release never arrives.
+/// user's. Its marked release still reaches core, but only to take back
+/// what the key state said of it.
 struct RawKeyboard<'a> {
     window: HWND,
     own: &'a Table,

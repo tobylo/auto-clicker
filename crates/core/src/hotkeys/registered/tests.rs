@@ -464,3 +464,15 @@ fn a_key_the_program_let_go_of_counts_as_up() {
     let released = hotkeys.own_release(ALT, &mut keyboard);
     assert_eq!(after(released, &keyboard), (vec![ModifiersReleased], false));
 }
+
+#[test]
+fn the_programs_release_leaves_a_key_the_user_pressed_down() {
+    let mut keyboard = FakeKeyboard::default();
+    let mut hotkeys = registered();
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    hotkeys.key(CTRL, true, &mut keyboard);
+    hotkeys.key(SHIFT, true, &mut keyboard);
+    // The program lets go of a Ctrl of its own while the user holds theirs.
+    assert_eq!(hotkeys.own_release(CTRL, &mut keyboard), []);
+    assert_eq!(hotkeys.key(F6, true, &mut keyboard), [Fired(CLICKING)]);
+}
