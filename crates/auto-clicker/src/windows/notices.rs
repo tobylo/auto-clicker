@@ -73,6 +73,9 @@ pub struct Notices {
     released: Arc<Mark>,
     /// The menu's commands, shared with the tray that draws it.
     commands: Commands,
+    /// Whether the taskbar refuses the icon since it last showed: each try
+    /// is reported, and only the first is logged.
+    icon_refused: bool,
 }
 
 impl Notices {
@@ -82,6 +85,7 @@ impl Notices {
             send,
             released,
             commands: Commands::default(),
+            icon_refused: false,
         }
     }
 
@@ -165,7 +169,7 @@ impl Notices {
 
     /// Handles `event` if it is the tray's; whether it was. Hovering and
     /// clicking the icon is the user's hand, not a wake, and is not logged.
-    fn tray(&self, event: &WindowEvent) -> bool {
+    fn tray(&mut self, event: &WindowEvent) -> bool {
         match event {
             // A stop chosen from the menu trims the trip from the click
             // that opened it, as on Linux.
@@ -180,10 +184,15 @@ impl Notices {
                     "auto-clicker: the tray's menu could not open: {err}"
                 ));
             }
-            WindowEvent::TrayUnshown(err) => log::line(format_args!(
-                "auto-clicker: the tray icon is not shown: {err}; trying again"
-            )),
+            WindowEvent::TrayUnshown(err) => {
+                if !std::mem::replace(&mut self.icon_refused, true) {
+                    log::line(format_args!(
+                        "auto-clicker: the tray icon is not shown: {err}; trying again"
+                    ));
+                }
+            }
             WindowEvent::TrayShown => {
+                self.icon_refused = false;
                 log::line(format_args!("auto-clicker: the tray icon is shown again"));
             }
             _ => return false,

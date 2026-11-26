@@ -604,3 +604,18 @@ fn the_trays_choices_reach_the_controller_and_its_news_only_the_log() {
         [Message::MenuOpened, Message::Start, Message::Play(file(0))]
     );
 }
+
+#[test]
+fn a_refused_icon_is_logged_once_until_it_shows_again() {
+    let (mut notices, mut inbox, _) = notices();
+    let refused = || WindowEvent::TrayUnshown(io::Error::other("refused"));
+    assert!(!notices.icon_refused);
+    notices.handle(refused());
+    assert!(notices.icon_refused);
+    notices.handle(refused());
+    notices.handle(WindowEvent::TrayShown);
+    assert!(!notices.icon_refused);
+    notices.handle(refused());
+    assert!(notices.icon_refused);
+    assert_eq!(drained(&mut inbox), []);
+}

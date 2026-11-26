@@ -271,9 +271,9 @@ impl<C: Calls> Icon<C> {
 
     /// The taskbar refused the icon: tried again on the ladder while a
     /// taskbar is there, else once Explorer says it started. The handler is
-    /// told once, when it stops showing; tries that follow are not news.
+    /// told of each refusal, since each hides the popup, which hears no
+    /// leave from a refused icon; the daemon logs the first.
     fn failed(&mut self, err: io::Error, now: Instant) {
-        let news = !matches!(self.state, State::Retrying { .. } | State::Waiting);
         self.state = if self.calls.tries_on_ladder() {
             let delay = RETRY_DELAYS[self.tries.min(RETRY_DELAYS.len() - 1)];
             self.tries = self.tries.saturating_add(1);
@@ -283,9 +283,7 @@ impl<C: Calls> Icon<C> {
         } else {
             State::Waiting
         };
-        if news {
-            self.calls.tell(WindowEvent::TrayUnshown(err));
-        }
+        self.calls.tell(WindowEvent::TrayUnshown(err));
     }
 
     /// Removes the icon, unless it was never added; one that was refused

@@ -135,10 +135,12 @@ fn a_refused_icon_is_tried_again_on_the_ladder_change_first() {
     // then an add; refused again, the next try waits longer.
     let first = start + RETRY_DELAYS[0];
     icon.take(Inbox::default(), first);
-    // The handler heard of the refusal once; a try that follows is no news.
     assert_eq!(
         seen(&mut icon),
-        (strings(&["modify clicking", "add clicking"]), vec![])
+        (
+            strings(&["modify clicking", "add clicking"]),
+            strings(&["unshown: refused"])
+        )
     );
     assert_eq!(
         icon.state,
@@ -411,7 +413,7 @@ fn a_hung_explorer_holds_up_neither_a_change_nor_the_removal_past_its_deadline()
 }
 
 #[test]
-fn a_taskbar_that_keeps_refusing_is_news_once() {
+fn each_refusal_reaches_the_handler_which_hides_the_popup() {
     let mut icon = Icon::new(Fake {
         adds: VecDeque::from([false; 4]),
         modifies: VecDeque::from([false; 4]),
@@ -426,7 +428,7 @@ fn a_taskbar_that_keeps_refusing_is_news_once() {
         now = due;
         icon.take(Inbox::default(), now);
     }
-    assert_eq!(seen(&mut icon).1, strings(&["unshown: refused"]));
+    assert_eq!(seen(&mut icon).1, strings(&["unshown: refused"; 4]));
 }
 
 #[test]
