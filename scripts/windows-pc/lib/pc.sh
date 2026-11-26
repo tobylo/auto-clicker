@@ -54,6 +54,10 @@ read_config() {
         die "no $KEYS_DIR/known_hosts: record the PC's host key under the name $SSH_HOST_ALIAS (docs/agents/windows-pc.md)"
 }
 
+# The PC's key must match the recorded one, whatever HOSTKEY the caller's
+# environment holds (only a VM build accepts a new key).
+HOSTKEY=yes
+
 # The probe reads nothing: stdin belongs to the command that follows
 # (`pc ssh` and `pc push` stream files through it).
 require_running() {
@@ -70,29 +74,29 @@ remote_script() {
 }
 
 # Copies files $3... into an empty staging folder on the PC and runs script
-# $2 from it within $1 seconds, its stdin this function's. The script removes
-# the folder when it ends.
+# $2 from it within $1 seconds, its stdin this function's; fails when the
+# script does, or throws. The script removes the folder when it ends. Each
+# step is checked by hand: callers run this before ||, where errexit is off.
 run_staged() {
     local seconds="$1" script="$2" local_dir
     shift 2
-    local_dir="$(mktemp -d)"
+    local_dir="$(mktemp -d)" || die "could not make a local staging folder"
     # shellcheck disable=SC2064 # The path is fixed now; the trap runs later.
     trap "rm -rf -- '$local_dir'" EXIT
-    mkdir "$local_dir/wn13-setup"
-    cp -- "$@" "$local_dir/wn13-setup/"
+    mkdir "$local_dir/wn13-setup" && cp -- "$@" "$local_dir/wn13-setup/" || die "could not stage the setup's files"
     vm_ssh 60 "$KEYS_DIR" "Remove-Item -LiteralPath '$STAGE' -Recurse -Force -ErrorAction SilentlyContinue; if (Test-Path -LiteralPath '$STAGE') { exit 1 }" </dev/null ||
         die "could not empty $STAGE on the PC"
-    vm_push 120 "$KEYS_DIR" "$STAGE_PARENT" "$local_dir/wn13-setup" </dev/null
+    vm_push 120 "$KEYS_DIR" "$STAGE_PARENT" "$local_dir/wn13-setup" </dev/null || die "could not copy the setup's files to the PC"
     rm -rf -- "$local_dir"
     trap - EXIT
-    vm_ssh "$seconds" "$KEYS_DIR" "${REMOTE_PREFIX}& '$STAGE\\$script'; exit \$LASTEXITCODE"
+    vm_ssh "$seconds" "$KEYS_DIR" "${REMOTE_PREFIX}try { & '$STAGE\\$script'; exit \$LASTEXITCODE } catch { [Console]::Error.WriteLine(\$_); exit 1 }"
 }
 
 # Makes tester's password unless the dev box has one, and checks it: 24
 # letters and digits, one line, readable by the owner alone. It is written
 # in full before the PC is touched, so a failed setup never loses it.
 ensure_password() {
-    local file="$STATE_DIR/password" tmp
+    local file="$STATE_DIR/password" tmp text
     if [[ ! -e "$file" ]]; then
         tmp="$(mktemp "$STATE_DIR/password.XXXXXX")"
         python3 -I -c '
@@ -110,14 +114,19 @@ while True:
         log "made a new password for tester in $file"
     fi
     chmod 600 "$file"
-    [[ "$(wc -l <"$file")" == 1 ]] && grep -qxE '[A-Za-z0-9]{16,128}' "$file" ||
+    # The file is exactly that line and its newline: the PC reads the first
+    # line, so nothing may come before or after it.
+    text="$(<"$file")"
+    [[ "$text" =~ ^[A-Za-z0-9]{16,128}$ ]] && (($(wc -c <"$file") == ${#text} + 1)) ||
         die "$file must hold one line of 16 to 128 letters and digits"
 }
 
-# Whether tester is logged on to the PC's desktop.
+# Whether tester is logged on to the PC's desktop; dies when that cannot be
+# read, rather than taking it for nobody.
 tester_logged_on() {
     local user
-    user="$(vm_ssh 30 "$KEYS_DIR" '(Get-CimInstance Win32_ComputerSystem).UserName' </dev/null | tr -d '\r')" || return 1
+    user="$(vm_ssh 30 "$KEYS_DIR" '(Get-CimInstance Win32_ComputerSystem).UserName' </dev/null | tr -d '\r')" ||
+        die "could not read who is logged on to the PC"
     [[ "${user,,}" == *'\tester' ]]
 }
 
@@ -146,16 +155,15 @@ cmd_uninstall() {
     log "kept $STATE_DIR/password: tester's password on the PC is still that one"
 }
 
-# What has focus in the desktop, from the elevated runner; fails when an
-# elevated window is in front, since Windows then drops injected input.
+# What has focus in the desktop, from the elevated runner; fails only when
+# focus.ps1 says (exit 2) that an elevated window is in front, since Windows
+# then drops injected input. A check that did not run is reported and does
+# not fail: the click test then fails on its own.
 check_focus() {
-    local focus
-    focus="$(run_job "$KEYS_DIR" high 30 'C:\wn01' 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\wn01\focus.ps1' </dev/null | tr -d '\r')" || {
-        echo "focus:      ${focus:-unknown}"
-        return 1
-    }
-    echo "focus:      $focus"
-    [[ "$focus" != *' elevated:'* ]]
+    local focus rc=0
+    focus="$(run_job "$KEYS_DIR" high 30 'C:\wn01' 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\wn01\focus.ps1' </dev/null | tr -d '\r')" || rc=$?
+    echo "focus:      ${focus:-unknown (exit $rc)}"
+    ((rc != 2))
 }
 
 # The runners answer a job each, and what has focus. Only while no other

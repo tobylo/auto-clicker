@@ -95,6 +95,9 @@ class PcTest(unittest.TestCase):
             "two lines": "abcdefghijklmnop1A\nabcdefghijklmnop1A\n",
             "a symbol": "abcdefghijklmnop1A!\n",
             "empty": "",
+            "a bad line before a good one": "bad line\nabcdefghijklmnop1A",
+            "no newline": "abcdefghijklmnop1A",
+            "a blank line after": "abcdefghijklmnop1A\n\n",
         }
         for name, text in cases.items():
             with self.subTest(name):

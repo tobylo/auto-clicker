@@ -198,49 +198,44 @@ function Test-RunnerCurrent([string] $Queue) {
     return $process.StartTime -gt $installed -and $process.StartTime -le $ready.LastWriteTime
 }
 
-# The SID of account $Name, however it is written ("tester" or
-# "COMPUTER\tester"), so the same account compares equal and another does not.
-function Get-AccountSid([string] $Name) {
-    return ([Security.Principal.NTAccount] $Name).Translate([Security.Principal.SecurityIdentifier]).Value
+# The definition the setup registers for a runner task, as text: a change to
+# it in a later setup shows as a difference.
+function Get-TaskText($Action, $Trigger, $Principal, $Settings) {
+    $limits = '{0}|{1}|{2}|{3}|{4}' -f $Settings.ExecutionTimeLimit, $Settings.MultipleInstances, $Settings.RestartCount,
+        $Settings.RestartInterval, $Settings.DisallowStartIfOnBatteries
+    return '{0} {1}|{2}:{3}|{4}:{5}:{6}|{7}' -f $Action.Execute, $Action.Arguments, $Trigger.CimClass.CimClassName, $Trigger.UserId,
+        $Principal.UserId, $Principal.LogonType, $Principal.RunLevel, $limits
 }
 
-# What matters of a runner task, as text, for a registered task and for one
-# only built, so the two compare.
-function Get-TaskText($Actions, $Triggers, $Principal, $Settings) {
-    $action = @($Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join ';'
-    $trigger = @($Triggers | ForEach-Object { "$($_.CimClass.CimClassName):$(Get-AccountSid $_.UserId):$($_.Enabled)" }) -join ';'
-    $principal = '{0}:{1}:{2}' -f (Get-AccountSid $Principal.UserId), $Principal.LogonType, $Principal.RunLevel
-    $limits = '{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}' -f $Settings.Enabled, $Settings.AllowDemandStart, $Settings.ExecutionTimeLimit,
-        $Settings.MultipleInstances, $Settings.RestartCount, $Settings.RestartInterval, $Settings.DisallowStartIfOnBatteries,
-        $Settings.StopIfGoingOnBatteries
-    return "$action|$trigger|$principal|$limits"
+# Whether task $Name is registered, as $Record says it was registered with
+# definition $Want.
+function Test-TaskRecorded([string] $Name, [string] $Record, [string] $Want) {
+    if ($null -eq (Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue)) { return $false }
+    if (-not (Test-Path -LiteralPath $Record)) { return $false }
+    return (Get-Content -LiteralPath $Record -Raw) -ceq "$Want`n$(Export-ScheduledTask -TaskName $Name)"
 }
 
-# The registered task as Get-TaskText puts it, or "" for one it cannot
-# read (another kind of trigger, say), which then counts as different.
-function Get-RegisteredTaskText($Task) {
-    try {
-        return Get-TaskText $Task.Actions $Task.Triggers $Task.Principal $Task.Settings
-    } catch {
-        return ''
-    }
-}
-
-# The VM's runner task (scripts/windows-vm/guest/setup.ps1), registered
-# again when what is registered differs; returns whether it was.
+# The VM's runner task (scripts/windows-vm/guest/setup.ps1). Registering it
+# records, in C:\wn01, the definition it was given and Windows' own export
+# of the task as registered. The task is registered again when either
+# differs now: the setup wants another definition, or anything in the task
+# changed since (its account, triggers, conditions or settings, whatever
+# changed them). Returns whether it was.
 function Install-RunnerTask([string] $Queue, [string] $RunLevel) {
     $name = "wn01-runner-$Queue"
+    $record = Join-Path $Root "task-$Queue.txt"
     $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Root\runner.ps1 -Queue $Queue"
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $User
     $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel $RunLevel
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
-    if ($null -ne $task -and (Get-RegisteredTaskText $task) -eq (Get-TaskText $action $trigger $principal $settings)) {
+    $want = Get-TaskText $action $trigger $principal $settings
+    if (Test-TaskRecorded $name $record $want) {
         Report-Ok "task $name"
         return $false
     }
     Stop-Runner $Queue
     Register-ScheduledTask -TaskName $name -Description "Desktop runner for pc run ($Queue queue)" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    Write-DurableFile $record "$want`n$(Export-ScheduledTask -TaskName $name)"
     Report-Set "task $name"
     return $true
 }
@@ -282,16 +277,28 @@ function Remove-RegistryValue([string] $Name) {
     Report-Set "Winlogon $Name removed"
 }
 
+# tester's password is $Password, and Windows does not want it changed at
+# the next logon, which would stop an automatic logon at a prompt.
+function Set-TesterPassword([string] $Password) {
+    $check = [Wn13.Autologon]::CheckPassword($User, $Password)
+    if ($check -eq [Wn13.Autologon]::WrongPassword) {
+        Set-LocalUser -Name $User -Password (ConvertTo-SecureString $Password -AsPlainText -Force)
+        Report-Set "tester's password"
+        $check = [Wn13.Autologon]::CheckPassword($User, $Password)
+    } else {
+        Report-Ok "tester's password"
+    }
+    if ($check -ne [Wn13.Autologon]::RightButMustChange) { return }
+    & net.exe user $User /logonpasswordchg:no | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "net user $User /logonpasswordchg:no failed" }
+    Report-Set "tester need not change its password at logon"
+}
+
 # tester logs in at every boot, with the password from the dev box. The
 # account's password is set first: should storing it for Winlogon fail, the
 # old one still logs in until a second run.
 function Enable-AutoLogon([string] $Password) {
-    if ([Wn13.Autologon]::IsPassword($User, $Password)) {
-        Report-Ok "tester's password"
-    } else {
-        Set-LocalUser -Name $User -Password (ConvertTo-SecureString $Password -AsPlainText -Force)
-        Report-Set "tester's password"
-    }
+    Set-TesterPassword $Password
     $account = Get-LocalUser -Name $User
     if ($null -eq $account.PasswordExpires) {
         Report-Ok "tester's password never expires"
@@ -468,3 +475,6 @@ try {
     Set-Location C:\
     Remove-Item -LiteralPath $PSScriptRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
+# Set explicitly: $LASTEXITCODE would be whatever a tolerated native
+# command last left.
+exit 0

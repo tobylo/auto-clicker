@@ -40,7 +40,7 @@ Everything lives in `~/.local/share/auto-clicker-pc/` (mode 700; `WN13_STATE_DIR
   - The runner's files and the queues are owned and written by administrators and SYSTEM only. The setup puts that right on every folder and file it installs, whoever made it, and refuses a junction or link in their place.
   - The unelevated runner writes its own queue's `ready`, log, `work` and `outbox`, and claims a job by moving it out of its inbox, which it cannot write.
   - So no other account can change the runner or hand it a job, and a job in the normal queue cannot hand one to the elevated runner. Programs running as tester are trusted as tester, elevated or not: Windows does not treat UAC as a security boundary, and the setup runs elevated over SSH from tester's own temporary folder and checks tester's Rust toolchain.
-- Two scheduled tasks, `wn01-runner-normal` (unelevated) and `wn01-runner-high` (elevated), start the runners at tester's logon. The setup compares each task's action, trigger, principal and settings with what it registers, and restarts a runner that started before its files were last installed.
+- Two scheduled tasks, `wn01-runner-normal` (unelevated) and `wn01-runner-high` (elevated), start the runners at tester's logon. The setup records, beside the runner, the definition it registered and Windows' export of each task, and registers a task again when either differs; it restarts a runner that started before its files were last installed.
 - `C:\work`: where tests build and run. It is not the setup's: `pc uninstall` leaves it alone.
 
 ## Commands
@@ -65,7 +65,7 @@ All of them print to stderr as they go, and every wait in them has a deadline.
 ```sh
 scripts/windows-pc/pc status
 # Copy the tree at HEAD into an empty C:\work\<name> and build it there.
-git archive --format=tar --prefix=wn13/ HEAD | scripts/windows-pc/pc ssh "cmd /c 'rmdir /s /q C:\work\wn13' 2>\$null; if (Test-Path C:\work\wn13) { exit 1 }; cmd /c 'tar -x -f - -C C:\work'; exit \$LASTEXITCODE"
+git archive --format=tar --prefix=wn13/ HEAD | scripts/windows-pc/pc ssh "New-Item -ItemType Directory -Force C:\work | Out-Null; cmd /c 'rmdir /s /q C:\work\wn13' 2>\$null; if (Test-Path C:\work\wn13) { exit 1 }; cmd /c 'tar -x -f - -C C:\work'; exit \$LASTEXITCODE"
 scripts/windows-pc/pc ssh 'cd C:\work\wn13; cargo build --locked; exit $LASTEXITCODE'
 # Tests run in the desktop: some Windows backend tests need one.
 scripts/windows-pc/pc run --timeout 1800 --workdir 'C:\work\wn13' -- cargo test --locked

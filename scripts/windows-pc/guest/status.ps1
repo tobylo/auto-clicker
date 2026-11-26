@@ -18,13 +18,13 @@ function Get-Value([string] $Path, [string] $Name) {
     return $item.$Name
 }
 
-# Minutes until the PC sleeps on AC power; 0 means never.
+# Seconds until the PC sleeps on AC power; 0 means never, $null unknown.
 function Get-SleepMinutes {
     $scheme = (Get-CimInstance -Namespace root\cimv2\power -ClassName Win32_PowerPlan -Filter 'IsActive = True').InstanceID -replace '^.*\\', ''
     $index = Get-CimInstance -Namespace root\cimv2\power -ClassName Win32_PowerSettingDataIndex |
         Where-Object { $_.InstanceID -like "*$scheme\AC\{29f6c1db-86da-48c5-9fdb-f2b67b1f44da}" }
     if (@($index).Count -ne 1) { return $null }
-    return [int] ($index.SettingIndexValue / 60)
+    return [int] $index.SettingIndexValue
 }
 
 # Whether $Process is the runner that wrote $Ready: a PowerShell that
@@ -59,7 +59,7 @@ $restart = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUp
     (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending')
 Write-Output "restart:    $(if ($restart) { 'pending (Windows Update may restart the PC)' } else { 'none pending' })"
 $sleep = Get-SleepMinutes
-Write-Output "sleep (AC): $(if ($null -eq $sleep) { 'unknown' } elseif ($sleep -eq 0) { 'never' } else { "after $sleep min idle" })"
+Write-Output "sleep (AC): $(if ($null -eq $sleep) { 'unknown' } elseif ($sleep -eq 0) { 'never' } else { "after $sleep s idle" })"
 foreach ($queue in 'normal', 'high') {
     Write-Output ("{0,-12}{1}" -f "${queue}:", (Get-RunnerState $queue $os.LastBootUpTime))
 }

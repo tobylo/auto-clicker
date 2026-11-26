@@ -68,7 +68,7 @@ function Disable-AutoLogon {
     foreach ($name in 'AutoLogonCount', 'DefaultPassword') {
         Remove-ItemProperty -LiteralPath $Winlogon -Name $name -ErrorAction SilentlyContinue
     }
-    [Wn13.Autologon]::WritePassword($null)
+    [Wn13.Autologon]::RemovePassword()
     Write-Output 'automatic logon is off'
 }
 
@@ -96,12 +96,15 @@ function Get-Leftovers {
 try {
     Add-Type -Path (Join-Path $PSScriptRoot 'Autologon.cs')
     Remove-Runners
+    # Before anything that can fail: a PC left half uninstalled must not
+    # still log tester on at boot.
+    Disable-AutoLogon
+    # restore.json goes with C:\wn01 only once every setting is back.
     Restore-Settings
     if (Test-Path -LiteralPath $Root) {
         Remove-Item -LiteralPath $Root -Recurse -Force
         Write-Output "removed $Root"
     }
-    Disable-AutoLogon
     $left = @(Get-Leftovers)
     if ($left.Count -gt 0) {
         Write-Output "uninstall: still there: $($left -join ', ')"
@@ -113,3 +116,4 @@ try {
     Set-Location C:\
     Remove-Item -LiteralPath $PSScriptRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
+exit 0

@@ -18,9 +18,13 @@ namespace Wn13
         const int LOGON32_LOGON_NETWORK = 3;
         const int LOGON32_PROVIDER_DEFAULT = 0;
         const int ERROR_LOGON_FAILURE = 1326;
+        const int ERROR_PASSWORD_MUST_CHANGE = 1907;
         // Refusals that mean the password itself was right: logon type not
-        // granted (1385), must change (1907), expired (1330).
-        static readonly int[] RightPasswordErrors = { 1385, 1907, 1330 };
+        // granted (1385), expired (1330).
+        static readonly int[] RightPasswordErrors = { 1385, 1330 };
+
+        /// CheckPassword's answers.
+        public const int WrongPassword = 0, RightPassword = 1, RightButMustChange = 2;
 
         [StructLayout(LayoutKind.Sequential)]
         struct LSA_UNICODE_STRING
@@ -93,8 +97,7 @@ namespace Wn13
             }
         }
 
-        /// The password Winlogon would log on with, or null when it keeps none
-        /// or an empty one.
+        /// The password Winlogon would log on with, or null when it keeps none.
         public static string ReadPassword()
         {
             return WithSecretKey<string>((policy, key) =>
@@ -113,8 +116,7 @@ namespace Wn13
                         return null;
                     }
                     LSA_UNICODE_STRING value = (LSA_UNICODE_STRING)Marshal.PtrToStructure(data, typeof(LSA_UNICODE_STRING));
-                    // Removing the secret leaves it empty, which logs nobody on.
-                    return value.Length == 0 ? null : Marshal.PtrToStringUni(value.Buffer, value.Length / 2);
+                    return value.Length == 0 ? "" : Marshal.PtrToStringUni(value.Buffer, value.Length / 2);
                 }
                 finally
                 {
@@ -123,20 +125,30 @@ namespace Wn13
             });
         }
 
-        /// Stores the password Winlogon logs on with; null removes it.
-        public static void WritePassword(string password)
+        /// Removes the password Winlogon logs on with. (A method of its own:
+        /// Windows PowerShell would pass a null string to WritePassword as "".)
+        public static void RemovePassword()
         {
             WithSecretKey<bool>((policy, key) =>
             {
-                if (password == null)
+                uint status = LsaStorePrivateData(policy, ref key, IntPtr.Zero);
+                if (status != STATUS_OBJECT_NAME_NOT_FOUND)
                 {
-                    uint status = LsaStorePrivateData(policy, ref key, IntPtr.Zero);
-                    if (status != STATUS_OBJECT_NAME_NOT_FOUND)
-                    {
-                        Check(status, "LsaStorePrivateData (remove)");
-                    }
-                    return true;
+                    Check(status, "LsaStorePrivateData (remove)");
                 }
+                return true;
+            });
+        }
+
+        /// Stores the password Winlogon logs on with.
+        public static void WritePassword(string password)
+        {
+            if (string.IsNullOrEmpty(password))
+            {
+                throw new ArgumentException("no password to store");
+            }
+            WithSecretKey<bool>((policy, key) =>
+            {
                 LSA_UNICODE_STRING value = new LSA_UNICODE_STRING();
                 value.Buffer = Marshal.StringToHGlobalUni(password);
                 value.Length = (ushort)(password.Length * 2);
@@ -156,25 +168,31 @@ namespace Wn13
             });
         }
 
-        /// Whether password is the local account's: true when Windows takes
-        /// it, even if the account may not log on this way or must change
-        /// it; false only when Windows answers that it is wrong.
-        public static bool IsPassword(string user, string password)
+        /// Whether password is the local account's: RightPassword when
+        /// Windows takes it, even if the account may not log on this way or
+        /// the password has expired; RightButMustChange when Windows takes it
+        /// but wants it changed at the next logon, which would stop an
+        /// automatic logon; WrongPassword only when Windows says it is wrong.
+        public static int CheckPassword(string user, string password)
         {
             IntPtr token;
             if (LogonUser(user, ".", password, LOGON32_LOGON_NETWORK, LOGON32_PROVIDER_DEFAULT, out token))
             {
                 CloseHandle(token);
-                return true;
+                return RightPassword;
             }
             int error = Marshal.GetLastWin32Error();
             if (error == ERROR_LOGON_FAILURE)
             {
-                return false;
+                return WrongPassword;
+            }
+            if (error == ERROR_PASSWORD_MUST_CHANGE)
+            {
+                return RightButMustChange;
             }
             if (Array.IndexOf(RightPasswordErrors, error) >= 0)
             {
-                return true;
+                return RightPassword;
             }
             throw new Win32Exception(error, "LogonUser");
         }

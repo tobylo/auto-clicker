@@ -8,7 +8,9 @@ process's integrity level. Windows drops input injected by an unelevated
 program into a window whose process has a higher integrity level (UIPI), so
 an elevated window left in front makes every click test fail. Prints one
 line, "<process> (<pid>) '<title>' <level>", or "no window in front" (as
-after a window closes, until another is activated), and exits 0.
+after a window closes, until another is activated). Exits 2 when the window
+is elevated, else 0: the caller reads the verdict from the exit code, never
+from the line, whose title could say anything.
 #>
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -89,3 +91,4 @@ $text = switch ($level) {
     default { 'not elevated' }
 }
 Write-Output ("{0} ({1}) '{2}' {3}" -f $name, [Wn13Focus]::Pid, [Wn13Focus]::Title, $text)
+if ($level -ge 0x3000) { exit 2 }
