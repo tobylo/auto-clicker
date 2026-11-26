@@ -442,15 +442,22 @@ fn holding(output: FakeOutput) -> (Controller<FakeOutput>, Links) {
     Controller::new(output, None, config, None)
 }
 
-/// Runs `controller` beside `steps` until both end, failing past a bound
-/// far above what they take: a controller that never quits fails the test
-/// rather than hanging it.
-fn run_until_quit(controller: Controller<FakeOutput>, steps: impl Future<Output = ()>) {
+/// Runs `controller` beside `steps` until both end, failing past `within`,
+/// a bound far above what they take: a controller that never quits fails
+/// the test rather than hanging it.
+fn run_until_quit(
+    controller: Controller<FakeOutput>,
+    steps: impl Future<Output = ()>,
+    within: Duration,
+) {
     let both = async { tokio::join!(controller.run(), steps) };
     runtime()
-        .block_on(async { tokio::time::timeout(Duration::from_secs(30), both).await })
-        .expect("the controller did not quit within 30 s");
+        .block_on(async { tokio::time::timeout(within, both).await })
+        .unwrap_or_else(|_| panic!("the controller did not quit within {within:?}"));
 }
+
+/// Far above what a test without a person in it takes.
+const QUIT: Duration = Duration::from_secs(30);
 
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
@@ -493,7 +500,7 @@ fn a_lock_from_the_message_thread_releases_a_held_button_at_once() {
         assert_eq!(output.presses(0), [PressState::Down, PressState::Up]);
         send.send(Message::Quit).unwrap();
     };
-    run_until_quit(controller, steps);
+    run_until_quit(controller, steps, QUIT);
     drop(events);
     message_thread.join().unwrap();
 }
@@ -525,7 +532,7 @@ fn the_watchdogs_end_stops_a_hold_at_once_releases_and_quits() {
         assert!(ending.elapsed() < AT_ONCE, "{:?}", ending.elapsed());
     };
     // The controller ends on its own: the watchdog's end quits it.
-    run_until_quit(controller, steps);
+    run_until_quit(controller, steps, QUIT);
     assert!(ended.load(std::sync::atomic::Ordering::Acquire));
 }
 
@@ -582,6 +589,7 @@ fn locking_the_desktop_releases_a_held_button_at_once_and_unlocking_allows_start
         // While locked, a start is refused.
         assert!(!try_holding(&send, &view).await);
         // Once the password is typed, starts are allowed again.
+        // Within the bound `run_until_quit` gives this test.
         let deadline = Instant::now() + Duration::from_secs(120);
         while !try_holding(&send, &view).await {
             assert!(Instant::now() < deadline, "never unlocked");
@@ -596,7 +604,7 @@ fn locking_the_desktop_releases_a_held_button_at_once_and_unlocking_allows_start
         .await;
         send.send(Message::Quit).unwrap();
     };
-    run_until_quit(controller, steps);
+    run_until_quit(controller, steps, Duration::from_secs(300));
     released.raise(ENDED);
     thread.quit_and_join(AT_ONCE).unwrap();
     let runs = output.0.lock().unwrap().len();

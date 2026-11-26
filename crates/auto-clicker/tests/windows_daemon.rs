@@ -211,7 +211,10 @@ struct Reaped(Child);
 impl Drop for Reaped {
     fn drop(&mut self) {
         let _ = self.0.kill();
-        let _ = self.0.wait();
+        let deadline = Instant::now() + END;
+        while matches!(self.0.try_wait(), Ok(None)) && Instant::now() < deadline {
+            sleep(Duration::from_millis(20));
+        }
     }
 }
 
