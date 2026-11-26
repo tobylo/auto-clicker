@@ -83,6 +83,11 @@ struct Record {
     no_local_time: bool,
     /// The reader gets its hotkeys from the desktop.
     desktop_reader: bool,
+    /// The reader reads the keyboards and reports the triggers of the
+    /// bindings it registered, as on Windows.
+    registered_triggers: bool,
+    /// The window in front runs as administrator.
+    elevated_front: bool,
     /// Opens wait until the test releases them through `open_gate`.
     hold_opens: bool,
     open_gate: Option<tokio::sync::oneshot::Sender<()>>,
@@ -386,6 +391,14 @@ impl Platform for FakePlatform {
         }
     }
 
+    fn reports_triggers(&self) -> bool {
+        self.0.with(|r| r.desktop_reader || r.registered_triggers)
+    }
+
+    fn foreground_takes_input(&self) -> bool {
+        !self.0.with(|r| r.elevated_front)
+    }
+
     fn read_input(&mut self, own: Option<&Input<Devices>>, reading: ReadInput) -> HotkeyReader {
         let ReadInput {
             bindings,
@@ -568,6 +581,20 @@ impl Daemon {
     fn assert_idle_after(&self, calls: &[Call]) {
         assert_eq!(self.activity(), Activity::Idle);
         assert_eq!(self.shared.calls(), calls);
+    }
+
+    /// What the newest reader was told to watch for since this was last
+    /// asked, in order.
+    async fn watched(&self) -> Vec<crate::hotkeys::Watching> {
+        let mut commands = self.shared.with(|r| r.commands.pop()).unwrap();
+        let mut told = Vec::new();
+        while let Ok(command) = timeout(Duration::from_millis(1), commands.next()).await {
+            if let ReaderCommand::Watch(watching) = command {
+                told.push(watching);
+            }
+        }
+        self.shared.with(|r| r.commands.push(commands));
+        told
     }
 
     /// Starts clicking from the hotkey, with the modifiers coming up at once.
@@ -1313,4 +1340,5 @@ mod playback;
 mod positions;
 mod recording;
 mod recordings;
+mod registered;
 mod settings;

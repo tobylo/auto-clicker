@@ -40,12 +40,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetMessageW, KillTimer, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSUSPEND,
     PBT_POWERSETTINGCHANGE, PostMessageW, PostQuitMessage, RegisterClassW, SetTimer,
-    UnregisterClassW, WM_APP, WM_CLOSE, WM_DESTROY, WM_ENDSESSION, WM_POWERBROADCAST,
-    WM_QUERYENDSESSION, WM_TIMER, WM_WTSSESSION_CHANGE, WNDCLASSW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
-    WTS_CONSOLE_CONNECT, WTS_CONSOLE_DISCONNECT, WTS_REMOTE_CONNECT, WTS_REMOTE_DISCONNECT,
-    WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+    UnregisterClassW, WM_APP, WM_CLOSE, WM_DESTROY, WM_ENDSESSION, WM_HOTKEY, WM_INPUT,
+    WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER, WM_WTSSESSION_CHANGE, WNDCLASSW,
+    WS_EX_TOOLWINDOW, WS_OVERLAPPED, WTS_CONSOLE_CONNECT, WTS_CONSOLE_DISCONNECT,
+    WTS_REMOTE_CONNECT, WTS_REMOTE_DISCONNECT, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
 };
 
+use crate::hotkeys::{self, WM_HOTKEYS_CHANGED, Wanted};
 use crate::message::wide;
 use crate::session::{SessionState, query};
 use crate::tray::{self, TrayContent, WM_TRAY_REFRESH};
@@ -188,6 +189,8 @@ struct Shared {
     /// The tray's content not yet taken by the thread: while it is there,
     /// a refresh is on its way.
     tray: Mutex<Option<TrayContent>>,
+    /// The hotkeys the runtime wants registered, and what for.
+    hotkeys: Mutex<Wanted>,
 }
 
 /// A window handle that may cross threads: Windows lets any thread post to
@@ -217,6 +220,7 @@ impl MessageThread {
         let remote = Remote(Arc::new(Shared {
             window: Mutex::new(None),
             tray: Mutex::new(None),
+            hotkeys: Mutex::new(Wanted::default()),
         }));
         let (ready, readiness) = mpsc::channel();
         let (finished, done) = mpsc::channel();
@@ -291,6 +295,11 @@ impl Remote {
         }
         self.post(WM_TRAY_REFRESH, 0, 0)
             .inspect_err(|_| *slot = None)
+    }
+
+    /// What the runtime wants of the hotkeys.
+    pub(crate) fn hotkeys(&self) -> &Mutex<Wanted> {
+        &self.0.hotkeys
     }
 
     /// Posts `message` to the window, under the lock that its destruction
@@ -622,6 +631,24 @@ fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LR
             unwatch(hwnd);
             Some(0)
         }
+        // A key press is never a wake to log (invariant N5).
+        WM_HOTKEY => {
+            hotkeys::hotkey(hwnd, wparam);
+            Some(0)
+        }
+        // Left to the default as well, which frees the event's data.
+        WM_INPUT => {
+            hotkeys::input(hwnd, lparam);
+            None
+        }
+        WM_HOTKEYS_CHANGED => {
+            SHARED.with_borrow(|shared| {
+                if let Some(shared) = shared {
+                    hotkeys::changed(hwnd, shared);
+                }
+            });
+            Some(0)
+        }
         // What the user's hand moved around the tray's menu is no wake.
         other => {
             if READY.get() && !tray::quiet(other) {
@@ -751,6 +778,7 @@ fn unwatch(hwnd: HWND) {
     READY.set(false);
     kill_retry_timer(hwnd);
     tray::remove();
+    hotkeys::end(hwnd);
     if SESSION_WATCHED.replace(false) {
         // SAFETY: `hwnd` is still alive (this runs in its `WM_DESTROY`) and
         // was registered. A failure leaves a registration that ends with

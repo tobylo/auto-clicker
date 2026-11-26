@@ -160,9 +160,12 @@ pub(crate) async fn unbound<T>(
             biased;
             done = &mut work => return done,
             command = commands.next() => {
-                let ReaderCommand::ConfigureShortcuts { operation, .. } = command;
-                let result = Err(NOT_BOUND.to_owned());
-                send(HotkeyEvent::Configured { operation, result });
+                // What the keyboard is watched for is no business of the
+                // desktop's shortcuts.
+                if let ReaderCommand::ConfigureShortcuts { operation, .. } = command {
+                    let result = Err(NOT_BOUND.to_owned());
+                    send(HotkeyEvent::Configured { operation, result });
+                }
             }
         }
     }

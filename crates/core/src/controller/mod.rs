@@ -50,7 +50,9 @@ pub use view::{Activity, Hotkey, Listed, NoRecording, Route, Routes, View, descr
 
 use crate::clicker::run;
 use crate::config::Config;
-use crate::hotkeys::{Action, Binding, Bindings, Capture, HotkeyEvent, HotkeyStatus, Unavailable};
+use crate::hotkeys::{
+    Action, Binding, Bindings, Capture, HotkeyEvent, HotkeyStatus, Unavailable, Watching,
+};
 use crate::input::{Input, InputBackend, InputError};
 use crate::message::{
     ConfigProblem, Hindrance, InputFailure, NoOnScreen, NoPointer, NoScreens, Notice, Problem,
@@ -194,6 +196,25 @@ pub trait Platform {
     /// Where the input reader gets its hotkeys.
     fn input_reader(&self) -> InputReader {
         InputReader::Devices
+    }
+
+    /// Whether the reader reports the triggers its hotkeys fire on
+    /// ([`HotkeyEvent::Triggers`]), which the program's own key presses
+    /// would set off: the desktop's shortcuts, and the hotkeys Windows
+    /// delivers for the bindings the program registered (M5 brief
+    /// decision 9). No run then presses a trigger's key, and until the
+    /// first report, no key at all.
+    fn reports_triggers(&self) -> bool {
+        self.input_reader() == InputReader::Desktop
+    }
+
+    /// Whether a run started now could reach the window in front. On
+    /// Windows, not while that window runs as administrator (or might),
+    /// nor on the secure desktop: Windows drops what the program sends
+    /// (M5 brief decision 7). A hotkey start is refused then. The default
+    /// can always reach it.
+    fn foreground_takes_input(&self) -> bool {
+        true
     }
 
     /// Starts reading input for `reading`, ignoring the devices of `own`
@@ -372,6 +393,14 @@ impl<B: InputBackend> Running<B> {
         self.stop.is_none()
     }
 
+    /// The hotkeys that stop it: its own, or any of them during playback.
+    fn stops(&self) -> Vec<Action> {
+        match self.playing {
+            Some(_) => Action::ALL.to_vec(),
+            None => vec![Action::ToggleClicking],
+        }
+    }
+
     /// Ends the run with the shutdown signal and waits for it to hand back
     /// what it held, released. The engine ends at once on the signal.
     async fn shut_down(mut self) -> RunEnd<B> {
@@ -428,6 +457,8 @@ pub struct Controller<P: Platform> {
     /// Why the devices could not be opened again.
     input_error: Option<InputFailure>,
     hotkeys: HotkeySource,
+    /// What the reader was last told to watch the keyboard for.
+    watched: Watching,
     hotkey_status: Option<HotkeyStatus>,
     /// The screen layout's watcher.
     screen: LayoutSource,
@@ -464,22 +495,17 @@ impl<P: Platform> Controller<P> {
         let (send, inbox) = mpsc::unbounded_channel();
         let (released_for_sleep, sleep_reports) = watch::channel(0);
         let desktop = Self::first_triggers(&platform);
+        let reader = platform.input_reader();
+        let hotkey =
+            |action| desktop::shown_hotkey(config.hotkeys, desktop.as_ref(), reader, action);
         let (view, shown) = watch::channel(View {
             activity: Activity::Idle,
             routes: routes(&platform),
             settings: config.clicker,
-            hotkey: desktop::shown_hotkey(config.hotkeys, desktop.as_ref(), Action::ToggleClicking),
-            record_hotkey: desktop::shown_hotkey(
-                config.hotkeys,
-                desktop.as_ref(),
-                Action::ToggleRecording,
-            ),
+            hotkey: hotkey(Action::ToggleClicking),
+            record_hotkey: hotkey(Action::ToggleRecording),
             no_recording: recording::no_recording(platform.input_reader(), None),
-            play_hotkey: desktop::shown_hotkey(
-                config.hotkeys,
-                desktop.as_ref(),
-                Action::TogglePlayback,
-            ),
+            play_hotkey: hotkey(Action::TogglePlayback),
             playback: config.playback,
             on_screen: config.on_screen,
             recordings: Arc::from([]),
@@ -500,6 +526,7 @@ impl<P: Platform> Controller<P> {
             opening: None,
             input_error: None,
             hotkeys: HotkeySource::none(),
+            watched: Watching::default(),
             hotkey_status: None,
             screen: LayoutSource::default(),
             since: crate::window::Since::default(),
@@ -538,6 +565,7 @@ impl<P: Platform> Controller<P> {
         self.start_reader();
         loop {
             self.relist_when_due();
+            self.tell_reader();
             self.publish();
             let wake = self.next_wake().await;
             if !self.handle(wake) {
@@ -714,7 +742,10 @@ impl<P: Platform> Controller<P> {
         if Instant::now() >= deadline {
             self.release_expired();
         } else if let Some(job) = self.take_start() {
-            self.begin_run(job);
+            // The window in front may have changed during the wait.
+            if self.foreground_allows(job.start()) {
+                self.begin_run(job);
+            }
         }
     }
 
@@ -726,7 +757,11 @@ impl<P: Platform> Controller<P> {
             return;
         };
         match self.take_start() {
-            Some(Job::Play(playing)) => self.begin_run(Job::Play(playing.modifier_held())),
+            Some(Job::Play(playing)) => {
+                if self.foreground_allows(Start::Playback) {
+                    self.begin_run(Job::Play(playing.modifier_held()));
+                }
+            }
             Some(job @ Job::Click) => {
                 let seconds = RELEASE_WAIT.as_secs();
                 self.notice = Some(job.refused(Hindrance::HeldTooLong { seconds }));
@@ -766,6 +801,7 @@ impl<P: Platform> Controller<P> {
         match &mut self.state {
             State::Idle => {
                 if self.may_start()
+                    && self.foreground_allows(Start::Clicking)
                     && let Some(deadline) = Instant::now().checked_add(RELEASE_WAIT)
                 {
                     self.state = State::Release(deadline, Job::Click);
@@ -847,6 +883,20 @@ impl<P: Platform> Controller<P> {
             self.stop(Some(Stop::Blocked(reason.clone())));
         }
         self.blocked = blocked;
+    }
+
+    /// Whether a start from a hotkey may begin with the window now in
+    /// front; says why not when it may not. A start from the tray is not
+    /// asked: the taskbar is in front when it is chosen.
+    fn foreground_allows(&mut self, start: Start) -> bool {
+        if self.platform.foreground_takes_input() {
+            return true;
+        }
+        self.notice = Some(Notice::Refused {
+            start,
+            why: Hindrance::Elevated,
+        });
+        false
     }
 
     /// Whether a start may begin; says why not when it may not.
@@ -1081,6 +1131,36 @@ impl<P: Platform> Controller<P> {
             platform.read_input(input.as_ref(), reading)
         });
         self.hotkey_status = None;
+        // A new reader watches for nothing until told.
+        self.watched = Watching::default();
+    }
+
+    /// What the keyboard needs watching for now: the hotkey's modifiers
+    /// while a start waits for them, and the hotkeys that stop the run that
+    /// is going, until it is told to stop.
+    fn watching(&self) -> Watching {
+        match &self.state {
+            State::Release(..) => Watching {
+                release: true,
+                stops: Vec::new(),
+            },
+            State::Running(running) if !running.stopping() => Watching {
+                release: false,
+                stops: running.stops(),
+            },
+            _ => Watching::default(),
+        }
+    }
+
+    /// Tells the reader what to watch the keyboard for, when that changed:
+    /// the one place it is told, so every way out of a wait or a run ends
+    /// what was watched for it.
+    fn tell_reader(&mut self) {
+        let watching = self.watching();
+        if watching != self.watched {
+            self.hotkeys.command(ReaderCommand::Watch(watching.clone()));
+            self.watched = watching;
+        }
     }
 
     fn publish(&self) {
@@ -1143,6 +1223,7 @@ impl<P: Platform> Controller<P> {
     fn problems(&self) -> Vec<Problem> {
         let hotkeys = match &self.hotkey_status {
             Some(HotkeyStatus::Unavailable(why)) => Some(Problem::Hotkeys(why.clone())),
+            Some(HotkeyStatus::Refused(refused)) => Some(Problem::HotkeysRefused(refused.clone())),
             _ => None,
         };
         [

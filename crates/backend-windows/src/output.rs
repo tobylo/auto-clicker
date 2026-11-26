@@ -5,7 +5,7 @@
 //! waits for its deadlines on a high-resolution waitable timer of its own
 //! ([`crate::run_timer`]).
 
-mod keys;
+pub(crate) mod keys;
 
 use std::io;
 

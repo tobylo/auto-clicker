@@ -79,6 +79,12 @@ fn allowed_throughout(before: Context, after: Context) -> bool {
     both && before.foreground == after.foreground
 }
 
+/// Whether what the program sends now could reach the window in front: a
+/// hotkey start is refused when not (WN08).
+pub fn foreground_takes_input() -> bool {
+    context().allows_delivery()
+}
+
 /// What is in front now.
 pub fn context() -> Context {
     let desktop_has_input = input_desktop();

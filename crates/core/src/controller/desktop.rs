@@ -75,10 +75,11 @@ pub(super) const ECHO_WINDOW: Duration = Duration::from_secs(1);
 
 impl<P: Platform> Controller<P> {
     /// The triggers a new controller starts with: unknown ones when the
-    /// desktop delivers the hotkeys, so nothing presses a key before the
-    /// desktop has said which keys are taken.
+    /// reader reports them, so nothing presses a key before the desktop,
+    /// or Windows, has said which keys are taken. Being known from the
+    /// start, they open no echo window when the first report comes.
     pub(super) fn first_triggers(platform: &P) -> Option<DesktopHotkeys> {
-        (platform.input_reader() == InputReader::Desktop).then(|| DesktopHotkeys {
+        platform.reports_triggers().then(|| DesktopHotkeys {
             triggers: Triggers::unknown(),
             live: true,
             echo_until: None,
@@ -186,18 +187,21 @@ impl<P: Platform> Controller<P> {
     }
 
     pub(super) fn shown_hotkey(&self, action: Action) -> Hotkey {
-        shown_hotkey(self.config.hotkeys, self.desktop.as_ref(), action)
+        let reader = self.platform.input_reader();
+        shown_hotkey(self.config.hotkeys, self.desktop.as_ref(), reader, action)
     }
 }
 
 /// The hotkey of `action` as the tray names it: what the desktop reports
-/// when it delivers the hotkeys, else the config's binding.
+/// when it delivers the hotkeys, else the config's binding, which is also
+/// what Windows reports for the bindings the program registered.
 pub(super) fn shown_hotkey(
     bindings: Bindings,
     desktop: Option<&DesktopHotkeys>,
+    reader: InputReader,
     action: Action,
 ) -> Hotkey {
-    match desktop {
+    match desktop.filter(|_| reader == InputReader::Desktop) {
         Some(desktop) => Hotkey::Desktop(desktop.triggers.of(action).text().map(str::to_owned)),
         None => Hotkey::Bound(match action {
             Action::ToggleClicking => bindings.toggle_clicking,

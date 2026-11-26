@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::Action;
+use super::{Action, Binding, Bindings};
 use crate::input::Key;
 use crate::message::Quoted;
 
@@ -64,6 +64,16 @@ impl Trigger {
         Trigger {
             text: Some(shown.trim().to_owned()),
             keys: keys_of(description),
+        }
+    }
+
+    /// The trigger of a binding the program registered itself (Windows'
+    /// `RegisterHotKey`): shown as the binding is, and set off by exactly
+    /// its key, whatever that key is.
+    pub fn bound(binding: Binding) -> Trigger {
+        Trigger {
+            text: Some(binding.to_string()),
+            keys: Some(vec![binding.key()]),
         }
     }
 
@@ -120,6 +130,16 @@ impl Triggers {
             toggle_clicking: Trigger::UNKNOWN,
             toggle_recording: Trigger::UNKNOWN,
             toggle_playback: Trigger::UNKNOWN,
+        }
+    }
+
+    /// The triggers of bindings the program registered itself, each set
+    /// off by exactly its key.
+    pub fn bound(bindings: &Bindings) -> Triggers {
+        Triggers {
+            toggle_clicking: Trigger::bound(bindings.toggle_clicking),
+            toggle_recording: Trigger::bound(bindings.toggle_recording),
+            toggle_playback: Trigger::bound(bindings.toggle_playback),
         }
     }
 
@@ -319,6 +339,32 @@ mod tests {
             "Ctrl+Alt+Meta+F1, Ctrl+Shift+F10, Ctrl+Shift+F11, Ctrl+Shift+F12, Ctrl+Shift+F13, F9";
         let keys = Trigger::reported(dropped).keys.unwrap();
         assert!(keys.contains(&key("f9")), "{keys:?}");
+    }
+
+    #[test]
+    fn a_bound_trigger_refuses_exactly_its_key_whatever_the_key() {
+        let space = Binding::parse("Ctrl+Space").unwrap();
+        let bindings = Bindings {
+            toggle_clicking: space,
+            ..Bindings::default()
+        };
+        let triggers = Triggers::bound(&bindings);
+        assert_eq!(
+            triggers.refusal(key("space")),
+            Some(Refusal::HotkeyKey {
+                key: key("space"),
+                trigger: "Ctrl+Space".to_owned().into(),
+            })
+        );
+        assert!(triggers.refusal(key("f7")).is_some());
+        assert!(triggers.refusal(key("f8")).is_some());
+        for name in ["f6", "w", "enter"] {
+            assert_eq!(triggers.refusal(key(name)), None, "{name}");
+        }
+        assert_eq!(
+            triggers.of(Action::ToggleClicking).text(),
+            Some("Ctrl+Space")
+        );
     }
 
     #[test]

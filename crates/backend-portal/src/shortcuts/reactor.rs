@@ -211,6 +211,8 @@ where
                     None
                 }
             },
+            // The desktop reads the keys, not the program.
+            Wake::Command(ReaderCommand::Watch(_)) => None,
             Wake::Signal(Some(Signal::Activated(id))) => session.activated(&id),
             Wake::Signal(Some(Signal::Deactivated(_))) => {
                 session.deactivated(Instant::now());
