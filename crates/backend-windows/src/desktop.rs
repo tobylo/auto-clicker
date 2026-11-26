@@ -209,8 +209,12 @@ pub fn is_down(key: VIRTUAL_KEY) -> bool {
 }
 
 /// A process held by its handle, so its id cannot pass to another process
-/// while it is held; ended when dropped, unless it already ended.
-pub struct Held(std::os::windows::io::OwnedHandle);
+/// while it is held; ended when dropped, unless it already ended or was let
+/// go.
+pub struct Held {
+    handle: std::os::windows::io::OwnedHandle,
+    armed: bool,
+}
 
 impl Held {
     /// Holds process `pid`, with the right to end it and wait on it.
@@ -230,9 +234,27 @@ impl Held {
             return Err(io::Error::last_os_error());
         }
         // SAFETY: a new handle that nothing else owns.
-        Ok(Held(unsafe {
-            std::os::windows::io::OwnedHandle::from_raw_handle(process)
-        }))
+        let handle = unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(process) };
+        Ok(Held {
+            handle,
+            armed: true,
+        })
+    }
+
+    /// Holds process `pid` only while `still` says, once it is held, that
+    /// the id still names the process meant: an id read before it was held
+    /// may by then be another process's. That other process is let go, not
+    /// ended.
+    ///
+    /// # Errors
+    /// No such process, it cannot be opened, or it is not the one meant.
+    pub fn open_checked(pid: Process, still: impl FnOnce() -> bool) -> io::Result<Held> {
+        let mut held = Held::open(pid)?;
+        if still() {
+            return Ok(held);
+        }
+        held.armed = false;
+        Err(io::Error::other("the process id passed to another process"))
     }
 }
 
@@ -242,12 +264,15 @@ impl Drop for Held {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
         use std::os::windows::io::AsRawHandle;
+        if !self.armed {
+            return;
+        }
         use windows_sys::Win32::System::Threading::{TerminateProcess, WaitForSingleObject};
         // SAFETY: a live process handle with the right to end it; one that
         // already ended refuses, harmlessly.
-        unsafe { TerminateProcess(self.0.as_raw_handle(), 1) };
+        unsafe { TerminateProcess(self.handle.as_raw_handle(), 1) };
         // SAFETY: as above, with the right to wait on it.
-        unsafe { WaitForSingleObject(self.0.as_raw_handle(), 5_000) };
+        unsafe { WaitForSingleObject(self.handle.as_raw_handle(), 5_000) };
     }
 }
 

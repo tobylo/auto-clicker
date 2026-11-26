@@ -66,6 +66,8 @@ git archive --format=tar --prefix=src/ HEAD | scripts/windows-vm/vm ssh "cmd /c 
 scripts/windows-vm/vm ssh 'cd C:\work\src; cargo build --locked'
 # Device tests run in the desktop, one at a time.
 scripts/windows-vm/vm run --timeout 600 --workdir 'C:\work\src' -- cargo test --locked -- --ignored --test-threads=1
+# Tests that need an elevated process pass by in that run; run each alone
+# through the elevated runner, as its file's header says.
 scripts/windows-vm/vm screen .claude/local/after-test.png
 scripts/windows-vm/vm stop
 ```

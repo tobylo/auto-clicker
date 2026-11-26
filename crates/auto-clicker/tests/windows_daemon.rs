@@ -7,6 +7,13 @@
 //! ```text
 //! scripts/windows-vm/vm run --timeout 900 --workdir 'C:\work\<dir>' -- cargo test --locked -p auto-clicker --test windows_daemon -- --ignored --test-threads=1 --nocapture
 //! ```
+//!
+//! One test needs an elevated process and passes by otherwise; run it
+//! alone through the elevated runner:
+//!
+//! ```text
+//! scripts/windows-vm/vm run --elevated --timeout 900 --workdir 'C:\work\<dir>' -- cargo test --locked -p auto-clicker --test windows_daemon -- --ignored --exact an_elevated_watchdog_refuses_before_it_writes_or_starts_anything
+//! ```
 
 // Windows alone, as the daemon it drives.
 #![cfg(windows)]
@@ -67,8 +74,11 @@ impl Home {
         };
         let id = daemon.watchdog.id();
         let pid = wait_for("the watchdog's daemon", || children(id).first().copied());
-        // Held while the watchdog still holds it, so the id is the daemon's.
-        daemon.held = Some(desktop::Held::open(desktop::Process(pid)).unwrap());
+        // Still the watchdog's child once held, so the id is the daemon's.
+        daemon.held = Some(
+            desktop::Held::open_checked(desktop::Process(pid), || children(id).contains(&pid))
+                .unwrap(),
+        );
         daemon.pid = Some(pid);
         daemon
     }
@@ -187,6 +197,19 @@ fn kill(pid: u32, tree: bool) -> ExitStatus {
         .stderr(Stdio::null())
         .status()
         .unwrap()
+}
+
+/// The watchdogs running from the program these tests built.
+fn watchdogs_here() -> Vec<u32> {
+    let watchdog = WATCHDOG.replace('\'', "''");
+    powershell(&format!(
+        "Get-CimInstance Win32_Process -Filter \"Name = 'auto-clicker-watchdog.exe'\" \
+         | Where-Object {{ $_.ExecutablePath -eq '{watchdog}' }} \
+         | ForEach-Object {{ $_.ProcessId }}"
+    ))
+    .lines()
+    .filter_map(|line| line.trim().parse().ok())
+    .collect()
 }
 
 /// The processes `pid` started that still run.
@@ -739,21 +762,18 @@ fn a_bare_start_launches_the_watchdog_and_exits() {
     let home = Home::new("bare");
     let mut bare = home.command(DAEMON).spawn().unwrap();
     assert!(ended(&mut bare, END).success());
-    let watchdog = wait_for("the watchdog", || {
-        let watchdog = WATCHDOG.replace('\'', "''");
-        powershell(&format!(
-            "Get-CimInstance Win32_Process -Filter \"Name = 'auto-clicker-watchdog.exe'\" \
-             | Where-Object {{ $_.ExecutablePath -eq '{watchdog}' }} \
-             | ForEach-Object {{ $_.ProcessId }}"
-        ))
-        .lines()
-        .find_map(|line| line.trim().parse::<u32>().ok())
-    });
+    let watchdog = wait_for("the watchdog", || watchdogs_here().first().copied());
     // Ended however the test ends: a daemon left running would hold the
-    // session's single instance.
-    let _watchdog_guard = desktop::Held::open(desktop::Process(watchdog)).unwrap();
+    // session's single instance. Each held only once it is still the
+    // process found, so the id named it.
+    let _watchdog_guard = desktop::Held::open_checked(desktop::Process(watchdog), || {
+        watchdogs_here().contains(&watchdog)
+    })
+    .unwrap();
     let pid = wait_for("its daemon", || children(watchdog).first().copied());
-    let _daemon_guard = desktop::Held::open(desktop::Process(pid)).unwrap();
+    let _daemon_guard =
+        desktop::Held::open_checked(desktop::Process(pid), || children(watchdog).contains(&pid))
+            .unwrap();
     wait_for("the daemon running", || {
         home.log().contains(": running").then_some(())
     });
@@ -777,11 +797,11 @@ fn a_bare_start_launches_the_watchdog_and_exits() {
 #[test]
 #[ignore = "must run elevated, in the desktop: the WN01 VM through `vm run --elevated`"]
 fn an_elevated_watchdog_refuses_before_it_writes_or_starts_anything() {
-    assert_eq!(
-        auto_clicker_backend_windows::is_elevated().ok(),
-        Some(true),
-        "run this test elevated"
-    );
+    // The usual unelevated run of every device test passes it by.
+    if auto_clicker_backend_windows::is_elevated().ok() != Some(true) {
+        println!("not elevated: run this test alone through `vm run --elevated`");
+        return;
+    }
     let home = Home::new("elevated");
     let mut watchdog = home.command(WATCHDOG).spawn().unwrap();
     let pid = watchdog.id();
