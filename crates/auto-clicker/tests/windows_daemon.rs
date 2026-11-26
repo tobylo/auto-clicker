@@ -27,6 +27,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use auto_clicker_backend_windows::desktop;
+use auto_clicker_core::locale::Language;
 
 const DAEMON: &str = env!("CARGO_BIN_EXE_auto-clicker");
 const WATCHDOG: &str = env!("CARGO_BIN_EXE_auto-clicker-watchdog");
@@ -537,6 +538,51 @@ fn place_of(menu: &desktop::Menu, label: &str) -> u32 {
     u32::try_from(place).unwrap()
 }
 
+/// The menu labels these tests choose, with the Swedish form the daemon
+/// shows on a Swedish Windows (as `tray_text` has them).
+const LABELS: &[(&str, &str)] = &[
+    ("Start clicking", "Börja klicka"),
+    ("Stop clicking", "Sluta klicka"),
+    ("Record (movement only)", "Spela in (bara rörelser)"),
+    ("Stop recording", "Sluta spela in"),
+    ("Play", "Spela upp"),
+    ("Stop playing", "Sluta spela upp"),
+    (
+        "Settings (not on Windows yet)",
+        "Inställningar (finns inte på Windows än)",
+    ),
+    ("", ""),
+    ("Quit", "Avsluta"),
+];
+
+/// The language the daemon shows its tray in, picked as it picks it.
+fn language() -> Language {
+    auto_clicker_backend_windows::display_languages().map_or(Language::English, |names| {
+        Language::from_tags(names.iter().map(String::as_str))
+    })
+}
+
+/// `english`, a menu label, as the daemon shows it in the user's language.
+fn label(english: &'static str) -> &'static str {
+    match language() {
+        Language::English => english,
+        Language::Swedish => LABELS
+            .iter()
+            .find(|(en, _)| *en == english)
+            .map(|&(_, sv)| sv)
+            .unwrap_or_else(|| panic!("no Swedish form for {english:?}")),
+    }
+}
+
+/// Whether the popup's `text` opens with its title saying `english`, or
+/// `swedish` on a Swedish Windows.
+fn titled(text: &str, english: &str, swedish: &str) -> bool {
+    match language() {
+        Language::English => text.starts_with(&format!("Auto clicker: {english}")),
+        Language::Swedish => text.starts_with(&format!("Autoklickare: {swedish}")),
+    }
+}
+
 /// Longer than a double click's time (500 ms unless set otherwise).
 const REOPEN: Duration = Duration::from_secs(1);
 
@@ -564,7 +610,7 @@ fn every_tray_item_sends_what_it_sends_on_linux() {
     home.running(&mut daemon);
     let pid = daemon.process();
     let icon = promoted_icon(pid);
-    let idle = |text: &str| text.starts_with("Auto clicker: idle");
+    let idle = |text: &str| titled(text, "idle", "vilar");
     popup_once(pid, icon, idle);
     // The menu as on Linux, Settings off until the window comes.
     desktop::click(icon.centre(), desktop::Button::Left).unwrap();
@@ -574,7 +620,7 @@ fn every_tray_item_sends_what_it_sends_on_linux() {
         .into_iter()
         .map(|line| (line.label, line.greyed))
         .collect();
-    let line = |label: &str, greyed| (label.to_owned(), greyed);
+    let line = |english: &'static str, greyed| (label(english).to_owned(), greyed);
     assert_eq!(
         lines,
         [
@@ -593,31 +639,29 @@ fn every_tray_item_sends_what_it_sends_on_linux() {
         desktop::shown_menu().is_none().then_some(())
     });
     // Start: a countdown, stopped by Stop clicking.
-    choose(icon, None, "Start clicking");
-    popup_once(pid, icon, |text| {
-        text.starts_with("Auto clicker: starts in")
-    });
-    choose(icon, None, "Stop clicking");
+    choose(icon, None, label("Start clicking"));
+    popup_once(pid, icon, |text| titled(text, "starts in", "börjar om"));
+    choose(icon, None, label("Stop clicking"));
     popup_once(pid, icon, idle);
     // Started and left to run: it holds, until Stop clicking.
-    choose(icon, None, "Start clicking");
+    choose(icon, None, label("Start clicking"));
     wait_for("F13 held", || desktop::is_down(VK_F13).then_some(()));
-    choose(icon, None, "Stop clicking");
+    choose(icon, None, label("Stop clicking"));
     wait_for("F13 released", || (!desktop::is_down(VK_F13)).then_some(()));
     popup_once(pid, icon, idle);
     // Record, then Stop recording.
-    choose(icon, None, "Record (movement only)");
-    popup_once(pid, icon, |text| text.starts_with("Auto clicker: record"));
-    choose(icon, None, "Stop recording");
-    popup_once(pid, icon, |text| !text.starts_with("Auto clicker: record"));
+    choose(icon, None, label("Record (movement only)"));
+    popup_once(pid, icon, |text| titled(text, "record", "spelar in"));
+    choose(icon, None, label("Stop recording"));
+    popup_once(pid, icon, |text| !titled(text, "record", "spelar in"));
     // The recording in the Play menu, then Stop playing.
-    choose(icon, Some("Play"), RECORDING_LINE);
-    popup_once(pid, icon, |text| text.starts_with("Auto clicker: plays in"));
-    choose(icon, None, "Stop playing");
+    choose(icon, Some(label("Play")), RECORDING_LINE);
+    popup_once(pid, icon, |text| titled(text, "plays in", "spelar upp om"));
+    choose(icon, None, label("Stop playing"));
     popup_once(pid, icon, idle);
     // Quit ends the daemon, and its icon goes with it.
     let owner = desktop::icon_owner(pid).unwrap();
-    choose(icon, None, "Quit");
+    choose(icon, None, label("Quit"));
     assert!(ended(&mut daemon.watchdog, END).success(), "{}", home.log());
     assert_eq!(owner.area(), None, "the icon outlived the daemon");
 }
@@ -646,7 +690,7 @@ fn holding(what: &str, config: &str, key: u16) -> (Home, Daemon) {
     let mut daemon = home.start();
     home.running(&mut daemon);
     let icon = promoted_icon(daemon.process());
-    choose(icon, None, "Start clicking");
+    choose(icon, None, label("Start clicking"));
     wait_for("the hold", || desktop::is_down(key).then_some(()));
     (home, daemon)
 }
