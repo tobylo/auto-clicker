@@ -41,6 +41,7 @@ fn followed(event: &WindowEvent) -> Option<String> {
         WindowEvent::TrayChosen(command) => Some(format!("TrayChosen({command})")),
         WindowEvent::TrayShown => Some("TrayShown".to_owned()),
         WindowEvent::TrayRestarted => Some("TrayRestarted".to_owned()),
+        WindowEvent::WatchdogEnded => Some("WatchdogEnded".to_owned()),
         // A runner has no taskbar; a desktop has one.
         WindowEvent::TrayUnshown(_)
         | WindowEvent::SessionRead(_)

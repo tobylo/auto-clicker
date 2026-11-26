@@ -10,7 +10,7 @@ mod receiver;
 use std::io::{BufRead, BufReader};
 use std::num::NonZeroU32;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -23,6 +23,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::*;
+use crate::Watched;
+use crate::watchdog::Table;
 
 /// Set in the receiver's environment, so its test serves instead of
 /// returning at once.
@@ -153,6 +155,16 @@ fn aim_at_receiver(output: &mut Input<Output>) {
 /// go when the test ends, however it ends.
 fn output() -> Input<Output> {
     Output::open()
+}
+
+/// Makes this test process per-monitor DPI aware, as the daemon makes
+/// itself, unless an earlier test did.
+fn per_monitor_aware() {
+    let _ = crate::become_per_monitor_aware();
+    assert_eq!(
+        crate::desktop::per_monitor_aware(crate::desktop::Process::this()),
+        Some(true)
+    );
 }
 
 /// The marker as the receiver prints extra information.
@@ -298,6 +310,9 @@ fn land(output: &mut Input<Output>, position: AbsolutePosition, from: (i32, i32)
 #[test]
 #[ignore = "moves the pointer over the whole screen: Windows test VM"]
 fn absolute_moves_land_on_every_pixel_of_a_row_and_a_column() {
+    // As the daemon is: at a scale above 100 % a process that is not reads
+    // a scaled screen, and its moves land off by the scale.
+    per_monitor_aware();
     let (width, height) = screen();
     let mut output = output();
     let row = height / 2;
@@ -383,7 +398,9 @@ fn clicks_at_10_12_and_15_ms_arrive_on_time() {
     let runtime = runtime();
     for interval in intervals {
         for _ in 0..RUNS {
-            let input = Output::open();
+            // As the daemon sends: every press marked in the watchdog's
+            // table, every release checked before and after.
+            let input = Watched::open(Arc::new(Table::private()));
             let signals = Signals {
                 stop: std::future::pending::<()>(),
                 shutdown: std::future::pending::<()>(),
@@ -394,7 +411,7 @@ fn clicks_at_10_12_and_15_ms_arrive_on_time() {
             assert!(
                 end.input
                     .as_ref()
-                    .is_some_and(|input: &Input<Output>| input.held().next().is_none())
+                    .is_some_and(|input: &Input<Watched>| input.held().next().is_none())
             );
             thread::sleep(Duration::from_millis(300));
         }

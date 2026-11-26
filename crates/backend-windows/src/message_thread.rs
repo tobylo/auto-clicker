@@ -49,6 +49,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::message::wide;
 use crate::session::{SessionState, query};
 use crate::tray::{self, TrayContent, WM_TRAY_REFRESH};
+use watchdog::WM_WATCHDOG_ENDED;
+pub use watchdog::WatchdogWait;
+
+mod watchdog;
 
 /// Posted by [`Remote::quit`]: destroy the window and end the thread.
 const WM_QUIT_REQUEST: u32 = WM_APP + 1;
@@ -114,6 +118,9 @@ pub enum WindowEvent {
     /// Explorer started again (`TaskbarCreated`): the tray's icon is added
     /// afresh.
     TrayRestarted,
+    /// The watchdog's process ended, or can no longer be waited on
+    /// ([`Remote::wait_for_watchdog`]).
+    WatchdogEnded,
     /// A message the thread does not act on, by its number: what woke it.
     Other(u32),
     /// The thread left its message loop and is about to end; always the
@@ -604,6 +611,10 @@ fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LR
         // controller quits, and the thread is then told to.
         WM_CLOSE => {
             emit(WindowEvent::Close);
+            Some(0)
+        }
+        WM_WATCHDOG_ENDED => {
+            emit(WindowEvent::WatchdogEnded);
             Some(0)
         }
         WM_TIMER if wparam == RETRY_TIMER => {

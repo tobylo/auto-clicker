@@ -46,7 +46,13 @@ impl Output {
     /// cannot fail: `SendInput` needs no device, and whether Windows takes
     /// an event shows only when one is sent.
     pub fn open() -> Input<Output> {
-        Input::new(Output { _private: () })
+        Input::new(Output::bare())
+    }
+
+    /// The output alone, for a backend that wraps it ([`crate::Watched`])
+    /// or for the watchdog's releases, which track nothing.
+    pub(crate) fn bare() -> Output {
+        Output { _private: () }
     }
 }
 

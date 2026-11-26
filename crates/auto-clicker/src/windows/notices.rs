@@ -12,6 +12,7 @@
 //! every wait. Neither the controller's stop nor its release ever waits on
 //! the message thread, so neither wait can deadlock.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -76,6 +77,9 @@ pub struct Notices {
     /// Whether the taskbar refuses the icon since it last showed: each try
     /// is reported, and only the first is logged.
     icon_refused: bool,
+    /// Raised when the watchdog ended, before the controller is told to
+    /// quit: the daemon then says why it stopped.
+    watchdog_ended: Arc<AtomicBool>,
 }
 
 impl Notices {
@@ -86,7 +90,13 @@ impl Notices {
             released,
             commands: Commands::default(),
             icon_refused: false,
+            watchdog_ended: Arc::default(),
         }
+    }
+
+    /// Raised once the watchdog has ended.
+    pub fn watchdog_ended(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.watchdog_ended)
     }
 
     /// The menu's commands, for the tray to draw the menu with.
@@ -112,6 +122,13 @@ impl Notices {
                 return;
             }
             WindowEvent::Close => return self.send(Message::Quit),
+            // Nothing would release what the daemon holds should it die
+            // now: it stops, releases and quits.
+            WindowEvent::WatchdogEnded => {
+                self.watchdog_ended.store(true, Ordering::Release);
+                self.send(Message::Quit);
+                return log::line(format_args!("auto-clicker: the watchdog ended; quitting"));
+            }
             WindowEvent::Ended { failure } => {
                 self.send(Message::Quit);
                 if let Some(failure) = failure {

@@ -1,81 +1,49 @@
-//! The controller's platform on Windows. Output waits for the watchdog: the
-//! daemon sends no press before a watchdog is attached to release what it
-//! holds should it die (M5 brief decision 6), and the watchdog arrives with
-//! WN06, which gives this platform WN04's output in place of [`NoOutput`].
-//! Hotkeys arrive with WN08, recording with WN09.
+//! The controller's platform on Windows. Output is SendInput's, keeping the
+//! table the watchdog releases from should the daemon die (M5 brief
+//! decision 6): the daemon runs only with a watchdog attached, so no press
+//! is ever sent without one. Hotkeys arrive with WN08, recording with WN09.
 
 use std::future::pending;
-use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use auto_clicker_backend_windows::Watched;
+use auto_clicker_backend_windows::watchdog::Table;
 use auto_clicker_core::controller::{HotkeyReader, InputLifetime, OpenInput, Platform, ReadInput};
-use auto_clicker_core::input::{
-    AbsolutePosition, Button, Input, InputBackend, InputError, Key, PressState, RunTimer,
-};
+use auto_clicker_core::input::Input;
 use auto_clicker_core::recording::{LocalTime, recordings_dir};
 
 /// The daemon's platform on Windows.
 pub struct Windows {
     /// When the daemon started: the event clock counts from here.
     started: Instant,
+    /// The table shared with the watchdog.
+    table: Arc<Table>,
 }
 
 impl Windows {
-    pub fn new() -> Windows {
+    pub fn new(table: Table) -> Windows {
         Windows {
             started: Instant::now(),
+            table: Arc::new(table),
         }
     }
 }
 
-/// No output: it cannot be opened, so no value of it exists, and no press
-/// is ever sent through it.
-pub enum NoOutput {}
-
-impl InputBackend for NoOutput {
-    fn button(&mut self, _: Button, _: PressState) -> Result<(), InputError> {
-        match *self {}
-    }
-
-    fn key(&mut self, _: Key, _: PressState) -> Result<(), InputError> {
-        match *self {}
-    }
-
-    fn move_relative(&mut self, _: i32, _: i32) -> Result<(), InputError> {
-        match *self {}
-    }
-
-    fn move_absolute(&mut self, _: AbsolutePosition) -> Result<(), InputError> {
-        match *self {}
-    }
-
-    fn scroll(&mut self, _: i32) -> Result<(), InputError> {
-        match *self {}
-    }
-
-    fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError> {
-        match *self {}
-    }
-}
-
 impl Platform for Windows {
-    type Backend = NoOutput;
+    type Backend = Watched;
 
     /// Output is opened for each run, as SendInput needs no device.
     const LIFETIME: InputLifetime = InputLifetime::PerRun;
 
-    fn open_input(&mut self) -> OpenInput<NoOutput> {
-        Box::pin(async {
-            Err(InputError::CreateDevice(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "clicking on Windows waits for the watchdog, which is not built yet",
-            )))
-        })
+    fn open_input(&mut self) -> OpenInput<Watched> {
+        let table = Arc::clone(&self.table);
+        Box::pin(async move { Ok(Watched::open(table)) })
     }
 
     /// No hotkeys yet: a reader that never fires.
-    fn read_input(&mut self, _own: Option<&Input<NoOutput>>, _reading: ReadInput) -> HotkeyReader {
+    fn read_input(&mut self, _own: Option<&Input<Watched>>, _reading: ReadInput) -> HotkeyReader {
         Box::pin(pending())
     }
 

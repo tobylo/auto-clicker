@@ -488,6 +488,42 @@ fn a_lock_from_the_message_thread_releases_a_held_button_at_once() {
     message_thread.join().unwrap();
 }
 
+#[test]
+fn the_watchdogs_end_stops_a_hold_at_once_releases_and_quits() {
+    let output = FakeOutput::default();
+    let (controller, links) = holding(output.clone());
+    let mut handler = Notices::new(links.send.clone(), Arc::new(Mark::default()));
+    let ended = handler.watchdog_ended();
+    handler.handle(WindowEvent::SessionRead(Ok(UNLOCKED)));
+    let (events, heard) = std_mpsc::channel::<WindowEvent>();
+    let message_thread = thread::spawn(move || {
+        for event in heard {
+            handler.handle(event);
+        }
+    });
+    let view = links.view.clone();
+    let send = links.send.clone();
+    let steps = async {
+        send.send(Message::Start).unwrap();
+        until(Duration::from_secs(10), "holding", || {
+            view.borrow().activity == Activity::Clicking && !output.presses(0).is_empty()
+        })
+        .await;
+        let ending = Instant::now();
+        events.send(WindowEvent::WatchdogEnded).unwrap();
+        until(Duration::from_secs(10), "released", || {
+            output.presses(0) == [PressState::Down, PressState::Up]
+        })
+        .await;
+        assert!(ending.elapsed() < AT_ONCE, "{:?}", ending.elapsed());
+    };
+    // The controller ends on its own: the watchdog's end quits it.
+    runtime().block_on(async { tokio::join!(controller.run(), steps) });
+    assert!(ended.load(std::sync::atomic::Ordering::Acquire));
+    drop(events);
+    message_thread.join().unwrap();
+}
+
 /// Starts a hold, and once it holds, whether it took.
 async fn try_holding(send: &mpsc::UnboundedSender<Message>, view: &watch::Receiver<View>) -> bool {
     send.send(Message::Start).unwrap();

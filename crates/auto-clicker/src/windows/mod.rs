@@ -10,19 +10,27 @@
 //! writes nothing to the user's folders: it says why in a message box. A
 //! second daemon in the same session says so the same way, before it reads
 //! or writes anything.
+//!
+//! It runs as the child of its watchdog (M5 brief decision 6), which
+//! releases what it held should it die. Started bare, it starts the
+//! watchdog, which starts it again with the two handles it needs; started
+//! with anything else, it refuses, so a bad start cannot loop. Should the
+//! watchdog end, the daemon stops, releases and quits, saying why.
 
 mod notices;
 mod platform;
 mod tray;
 
 use std::io;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use auto_clicker_backend_windows::watchdog::{self as launch, Attached, Launch, WATCHDOG, attach};
 use auto_clicker_backend_windows::{
-    ClaimError, Instance, JoinError, MessageThread, claim, display_languages, is_elevated,
-    show_error,
+    ClaimError, Instance, JoinError, MessageThread, become_per_monitor_aware, claim,
+    display_languages, is_elevated, show_error,
 };
 use auto_clicker_core::controller::Controller;
 use auto_clicker_core::dirs::{NO_DATA_DIR, log_path};
@@ -43,6 +51,13 @@ const INSTANCE_NAME: &str = "io.github.tobylo.AutoClicker";
 const EXIT_ALREADY_RUNNING: u8 = 3;
 /// The daemon refused to run elevated, or could not tell whether it was.
 const EXIT_ELEVATED: u8 = 4;
+/// The daemon was started with arguments or handles it does not take, or
+/// started bare and could not start its watchdog.
+const EXIT_LAUNCH: u8 = 5;
+/// The daemon's watchdog ended, so it stopped.
+const EXIT_WATCHDOG_ENDED: u8 = 6;
+/// How long the wait on the watchdog may take to end once stopped.
+const WATCHDOG_WAIT_STOP: Duration = Duration::from_secs(1);
 /// How long the message thread may take to create its window.
 const MESSAGE_THREAD_START: Duration = Duration::from_secs(5);
 /// How long the message thread may take to end once told to.
@@ -50,10 +65,21 @@ const MESSAGE_THREAD_JOIN: Duration = Duration::from_secs(1);
 
 /// Runs the daemon to its end.
 pub fn main() -> ExitCode {
+    // Before any window exists, which would fix the awareness; every size
+    // the daemon reads is then in physical pixels.
+    let aware = become_per_monitor_aware();
     if let Some(refusal) = refusal(is_elevated()) {
         show_error(TITLE, &refusal.text(language()));
         return ExitCode::from(EXIT_ELEVATED);
     }
+    let attached = match launch::parse(std::env::args_os().skip(1)) {
+        Ok(Launch::Bare) => return start_watchdog(),
+        Ok(Launch::Watched(handles)) => match attach(handles) {
+            Ok(attached) => attached,
+            Err(err) => return refuse_launch(&LaunchRefusal::Handles(err)),
+        },
+        Err(why) => return refuse_launch(&LaunchRefusal::Arguments(why)),
+    };
     // Claimed before anything else: a second daemon reads no config and
     // writes no log.
     let instance = match claim(INSTANCE_NAME) {
@@ -61,9 +87,101 @@ pub fn main() -> ExitCode {
         Err(err) => return not_alone(&err),
     };
     open_log();
-    let status = run();
+    if let Err(err) = aware {
+        log::line(format_args!(
+            "auto-clicker: not per-monitor DPI aware ({err}); absolute moves may land off"
+        ));
+    }
+    let (status, watchdog_ended) = run(attached);
+    // The name goes before the message, which waits for the user: a new
+    // start meanwhile is not told the daemon is already running.
     drop::<Instance>(instance);
+    if watchdog_ended {
+        show_error(TITLE, watchdog_ended_text(language()));
+        return ExitCode::from(EXIT_WATCHDOG_ENDED);
+    }
     status
+}
+
+/// Starts the watchdog beside this program, which starts the daemon with
+/// its handles, and exits. A watchdog that cannot start is said in a
+/// message, never tried again.
+fn start_watchdog() -> ExitCode {
+    let started = std::env::current_exe()
+        .map(|daemon| daemon.with_file_name(WATCHDOG))
+        .and_then(|watchdog| Command::new(watchdog).spawn());
+    match started {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(err) => refuse_launch(&LaunchRefusal::NoWatchdog(err)),
+    }
+}
+
+/// Why the daemon does not start as it was started.
+#[derive(Debug)]
+enum LaunchRefusal {
+    /// Its arguments are not the ones it takes.
+    Arguments(String),
+    /// The handles they name are not what the watchdog gives.
+    Handles(io::Error),
+    /// Started bare, it could not start its watchdog.
+    NoWatchdog(io::Error),
+}
+
+impl LaunchRefusal {
+    /// What the message box says, in `language`.
+    fn text(&self, language: Language) -> String {
+        match (self, language) {
+            (LaunchRefusal::Arguments(why), Language::English) => format!(
+                "Auto Clicker was started with arguments it does not take ({why}), so it does \
+                 not start. Start it without arguments."
+            ),
+            (LaunchRefusal::Arguments(why), Language::Swedish) => format!(
+                "Auto Clicker startades med argument som det inte tar emot ({why}), så det \
+                 startar inte. Starta det utan argument."
+            ),
+            (LaunchRefusal::Handles(err), Language::English) => format!(
+                "Auto Clicker could not take over from its watchdog ({err}), so it does not \
+                 start. Start it without arguments."
+            ),
+            (LaunchRefusal::Handles(err), Language::Swedish) => format!(
+                "Auto Clicker kunde inte ta över från sin vakt ({err}), så det startar inte. \
+                 Starta det utan argument."
+            ),
+            (LaunchRefusal::NoWatchdog(err), Language::English) => format!(
+                "Auto Clicker could not start its watchdog, {WATCHDOG} ({err}), so it does \
+                 not start. The watchdog lets go of held keys and buttons should Auto Clicker \
+                 end unexpectedly; it belongs in the same folder."
+            ),
+            (LaunchRefusal::NoWatchdog(err), Language::Swedish) => format!(
+                "Auto Clicker kunde inte starta sin vakt, {WATCHDOG} ({err}), så det startar \
+                 inte. Vakten släpper nedtryckta tangenter och knappar om Auto Clicker skulle \
+                 avslutas oväntat; den hör hemma i samma mapp."
+            ),
+        }
+    }
+}
+
+/// Says why the daemon does not start as it was started, and exits.
+fn refuse_launch(why: &LaunchRefusal) -> ExitCode {
+    show_error(TITLE, &why.text(language()));
+    ExitCode::from(EXIT_LAUNCH)
+}
+
+/// What the message box says once the watchdog ended and the daemon
+/// stopped.
+fn watchdog_ended_text(language: Language) -> &'static str {
+    match language {
+        Language::English => {
+            "Auto Clicker stopped: its watchdog, which lets go of held keys and buttons should \
+             Auto Clicker end unexpectedly, has ended.\n\n\
+             To start it again, sign out and in again, or run auto-clicker.exe."
+        }
+        Language::Swedish => {
+            "Auto Clicker har stoppats: dess vakt, som släpper nedtryckta tangenter och knappar \
+             om Auto Clicker skulle avslutas oväntat, har avslutats.\n\n\
+             Starta det igen genom att logga ut och in igen, eller kör auto-clicker.exe."
+        }
+    }
 }
 
 /// Says why the daemon does not start beside another, and the exit status.
@@ -158,28 +276,47 @@ fn language() -> Language {
     })
 }
 
-/// Runs the controller beside the message thread until Quit, logoff or
-/// the message thread's end; then ends the message thread.
-fn run() -> ExitCode {
+/// Runs the controller beside the message thread until Quit, logoff, the
+/// watchdog's end or the message thread's end; then ends the message
+/// thread. The status, and whether the watchdog ended.
+fn run(attached: Attached) -> (ExitCode, bool) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
     {
         Ok(runtime) => runtime,
-        Err(err) => return fail(&format!("could not start the runtime: {err}")),
+        Err(err) => return (fail(&format!("could not start the runtime: {err}")), false),
     };
+    let Attached { table, watchdog } = attached;
     let (config, config_error, file) = load_config();
-    let (mut controller, links) = Controller::new(Windows::new(), None, config, config_error);
+    let (mut controller, links) = Controller::new(Windows::new(table), None, config, config_error);
     controller.keep_config_file(file);
     controller.keep_current_file(CurrentFile::of_environment());
     let released = Arc::new(Mark::default());
     let mut notices = Notices::new(links.send.clone(), Arc::clone(&released));
     let commands = notices.commands();
+    let watchdog_ended = notices.watchdog_ended();
     let thread =
         match MessageThread::spawn(move |event| notices.handle(event), MESSAGE_THREAD_START) {
             Ok(thread) => thread,
-            Err(err) => return fail(&format!("could not start the message thread: {err}")),
+            Err(err) => {
+                return (
+                    fail(&format!("could not start the message thread: {err}")),
+                    false,
+                );
+            }
         };
+    // No run starts unwatched: the controller has not run yet.
+    let wait = match thread.remote().wait_for_watchdog(watchdog) {
+        Ok(wait) => wait,
+        Err(err) => {
+            let _ = end(thread);
+            return (
+                fail(&format!("could not wait on the watchdog: {err}")),
+                false,
+            );
+        }
+    };
     log::line(format_args!(
         "auto-clicker {}: running",
         env!("CARGO_PKG_VERSION")
@@ -201,7 +338,12 @@ fn run() -> ExitCode {
     // sleep waiting for that may go on, whether or not its report was
     // passed on before the runtime stopped.
     released.raise(ENDED);
-    end(thread)
+    if !wait.stop(WATCHDOG_WAIT_STOP) {
+        log::line(format_args!(
+            "auto-clicker: the wait on the watchdog did not end in time"
+        ));
+    }
+    (end(thread), watchdog_ended.load(Ordering::Acquire))
 }
 
 /// Passes the controller's reports of letting go before sleep to the

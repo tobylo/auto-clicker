@@ -197,6 +197,46 @@ pub fn press(key: VIRTUAL_KEY) -> io::Result<()> {
     send_key(key, KEYEVENTF_KEYUP)
 }
 
+/// Whether the key or button `key` (a virtual key code) reads as down. Every
+/// key reads up while a window of a higher integrity is in front.
+#[allow(unsafe_code)]
+pub fn is_down(key: VIRTUAL_KEY) -> bool {
+    // SAFETY: plain query.
+    let state = unsafe {
+        windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(i32::from(key))
+    };
+    state.cast_unsigned() & 0x8000 != 0
+}
+
+/// Whether process `pid` is per-monitor DPI aware (version 2); `None` when
+/// it cannot be asked.
+#[allow(unsafe_code)]
+pub fn per_monitor_aware(Process(pid): Process) -> Option<bool> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows_sys::Win32::UI::HiDpi::{
+        AreDpiAwarenessContextsEqual, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        GetDpiAwarenessContextForProcess,
+    };
+    // SAFETY: plain call; the handle, if any, is owned below.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        return None;
+    }
+    // SAFETY: a new handle that nothing else owns.
+    let process = unsafe { OwnedHandle::from_raw_handle(process) };
+    // SAFETY: a live process handle with limited query access; the
+    // contexts are values, not pointers this program follows.
+    Some(
+        unsafe {
+            AreDpiAwarenessContextsEqual(
+                GetDpiAwarenessContextForProcess(process.as_raw_handle()),
+                DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+            )
+        } != 0,
+    )
+}
+
 /// The menu that shows, if one does; none when its thread does not answer
 /// within half a second.
 #[allow(unsafe_code)]
