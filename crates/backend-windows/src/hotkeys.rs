@@ -30,8 +30,9 @@ use windows_sys::Win32::Foundation::{
     ERROR_HOTKEY_ALREADY_REGISTERED, HWND, LPARAM, LRESULT, WPARAM,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, MAPVK_VSC_TO_VK_EX, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
-    MapVirtualKeyW, RegisterHotKey, UnregisterHotKey,
+    GetAsyncKeyState, GetKeyboardLayoutList, HKL, MAPVK_VK_TO_VSC_EX, MAPVK_VSC_TO_VK_EX, MOD_ALT,
+    MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, MapVirtualKeyExW, MapVirtualKeyW,
+    RegisterHotKey, UnregisterHotKey,
 };
 use windows_sys::Win32::UI::Input::{
     GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
@@ -369,7 +370,7 @@ fn register(hwnd: HWND, wish: &Wish) -> Active {
         send: Arc::clone(&wish.send),
         ids,
         watching: Watching::default(),
-        registered: Registered::new(taken),
+        registered: Registered::new(taken, |binding| setting_off(binding.key())),
     }
 }
 
@@ -412,27 +413,56 @@ fn modifier_flag(modifier: Modifier) -> u32 {
 /// right modifiers apart. `None` for a key without one.
 #[allow(unsafe_code)]
 fn virtual_key(key: Key) -> Option<u16> {
+    virtual_key_in(key, null_mut())
+}
+
+/// The virtual key `layout` gives `key`; the thread's own layout when it is
+/// null.
+#[allow(unsafe_code)]
+fn virtual_key_in(key: Key, layout: HKL) -> Option<u16> {
     match code(key)? {
         Code::Virtual(vk) => Some(vk),
         Code::Scan { scan, extended } => {
             let scan = u32::from(scan) | if extended { 0xE000 } else { 0 };
-            // SAFETY: plain call.
-            let vk = unsafe { MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX) };
+            // SAFETY: plain call; a null layout is the thread's own.
+            let vk = unsafe { MapVirtualKeyExW(scan, MAPVK_VSC_TO_VK_EX, layout) };
             u16::try_from(vk).ok().filter(|&vk| vk != 0)
         }
     }
 }
 
+/// The keyboard layouts the user has installed, which the window in front
+/// may use rather than this thread's.
+#[allow(unsafe_code)]
+fn layouts() -> Vec<HKL> {
+    // SAFETY: a null buffer asks for the count alone.
+    let count = unsafe { GetKeyboardLayoutList(0, null_mut()) };
+    let mut layouts = vec![null_mut(); usize::try_from(count).unwrap_or(0)];
+    // SAFETY: room for `count` handles; Windows writes at most that many.
+    let written = unsafe { GetKeyboardLayoutList(count, layouts.as_mut_ptr()) };
+    layouts.truncate(usize::try_from(written).unwrap_or(0));
+    layouts
+}
+
 /// The keys whose press sets off a hotkey on `key`: every key the program
-/// can send that Windows gives the same virtual key (Enter and keypad
-/// Enter; Home and keypad 7, which NumLock decides between), and `key`
-/// itself whatever it maps to.
+/// can send that one of the installed layouts gives the virtual key it was
+/// registered with (Enter and keypad Enter; Home and keypad 7, which
+/// NumLock decides between; Z for a Y on a German layout), and `key`
+/// itself whatever it maps to. A layout installed later is not covered
+/// until the hotkeys are registered again.
 fn setting_off(key: Key) -> Vec<Key> {
     let Some(vk) = virtual_key(key) else {
         return vec![key];
     };
+    let layouts = layouts();
     let mut keys = vec![key];
-    keys.extend(keys::sendable().filter(|&other| other != key && virtual_key(other) == Some(vk)));
+    keys.extend(keys::sendable().filter(|&other| {
+        other != key
+            && (virtual_key(other) == Some(vk)
+                || layouts
+                    .iter()
+                    .any(|&layout| virtual_key_in(other, layout) == Some(vk)))
+    }));
     keys
 }
 
@@ -469,12 +499,26 @@ fn key_event(lparam: LPARAM) -> Option<KeyEvent> {
     if keyboard.ExtraInformation == MARKER && down {
         return Some(KeyEvent::OwnPress);
     }
-    let scan = u8::try_from(keyboard.MakeCode).ok()?;
-    let code = received_key(scan, flags & RI_KEY_E0 != 0, keyboard.VKey)?.code();
+    let (scan, extended) = scan_code(keyboard.MakeCode, flags, keyboard.VKey)?;
+    let code = received_key(scan, extended, keyboard.VKey)?.code();
     if keyboard.ExtraInformation == MARKER {
         return Some(KeyEvent::OwnRelease(code));
     }
     Some(KeyEvent::User { code, down })
+}
+
+/// The set-1 scan code of a raw keyboard event, and whether it is an `E0`
+/// key. Another program may send a key by its virtual key alone, with no
+/// scan code: the layout's scan code for that virtual key stands in.
+#[allow(unsafe_code)]
+fn scan_code(made: u16, flags: u32, vk: u16) -> Option<(u8, bool)> {
+    if made != 0 {
+        return Some((u8::try_from(made).ok()?, flags & RI_KEY_E0 != 0));
+    }
+    // SAFETY: plain call.
+    let mapped = unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC_EX) };
+    let extended = mapped & 0xff00 == 0xe000;
+    Some((u8::try_from(mapped & 0xff).ok()?, extended)).filter(|&(scan, _)| scan != 0)
 }
 
 /// Raw keyboard input for this thread's window, and the user's key state:

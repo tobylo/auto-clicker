@@ -79,8 +79,14 @@ impl Drop for Front {
     fn drop(&mut self) {
         // SAFETY: the window's thread destroys it on this message; a window
         // already gone only makes the post fail.
-        unsafe { PostMessageW(self.hwnd(), WM_CLOSE_FRONT, 0, 0) };
-        if let Some(thread) = self.thread.take() {
+        let posted = unsafe { PostMessageW(self.hwnd(), WM_CLOSE_FRONT, 0, 0) } != 0;
+        // A thread that was not told to end is left to the process's end,
+        // rather than waited for forever; one whose window is gone has ended.
+        if let Some(thread) = self
+            .thread
+            .take()
+            .filter(|thread| posted || thread.is_finished())
+        {
             let _ = thread.join();
         }
     }

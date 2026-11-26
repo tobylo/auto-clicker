@@ -2,6 +2,7 @@ use std::io;
 
 use super::*;
 use crate::hotkeys::Bindings;
+use crate::input::Key;
 use HotkeyEvent::{Fired, ModifiersReleased, ReleaseLost};
 
 const CTRL: u16 = 29;
@@ -45,8 +46,13 @@ impl Keyboard for FakeKeyboard {
     }
 }
 
+/// Each hotkey set off by its own key alone.
+fn own_key(binding: Binding) -> Vec<Key> {
+    vec![binding.key()]
+}
+
 fn registered() -> Registered {
-    Registered::new(Bindings::default().actions().to_vec())
+    Registered::new(Bindings::default().actions().to_vec(), own_key)
 }
 
 fn holding(codes: &[u16]) -> FakeKeyboard {
@@ -333,7 +339,7 @@ fn a_later_press_is_never_taken_for_an_earlier_ones_other_half() {
 #[test]
 fn a_hotkey_windows_refused_is_neither_delivered_nor_matched() {
     let bindings = Bindings::default();
-    let mut hotkeys = Registered::new(vec![(RECORDING, bindings.toggle_recording)]);
+    let mut hotkeys = Registered::new(vec![(RECORDING, bindings.toggle_recording)], own_key);
     let mut keyboard = holding(&[CTRL, SHIFT]);
     assert_eq!(hotkeys.hotkey(CLICKING, &mut keyboard), []);
     assert!(!keyboard.reading);
@@ -389,7 +395,7 @@ fn a_modifier_let_go_first_leaves_the_press_waiting_for_its_hotkey() {
 #[test]
 fn a_stop_matches_when_only_its_hotkey_was_registered() {
     let bindings = Bindings::default();
-    let mut hotkeys = Registered::new(vec![(CLICKING, bindings.toggle_clicking)]);
+    let mut hotkeys = Registered::new(vec![(CLICKING, bindings.toggle_clicking)], own_key);
     let mut keyboard = FakeKeyboard::default();
     hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
     assert!(hotkeys.reading());
@@ -475,4 +481,24 @@ fn the_programs_release_leaves_a_key_the_user_pressed_down() {
     // The program lets go of a Ctrl of its own while the user holds theirs.
     assert_eq!(hotkeys.own_release(CTRL, &mut keyboard), []);
     assert_eq!(hotkeys.key(F6, true, &mut keyboard), [Fired(CLICKING)]);
+}
+
+#[test]
+fn a_key_the_system_takes_for_a_stops_key_stops_it_from_raw_input() {
+    // Keypad Enter is Enter to Windows: Ctrl+Shift+Enter fires on either.
+    const ENTER: u16 = 28;
+    const KEYPAD_ENTER: u16 = 96;
+    let enter = Binding::parse("Ctrl+Shift+Enter").unwrap();
+    let both = |binding: Binding| vec![binding.key(), Key::new(KEYPAD_ENTER).unwrap()];
+    let mut hotkeys = Registered::new(vec![(CLICKING, enter)], both);
+    let mut keyboard = FakeKeyboard::default();
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    assert_eq!(
+        press(&mut hotkeys, &mut keyboard, KEYPAD_ENTER),
+        [Fired(CLICKING), ModifiersReleased]
+    );
+    assert_eq!(
+        press(&mut hotkeys, &mut keyboard, ENTER),
+        [Fired(CLICKING), ModifiersReleased]
+    );
 }

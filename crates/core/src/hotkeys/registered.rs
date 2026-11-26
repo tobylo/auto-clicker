@@ -28,6 +28,7 @@ use std::io;
 
 use super::matcher::MODIFIER_CODES;
 use super::{Action, Binding, HotkeyEvent, Modifier, Modifiers};
+use crate::input::Key;
 
 /// What the controller needs read from the keyboard now. It sends this to
 /// the reader whenever it changes.
@@ -64,12 +65,22 @@ enum Source {
     Keys,
 }
 
+/// A hotkey the system took.
+#[derive(Debug)]
+struct Taken {
+    action: Action,
+    binding: Binding,
+    /// The codes of every key that sets it off: its own, and those the
+    /// system takes for it.
+    keys: Vec<u16>,
+}
+
 /// The registered hotkeys and what the keyboard is read for.
 #[derive(Debug)]
 pub struct Registered {
     /// The hotkeys the system took; a refused one is neither delivered nor
     /// matched.
-    hotkeys: Vec<(Action, Binding)>,
+    hotkeys: Vec<Taken>,
     watching: Watching,
     /// Whether raw keyboard input is being read.
     reading: bool,
@@ -91,9 +102,27 @@ pub struct Registered {
 }
 
 impl Registered {
-    /// The hotkeys the system took, each with its binding. Nothing is read
-    /// yet.
-    pub fn new(hotkeys: Vec<(Action, Binding)>) -> Registered {
+    /// The hotkeys the system took, each with its binding, and set off by
+    /// the keys `keys_of` gives for it (its own key among them, as
+    /// [`super::Triggers::bound`] takes them). Nothing is read yet.
+    pub fn new(
+        hotkeys: Vec<(Action, Binding)>,
+        keys_of: impl Fn(Binding) -> Vec<Key>,
+    ) -> Registered {
+        let hotkeys = hotkeys
+            .into_iter()
+            .map(|(action, binding)| {
+                let mut keys: Vec<u16> = keys_of(binding).iter().map(|key| key.code()).collect();
+                if !keys.contains(&binding.key().code()) {
+                    keys.push(binding.key().code());
+                }
+                Taken {
+                    action,
+                    binding,
+                    keys,
+                }
+            })
+            .collect();
         Registered {
             hotkeys,
             watching: Watching::default(),
@@ -115,7 +144,7 @@ impl Registered {
     /// other half of a press already counted, and its modifiers are waited
     /// for. The events to send, in order.
     pub fn hotkey(&mut self, action: Action, keyboard: &mut impl Keyboard) -> Vec<HotkeyEvent> {
-        if self.binding(action).is_none() || self.paired(action, Source::Keys) {
+        if !self.took(action) || self.paired(action, Source::Keys) {
             return Vec::new();
         }
         let mut events = vec![HotkeyEvent::Fired(action)];
@@ -149,7 +178,7 @@ impl Registered {
             self.unpaired.retain(|(action, _)| {
                 !hotkeys
                     .iter()
-                    .any(|(bound, binding)| bound == action && binding.key().code() == code)
+                    .any(|taken| taken.action == *action && taken.keys.contains(&code))
             });
         }
         self.settle(keyboard, &mut events);
@@ -207,11 +236,9 @@ impl Registered {
         }
     }
 
-    fn binding(&self, action: Action) -> Option<Binding> {
-        self.hotkeys
-            .iter()
-            .find(|(bound, _)| *bound == action)
-            .map(|(_, binding)| *binding)
+    /// Whether the system took `action`'s hotkey.
+    fn took(&self, action: Action) -> bool {
+        self.hotkeys.iter().any(|taken| taken.action == action)
     }
 
     /// Whether `action` was counted from `other` and waits for this half;
@@ -235,8 +262,10 @@ impl Registered {
     fn pressed(&mut self, code: u16, events: &mut Vec<HotkeyEvent>) {
         let modifiers = self.modifiers();
         let stop = self.watching.stops.iter().copied().find(|&action| {
-            self.binding(action).is_some_and(|binding| {
-                binding.key().code() == code && binding.modifiers() == modifiers
+            self.hotkeys.iter().any(|taken| {
+                taken.action == action
+                    && taken.keys.contains(&code)
+                    && taken.binding.modifiers() == modifiers
             })
         });
         let Some(action) = stop else {
@@ -253,15 +282,15 @@ impl Registered {
     /// Whether `code` is read: a modifier, or a hotkey's key.
     fn tracked(&self, code: u16) -> bool {
         MODIFIER_CODES.contains(&code)
-            || self
-                .hotkeys
-                .iter()
-                .any(|(_, binding)| binding.key().code() == code)
+            || self.hotkeys.iter().any(|taken| taken.keys.contains(&code))
     }
 
     /// Adds what the system's key state says is down.
     fn seed(&mut self, keyboard: &impl Keyboard) {
-        let hotkeys = self.hotkeys.iter().map(|(_, binding)| binding.key().code());
+        let hotkeys = self
+            .hotkeys
+            .iter()
+            .flat_map(|taken| taken.keys.iter().copied());
         for code in MODIFIER_CODES.into_iter().chain(hotkeys) {
             if keyboard.held(code) && !self.held.contains(&code) {
                 self.held.push(code);

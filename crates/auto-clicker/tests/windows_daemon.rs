@@ -940,8 +940,20 @@ fn key(scan: u16, down: bool) {
     desktop::key(scan, false, down).unwrap();
 }
 
+/// Lets go of these keys (by scan code) when dropped, so a test that fails
+/// leaves nothing of its own down in the desktop.
+struct LetGo(&'static [u16]);
+
+impl Drop for LetGo {
+    fn drop(&mut self) {
+        let up: Vec<(u16, bool)> = self.0.iter().map(|&scan| (scan, false)).collect();
+        let _ = desktop::keys(&up);
+    }
+}
+
 /// Ctrl+Shift+`scan`, every key let go at once, as a quick hand does.
 fn combination(scan: u16) {
+    let _up = LetGo(&[CTRL, SHIFT]);
     for (scan, down) in [
         (CTRL, true),
         (SHIFT, true),
@@ -1001,6 +1013,7 @@ fn each_hotkey_starts_and_stops_its_job_while_another_window_has_focus() {
     let pid = daemon.process();
     let front = in_front(false);
     // Clicking starts only once Ctrl and Shift are both up.
+    let _up = LetGo(&[CTRL, SHIFT, F6]);
     key(CTRL, true);
     key(SHIFT, true);
     key(F6, true);
@@ -1090,43 +1103,74 @@ fn a_combination_another_program_holds_is_named_in_the_tray() {
 struct Unelevated {
     task: String,
     watchdog: u32,
+    daemon: u32,
+}
+
+/// The watchdogs running from `path`.
+fn watchdogs_of(path: &str) -> Vec<u32> {
+    let path = path.replace('\'', "''");
+    powershell(&format!(
+        "Get-CimInstance Win32_Process -Filter \"Name = 'auto-clicker-watchdog.exe'\" \
+         | Where-Object {{ $_.ExecutablePath -eq '{path}' }} \
+         | ForEach-Object {{ $_.ProcessId }}"
+    ))
+    .lines()
+    .filter_map(|line| line.trim().parse().ok())
+    .collect()
 }
 
 impl Unelevated {
     fn start(home: &Home) -> (Unelevated, desktop::Process) {
         let script = home.0.join("start.cmd");
         let folder = |name: &str| home.0.join(name).display().to_string();
+        let watchdog = std::path::Path::new(WATCHDOG)
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string();
+        // `canonicalize` gives a `\\?\` path; the process list does not.
+        let listed = watchdog.trim_start_matches(r"\\?\").to_owned();
         std::fs::write(
             &script,
             format!(
-                "set \"APPDATA={}\"\r\nset \"LOCALAPPDATA={}\"\r\nstart \"\" \"{}\"\r\n",
+                "set \"APPDATA={}\"\r\nset \"LOCALAPPDATA={}\"\r\nstart \"\" \"{watchdog}\"\r\n",
                 folder("roaming"),
                 folder("local"),
-                std::path::Path::new(WATCHDOG)
-                    .canonicalize()
-                    .unwrap()
-                    .display()
             ),
         )
         .unwrap();
         let task = format!("auto-clicker-test-{}", std::process::id());
-        let script = script.display().to_string();
+        // Inside PowerShell's single quotes, an apostrophe is written twice.
+        let script = script.display().to_string().replace('\'', "''");
+        // Only a watchdog of this build that was not there before is ours.
+        let before = watchdogs_of(&listed);
         powershell(&format!(
             "schtasks /create /tn '{task}' /tr '\"{script}\"' /sc once /st 23:59 /rl limited /it /f | Out-Null; schtasks /run /tn '{task}' | Out-Null"
         ));
         let watchdog = wait_for("the unelevated watchdog", || {
-            let found =
-                powershell("(Get-Process auto-clicker-watchdog -ErrorAction SilentlyContinue).Id");
-            found.trim().parse::<u32>().ok()
+            let mut new = watchdogs_of(&listed);
+            new.retain(|pid| !before.contains(pid));
+            new.first().copied()
         });
-        let started = Unelevated { task, watchdog };
-        let pid = wait_for("its daemon", || children(watchdog, DAEMON).first().copied());
-        (started, desktop::Process(pid))
+        let daemon = wait_for("its daemon", || children(watchdog, DAEMON).first().copied());
+        let started = Unelevated {
+            task,
+            watchdog,
+            daemon,
+        };
+        (started, desktop::Process(daemon))
     }
 }
 
 impl Drop for Unelevated {
+    /// Ends the daemon first, so its watchdog releases whatever it held,
+    /// then the watchdog should it still run.
     fn drop(&mut self) {
+        let _ = kill(self.daemon, false);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while alive(self.watchdog) && Instant::now() < deadline {
+            sleep(Duration::from_millis(100));
+        }
         let _ = kill(self.watchdog, true);
         let task = &self.task;
         powershell(&format!("schtasks /delete /tn '{task}' /f | Out-Null"));
