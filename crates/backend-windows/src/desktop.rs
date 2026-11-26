@@ -199,9 +199,31 @@ pub fn click(at: Point, button: Button) -> io::Result<()> {
 /// Sends the key with set-1 scan code `scan` (`extended` for an `E0` key)
 /// down or up, as a keyboard does: what raw input and hotkeys see.
 pub fn key(scan: u16, extended: bool, down: bool) -> io::Result<()> {
+    send(&key_input(scan, extended, down))
+}
+
+/// Sends these keys (not extended) down or up in one go, as a macro pad
+/// does: they are all queued before anything reads the first.
+#[allow(unsafe_code)]
+pub fn keys(keys: &[(u16, bool)]) -> io::Result<()> {
+    let inputs: Vec<INPUT> = keys
+        .iter()
+        .map(|&(scan, down)| key_input(scan, false, down))
+        .collect();
+    let count = u32::try_from(inputs.len()).map_err(io::Error::other)?;
+    let size = i32::try_from(size_of::<INPUT>()).map_err(io::Error::other)?;
+    // SAFETY: `count` fully set `INPUT`s of their own size, alive for the
+    // call.
+    if unsafe { SendInput(count, inputs.as_ptr(), size) } != count {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn key_input(scan: u16, extended: bool, down: bool) -> INPUT {
     let extended = if extended { KEYEVENTF_EXTENDEDKEY } else { 0 };
     let up = if down { 0 } else { KEYEVENTF_KEYUP };
-    let input = INPUT {
+    INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
@@ -210,8 +232,7 @@ pub fn key(scan: u16, extended: bool, down: bool) -> io::Result<()> {
                 ..KEYBDINPUT::default()
             },
         },
-    };
-    send(&input)
+    }
 }
 
 /// Ctrl+Shift and a key (a virtual key code), registered as a hotkey of

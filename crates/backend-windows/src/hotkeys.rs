@@ -38,7 +38,8 @@ use windows_sys::Win32::UI::Input::{
     RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEKEYBOARD, RegisterRawInputDevices,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    RI_KEY_BREAK, RI_KEY_E0, WM_APP, WM_HOTKEY, WM_INPUT,
+    DefWindowProcW, MSG, PM_REMOVE, PeekMessageW, RI_KEY_BREAK, RI_KEY_E0, WM_APP, WM_HOTKEY,
+    WM_INPUT,
 };
 
 use crate::message_thread::Remote;
@@ -243,12 +244,14 @@ pub(crate) fn answer(
     Some(Some(0))
 }
 
-/// A `WM_HOTKEY` with this id, handed in as it comes: raw input still
-/// queued is not read ahead of it, since that could take in the press's own
-/// release before its hotkey (core's `Registered` pairs the two halves
-/// until the key comes up). Its modifiers' downs still queued are read
-/// from the key state.
+/// A `WM_HOTKEY` with this id. Raw input already queued goes first: Windows
+/// hands a posted hotkey out ahead of input that came before it (the
+/// modifiers' downs, an earlier press's releases), and the key state the
+/// hotkey reads is newer than all of it. A hotkey that fires never shows
+/// its key's press in raw input (measured in the WN01 VM, build
+/// 26300.9974), so this never counts the hotkey's own press first.
 fn hotkey(hwnd: HWND, id: WPARAM) {
+    drain_input(hwnd);
     with_active(hwnd, |active, keyboard| {
         let action = active
             .ids
@@ -264,12 +267,43 @@ fn hotkey(hwnd: HWND, id: WPARAM) {
 
 /// A `WM_INPUT`; the window procedure leaves it to `DefWindowProc` after.
 fn input(hwnd: HWND, lparam: LPARAM) {
-    let Some((code, down)) = key_event(lparam) else {
+    let Some(event) = key_event(lparam) else {
         return;
     };
-    with_active(hwnd, |active, keyboard| {
-        active.registered.key(code, down, keyboard)
+    with_active(hwnd, |active, keyboard| match event {
+        KeyEvent::User { code, down } => active.registered.key(code, down, keyboard),
+        KeyEvent::OwnRelease(code) => active.registered.own_release(code, keyboard),
+        KeyEvent::OwnPress => Vec::new(),
     });
+}
+
+/// A keyboard event raw input reported.
+enum KeyEvent {
+    /// The user's key went down or came up.
+    User { code: u16, down: bool },
+    /// The program let go of a key it held: whatever the key state said
+    /// of it, it is up now.
+    OwnRelease(u16),
+    /// The program pressed a key: never seen (decision 8).
+    OwnPress,
+}
+
+/// Handles every `WM_INPUT` waiting in the queue, in order.
+#[allow(unsafe_code)]
+fn drain_input(hwnd: HWND) {
+    let mut message = MSG::default();
+    loop {
+        // SAFETY: `message` is a live, writable `MSG`; only this window's
+        // `WM_INPUT` is taken.
+        let got = unsafe { PeekMessageW(&mut message, hwnd, WM_INPUT, WM_INPUT, PM_REMOVE) };
+        if got == 0 {
+            return;
+        }
+        input(hwnd, message.lParam);
+        // SAFETY: the message as Windows queued it; its default handling
+        // frees the raw input's data.
+        unsafe { DefWindowProcW(hwnd, WM_INPUT, message.wParam, message.lParam) };
+    }
 }
 
 /// Runs `step` on the active hotkeys, then sends what it says.
@@ -391,10 +425,11 @@ fn setting_off(key: Key) -> Vec<Key> {
     keys
 }
 
-/// The key a `WM_INPUT` reports, and whether it went down; `None` for
-/// anything but an unmarked keyboard event of a key the program knows.
+/// The key event a `WM_INPUT` reports; `None` for anything but a keyboard
+/// event of a key the program knows. What carries the program's marker is
+/// told apart, and only its releases say anything.
 #[allow(unsafe_code)]
-fn key_event(lparam: LPARAM) -> Option<(u16, bool)> {
+fn key_event(lparam: LPARAM) -> Option<KeyEvent> {
     let mut input = RAWINPUT::default();
     let mut size = u32::try_from(size_of::<RAWINPUT>()).ok()?;
     let header = u32::try_from(size_of::<RAWINPUTHEADER>()).ok()?;
@@ -418,13 +453,17 @@ fn key_event(lparam: LPARAM) -> Option<(u16, bool)> {
     }
     // SAFETY: a keyboard event, so the union holds its keyboard part.
     let keyboard = unsafe { input.data.keyboard };
-    if keyboard.ExtraInformation == MARKER {
-        return None;
-    }
     let flags = u32::from(keyboard.Flags);
+    let down = flags & RI_KEY_BREAK == 0;
+    if keyboard.ExtraInformation == MARKER && down {
+        return Some(KeyEvent::OwnPress);
+    }
     let scan = u8::try_from(keyboard.MakeCode).ok()?;
-    let key = received_key(scan, flags & RI_KEY_E0 != 0, keyboard.VKey)?;
-    Some((key.code(), flags & RI_KEY_BREAK == 0))
+    let code = received_key(scan, flags & RI_KEY_E0 != 0, keyboard.VKey)?.code();
+    if keyboard.ExtraInformation == MARKER {
+        return Some(KeyEvent::OwnRelease(code));
+    }
+    Some(KeyEvent::User { code, down })
 }
 
 /// Raw keyboard input for this thread's window, and the user's key state:
@@ -480,11 +519,15 @@ impl Keyboard for RawKeyboard<'_> {
         let Some(key) = Key::new(code) else {
             return false;
         };
-        let Some(vk) = virtual_key(key).filter(|_| !self.own.owes(Held::Key(key))) else {
+        let Some(vk) = virtual_key(key) else {
             return false;
         };
         // SAFETY: plain call. The high bit says the key is down.
-        unsafe { GetAsyncKeyState(i32::from(vk)) < 0 }
+        let down = unsafe { GetAsyncKeyState(i32::from(vk)) < 0 };
+        // Asked after the state: the program marks a key before it presses
+        // it. A release it sent that the state does not show yet is caught
+        // by its marked event coming up.
+        down && !self.own.owes(Held::Key(key))
     }
 }
 

@@ -11,10 +11,10 @@
 //! it is made while either needs it and removed once neither does.
 //!
 //! One press can arrive both ways, in either order, and counts once: each
-//! half waits for its pair until the press's key comes up. That needs a
-//! press's hotkey to be handed in before its key's release: the system
-//! sends the hotkey at the key-down, so the backend hands events in as
-//! they come and never reads raw input ahead of a hotkey. A press counted
+//! half waits for its pair until the press's key comes up. (On Windows a
+//! hotkey that fires never shows its key's press in raw input, so the pair
+//! is a safeguard: the backend hands in the raw input queued before a
+//! hotkey first, the hotkey after.) A press counted
 //! from raw input keeps the keyboard read until then, so its hotkey is
 //! known for the same press however late it comes. A hotkey counted first
 //! needs no such hold: once nothing matches stops, a raw key-down fires
@@ -49,8 +49,9 @@ pub trait Keyboard {
     /// Stops reading it.
     fn stop(&mut self);
     /// Whether the user holds the key with this code down now, as the
-    /// system's own key state says: never a key the program itself holds,
-    /// whose release would come marked and never reach [`Registered`].
+    /// system's own key state says: never a key the program itself holds.
+    /// One the state still shows after the program let go of it is put
+    /// right by [`Registered::own_release`].
     fn held(&self, code: u16) -> bool;
 }
 
@@ -145,6 +146,17 @@ impl Registered {
             });
         }
         self.settle(keyboard, &mut events);
+        events
+    }
+
+    /// The program let go of a key it held, read from raw input: should the
+    /// key state have counted it as the user's, it is up now. Nothing fires.
+    pub fn own_release(&mut self, code: u16, keyboard: &mut impl Keyboard) -> Vec<HotkeyEvent> {
+        let mut events = Vec::new();
+        if self.reading {
+            self.held.retain(|&held| held != code);
+            self.settle(keyboard, &mut events);
+        }
         events
     }
 

@@ -219,3 +219,61 @@ fn a_hotkey_is_set_off_by_every_key_windows_gives_its_virtual_key() {
     );
     assert_eq!(setting_off(key("f6")), [key("f6")]);
 }
+
+/// The events that arrive within `within`.
+fn arrived(received: &mpsc::Receiver<HotkeyEvent>, within: Duration) -> Vec<HotkeyEvent> {
+    let deadline = Instant::now() + within;
+    let mut events = Vec::new();
+    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+        match received.recv_timeout(left) {
+            Ok(event) => events.push(event),
+            Err(_) => break,
+        }
+    }
+    events
+}
+
+#[test]
+#[ignore = "registers hotkeys and presses keys, which needs a desktop: run in the WN01 VM through `vm run`"]
+fn a_tap_seen_both_ways_while_stops_are_read_fires_once() {
+    use crate::desktop::keys;
+    // Ctrl, Alt, Shift and F21 (`rare`'s clicking hotkey) by scan code.
+    const TAP: [(u16, bool); 8] = [
+        (0x1d, true),
+        (0x38, true),
+        (0x2a, true),
+        (0x6c, true),
+        (0x6c, false),
+        (0x2a, false),
+        (0x38, false),
+        (0x1d, false),
+    ];
+    let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
+    let (thread, _) = started();
+    let (sink, received) = sink();
+    let reading = thread.remote().read_hotkeys(rare(), own(), sink).unwrap();
+    next(&received);
+    next(&received);
+    let stops = Watching {
+        release: false,
+        stops: vec![Action::ToggleClicking],
+    };
+    reading.watch(stops).unwrap();
+    reads(1);
+    // Each tap's keys go in at once, as a macro pad sends them: its
+    // release is queued with its press, behind its hotkey.
+    for round in 0..20 {
+        keys(&TAP).unwrap();
+        let fired: Vec<_> = arrived(&received, Duration::from_millis(200))
+            .into_iter()
+            .filter(|event| matches!(event, HotkeyEvent::Fired(_)))
+            .collect();
+        assert_eq!(
+            fired,
+            [HotkeyEvent::Fired(Action::ToggleClicking)],
+            "round {round}"
+        );
+    }
+    drop(reading);
+    thread.quit_and_join(JOIN).unwrap();
+}

@@ -442,3 +442,25 @@ fn a_hotkeys_unpaired_half_is_forgotten_when_reading_stops() {
         [Fired(CLICKING), ModifiersReleased]
     );
 }
+
+#[test]
+fn a_key_the_program_let_go_of_counts_as_up() {
+    const ALT: u16 = 56;
+    // The key state counted the program's Alt as the user's.
+    let mut keyboard = holding(&[ALT]);
+    let mut hotkeys = registered();
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    keyboard.down.clear();
+    assert_eq!(hotkeys.own_release(ALT, &mut keyboard), []);
+    assert_eq!(
+        press(&mut hotkeys, &mut keyboard, F6),
+        [Fired(CLICKING), ModifiersReleased]
+    );
+    // An owed release it held up comes with it.
+    let mut keyboard = holding(&[ALT]);
+    let mut hotkeys = registered();
+    hotkeys.hotkey(CLICKING, &mut keyboard);
+    keyboard.down.clear();
+    let released = hotkeys.own_release(ALT, &mut keyboard);
+    assert_eq!(after(released, &keyboard), (vec![ModifiersReleased], false));
+}
