@@ -155,12 +155,9 @@ fn the_icon_comes_back_when_explorer_restarts() {
             .try_iter()
             .any(|event| matches!(event, WindowEvent::Ended { .. })),
     );
+    let owner = desktop::icon_owner(pid).unwrap();
     thread.quit_and_join(ARRIVAL).unwrap();
-    assert_eq!(
-        desktop::tray_icon(pid),
-        None,
-        "the icon outlived its window"
-    );
+    assert_eq!(owner.area(), None, "the icon outlived its window");
 }
 
 #[test]
@@ -293,7 +290,7 @@ fn a_lock_while_the_menu_is_open_reaches_the_handler_at_once() {
 fn a_quit_with_the_menu_open_closes_it_and_ends_the_thread_in_time() {
     let (thread, received, icon) = shown();
     open_menu(icon, Button::Left);
-    let pid = desktop::Process::this();
+    let owner = desktop::icon_owner(desktop::Process::this()).unwrap();
     let asked = Instant::now();
     thread.quit_and_join(QUIT).unwrap();
     assert!(asked.elapsed() < QUIT);
@@ -301,11 +298,7 @@ fn a_quit_with_the_menu_open_closes_it_and_ends_the_thread_in_time() {
         desktop::shown_menu().is_none(),
         "the menu outlived the thread"
     );
-    assert_eq!(
-        desktop::tray_icon(pid),
-        None,
-        "the icon outlived the thread"
-    );
+    assert_eq!(owner.area(), None, "the icon outlived the thread");
     // Nothing was chosen on the way out.
     assert!(
         !received

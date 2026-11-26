@@ -489,11 +489,8 @@ fn every_tray_item_sends_what_it_sends_on_linux() {
     choose(icon, None, "Stop playing");
     popup_once(pid, icon, idle);
     // Quit ends the daemon, and its icon goes with it.
+    let owner = desktop::icon_owner(pid).unwrap();
     choose(icon, None, "Quit");
     assert!(ended(&mut daemon, END).success(), "{}", home.log());
-    assert_eq!(
-        desktop::tray_icon(pid),
-        None,
-        "the icon outlived the daemon"
-    );
+    assert_eq!(owner.area(), None, "the icon outlived the daemon");
 }

@@ -86,27 +86,47 @@ impl From<RECT> for Area {
     }
 }
 
-/// The message thread's window of process `pid`, among the first few it
+/// The message threads' windows of process `pid`, among the first few it
 /// made.
-fn message_window(Process(pid): Process) -> Option<HWND> {
-    (0..64).find_map(|n| window(&format!("auto-clicker.message-window.{pid}.{n}")))
+fn message_windows(Process(pid): Process) -> impl Iterator<Item = HWND> {
+    (0..64).filter_map(move |n| window(&format!("auto-clicker.message-window.{pid}.{n}")))
 }
 
 /// The tray icon of process `pid` on the screen, where the taskbar shows
 /// it (the overflow's button while it is hidden there); none while there
 /// is no icon.
-#[allow(unsafe_code)]
 pub fn tray_icon(process: Process) -> Option<Area> {
-    let identifier = NOTIFYICONIDENTIFIER {
-        cbSize: size_of::<NOTIFYICONIDENTIFIER>() as u32,
-        hWnd: message_window(process)?,
-        uID: 1,
-        ..NOTIFYICONIDENTIFIER::default()
-    };
-    let mut rect = RECT::default();
-    // SAFETY: both are live and fully set for the call.
-    let result = unsafe { Shell_NotifyIconGetRect(&identifier, &mut rect) };
-    (result == 0).then(|| Area::from(rect))
+    icon_owner(process)?.area()
+}
+
+/// The window that owns process `pid`'s tray icon, while it has one.
+pub fn icon_owner(process: Process) -> Option<IconOwner> {
+    message_windows(process)
+        .map(IconOwner)
+        .find(|owner| owner.area().is_some())
+}
+
+/// A tray icon's owner, by its window: still asked after the window is
+/// gone, so an icon left behind is seen.
+#[derive(Clone, Copy, Debug)]
+pub struct IconOwner(HWND);
+
+impl IconOwner {
+    /// Where the taskbar shows the icon; none once it has no such icon.
+    #[allow(unsafe_code)]
+    pub fn area(self) -> Option<Area> {
+        let identifier = NOTIFYICONIDENTIFIER {
+            cbSize: size_of::<NOTIFYICONIDENTIFIER>() as u32,
+            hWnd: self.0,
+            uID: 1,
+            ..NOTIFYICONIDENTIFIER::default()
+        };
+        let mut rect = RECT::default();
+        // SAFETY: both are live and fully set for the call; the window is
+        // only named, never used.
+        let result = unsafe { Shell_NotifyIconGetRect(&identifier, &mut rect) };
+        (result == 0).then(|| Area::from(rect))
+    }
 }
 
 /// The text of process `pid`'s tray popup while it shows.
@@ -229,7 +249,9 @@ impl Menu {
             greyed: state & MF_GRAYED != 0,
             checked: state & MF_CHECKED != 0,
             submenu: state & MF_POPUP != 0,
-            separator: state & MF_SEPARATOR != 0,
+            // A submenu's state holds its count in the high byte, where
+            // eight items would read as a separator.
+            separator: state & MF_POPUP == 0 && state & MF_SEPARATOR != 0,
         }
     }
 
@@ -271,8 +293,9 @@ fn visible(window: HWND) -> bool {
 fn text(window: HWND) -> String {
     let mut text = vec![0u16; 4096];
     let mut length = 0;
-    // SAFETY: `text` is a live buffer of the length given, kept alive past
-    // the call (which ends at its deadline); `length` is live.
+    // SAFETY: `text` is a live buffer of the length given; `length` is
+    // live. A send that timed out may still be handled after the call
+    // returns, so the buffer is then never freed (below).
     let answered = unsafe {
         SendMessageTimeoutW(
             window,
@@ -284,12 +307,13 @@ fn text(window: HWND) -> String {
             &mut length,
         )
     };
-    let length = if answered == 0 {
-        0
-    } else {
-        length.min(text.len())
-    };
-    String::from_utf16_lossy(&text[..length])
+    if answered == 0 {
+        // The window's thread may write into it yet: it is leaked, a
+        // test's few kilobytes, rather than freed under that write.
+        std::mem::forget(text);
+        return String::new();
+    }
+    String::from_utf16_lossy(&text[..length.min(text.len())])
 }
 
 /// Runs `script` in PowerShell, waiting at most `within`; its output. One
