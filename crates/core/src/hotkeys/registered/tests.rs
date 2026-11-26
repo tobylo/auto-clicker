@@ -360,3 +360,28 @@ fn a_hotkey_while_reading_counts_modifiers_whose_raw_events_are_still_queued() {
     hotkeys.key(SHIFT, false, &mut keyboard);
     assert_eq!(hotkeys.key(CTRL, false, &mut keyboard), [ModifiersReleased]);
 }
+
+#[test]
+fn the_readers_end_with_a_raw_stop_still_held_stops_the_reading() {
+    let mut keyboard = FakeKeyboard::default();
+    let mut hotkeys = registered();
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    for code in [CTRL, SHIFT, F6] {
+        hotkeys.key(code, true, &mut keyboard);
+    }
+    hotkeys.end(&mut keyboard);
+    assert!(!keyboard.reading && !hotkeys.reading());
+}
+
+#[test]
+fn a_modifier_let_go_first_leaves_the_press_waiting_for_its_hotkey() {
+    let mut keyboard = FakeKeyboard::default();
+    let mut hotkeys = registered();
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    for code in [CTRL, SHIFT, F6] {
+        hotkeys.key(code, true, &mut keyboard);
+    }
+    // Shift comes up before the press's hotkey is handled; F6 is down.
+    hotkeys.key(SHIFT, false, &mut keyboard);
+    assert_eq!(hotkeys.hotkey(CLICKING, &mut keyboard), []);
+}

@@ -21,7 +21,7 @@ async fn registered_daemon(config: Config, prepare: impl FnOnce(&mut Record)) ->
 }
 
 fn reported() -> HotkeyEvent {
-    HotkeyEvent::Triggers(Triggers::bound(&Bindings::default()))
+    HotkeyEvent::Triggers(Triggers::bound(&Bindings::default(), |b| vec![b.key()]))
 }
 
 const WAIT: Watching = Watching {

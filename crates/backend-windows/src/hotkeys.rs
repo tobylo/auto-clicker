@@ -24,7 +24,7 @@ use auto_clicker_core::hotkeys::{
     Action, Binding, Bindings, HotkeyEvent, HotkeyStatus, Keyboard, Modifier, NotRegistered,
     Registered, Triggers, Unregistered, Watching,
 };
-use auto_clicker_core::input::Key;
+use auto_clicker_core::input::{Held, Key};
 use auto_clicker_core::log;
 use windows_sys::Win32::Foundation::{
     ERROR_HOTKEY_ALREADY_REGISTERED, HWND, LPARAM, LRESULT, WPARAM,
@@ -38,13 +38,13 @@ use windows_sys::Win32::UI::Input::{
     RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEKEYBOARD, RegisterRawInputDevices,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, MSG, PM_REMOVE, PeekMessageW, RI_KEY_BREAK, RI_KEY_E0, WM_APP, WM_HOTKEY,
-    WM_INPUT,
+    RI_KEY_BREAK, RI_KEY_E0, WM_APP, WM_HOTKEY, WM_INPUT,
 };
 
 use crate::message_thread::Remote;
-use crate::output::keys::{Code, code};
+use crate::output::keys::{self, Code, code};
 use crate::output::{MARKER, received_key};
+use crate::watchdog::Table;
 
 /// Posted when the slot changed: the thread reads it.
 const WM_HOTKEYS_CHANGED: u32 = WM_APP + 5;
@@ -69,6 +69,7 @@ pub type Sink = Arc<dyn Fn(HotkeyEvent) + Send + Sync>;
 struct Wish {
     id: u64,
     bindings: Bindings,
+    own: Arc<Table>,
     send: Sink,
     watching: Watching,
 }
@@ -84,16 +85,23 @@ impl Remote {
     /// Registers `bindings` as hotkeys on the message thread, in place of
     /// any earlier reader's; what they do, and what the keyboard read for
     /// them says, goes to `send`. Their triggers and whether Windows took
-    /// them come first.
+    /// them come first. `own` is the table of what the program holds down,
+    /// whose keys the key state is never read for.
     ///
     /// # Errors
     /// The window is gone, or Windows refused the post (its queue is full).
-    pub fn read_hotkeys(&self, bindings: Bindings, send: Sink) -> io::Result<HotkeyReading> {
+    pub fn read_hotkeys(
+        &self,
+        bindings: Bindings,
+        own: Arc<Table>,
+        send: Sink,
+    ) -> io::Result<HotkeyReading> {
         let id = READERS.fetch_add(1, Ordering::Relaxed);
         self.wanted(|wanted| {
             wanted.reader = Some(Wish {
                 id,
                 bindings,
+                own,
                 send,
                 watching: Watching::default(),
             });
@@ -153,6 +161,7 @@ impl Drop for HotkeyReading {
 /// The hotkeys registered on this thread, for one reader.
 struct Active {
     id: u64,
+    own: Arc<Table>,
     send: Sink,
     /// The hotkey id Windows reports and the action, for each one it took.
     ids: Vec<(i32, Action)>,
@@ -198,7 +207,9 @@ pub(crate) fn end(hwnd: HWND) {
     let Some(mut active) = ACTIVE.take() else {
         return;
     };
-    active.registered.end(&mut RawKeyboard(hwnd));
+    active
+        .registered
+        .end(&mut RawKeyboard::new(hwnd, &active.own));
     for &(id, _) in &active.ids {
         // SAFETY: `hwnd` is this thread's window, which registered `id`.
         // A failure leaves a hotkey that goes with the window.
@@ -232,10 +243,12 @@ pub(crate) fn answer(
     Some(Some(0))
 }
 
-/// A `WM_HOTKEY` with this id. Raw input already queued goes first: it
-/// happened before, and the key state the hotkey reads is newer than it.
+/// A `WM_HOTKEY` with this id, handed in as it comes: raw input still
+/// queued is not read ahead of it, since that could take in the press's own
+/// release before its hotkey (core's `Registered` pairs the two halves
+/// until the key comes up). Its modifiers' downs still queued are read
+/// from the key state.
 fn hotkey(hwnd: HWND, id: WPARAM) {
-    drain_input(hwnd);
     with_active(hwnd, |active, keyboard| {
         let action = active
             .ids
@@ -259,29 +272,16 @@ fn input(hwnd: HWND, lparam: LPARAM) {
     });
 }
 
-/// Handles every `WM_INPUT` waiting in the queue, in order.
-#[allow(unsafe_code)]
-fn drain_input(hwnd: HWND) {
-    let mut message = MSG::default();
-    loop {
-        // SAFETY: `message` is a live, writable `MSG`; only this window's
-        // `WM_INPUT` is taken.
-        let got = unsafe { PeekMessageW(&mut message, hwnd, WM_INPUT, WM_INPUT, PM_REMOVE) };
-        if got == 0 {
-            return;
-        }
-        input(hwnd, message.lParam);
-        // SAFETY: the message as Windows queued it; its default handling
-        // frees the raw input's data.
-        unsafe { DefWindowProcW(hwnd, WM_INPUT, message.wParam, message.lParam) };
-    }
-}
-
 /// Runs `step` on the active hotkeys, then sends what it says.
-fn with_active(hwnd: HWND, step: impl FnOnce(&mut Active, &mut RawKeyboard) -> Vec<HotkeyEvent>) {
+fn with_active(
+    hwnd: HWND,
+    step: impl FnOnce(&mut Active, &mut RawKeyboard<'_>) -> Vec<HotkeyEvent>,
+) {
     let sent = ACTIVE.with_borrow_mut(|active| {
         let active = active.as_mut()?;
-        let events = step(active, &mut RawKeyboard(hwnd));
+        let own = Arc::clone(&active.own);
+        let mut keyboard = RawKeyboard::new(hwnd, &own);
+        let events = step(active, &mut keyboard);
         Some((Arc::clone(&active.send), events))
     });
     if let Some((send, events)) = sent {
@@ -308,9 +308,10 @@ fn register(hwnd: HWND, wish: &Wish) -> Active {
             }),
         }
     }
-    // A refused binding's key stays refused too: the safe side, should
+    // A refused binding's keys stay refused too: the safe side, should
     // another program's hotkey on it be the user's.
-    (wish.send)(HotkeyEvent::Triggers(Triggers::bound(&wish.bindings)));
+    let triggers = Triggers::bound(&wish.bindings, |binding| setting_off(binding.key()));
+    (wish.send)(HotkeyEvent::Triggers(triggers));
     let status = if refused.is_empty() {
         HotkeyStatus::Available
     } else {
@@ -319,6 +320,7 @@ fn register(hwnd: HWND, wish: &Wish) -> Active {
     (wish.send)(HotkeyEvent::Status(status));
     Active {
         id: wish.id,
+        own: Arc::clone(&wish.own),
         send: Arc::clone(&wish.send),
         ids,
         watching: Watching::default(),
@@ -376,6 +378,19 @@ fn virtual_key(key: Key) -> Option<u16> {
     }
 }
 
+/// The keys whose press sets off a hotkey on `key`: every key the program
+/// can send that Windows gives the same virtual key (Enter and keypad
+/// Enter; Home and keypad 7, which NumLock decides between), and `key`
+/// itself whatever it maps to.
+fn setting_off(key: Key) -> Vec<Key> {
+    let Some(vk) = virtual_key(key) else {
+        return vec![key];
+    };
+    let mut keys = vec![key];
+    keys.extend(keys::sendable().filter(|&other| other != key && virtual_key(other) == Some(vk)));
+    keys
+}
+
 /// The key a `WM_INPUT` reports, and whether it went down; `None` for
 /// anything but an unmarked keyboard event of a key the program knows.
 #[allow(unsafe_code)]
@@ -412,10 +427,19 @@ fn key_event(lparam: LPARAM) -> Option<(u16, bool)> {
     Some((key.code(), flags & RI_KEY_BREAK == 0))
 }
 
-/// Raw keyboard input for this thread's window.
-struct RawKeyboard(HWND);
+/// Raw keyboard input for this thread's window, and the user's key state:
+/// a key the program holds (in the watchdog's table) is never read as the
+/// user's, since its marked release never arrives.
+struct RawKeyboard<'a> {
+    window: HWND,
+    own: &'a Table,
+}
 
-impl RawKeyboard {
+impl<'a> RawKeyboard<'a> {
+    fn new(window: HWND, own: &'a Table) -> RawKeyboard<'a> {
+        RawKeyboard { window, own }
+    }
+
     #[allow(unsafe_code)]
     fn register(flags: u32, target: HWND) -> io::Result<()> {
         let device = RAWINPUTDEVICE {
@@ -433,10 +457,10 @@ impl RawKeyboard {
     }
 }
 
-impl Keyboard for RawKeyboard {
+impl Keyboard for RawKeyboard<'_> {
     /// Reads every keyboard, whatever window is in front.
     fn start(&mut self) -> io::Result<()> {
-        RawKeyboard::register(RIDEV_INPUTSINK, self.0).inspect_err(|err| {
+        RawKeyboard::register(RIDEV_INPUTSINK, self.window).inspect_err(|err| {
             log::line(format_args!(
                 "auto-clicker: the keyboard could not be read for the hotkeys: {err}"
             ));
@@ -453,7 +477,10 @@ impl Keyboard for RawKeyboard {
 
     #[allow(unsafe_code)]
     fn held(&self, code: u16) -> bool {
-        let Some(vk) = Key::new(code).and_then(virtual_key) else {
+        let Some(key) = Key::new(code) else {
+            return false;
+        };
+        let Some(vk) = virtual_key(key).filter(|_| !self.own.owes(Held::Key(key))) else {
             return false;
         };
         // SAFETY: plain call. The high bit says the key is down.

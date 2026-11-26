@@ -224,6 +224,11 @@ pub(crate) fn code(key: Key) -> Option<Code> {
         .map(|index| TABLE[index].1)
 }
 
+/// Every key the program can send Windows.
+pub(crate) fn sendable() -> impl Iterator<Item = Key> {
+    TABLE.iter().filter_map(|&(code, _)| Key::new(code))
+}
+
 /// The key Windows reports as `scan`, `extended` and `virtual_key` (as a
 /// window message or a hook gives them), or `None` for one the table lacks.
 /// Pause is read by its virtual key, which Windows reports with scan code

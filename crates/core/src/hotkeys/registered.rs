@@ -11,7 +11,10 @@
 //! it is made while either needs it and removed once neither does.
 //!
 //! One press can arrive both ways, in either order, and counts once: each
-//! half waits for its pair until the press's key comes up. A press counted
+//! half waits for its pair until the press's key comes up. That needs a
+//! press's hotkey to be handed in before its key's release: the system
+//! sends the hotkey at the key-down, so the backend hands events in as
+//! they come and never reads raw input ahead of a hotkey. A press counted
 //! from raw input keeps the keyboard read until then, so its hotkey is
 //! known for the same press however late it comes. A hotkey counted first
 //! needs no such hold: once nothing matches stops, a raw key-down fires
@@ -45,8 +48,9 @@ pub trait Keyboard {
     fn start(&mut self) -> io::Result<()>;
     /// Stops reading it.
     fn stop(&mut self);
-    /// Whether the key with this code is down now, as the system's own key
-    /// state says.
+    /// Whether the user holds the key with this code down now, as the
+    /// system's own key state says: never a key the program itself holds,
+    /// whose release would come marked and never reach [`Registered`].
     fn held(&self, code: u16) -> bool;
 }
 
@@ -160,10 +164,12 @@ impl Registered {
         events
     }
 
-    /// Stops reading whatever it read for: the reader is gone.
+    /// Stops reading whatever it read for: the reader is gone, and with
+    /// it any press still waiting for its other half.
     pub fn end(&mut self, keyboard: &mut impl Keyboard) {
         self.owed = false;
         self.watching = Watching::default();
+        self.unpaired.clear();
         let mut events = Vec::new();
         self.settle(keyboard, &mut events);
     }

@@ -69,11 +69,12 @@ impl Trigger {
 
     /// The trigger of a binding the program registered itself (Windows'
     /// `RegisterHotKey`): shown as the binding is, and set off by exactly
-    /// its key, whatever that key is.
-    pub fn bound(binding: Binding) -> Trigger {
+    /// `keys`: its key and every key the system takes for it (Enter and
+    /// keypad Enter are one virtual key on Windows).
+    pub fn bound(binding: Binding, keys: Vec<Key>) -> Trigger {
         Trigger {
             text: Some(binding.to_string()),
-            keys: Some(vec![binding.key()]),
+            keys: Some(keys),
         }
     }
 
@@ -134,12 +135,13 @@ impl Triggers {
     }
 
     /// The triggers of bindings the program registered itself, each set
-    /// off by exactly its key.
-    pub fn bound(bindings: &Bindings) -> Triggers {
+    /// off by exactly the keys `keys_of` gives for it.
+    pub fn bound(bindings: &Bindings, keys_of: impl Fn(Binding) -> Vec<Key>) -> Triggers {
+        let bound = |binding| Trigger::bound(binding, keys_of(binding));
         Triggers {
-            toggle_clicking: Trigger::bound(bindings.toggle_clicking),
-            toggle_recording: Trigger::bound(bindings.toggle_recording),
-            toggle_playback: Trigger::bound(bindings.toggle_playback),
+            toggle_clicking: bound(bindings.toggle_clicking),
+            toggle_recording: bound(bindings.toggle_recording),
+            toggle_playback: bound(bindings.toggle_playback),
         }
     }
 
@@ -342,13 +344,19 @@ mod tests {
     }
 
     #[test]
-    fn a_bound_trigger_refuses_exactly_its_key_whatever_the_key() {
+    fn a_bound_trigger_refuses_exactly_its_keys_whatever_the_key() {
         let space = Binding::parse("Ctrl+Space").unwrap();
         let bindings = Bindings {
             toggle_clicking: space,
             ..Bindings::default()
         };
-        let triggers = Triggers::bound(&bindings);
+        // Another key the system takes for F7's, as keypad Enter is Enter.
+        let keys_of = |binding: Binding| match binding.key() {
+            f7 if f7 == key("f7") => vec![f7, key("kpenter")],
+            other => vec![other],
+        };
+        let triggers = Triggers::bound(&bindings, keys_of);
+        assert!(triggers.refusal(key("kpenter")).is_some());
         assert_eq!(
             triggers.refusal(key("space")),
             Some(Refusal::HotkeyKey {

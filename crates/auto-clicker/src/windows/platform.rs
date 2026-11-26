@@ -71,6 +71,7 @@ impl Platform for Windows {
             ..
         } = reading;
         let thread = self.thread.get().cloned();
+        let own = Arc::clone(&self.table);
         Box::pin(async move {
             let failed = |why: String| {
                 let why = Unavailable::ReadFailed(why.into());
@@ -87,7 +88,7 @@ impl Platform for Windows {
                 let send = send.clone();
                 Arc::new(move |event| send.send(event))
             };
-            let hotkeys = match thread.read_hotkeys(bindings, sink) {
+            let hotkeys = match thread.read_hotkeys(bindings, own, sink) {
                 Ok(hotkeys) => hotkeys,
                 Err(err) => return failed(format!("the message thread refused them: {err}")),
             };

@@ -32,6 +32,11 @@ fn rare() -> Bindings {
     }
 }
 
+/// A table of this process alone: the program holds nothing.
+fn own() -> Arc<Table> {
+    Arc::new(Table::private())
+}
+
 /// A sink whose events arrive on a channel.
 fn sink() -> (Sink, mpsc::Receiver<HotkeyEvent>) {
     let (events, received) = mpsc::channel();
@@ -87,10 +92,10 @@ fn the_keyboard_is_read_only_while_asked_and_the_hotkeys_go_with_their_reader() 
     let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
     let (thread, _) = started();
     let (sink, received) = sink();
-    let reading = thread.remote().read_hotkeys(rare(), sink).unwrap();
+    let reading = thread.remote().read_hotkeys(rare(), own(), sink).unwrap();
     assert_eq!(
         next(&received),
-        HotkeyEvent::Triggers(Triggers::bound(&rare()))
+        HotkeyEvent::Triggers(Triggers::bound(&rare(), |b| setting_off(b.key())))
     );
     assert_eq!(
         next(&received),
@@ -122,13 +127,19 @@ fn a_replaced_readers_end_leaves_its_replacements_hotkeys() {
     let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
     let (thread, _) = started();
     let (first_sink, _first) = sink();
-    let first = thread.remote().read_hotkeys(rare(), first_sink).unwrap();
+    let first = thread
+        .remote()
+        .read_hotkeys(rare(), own(), first_sink)
+        .unwrap();
     let (second_sink, second) = sink();
-    let replacement = thread.remote().read_hotkeys(rare(), second_sink).unwrap();
+    let replacement = thread
+        .remote()
+        .read_hotkeys(rare(), own(), second_sink)
+        .unwrap();
     drop(first);
     assert_eq!(
         next(&second),
-        HotkeyEvent::Triggers(Triggers::bound(&rare()))
+        HotkeyEvent::Triggers(Triggers::bound(&rare(), |b| setting_off(b.key())))
     );
     assert_eq!(next(&second), HotkeyEvent::Status(HotkeyStatus::Available));
     // Raw input read for the replacement shows the thread got past the
@@ -161,7 +172,7 @@ fn a_combination_another_program_holds_is_refused_by_name_and_the_rest_work() {
     );
     let (thread, _) = started();
     let (sink, received) = sink();
-    let reading = thread.remote().read_hotkeys(rare(), sink).unwrap();
+    let reading = thread.remote().read_hotkeys(rare(), own(), sink).unwrap();
     next(&received);
     let refused = vec![Unregistered {
         hotkey: held,
@@ -184,7 +195,7 @@ fn the_windows_end_stops_the_reading_and_frees_the_hotkeys() {
     let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
     let (thread, _) = started();
     let (sink, received) = sink();
-    let reading = thread.remote().read_hotkeys(rare(), sink).unwrap();
+    let reading = thread.remote().read_hotkeys(rare(), own(), sink).unwrap();
     next(&received);
     let stops = Watching {
         release: false,
@@ -196,4 +207,15 @@ fn the_windows_end_stops_the_reading_and_frees_the_hotkeys() {
     assert_eq!(raw_registrations(), 0);
     assert!(free(rare().toggle_clicking));
     drop(reading);
+}
+
+#[test]
+fn a_hotkey_is_set_off_by_every_key_windows_gives_its_virtual_key() {
+    let key = |name| Key::from_name(name).unwrap();
+    let enter = setting_off(key("enter"));
+    assert!(
+        enter.contains(&key("enter")) && enter.contains(&key("kpenter")),
+        "{enter:?}"
+    );
+    assert_eq!(setting_off(key("f6")), [key("f6")]);
 }
