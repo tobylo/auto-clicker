@@ -114,7 +114,9 @@ fn labels(lines: &[Line]) -> Vec<(String, bool)> {
         .collect()
 }
 
-/// The next event that is not Windows' own, within [`ARRIVAL`].
+/// The next event that is not Windows' own, nor the icon's coming and
+/// going (a first add the taskbar refused and a later try that took it),
+/// within [`ARRIVAL`].
 fn next_tray_event(received: &std::sync::mpsc::Receiver<WindowEvent>) -> WindowEvent {
     let deadline = Instant::now() + ARRIVAL;
     loop {
@@ -123,7 +125,8 @@ fn next_tray_event(received: &std::sync::mpsc::Receiver<WindowEvent>) -> WindowE
             WindowEvent::Other(_)
             | WindowEvent::SessionRead(_)
             | WindowEvent::Display(_)
-            | WindowEvent::TrayUnshown(_) => {}
+            | WindowEvent::TrayUnshown(_)
+            | WindowEvent::TrayShown => {}
             event => return event,
         }
     }
