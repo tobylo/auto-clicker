@@ -135,12 +135,10 @@ fn a_refused_icon_is_tried_again_on_the_ladder_change_first() {
     // then an add; refused again, the next try waits longer.
     let first = start + RETRY_DELAYS[0];
     icon.take(Inbox::default(), first);
+    // The handler heard of the refusal once; a try that follows is no news.
     assert_eq!(
         seen(&mut icon),
-        (
-            strings(&["modify clicking", "add clicking"]),
-            strings(&["unshown: refused"])
-        )
+        (strings(&["modify clicking", "add clicking"]), vec![])
     );
     assert_eq!(
         icon.state,
@@ -250,7 +248,7 @@ fn a_restart_notice_while_the_icon_is_there_keeps_it_unsaid() {
 }
 
 #[test]
-fn an_icon_never_added_or_gone_with_explorer_is_not_removed() {
+fn an_icon_never_added_is_not_removed() {
     let mut never = Icon::new(Fake::default());
     never.remove();
     assert_eq!(seen(&mut never).0, Vec::<String>::new());
@@ -369,11 +367,13 @@ fn the_thread_tries_a_refused_icon_again_when_due_by_itself() {
     );
 }
 
-/// A taskbar that never answers, as a hung Explorer does.
-struct Hung;
+/// A taskbar that never answers, as a hung Explorer does; it says when a
+/// call reaches it.
+struct Hung(std::sync::mpsc::Sender<()>);
 
 impl Calls for Hung {
     fn add(&mut self, _: &Shown) -> io::Result<()> {
+        let _ = self.0.send(());
         thread::sleep(Duration::from_secs(3600));
         Ok(())
     }
@@ -397,12 +397,90 @@ impl Calls for Hung {
 
 #[test]
 fn a_hung_explorer_holds_up_neither_a_change_nor_the_removal_past_its_deadline() {
-    let shell = Shell::spawn(Hung).unwrap();
-    let asked = Instant::now();
+    let (entered, inside) = std::sync::mpsc::channel();
+    let shell = Shell::spawn(Hung(entered)).unwrap();
     shell.show(shown("idle").show.unwrap());
+    // The thread is in its call before anything else is asked.
+    inside.recv_timeout(Duration::from_secs(10)).unwrap();
+    let asked = Instant::now();
     shell.show(shown("clicking").show.unwrap());
     let within = Duration::from_millis(200);
     shell.remove(within);
     // The thread is left in its call, to end with the process.
     assert!(asked.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn a_taskbar_that_keeps_refusing_is_news_once() {
+    let mut icon = Icon::new(Fake {
+        adds: VecDeque::from([false; 4]),
+        modifies: VecDeque::from([false; 4]),
+        ..Fake::default()
+    });
+    let mut now = Instant::now();
+    icon.take(shown("idle"), now);
+    for _ in 0..3 {
+        let State::Retrying { due } = icon.state else {
+            panic!("{:?}", icon.state);
+        };
+        now = due;
+        icon.take(Inbox::default(), now);
+    }
+    assert_eq!(seen(&mut icon).1, strings(&["unshown: refused"]));
+}
+
+#[test]
+fn only_a_request_wakes_the_thread() {
+    assert!(!Inbox::default().asks());
+    assert!(shown("idle").asks());
+    assert!(restarted().asks());
+    assert!(
+        Inbox {
+            remove: true,
+            ..Inbox::default()
+        }
+        .asks()
+    );
+}
+
+#[test]
+fn explorers_restart_reaches_the_thread_and_adds_the_icon_afresh() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let shell = Shell::spawn(Counted(Arc::clone(&calls))).unwrap();
+    shell.show(shown("idle").show.unwrap());
+    let added = |count: usize| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while calls.lock().unwrap().len() < count {
+            assert!(Instant::now() < deadline, "{:?}", calls.lock().unwrap());
+            thread::sleep(Duration::from_millis(10));
+        }
+    };
+    added(1);
+    shell.restarted();
+    added(2);
+    shell.remove(Duration::from_secs(10));
+    assert_eq!(
+        *calls.lock().unwrap(),
+        strings(&["add idle", "add idle", "delete"])
+    );
+}
+
+#[test]
+fn a_removal_ends_a_wait_for_a_try_at_once() {
+    let shared = Arc::new((Mutex::new(Inbox::default()), Condvar::new()));
+    let theirs = Arc::clone(&shared);
+    let (done, ended) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut icon = Icon::new(Fake::default());
+        icon.state = State::Retrying {
+            due: Instant::now() + Duration::from_secs(3600),
+        };
+        let _ = done.send(icon.wait(&theirs).remove);
+    });
+    thread::sleep(Duration::from_millis(50));
+    let (inbox, changed) = &*shared;
+    inbox.lock().unwrap().remove = true;
+    changed.notify_one();
+    // Far under the hour the try waits for.
+    assert_eq!(ended.recv_timeout(Duration::from_secs(2)), Ok(true));
 }

@@ -121,3 +121,27 @@ fn without_explorers_restart_notice_a_refused_icon_stays_on_the_ladder() {
     // Waiting for a notice that cannot be heard would wait for ever.
     assert!(on_ladder(false, || false));
 }
+
+#[test]
+fn a_picture_the_taskbar_cannot_take_reaches_the_handler_as_refused() {
+    let (thread, received) = started();
+    let mut broken = content("Auto clicker: idle");
+    broken.icon = TrayIcon {
+        side: 2,
+        rgba: vec![0; 3],
+    };
+    thread.remote().show_tray(broken).unwrap();
+    let deadline = Instant::now() + ARRIVAL;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match received.recv_timeout(left) {
+            Ok(WindowEvent::TrayUnshown(err)) => {
+                assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
+                break;
+            }
+            Ok(_) => {}
+            Err(err) => panic!("no refusal: {err}"),
+        }
+    }
+    thread.quit_and_join(ARRIVAL).unwrap();
+}

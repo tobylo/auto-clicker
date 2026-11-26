@@ -316,6 +316,52 @@ mod tests {
     }
 
     #[test]
+    fn a_menu_already_open_or_just_closed_opens_nothing() {
+        OPEN.set(true);
+        assert_eq!(run(std::ptr::null_mut(), &[], (0, 0)), None);
+        // Still open, and not closed by this.
+        assert!(OPEN.get());
+        assert_eq!(CLOSED_AT.get(), None);
+        OPEN.set(false);
+        CLOSED_AT.set(Some(Instant::now()));
+        assert!(just_closed());
+        let opened = Instant::now();
+        assert_eq!(run(std::ptr::null_mut(), &[], (0, 0)), None);
+        assert!(CLOSED_AT.get().unwrap() < opened);
+        CLOSED_AT.set(Instant::now().checked_sub(Duration::from_secs(60)));
+        assert!(!just_closed());
+        // A quit with no menu open goes at once.
+        assert!(!end_for_quit());
+        assert!(!QUIT_AFTER.get());
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn items_show_greyed_without_a_command_and_checked_where_said() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetMenuState;
+        let entries = [
+            MenuEntry::Item {
+                label: "Settings".to_owned(),
+                command: None,
+                enabled: true,
+                checked: None,
+            },
+            MenuEntry::Item {
+                label: "Rock & roll".to_owned(),
+                command: Some(100),
+                enabled: true,
+                checked: Some(true),
+            },
+        ];
+        let menu = Menu::build(&entries).unwrap();
+        // SAFETY: a live menu of this test's, by position.
+        let state = |place| unsafe { GetMenuState(menu.0, place, MF_BYPOSITION) };
+        assert_ne!(state(0) & MF_GRAYED, 0);
+        assert_eq!(state(1) & MF_GRAYED, 0);
+        assert_ne!(state(1) & MF_CHECKED, 0);
+    }
+
+    #[test]
     fn an_item_is_greyed_when_off_and_checked_when_chosen() {
         assert_eq!(item_flags(true, false), MF_STRING);
         assert_eq!(item_flags(false, false), MF_STRING | MF_GRAYED);

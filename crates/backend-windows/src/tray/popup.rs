@@ -165,13 +165,21 @@ fn create(owner: HWND) -> bool {
             null(),
         )
     };
-    if popup.is_null() {
-        // SAFETY: the class registered above, with no window.
-        unsafe { UnregisterClassW(class.as_ptr(), instance) };
+    // SAFETY: `popup`, when made, is the layered window made above, which
+    // shows only once its opacity is set: fully opaque.
+    let shown = !popup.is_null()
+        && unsafe { SetLayeredWindowAttributes(popup, 0, u8::MAX, LWA_ALPHA) } != 0;
+    if !shown {
+        // SAFETY: the window made above, if any, destroyed once; then the
+        // class registered above, with no window left.
+        unsafe {
+            if !popup.is_null() {
+                DestroyWindow(popup);
+            }
+            UnregisterClassW(class.as_ptr(), instance);
+        }
         return false;
     }
-    // SAFETY: `popup` is the layered window made above; fully opaque.
-    unsafe { SetLayeredWindowAttributes(popup, 0, u8::MAX, LWA_ALPHA) };
     CLASS.set(Some(class));
     POPUP.set(popup);
     FONTS.set(Some(fonts()));
@@ -427,6 +435,53 @@ mod tests {
         }
     }
 
+    /// The popup's window text and whether it shows.
+    #[allow(unsafe_code)]
+    fn seen(popup: HWND) -> (String, bool) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowTextW, IsWindowVisible};
+        let mut text = [0u16; 256];
+        // SAFETY: `text` is a live buffer of the length given; any handle
+        // may be asked whether it shows.
+        let (length, visible) = unsafe {
+            (
+                GetWindowTextW(popup, text.as_mut_ptr(), 256),
+                IsWindowVisible(popup) != 0,
+            )
+        };
+        let length = usize::try_from(length).unwrap();
+        (String::from_utf16_lossy(&text[..length]), visible)
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn the_popup_shows_the_latest_lines_takes_no_click_and_goes_whole() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, GetWindowLongPtrW};
+        let lines = "Auto clicker: idle\nA first line\nRock & roll";
+        crate::tray::CONTENT.set(Some(crate::tray::tests::content("Auto clicker: idle")));
+        show(null_mut());
+        let popup = POPUP.get();
+        assert!(!popup.is_null());
+        assert_eq!(seen(popup), (lines.to_owned(), true));
+        // SAFETY: a live window of this thread's.
+        let style = unsafe { GetWindowLongPtrW(popup, GWL_EXSTYLE) } as WINDOW_EX_STYLE;
+        assert_eq!(style & EX_STYLE, EX_STYLE);
+        // Shown again, it is the same window.
+        show(null_mut());
+        assert_eq!(POPUP.get(), popup);
+        // Hidden, new lines do not bring it back.
+        hide();
+        refresh();
+        assert!(!seen(popup).1);
+        // With nothing to show, it hides.
+        show(null_mut());
+        crate::tray::CONTENT.set(None);
+        refresh();
+        assert!(!seen(popup).1);
+        destroy();
+        assert!(POPUP.get().is_null());
+        assert!(CLASS.with_borrow(Option::is_none));
+    }
+
     #[test]
     fn the_popup_stands_above_the_icon_inside_the_work_area() {
         let work = rect(0, 0, 1920, 1032);
@@ -441,5 +496,10 @@ mod tests {
         assert_eq!(position(200, 100, top, work), (1616, 48));
         // Taller than the work area: from its top, the title first.
         assert_eq!(position(200, 2000, top, work), (1616, 48));
+        // Fits neither above nor below: as low as fits, inside the left
+        // edge.
+        let left = rect(0, 500, 40, 540);
+        let work = rect(48, 0, 1920, 1080);
+        assert_eq!(position(300, 600, left, work), (48, 480));
     }
 }

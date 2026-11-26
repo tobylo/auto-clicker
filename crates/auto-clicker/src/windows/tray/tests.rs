@@ -54,6 +54,8 @@ fn the_menu_is_linuxs_with_settings_off_until_the_window_comes() {
     );
     let playing = content(&view(Activity::Playing), Language::English, 16, &commands);
     assert!(items(&playing.menu).contains(&item("Stop playing", true, Some(STOP))));
+    let recording = content(&view(Activity::Recording), Language::English, 16, &commands);
+    assert!(items(&recording.menu).contains(&item("Stop recording", true, Some(STOP_RECORDING))));
 }
 
 #[test]
@@ -153,4 +155,29 @@ fn the_icon_title_and_lines_follow_the_view() {
             "{activity:?}"
         );
     }
+}
+
+#[test]
+fn following_ends_once_the_window_is_gone() {
+    use std::time::Duration;
+
+    use auto_clicker_backend_windows::MessageThread;
+
+    let thread = MessageThread::spawn(|_| {}, Duration::from_secs(10)).unwrap();
+    let remote = thread.remote();
+    thread.quit_and_join(Duration::from_secs(5)).unwrap();
+    // The views stay open: only the gone window ends it.
+    let (_views, follows) = watch::channel(view(Activity::Idle));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let ended = runtime.block_on(async {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            follow(follows, remote, Language::English, Commands::default()),
+        )
+        .await
+    });
+    assert!(ended.is_ok(), "still following a gone window");
 }

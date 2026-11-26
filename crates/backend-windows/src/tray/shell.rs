@@ -120,7 +120,7 @@ impl Shell {
 /// Where the icon stands with the taskbar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
-    /// Not added yet, or Explorer restarted: the next look adds it.
+    /// Not added yet: the first picture adds it.
     Absent,
     Shown,
     /// The taskbar refused it while there: tried again at `due`.
@@ -270,8 +270,10 @@ impl<C: Calls> Icon<C> {
     }
 
     /// The taskbar refused the icon: tried again on the ladder while a
-    /// taskbar is there, else once Explorer says it started.
+    /// taskbar is there, else once Explorer says it started. The handler is
+    /// told once, when it stops showing; tries that follow are not news.
     fn failed(&mut self, err: io::Error, now: Instant) {
+        let news = !matches!(self.state, State::Retrying { .. } | State::Waiting);
         self.state = if self.calls.tries_on_ladder() {
             let delay = RETRY_DELAYS[self.tries.min(RETRY_DELAYS.len() - 1)];
             self.tries = self.tries.saturating_add(1);
@@ -281,10 +283,13 @@ impl<C: Calls> Icon<C> {
         } else {
             State::Waiting
         };
-        self.calls.tell(WindowEvent::TrayUnshown(err));
+        if news {
+            self.calls.tell(WindowEvent::TrayUnshown(err));
+        }
     }
 
-    /// Removes the icon, unless it was never added or went with Explorer.
+    /// Removes the icon, unless it was never added; one that was refused
+    /// may have gone through.
     fn remove(&mut self) {
         if self.state != State::Absent {
             self.calls.delete();
