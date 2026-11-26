@@ -392,7 +392,7 @@ impl Platform for FakePlatform {
     }
 
     fn reports_triggers(&self) -> bool {
-        self.0.with(|r| r.desktop_reader || r.registered_triggers)
+        super::reports_triggers(self.input_reader()) || self.0.with(|r| r.registered_triggers)
     }
 
     fn foreground_takes_input(&self) -> bool {

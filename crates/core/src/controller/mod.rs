@@ -205,7 +205,7 @@ pub trait Platform {
     /// decision 9). No run then presses a trigger's key, and until the
     /// first report, no key at all.
     fn reports_triggers(&self) -> bool {
-        self.input_reader() == InputReader::Desktop
+        reports_triggers(self.input_reader())
     }
 
     /// Whether a run started now could reach the window in front. On
@@ -381,6 +381,12 @@ struct Running<B: InputBackend> {
     loss: InputLoss,
     /// Why the devices were lost, once `loss` fired.
     lost: Option<InputError>,
+}
+
+/// Whether a platform's reader reports its triggers when the platform does
+/// not say: only the desktop's shortcuts do.
+pub(super) fn reports_triggers(reader: InputReader) -> bool {
+    reader == InputReader::Desktop
 }
 
 impl<B: InputBackend> Running<B> {

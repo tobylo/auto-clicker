@@ -385,3 +385,60 @@ fn a_modifier_let_go_first_leaves_the_press_waiting_for_its_hotkey() {
     hotkeys.key(SHIFT, false, &mut keyboard);
     assert_eq!(hotkeys.hotkey(CLICKING, &mut keyboard), []);
 }
+
+#[test]
+fn a_stop_matches_when_only_its_hotkey_was_registered() {
+    let bindings = Bindings::default();
+    let mut hotkeys = Registered::new(vec![(CLICKING, bindings.toggle_clicking)]);
+    let mut keyboard = FakeKeyboard::default();
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    assert!(hotkeys.reading());
+    assert_eq!(
+        press(&mut hotkeys, &mut keyboard, F6),
+        [Fired(CLICKING), ModifiersReleased]
+    );
+}
+
+#[test]
+fn stray_keys_while_raw_input_was_refused_fire_nothing() {
+    let mut keyboard = FakeKeyboard {
+        refuse: true,
+        ..FakeKeyboard::default()
+    };
+    let mut hotkeys = registered();
+    // No release is owed, so a refusal loses none.
+    assert_eq!(hotkeys.watch(stops(&[CLICKING]), &mut keyboard), []);
+    assert!(!hotkeys.reading());
+    assert_eq!(press(&mut hotkeys, &mut keyboard, F6), []);
+}
+
+#[test]
+fn a_hotkey_heard_before_reading_swallows_no_later_press() {
+    // Playback's 2 s wait ran out with Ctrl and Shift still down, F8 up.
+    let mut keyboard = holding(&[CTRL, SHIFT]);
+    let mut hotkeys = registered();
+    let playback = Action::TogglePlayback;
+    assert_eq!(hotkeys.hotkey(playback, &mut keyboard), [Fired(playback)]);
+    hotkeys.watch(WAITING, &mut keyboard);
+    hotkeys.watch(stops(&Action::ALL), &mut keyboard);
+    // The next F8 is the user's stop.
+    assert_eq!(hotkeys.key(66, true, &mut keyboard), [Fired(playback)]);
+}
+
+#[test]
+fn a_hotkeys_unpaired_half_is_forgotten_when_reading_stops() {
+    let mut keyboard = FakeKeyboard::default();
+    let mut hotkeys = registered();
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    assert_eq!(
+        hotkeys.hotkey(CLICKING, &mut keyboard),
+        [Fired(CLICKING), ModifiersReleased]
+    );
+    hotkeys.watch(Watching::default(), &mut keyboard);
+    assert!(!keyboard.reading);
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    assert_eq!(
+        press(&mut hotkeys, &mut keyboard, F6),
+        [Fired(CLICKING), ModifiersReleased]
+    );
+}
