@@ -9,6 +9,8 @@
 #   SSH_HOST_ALIAS the name its host key is recorded under (default: none)
 #   KEYS_DIR       the directory with known_hosts, for the commands below
 #   REMOTE_PREFIX  PowerShell put before each command they send (default none)
+#   RUN_JOB_PREFIX PowerShell put before handing a job to the runner, after
+#                  REMOTE_PREFIX (default none)
 # and defines require_running.
 # shellcheck shell=bash
 
@@ -66,7 +68,7 @@ run_job() {
     local keys="$1" queue="$2" seconds="$3" workdir="$4" command="$5" encoded
     encoded="$(printf '%s' "$command" | base64 -w0)"
     vm_ssh $((seconds + 120)) "$keys" \
-        "${REMOTE_PREFIX:-}C:\\wn01\\run-job.ps1 -CommandBase64 $encoded -TimeoutSeconds $seconds -Queue $queue -WorkDir '$workdir'; exit \$LASTEXITCODE"
+        "${REMOTE_PREFIX:-}${RUN_JOB_PREFIX:-}C:\\wn01\\run-job.ps1 -CommandBase64 $encoded -TimeoutSeconds $seconds -Queue $queue -WorkDir '$workdir'; exit \$LASTEXITCODE"
 }
 
 # How long `ssh` and `push` may take: WN01_SSH_TIMEOUT, default an hour.

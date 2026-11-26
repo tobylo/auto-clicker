@@ -182,8 +182,14 @@ function Install-RunnerFiles {
         # the new files; that changes their export, so Install-RunnerTask
         # registers them again, enabled, once every file is in.
         if ($name -in $RunnerCode) { Suspend-Runners }
-        Copy-Item -LiteralPath $source -Destination $target -Force
-        (Get-Item -LiteralPath $target).LastWriteTime = Get-Date
+        # Whole or not at all: a half-copied run-job.ps1 would run as empty.
+        Copy-Item -LiteralPath $source -Destination "$target.new" -Force
+        (Get-Item -LiteralPath "$target.new").LastWriteTime = Get-Date
+        if (Test-Path -LiteralPath $target) {
+            [IO.File]::Replace("$target.new", $target, [Management.Automation.Language.NullString]::Value)
+        } else {
+            [IO.File]::Move("$target.new", $target)
+        }
         Report-Set "file $target"
     }
 }

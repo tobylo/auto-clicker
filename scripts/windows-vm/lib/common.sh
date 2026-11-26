@@ -26,6 +26,7 @@ SSH_HOST=127.0.0.1
 SSH_KEY_FILE=""
 SSH_HOST_ALIAS=""
 REMOTE_PREFIX=""
+RUN_JOB_PREFIX=""
 SSH_PORT="${WN01_SSH_PORT:-52222}"
 # It goes into QEMU's comma-separated -netdev option: a port and nothing else.
 [[ "$SSH_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && ((SSH_PORT <= 65535)) || {

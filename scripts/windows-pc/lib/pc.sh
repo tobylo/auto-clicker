@@ -17,6 +17,13 @@ SSH_KEY_FILE=""
 # holds what tester's logon would, cargo included, as an SSH session's does not.
 # shellcheck disable=SC2016 # PowerShell expands these on the PC.
 REMOTE_PREFIX='Set-ExecutionPolicy -Scope Process Bypass -Force; [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User"); '
+# Before a job is handed to the runner: C:\wn01 must be the setup's, a plain
+# folder the administrators or SYSTEM own, or its run-job.ps1 is not run
+# (exit 125, as when the runner cannot start a job). Another account could
+# have made the folder before the setup ran.
+# shellcheck disable=SC2016 # PowerShell expands these on the PC.
+RUN_JOB_PREFIX='$r = Get-Item -LiteralPath C:\wn01 -Force -ErrorAction SilentlyContinue; if (-not $r -or -not $r.PSIsContainer -or ($r.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Acl -LiteralPath C:\wn01).GetOwner([Security.Principal.SecurityIdentifier]).Value -notin "S-1-5-32-544", "S-1-5-18") { [Console]::Error.WriteLine("C:\wn01 is not the setup'"'"'s: run pc setup"); exit 125 }; '
+
 # Where setup and uninstall copy their scripts on the PC: tester's own temp
 # folder, which no other account can write.
 STAGE_PARENT='C:\Users\tester\AppData\Local\Temp'
