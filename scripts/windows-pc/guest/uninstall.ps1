@@ -38,13 +38,24 @@ function Remove-Runners {
     }
 }
 
+# Whether C:\wn01 is the setup's: a plain folder the administrators or
+# SYSTEM own. One another account made is left alone, and nothing in it is
+# read.
+function Test-SetupRoot {
+    $item = Get-Item -LiteralPath $Root -Force
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+    return (Get-Acl -LiteralPath $Root).GetOwner([Security.Principal.SecurityIdentifier]).Value -in 'S-1-5-32-544', 'S-1-5-18'
+}
+
 function Restore-Settings {
     $path = Join-Path $Root 'restore.json'
     if (-not (Test-Path -LiteralPath $path)) { return }
     $saved = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-    if ($saved.PSObject.Properties['passwordNeverExpires']) {
-        Set-LocalUser -Name $User -PasswordNeverExpires ([bool] $saved.passwordNeverExpires)
-        Write-Output "put back: tester's password never expires = $($saved.passwordNeverExpires)"
+    # Only for the account it was read from, by SID.
+    $expiry = $saved.PSObject.Properties["passwordNeverExpires:$((Get-LocalUser -Name $User).SID.Value)"]
+    if ($expiry) {
+        Set-LocalUser -Name $User -PasswordNeverExpires ([bool] $expiry.Value)
+        Write-Output "put back: tester's password never expires = $($expiry.Value)"
     }
     # Each power value under the plan it was read from: "power:<plan>:<name>".
     foreach ($property in @($saved.PSObject.Properties | Where-Object Name -like 'power:*')) {
@@ -99,9 +110,11 @@ try {
     # not still log tester on at boot.
     Disable-AutoLogon
     Remove-Runners
-    # restore.json goes with C:\wn01 only once every setting is back.
-    Restore-Settings
-    if (Test-Path -LiteralPath $Root) {
+    if ((Test-Path -LiteralPath $Root) -and -not (Test-SetupRoot)) {
+        Write-Output "$Root was not made by the setup: left alone, and no setting put back from it"
+    } elseif (Test-Path -LiteralPath $Root) {
+        # restore.json goes with C:\wn01 only once every setting is back.
+        Restore-Settings
         Remove-Item -LiteralPath $Root -Recurse -Force
         Write-Output "removed $Root"
     }

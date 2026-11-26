@@ -72,19 +72,30 @@ function New-Security([bool] $Protected, [object[]] $Rules) {
 }
 
 # C:\wn01 is the setup's own: made by it, with its rules, in one step, or
-# found owned by the administrators or SYSTEM. One that another account made
-# (or a junction in its place) is refused, since whatever that account put
-# inside could not be trusted. Once it is the setup's, no other account can
-# add anything to it, so nothing inside needs checking for its origin.
+# found as it leaves it, a plain folder the administrators or SYSTEM own with
+# exactly the setup's rules. One that another account made or could write
+# (or a junction in its place) is refused, since what that account put
+# inside could not be trusted; the setup never adopts it by tightening it.
+# Once the root is the setup's, no other account can add anything to it,
+# so nothing inside needs checking for its origin.
 function Install-Root($Security) {
     if (-not (Test-Path -LiteralPath $Root)) {
         [IO.Directory]::CreateDirectory($Root, $Security) | Out-Null
+        # Checked again: a folder another account put there in between is
+        # taken by CreateDirectory as it is.
+        Assert-SetupRoot $Security
         Report-Set "made $Root"
         return
     }
-    $owner = (Get-Acl -LiteralPath $Root).GetOwner([Security.Principal.SecurityIdentifier]).Value
-    if (-not (Test-SetupFolder (Get-Item -LiteralPath $Root -Force) $owner)) {
-        throw "$Root was not made by the setup (owner $owner): remove it from an elevated prompt (Remove-Item -Recurse -Force $Root), then run the setup again"
+    Assert-SetupRoot $Security
+    Report-Ok "$Root is the setup's"
+}
+
+function Assert-SetupRoot($Security) {
+    $acl = Get-Acl -LiteralPath $Root
+    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if (-not (Test-SetupFolder (Get-Item -LiteralPath $Root -Force) $owner) -or -not (Test-Security $acl $Security)) {
+        throw "$Root was not made by the setup, or others can write to it (owner $owner): remove it from an elevated prompt (Remove-Item -Recurse -Force $Root), then run the setup again"
     }
 }
 
@@ -124,7 +135,6 @@ function Install-Folders([string] $TesterSid) {
     $full = 'FullControl'
     $rootRules = @((New-Rule $Admins $full), (New-Rule $System $full), (New-Rule $TesterSid 'ReadAndExecute'))
     Install-Root (New-Security $true $rootRules)
-    Set-Security $Root $true $rootRules
     foreach ($folder in 'queue', 'queue\high', 'queue\high\inbox', 'queue\high\work', 'queue\high\outbox') {
         Set-Security "$Root\$folder" $false
     }
@@ -149,6 +159,10 @@ function Install-RunnerFiles {
             Report-Ok "file $target"
             continue
         }
+        # Code a runner has loaded: both stop first, so none can start
+        # between the copy and its time stamp and pass for current; the
+        # setup starts them again.
+        if ($name -in $RunnerCode) { 'normal', 'high' | ForEach-Object { Stop-Runner $_ } }
         Copy-Item -LiteralPath $source -Destination $target -Force
         (Get-Item -LiteralPath $target).LastWriteTime = Get-Date
         Report-Set "file $target"
@@ -319,7 +333,9 @@ function Enable-AutoLogon([string] $Password) {
     if ($null -eq $account.PasswordExpires) {
         Report-Ok "tester's password never expires"
     } else {
-        Save-Original 'passwordNeverExpires' $false
+        # Under tester's SID: an account made again under the same name is
+        # another, whose setting the setup never changed.
+        Save-Original "passwordNeverExpires:$($account.SID.Value)" $false
         Set-LocalUser -Name $User -PasswordNeverExpires $true
         Report-Set "tester's password never expires"
     }
@@ -480,12 +496,14 @@ try {
     $testerSid = (Get-LocalUser -Name $User).SID.Value
     Install-Folders $testerSid
     Install-RunnerFiles
+    # The toolchain before the runners: a runner started earlier would hand
+    # its jobs a PATH without a newly installed cargo.
+    Install-BuildTools
+    Install-Rust
     Install-Runner 'normal' 'Limited'
     Install-Runner 'high' 'Highest'
     Enable-AutoLogon $Password
     Disable-Sleep
-    Install-BuildTools
-    Install-Rust
     if ($script:Changed.Count -eq 0) {
         Write-Output 'setup: nothing changed'
     } else {
