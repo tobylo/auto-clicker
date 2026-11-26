@@ -73,11 +73,15 @@ impl Home {
             held: None,
         };
         let id = daemon.watchdog.id();
-        let pid = wait_for("the watchdog's daemon", || children(id).first().copied());
+        let pid = wait_for("the watchdog's daemon", || {
+            children(id, DAEMON).first().copied()
+        });
         // Still the watchdog's child once held, so the id is the daemon's.
         daemon.held = Some(
-            desktop::Held::open_checked(desktop::Process(pid), || children(id).contains(&pid))
-                .unwrap(),
+            desktop::Held::open_checked(desktop::Process(pid), || {
+                children(id, DAEMON).contains(&pid)
+            })
+            .unwrap(),
         );
         daemon.pid = Some(pid);
         daemon
@@ -199,10 +203,14 @@ fn kill(pid: u32, tree: bool) -> ExitStatus {
         .unwrap()
 }
 
-/// The processes `pid` started that still run.
-fn children(pid: u32) -> Vec<u32> {
+/// The processes running `program` (a path) that `pid` started. Both: a
+/// process whose parent ended keeps the parent's id, which a later process
+/// may be given.
+fn children(pid: u32, program: &str) -> Vec<u32> {
+    let program = program.replace('\'', "''");
     powershell(&format!(
         "Get-CimInstance Win32_Process -Filter 'ParentProcessId = {pid}' \
+         | Where-Object {{ $_.ExecutablePath -eq '{program}' }} \
          | ForEach-Object {{ $_.ProcessId }}"
     ))
     .lines()
@@ -709,7 +717,7 @@ fn a_quit_releases_and_leaves_no_watchdog_behind() {
     // The release counted as delivered by the daemon, on the real desktop:
     // nothing was left owed for the watchdog.
     assert!(
-        !home.log().contains("may not have arrived"),
+        !home.log().contains("could not be counted delivered"),
         "{}",
         home.log()
     );
@@ -755,18 +763,21 @@ fn a_bare_start_launches_the_watchdog_and_exits() {
     // The bare start's own watchdog, as its child: `bare` still holds the
     // ended process, so its id names no other.
     let launcher = bare.id();
-    let watchdog = wait_for("the watchdog", || children(launcher).first().copied());
+    let watchdog = wait_for("the watchdog", || {
+        children(launcher, WATCHDOG).first().copied()
+    });
     // Ended however the test ends: a daemon left running would hold the
     // session's single instance. Each held only once it is still the
     // process found, so the id named it.
     let _watchdog_guard = desktop::Held::open_checked(desktop::Process(watchdog), || {
-        children(launcher).contains(&watchdog)
+        children(launcher, WATCHDOG).contains(&watchdog)
     })
     .unwrap();
-    let pid = wait_for("its daemon", || children(watchdog).first().copied());
-    let _daemon_guard =
-        desktop::Held::open_checked(desktop::Process(pid), || children(watchdog).contains(&pid))
-            .unwrap();
+    let pid = wait_for("its daemon", || children(watchdog, DAEMON).first().copied());
+    let _daemon_guard = desktop::Held::open_checked(desktop::Process(pid), || {
+        children(watchdog, DAEMON).contains(&pid)
+    })
+    .unwrap();
     wait_for("the daemon running", || {
         home.log().contains(": running").then_some(())
     });
@@ -801,7 +812,7 @@ fn an_elevated_watchdog_refuses_before_it_writes_or_starts_anything() {
     let pid = watchdog.id();
     close_message_box(pid, || watchdog.try_wait().unwrap().is_none());
     assert_eq!(ended(&mut watchdog, END).code(), Some(4));
-    assert!(children(pid).is_empty());
+    assert!(children(pid, DAEMON).is_empty());
     // No log of its own, and no daemon's.
     assert!(!home.log_path().parent().unwrap().exists());
 }
@@ -815,7 +826,7 @@ fn arguments_it_does_not_take_are_refused_never_a_new_start() {
         let pid = daemon.id();
         close_message_box(pid, || daemon.try_wait().unwrap().is_none());
         assert_eq!(ended(&mut daemon, END).code(), Some(5), "{arguments:?}");
-        assert!(children(daemon.id()).is_empty());
+        assert!(children(daemon.id(), WATCHDOG).is_empty());
         // Nothing was started, nothing logged.
         assert!(!home.log_path().exists(), "{arguments:?}");
     }

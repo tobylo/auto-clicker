@@ -139,7 +139,7 @@ impl<B: InputBackend, P: Probe> InputBackend for Watched<B, P> {
 }
 
 impl<B, P> Drop for Watched<B, P> {
-    /// Says how many releases may not have arrived, once every release was
+    /// Says how many releases failed the delivery check, once every release was
     /// tried ([`Input`] releases what it holds before its output goes).
     fn drop(&mut self) {
         let Missed { blocked, refused } = self.missed;
@@ -147,9 +147,9 @@ impl<B, P> Drop for Watched<B, P> {
             return;
         }
         log::line(format_args!(
-            "auto-clicker: {blocked} releases may not have arrived as Windows blocked them and \
-             {refused} as it refused them; they stay owed, and the watchdog sends them when the \
-             daemon ends"
+            "auto-clicker: {blocked} releases could not be counted delivered as Windows blocked \
+             them and {refused} as it refused them; what is still owed, the watchdog sends when \
+             the daemon ends"
         ));
     }
 }
