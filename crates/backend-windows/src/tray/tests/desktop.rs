@@ -322,11 +322,13 @@ struct Suspended;
 /// call succeeded.
 fn explorer(call: &str) -> bool {
     let script = format!(
-        "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; \
+        "$ErrorActionPreference = 'Stop'; \
+         Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; \
          public static class Nt {{ [DllImport(\"ntdll.dll\")] public static extern int \
          NtSuspendProcess(IntPtr h); [DllImport(\"ntdll.dll\")] public static extern int \
          NtResumeProcess(IntPtr h); }}'; \
-         $failed = 0; Get-Process explorer | ForEach-Object {{ \
+         $all = @(Get-Process explorer); \
+         if ($all.Count -eq 0) {{ exit 1 }}; $failed = 0; $all | ForEach-Object {{ \
          if ([Nt]::{call}($_.Handle) -ne 0) {{ $failed++ }} }}; exit $failed"
     );
     desktop::powershell(&script, POWERSHELL).is_ok()

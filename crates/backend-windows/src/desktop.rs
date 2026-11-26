@@ -3,9 +3,10 @@
 //! user's hand would. Built for tests alone (the `desktop` feature), so the
 //! daemon's tests drive Windows without `unsafe` of their own.
 
-use std::io;
+use std::io::{self, Read};
 use std::process::{Command, ExitStatus, Stdio};
 use std::ptr::{null, null_mut};
+use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -288,18 +289,27 @@ fn text(window: HWND) -> String {
     String::from_utf16_lossy(&text[..length])
 }
 
-/// Runs `script` in PowerShell, waiting at most `within`; its output. One
-/// that runs past its deadline is ended.
+/// Runs `script` in PowerShell, waiting at most `within` for it and its
+/// output; its output. One that runs past its deadline is ended.
 ///
 /// # Errors
 /// PowerShell could not start, ran past its deadline, or failed.
 pub fn powershell(script: &str, within: Duration) -> io::Result<String> {
+    let deadline = Instant::now() + within;
     let mut child = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let deadline = Instant::now() + within;
+    // Read while it runs, so a full pipe never holds it up.
+    let stdout = drained(child.stdout.take());
+    let stderr = drained(child.stderr.take());
+    let timed_out = || {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("{script}: past {within:?}"),
+        )
+    };
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
@@ -307,16 +317,29 @@ pub fn powershell(script: &str, within: Duration) -> io::Result<String> {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("{script}: no end in {within:?}"),
-            ));
+            return Err(timed_out());
         }
         sleep(Duration::from_millis(50));
     };
-    let output = child.wait_with_output()?;
-    succeeded(status, script, &output.stderr)?;
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    // A program it started may hold the pipes open: the deadline holds.
+    let left = || deadline.saturating_duration_since(Instant::now());
+    let stdout = stdout.recv_timeout(left()).map_err(|_| timed_out())?;
+    let stderr = stderr.recv_timeout(left()).map_err(|_| timed_out())?;
+    succeeded(status, script, &stderr)?;
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
+}
+
+/// Everything `pipe` gives until it closes, read on a thread of its own.
+fn drained(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<Vec<u8>> {
+    let (send, receive) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut read = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut read);
+        }
+        let _ = send.send(read);
+    });
+    receive
 }
 
 fn succeeded(status: ExitStatus, script: &str, stderr: &[u8]) -> io::Result<()> {
@@ -370,4 +393,28 @@ fn send(input: &INPUT) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn powershell_gives_all_its_output_and_keeps_its_deadline() {
+        // More than a pipe holds, read while it runs.
+        let big = powershell("'x' * 2097152", Duration::from_secs(60)).unwrap();
+        assert_eq!(big.trim_end().len(), 2_097_152);
+        let failed = powershell("exit 3", Duration::from_secs(60)).unwrap_err();
+        assert_eq!(failed.kind(), io::ErrorKind::Other);
+        // Past its deadline, or a program it started holding its output.
+        for script in [
+            "Start-Sleep -Seconds 60",
+            "Start-Process ping -ArgumentList '-n 60 127.0.0.1' -NoNewWindow",
+        ] {
+            let asked = Instant::now();
+            let late = powershell(script, Duration::from_secs(5)).unwrap_err();
+            assert_eq!(late.kind(), io::ErrorKind::TimedOut, "{script}");
+            assert!(asked.elapsed() < Duration::from_secs(30), "{script}");
+        }
+    }
 }
