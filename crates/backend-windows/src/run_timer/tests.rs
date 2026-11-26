@@ -13,7 +13,7 @@ use auto_clicker_core::clicker::{ClickerSettings, Interval, Mode, Repeat, run};
 use auto_clicker_core::input::fake::{Call, FakeBackend, FakeLog};
 use auto_clicker_core::input::{AbsolutePosition, Button, Input, InputBackend, Key, PressState};
 use auto_clicker_core::run::{Ended, Signals};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use super::*;
@@ -162,8 +162,16 @@ fn assert_idle(case: &str, display: bool) {
     );
 }
 
+/// How long a test waits for a wait or a run before calling it hung: far
+/// past any wake or end a correct timer gives.
+const HUNG_AFTER: Duration = Duration::from_secs(30);
+
+/// Waits until `deadline` on `timer`, failing the test if it never wakes.
 async fn wait(timer: &mut WaitableTimer, deadline: tokio::time::Instant) {
-    poll_fn(|cx| timer.poll_until(cx, deadline)).await.unwrap();
+    timeout(HUNG_AFTER, poll_fn(|cx| timer.poll_until(cx, deadline)))
+        .await
+        .expect("the timer never woke the wait")
+        .unwrap();
 }
 
 #[test]
@@ -493,6 +501,8 @@ enum Exit {
     Failed(InputError),
     Panicked,
     Dropped,
+    /// Neither ended nor dropped within [`HUNG_AFTER`].
+    Hung,
 }
 
 /// What a case's run did.
@@ -531,6 +541,7 @@ fn run_case(
                     Err(err) => Exit::Failed(err),
                 },
                 () = dropping => Exit::Dropped,
+                () = sleep(HUNG_AFTER) => Exit::Hung,
             }
         })
     }))
@@ -559,7 +570,7 @@ impl Exit {
         match self {
             Exit::Ended(ended) => Some(Expect::Ended(*ended)),
             Exit::Failed(InputError::Write(_)) => Some(Expect::WriteError),
-            Exit::Failed(_) => None,
+            Exit::Failed(_) | Exit::Hung => None,
             Exit::Panicked => Some(Expect::Panicked),
             Exit::Dropped => Some(Expect::Dropped),
         }
