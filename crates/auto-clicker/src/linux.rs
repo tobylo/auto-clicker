@@ -6,8 +6,6 @@ mod instance;
 mod platform;
 mod session;
 mod tray;
-mod tray_icon;
-mod tray_text;
 mod window;
 
 use std::process::ExitCode;

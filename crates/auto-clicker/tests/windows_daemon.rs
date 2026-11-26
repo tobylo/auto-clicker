@@ -20,6 +20,8 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use auto_clicker_backend_windows::desktop;
+
 const DAEMON: &str = env!("CARGO_BIN_EXE_auto-clicker");
 /// Generous: the daemon creates a window and reads its config.
 const START: Duration = Duration::from_secs(20);
@@ -331,4 +333,171 @@ fn a_timer_or_a_message_to_itself_is_the_programs_own() {
     // A registered message, such as Explorer's TaskbarCreated.
     assert!(!own_message(&line("c0f2")));
     assert!(own_message("garbled"));
+}
+
+/// Brings the daemon's tray icon out of the taskbar's overflow, where
+/// Windows 11 puts a new icon, as a user does once in the taskbar's
+/// settings; then where it shows.
+fn promoted_icon(pid: desktop::Process) -> desktop::Area {
+    wait_for("tray icon", || desktop::tray_icon(pid));
+    let daemon = std::path::Path::new(DAEMON).canonicalize().unwrap();
+    // Windows names the program without the verbatim prefix.
+    let daemon = daemon.display().to_string();
+    let daemon = daemon.trim_start_matches(r"\\?\");
+    let script = format!(
+        "$n = 0; Get-ChildItem 'HKCU:\\Control Panel\\NotifyIconSettings' | ForEach-Object {{ \
+         $p = Get-ItemProperty $_.PSPath; if ($p.ExecutablePath -eq '{daemon}') {{ \
+         Set-ItemProperty $_.PSPath -Name IsPromoted -Value 1 -Type DWord; $n++ }} }}; $n"
+    );
+    wait_for("entry in the taskbar's settings", || {
+        let count: u32 = powershell(&script).trim().parse().unwrap_or(0);
+        (count > 0).then_some(())
+    });
+    sleep(Duration::from_secs(1));
+    wait_for("tray icon", || desktop::tray_icon(pid))
+}
+
+/// Waits for `ready` to give something, at most [`START`].
+fn wait_for<T>(what: &str, mut ready: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + START;
+    loop {
+        if let Some(found) = ready() {
+            return found;
+        }
+        assert!(Instant::now() < deadline, "no {what} in {START:?}");
+        sleep(Duration::from_millis(50));
+    }
+}
+
+/// The tray popup's text, read with the pointer resting on `icon`, once it
+/// satisfies `wanted`.
+fn popup_once(pid: desktop::Process, icon: desktop::Area, wanted: impl Fn(&str) -> bool) -> String {
+    let on_icon = icon.centre();
+    wait_for("popup", || {
+        // Off the icon and back, so the taskbar says the pointer arrived.
+        desktop::move_pointer(on_icon.down(-300)).unwrap();
+        sleep(Duration::from_millis(100));
+        desktop::move_pointer(on_icon).unwrap();
+        let shown = Instant::now();
+        while shown.elapsed() < Duration::from_secs(2) {
+            if let Some(text) = desktop::popup_text(pid).filter(|text| wanted(text)) {
+                return Some(text);
+            }
+            sleep(Duration::from_millis(50));
+        }
+        None
+    })
+}
+
+/// Opens the tray's menu and chooses the line labelled `label`, in the
+/// submenu `under` when given.
+fn choose(icon: desktop::Area, under: Option<&str>, label: &str) {
+    println!("choosing {label}");
+    // A click within a double click's time of the menu closing is taken
+    // for the click that closed it, and opens nothing.
+    sleep(REOPEN);
+    desktop::click(icon.centre(), desktop::Button::Left).unwrap();
+    let mut menu = wait_for("menu", desktop::shown_menu);
+    if let Some(under) = under {
+        let place = place_of(&menu, under);
+        desktop::move_pointer(menu.area(place).unwrap().centre()).unwrap();
+        menu = wait_for("submenu", || {
+            desktop::shown_menu().filter(|shown| shown.lines().iter().all(|l| l.label != under))
+        });
+    }
+    menu.click(place_of(&menu, label)).unwrap();
+    wait_for("menu to close", || {
+        desktop::shown_menu().is_none().then_some(())
+    });
+}
+
+fn place_of(menu: &desktop::Menu, label: &str) -> u32 {
+    let lines = menu.lines();
+    let place = lines
+        .iter()
+        .position(|line| line.label == label)
+        .unwrap_or_else(|| panic!("no {label:?} in {lines:?}"));
+    u32::try_from(place).unwrap()
+}
+
+/// Longer than a double click's time (500 ms unless set otherwise).
+const REOPEN: Duration = Duration::from_secs(1);
+
+/// A recording the Play menu lists, named with an ampersand, which the menu
+/// shows as written.
+const RECORDING: &str = "2026-11-09_18-00-00.000.json";
+const RECORDED: &str = r#"{"version":1,"name":"Farm & loop","created":"2026-11-09T18:00:00.000+01:00","duration_us":1000000,"events":[
+[0,"wheel",-1],
+[1000000,"wheel",1]
+]}"#;
+/// Its line in the Play menu, as the menu holds it.
+const RECORDING_LINE: &str = "Farm && loop (2026-11-09 18:00:00)";
+
+#[test]
+#[ignore = "starts the daemon in the desktop and clicks its tray icon: run in the WN01 VM through `vm run`"]
+fn every_tray_item_sends_what_it_sends_on_linux() {
+    let home = Home::new("tray");
+    let recordings = home.0.join(r"local\auto-clicker\recordings");
+    std::fs::create_dir_all(&recordings).unwrap();
+    std::fs::write(recordings.join(RECORDING), RECORDED).unwrap();
+    let mut daemon = home.start();
+    home.running(&mut daemon);
+    let pid = desktop::Process(daemon.id());
+    let icon = promoted_icon(pid);
+    let idle = |text: &str| text.starts_with("Auto clicker: idle");
+    popup_once(pid, icon, idle);
+    // The menu as on Linux, Settings off until the window comes.
+    desktop::click(icon.centre(), desktop::Button::Left).unwrap();
+    let menu = wait_for("menu", desktop::shown_menu);
+    let lines: Vec<(String, bool)> = menu
+        .lines()
+        .into_iter()
+        .map(|line| (line.label, line.greyed))
+        .collect();
+    let line = |label: &str, greyed| (label.to_owned(), greyed);
+    assert_eq!(
+        lines,
+        [
+            line("Start clicking", false),
+            // No positions until WN09 reads the pointer: as on Linux, it
+            // says so.
+            line("Record (movement only)", false),
+            line("Play", false),
+            line("Settings (not on Windows yet)", true),
+            line("", true),
+            line("Quit", false),
+        ]
+    );
+    desktop::press(0x1b).unwrap();
+    wait_for("menu to close", || {
+        desktop::shown_menu().is_none().then_some(())
+    });
+    // Start: a countdown, stopped by Stop clicking.
+    choose(icon, None, "Start clicking");
+    popup_once(pid, icon, |text| {
+        text.starts_with("Auto clicker: starts in")
+    });
+    choose(icon, None, "Stop clicking");
+    popup_once(pid, icon, idle);
+    // Started and left to run: no output to open until the watchdog comes.
+    choose(icon, None, "Start clicking");
+    popup_once(pid, icon, |text| idle(text) && text.contains("watchdog"));
+    // Record, then Stop recording.
+    choose(icon, None, "Record (movement only)");
+    popup_once(pid, icon, |text| text.starts_with("Auto clicker: record"));
+    choose(icon, None, "Stop recording");
+    popup_once(pid, icon, |text| !text.starts_with("Auto clicker: record"));
+    // The recording in the Play menu, then Stop playing.
+    choose(icon, Some("Play"), RECORDING_LINE);
+    popup_once(pid, icon, |text| text.starts_with("Auto clicker: plays in"));
+    choose(icon, None, "Stop playing");
+    popup_once(pid, icon, idle);
+    // Quit ends the daemon, and its icon goes with it.
+    choose(icon, None, "Quit");
+    assert!(ended(&mut daemon, END).success(), "{}", home.log());
+    assert_eq!(
+        desktop::tray_icon(pid),
+        None,
+        "the icon outlived the daemon"
+    );
 }

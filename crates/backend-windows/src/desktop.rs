@@ -1,0 +1,287 @@
+//! A driver for the device tests, in the WN01 VM's desktop: the pointer,
+//! the tray icon, its popup and its menu, seen and used from outside, as a
+//! user's hand would. Built for tests alone (the `desktop` feature), so the
+//! daemon's tests drive Windows without `unsafe` of their own.
+
+use std::io;
+use std::ptr::{null, null_mut};
+
+use windows_sys::Win32::Foundation::{HWND, RECT};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, MOUSEEVENTF_ABSOLUTE,
+    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
+    MOUSEEVENTF_RIGHTUP, MOUSEINPUT, SendInput, VIRTUAL_KEY,
+};
+use windows_sys::Win32::UI::Shell::{NOTIFYICONIDENTIFIER, Shell_NotifyIconGetRect};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    ASFW_ANY, AllowSetForegroundWindow, FindWindowW, GetMenuItemCount, GetMenuItemRect,
+    GetMenuState, GetMenuStringW, GetSystemMetrics, GetWindowTextW, HMENU, IsWindowVisible,
+    MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MN_GETHMENU, SM_CXSCREEN,
+    SM_CYSCREEN, SendMessageW,
+};
+
+use crate::message::wide;
+
+/// A rectangle on the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Area {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+impl Area {
+    pub fn centre(self) -> Point {
+        Point {
+            x: self.left + (self.right - self.left) / 2,
+            y: self.top + (self.bottom - self.top) / 2,
+        }
+    }
+}
+
+/// A point on the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl Point {
+    /// The point `by` pixels further down (up when negative).
+    pub fn down(self, by: i32) -> Point {
+        Point {
+            y: self.y + by,
+            ..self
+        }
+    }
+}
+
+/// A process, by its id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Process(pub u32);
+
+impl Process {
+    /// The process running this code.
+    pub fn this() -> Process {
+        Process(std::process::id())
+    }
+}
+
+impl From<RECT> for Area {
+    fn from(rect: RECT) -> Area {
+        Area {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        }
+    }
+}
+
+/// The message thread's window of process `pid`, among the first few it
+/// made.
+fn message_window(Process(pid): Process) -> Option<HWND> {
+    (0..64).find_map(|n| window(&format!("auto-clicker.message-window.{pid}.{n}")))
+}
+
+/// The tray icon of process `pid` on the screen, where the taskbar shows
+/// it (the overflow's button while it is hidden there); none while there
+/// is no icon.
+#[allow(unsafe_code)]
+pub fn tray_icon(process: Process) -> Option<Area> {
+    let identifier = NOTIFYICONIDENTIFIER {
+        cbSize: size_of::<NOTIFYICONIDENTIFIER>() as u32,
+        hWnd: message_window(process)?,
+        uID: 1,
+        ..NOTIFYICONIDENTIFIER::default()
+    };
+    let mut rect = RECT::default();
+    // SAFETY: both are live and fully set for the call.
+    let result = unsafe { Shell_NotifyIconGetRect(&identifier, &mut rect) };
+    (result == 0).then(|| Area::from(rect))
+}
+
+/// The text of process `pid`'s tray popup while it shows.
+pub fn popup_text(Process(pid): Process) -> Option<String> {
+    (0..64)
+        .filter_map(|n| window(&format!("auto-clicker.tray-popup.{pid}.{n}")))
+        .find(|&popup| visible(popup))
+        .map(text)
+}
+
+/// Moves the pointer to `to` as a mouse would, through the steps a mouse
+/// takes on its way, so that what is under it hears it arrive.
+pub fn move_pointer(to: Point) -> io::Result<()> {
+    for step in [-24, -12, -4, 0] {
+        let on_the_way = Point {
+            x: to.x + step,
+            ..to
+        };
+        send_mouse(on_the_way, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE)?;
+    }
+    Ok(())
+}
+
+/// Which button a click uses.
+#[derive(Clone, Copy, Debug)]
+pub enum Button {
+    Left,
+    Right,
+}
+
+/// Clicks at `at`, and lets the program clicked bring a window to the
+/// front, as a real click does.
+#[allow(unsafe_code)]
+pub fn click(at: Point, button: Button) -> io::Result<()> {
+    let (down, up) = match button {
+        Button::Left => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+        Button::Right => (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+    };
+    // SAFETY: no arguments but a constant.
+    unsafe { AllowSetForegroundWindow(ASFW_ANY) };
+    move_pointer(at)?;
+    send_mouse(at, MOUSEEVENTF_ABSOLUTE | down)?;
+    send_mouse(at, MOUSEEVENTF_ABSOLUTE | up)
+}
+
+/// Presses and releases the key `key` (a virtual key code).
+pub fn press(key: VIRTUAL_KEY) -> io::Result<()> {
+    send_key(key, 0)?;
+    send_key(key, KEYEVENTF_KEYUP)
+}
+
+/// The menu that shows, if one does.
+#[allow(unsafe_code)]
+pub fn shown_menu() -> Option<Menu> {
+    let window = window("#32768").filter(|&menu| visible(menu))?;
+    // SAFETY: `window` is a menu window; the message asks for its menu.
+    let menu = unsafe { SendMessageW(window, MN_GETHMENU, 0, 0) } as HMENU;
+    (!menu.is_null()).then_some(Menu(menu))
+}
+
+/// A line of a menu, as it shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Line {
+    pub label: String,
+    pub greyed: bool,
+    pub checked: bool,
+    pub submenu: bool,
+    pub separator: bool,
+}
+
+/// A menu that shows: another process's, read and clicked from outside.
+pub struct Menu(HMENU);
+
+impl Menu {
+    /// Its lines, in order.
+    #[allow(unsafe_code)]
+    pub fn lines(&self) -> Vec<Line> {
+        // SAFETY: a menu handle is valid in every process of the session;
+        // reading a stale one only fails.
+        let count = unsafe { GetMenuItemCount(self.0) };
+        (0..u32::try_from(count).unwrap_or(0))
+            .map(|place| self.line(place))
+            .collect()
+    }
+
+    #[allow(unsafe_code)]
+    fn line(&self, place: u32) -> Line {
+        let mut label = [0u16; 256];
+        // SAFETY: `label` is a live buffer of the length given.
+        let length =
+            unsafe { GetMenuStringW(self.0, place, label.as_mut_ptr(), 256, MF_BYPOSITION) };
+        let label = String::from_utf16_lossy(&label[..usize::try_from(length).unwrap_or(0)]);
+        // SAFETY: as above.
+        let state = unsafe { GetMenuState(self.0, place, MF_BYPOSITION) };
+        Line {
+            label,
+            greyed: state & MF_GRAYED != 0,
+            checked: state & MF_CHECKED != 0,
+            submenu: state & MF_POPUP != 0,
+            separator: state & MF_SEPARATOR != 0,
+        }
+    }
+
+    /// Where the line at `place` shows.
+    #[allow(unsafe_code)]
+    pub fn area(&self, place: u32) -> Option<Area> {
+        let mut rect = RECT::default();
+        // SAFETY: no window: the menu's own is found; `rect` is live.
+        let found = unsafe { GetMenuItemRect(null_mut(), self.0, place, &mut rect) };
+        (found != 0).then(|| Area::from(rect))
+    }
+
+    /// Clicks the line at `place`.
+    pub fn click(&self, place: u32) -> io::Result<()> {
+        let area = self
+            .area(place)
+            .ok_or_else(|| io::Error::other(format!("no line {place}")))?;
+        click(area.centre(), Button::Left)
+    }
+}
+
+#[allow(unsafe_code)]
+fn window(class: &str) -> Option<HWND> {
+    let class = wide(class);
+    // SAFETY: `class` is NUL-terminated UTF-16, alive for the call.
+    let window = unsafe { FindWindowW(class.as_ptr(), null()) };
+    (!window.is_null()).then_some(window)
+}
+
+#[allow(unsafe_code)]
+fn visible(window: HWND) -> bool {
+    // SAFETY: any handle may be asked; a stale one is not visible.
+    unsafe { IsWindowVisible(window) != 0 }
+}
+
+#[allow(unsafe_code)]
+fn text(window: HWND) -> String {
+    let mut text = vec![0u16; 4096];
+    // SAFETY: `text` is a live buffer of the length given.
+    let length = unsafe { GetWindowTextW(window, text.as_mut_ptr(), 4096) };
+    String::from_utf16_lossy(&text[..usize::try_from(length).unwrap_or(0)])
+}
+
+#[allow(unsafe_code)]
+fn send_mouse(at: Point, flags: u32) -> io::Result<()> {
+    // SAFETY: the metrics' indices alone.
+    let (width, height) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    let normal = |at: i32, size: i32| at * 65535 / (size - 1).max(1);
+    let input = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: normal(at.x, width),
+                dy: normal(at.y, height),
+                dwFlags: flags,
+                ..MOUSEINPUT::default()
+            },
+        },
+    };
+    send(&input)
+}
+
+fn send_key(key: VIRTUAL_KEY, flags: u32) -> io::Result<()> {
+    let input = INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: key,
+                dwFlags: flags,
+                ..KEYBDINPUT::default()
+            },
+        },
+    };
+    send(&input)
+}
+
+#[allow(unsafe_code)]
+fn send(input: &INPUT) -> io::Result<()> {
+    // SAFETY: one fully set `INPUT` of its own size.
+    let sent = unsafe { SendInput(1, input, size_of::<INPUT>() as i32) };
+    if sent != 1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}

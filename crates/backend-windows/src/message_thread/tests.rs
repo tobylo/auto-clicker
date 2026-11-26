@@ -4,14 +4,15 @@ use windows_sys::Win32::System::RemoteDesktop::WTSSessionInfoEx;
 use windows_sys::Win32::UI::WindowsAndMessaging::WTS_SESSION_LOGON;
 
 use super::*;
+use crate::tray::tests::content;
 
 /// Long enough for any event to arrive on a slow runner.
-const ARRIVAL: Duration = Duration::from_secs(10);
+pub(crate) const ARRIVAL: Duration = Duration::from_secs(10);
 /// How long a quit may take: far above what it does, far below forever.
-const JOIN: Duration = Duration::from_secs(5);
+pub(crate) const JOIN: Duration = Duration::from_secs(5);
 
 /// A message thread whose events arrive on a channel.
-fn started() -> (MessageThread, mpsc::Receiver<WindowEvent>) {
+pub(crate) fn started() -> (MessageThread, mpsc::Receiver<WindowEvent>) {
     let (events, received) = mpsc::channel();
     let thread = MessageThread::spawn(
         move |event| {
@@ -35,7 +36,13 @@ fn followed(event: &WindowEvent) -> Option<String> {
         WindowEvent::Close => Some("Close".to_owned()),
         WindowEvent::Ended { failure: None } => Some("Ended".to_owned()),
         WindowEvent::Ended { failure: Some(why) } => Some(format!("Failed: {why}")),
-        WindowEvent::SessionRead(_)
+        WindowEvent::TrayMenuOpening => Some("TrayMenuOpening".to_owned()),
+        WindowEvent::TrayMenuFailed(why) => Some(format!("TrayMenuFailed: {why}")),
+        WindowEvent::TrayChosen(command) => Some(format!("TrayChosen({command})")),
+        WindowEvent::TrayShown => Some("TrayShown".to_owned()),
+        // A runner has no taskbar; a desktop has one.
+        WindowEvent::TrayUnshown(_)
+        | WindowEvent::SessionRead(_)
         | WindowEvent::SessionUnwatched(_)
         | WindowEvent::Display(_)
         | WindowEvent::DisplayUnwatched(_)
@@ -44,7 +51,7 @@ fn followed(event: &WindowEvent) -> Option<String> {
 }
 
 /// The next `count` followed events, in order.
-fn next_followed(received: &mpsc::Receiver<WindowEvent>, count: usize) -> Vec<String> {
+pub(crate) fn next_followed(received: &mpsc::Receiver<WindowEvent>, count: usize) -> Vec<String> {
     let deadline = Instant::now() + ARRIVAL;
     let mut seen = Vec::new();
     while seen.len() < count {
@@ -189,7 +196,8 @@ fn the_retry_timer_registers_again_and_other_timers_are_reported() {
     let (thread, received) = started();
     // Whatever Windows says on registering, the start has said it by now.
     let remote = thread.remote();
-    remote.post(WM_TIMER, RETRY_TIMER + 1, 0).unwrap();
+    // A timer that is neither the session's nor the tray's.
+    remote.post(WM_TIMER, 99, 0).unwrap();
     remote.post(WM_TIMER, RETRY_TIMER, 0).unwrap();
     // The other timer is only a wake; the retry timer registers again and
     // says so, whether or not Windows lets it.
@@ -227,7 +235,7 @@ fn display_notices_reach_the_handler() {
     };
     let (thread, received) = started();
     let power_setting = usize::try_from(PBT_POWERSETTINGCHANGE).unwrap();
-    let Some(Window(hwnd)) = *thread.remote.0.lock().unwrap() else {
+    let Some(Window(hwnd)) = *thread.remote.0.window.lock().unwrap() else {
         panic!("no window");
     };
     // Off, on, off: an order Windows' own notice of the display's state
@@ -361,4 +369,29 @@ fn the_display_setting_says_on_or_off() {
     other.data1 ^= 1;
     assert_eq!(Setting::new(other, 4, 0).read(), None);
     assert_eq!(display_setting(0), None);
+}
+
+#[test]
+fn content_on_a_gone_window_is_not_kept() {
+    let (thread, _received) = started();
+    let remote = thread.remote();
+    thread.quit_and_join(ARRIVAL).unwrap();
+    for _ in 0..2 {
+        let err = remote.show_tray(content("gone")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotConnected);
+    }
+}
+
+#[test]
+fn content_given_while_a_refresh_is_on_its_way_only_replaces_it() {
+    let (thread, _received) = started();
+    let remote = thread.remote();
+    thread.quit_and_join(ARRIVAL).unwrap();
+    // Content waiting in the slot means a refresh is on its way: the next
+    // only replaces it and posts nothing, which here, to a window that is
+    // gone, would fail.
+    *remote.0.tray.lock().unwrap() = Some(content("waiting"));
+    remote.show_tray(content("latest")).unwrap();
+    let kept = remote.0.tray.lock().unwrap().take().map(|c| c.title);
+    assert_eq!(kept.as_deref(), Some("latest"));
 }

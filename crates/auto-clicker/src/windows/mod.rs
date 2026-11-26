@@ -13,6 +13,7 @@
 
 mod notices;
 mod platform;
+mod tray;
 
 use std::io;
 use std::process::ExitCode;
@@ -173,6 +174,7 @@ fn run() -> ExitCode {
     controller.keep_current_file(CurrentFile::of_environment());
     let released = Arc::new(Mark::default());
     let mut notices = Notices::new(links.send.clone(), Arc::clone(&released));
+    let commands = notices.commands();
     let thread =
         match MessageThread::spawn(move |event| notices.handle(event), MESSAGE_THREAD_START) {
             Ok(thread) => thread,
@@ -182,13 +184,16 @@ fn run() -> ExitCode {
         "auto-clicker {}: running",
         env!("CARGO_PKG_VERSION")
     ));
-    // Nothing shows the view until the tray arrives (WN07); it is kept so
-    // the controller always has a reader.
-    let _view = links.view;
     runtime.block_on(async {
         tokio::spawn(report_releases(
             links.released_for_sleep,
             Arc::clone(&released),
+        ));
+        tokio::spawn(tray::follow(
+            links.view,
+            thread.remote(),
+            language(),
+            commands,
         ));
         controller.run().await;
     });
@@ -208,7 +213,7 @@ async fn report_releases(mut reports: watch::Receiver<u64>, released: Arc<Mark>)
 }
 
 /// Ends the message thread within its deadline; its window, and with it
-/// every registration (and from WN07 the tray icon), goes first.
+/// every registration and the tray icon, goes first.
 fn end(thread: MessageThread) -> ExitCode {
     match thread.quit_and_join(MESSAGE_THREAD_JOIN) {
         Ok(()) => ExitCode::SUCCESS,

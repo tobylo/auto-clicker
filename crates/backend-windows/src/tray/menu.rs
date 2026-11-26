@@ -1,0 +1,260 @@
+//! The tray's menu: built from the content's entries each time it opens,
+//! run in the window procedure (its loop hands the thread's other messages
+//! on meanwhile), and destroyed when it closes. A submenu is refilled from
+//! the latest content each time it opens, so a list that changed since the
+//! menu opened shows.
+
+use std::cell::{Cell, RefCell};
+use std::io;
+use std::ptr::null;
+use std::time::{Duration, Instant};
+
+use windows_sys::Win32::Foundation::{HWND, WPARAM};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    AppendMenuW, CreatePopupMenu, DeleteMenu, DestroyMenu, EndMenu, GetMenuItemCount,
+    GetSystemMetrics, HMENU, MENU_ITEM_FLAGS, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP,
+    MF_SEPARATOR, MF_STRING, PostMessageW, SM_MENUDROPALIGNMENT, SetForegroundWindow,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu,
+    WM_NULL,
+};
+
+use super::MenuEntry;
+use crate::message::wide;
+use crate::message_thread::{WindowEvent, destroy, emit};
+
+thread_local! {
+    /// Whether the menu's loop runs.
+    static OPEN: Cell<bool> = const { Cell::new(false) };
+    /// A quit arrived while it ran: the window goes once it ends.
+    static QUIT_AFTER: Cell<bool> = const { Cell::new(false) };
+    /// When the menu last closed.
+    static CLOSED_AT: Cell<Option<Instant>> = const { Cell::new(None) };
+    /// The open menu's submenus, by their place among the content's.
+    static SUBMENUS: RefCell<Vec<HMENU>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Whether the menu's loop runs.
+pub(super) fn is_open() -> bool {
+    OPEN.get()
+}
+
+/// Opens the menu at `anchor` and runs it until it closes; the command
+/// chosen, if any. Tells the handler first that it opens. An open that
+/// follows a close within a double click's time is the click that closed
+/// it (the taskbar reports it once the menu is gone), and opens nothing.
+pub(super) fn run(hwnd: HWND, entries: &[MenuEntry], anchor: (i32, i32)) -> Option<u32> {
+    if OPEN.get() || just_closed() {
+        return None;
+    }
+    let menu = match Menu::build(entries) {
+        Ok(menu) => menu,
+        Err(err) => {
+            emit(WindowEvent::TrayMenuFailed(err));
+            return None;
+        }
+    };
+    emit(WindowEvent::TrayMenuOpening);
+    OPEN.set(true);
+    let command = menu.track(hwnd, anchor);
+    OPEN.set(false);
+    CLOSED_AT.set(Some(Instant::now()));
+    SUBMENUS.with_borrow_mut(Vec::clear);
+    drop(menu);
+    if QUIT_AFTER.replace(false) {
+        destroy(hwnd);
+        return None;
+    }
+    command
+}
+
+/// Whether the menu closed less than a double click's time ago.
+#[allow(unsafe_code)]
+fn just_closed() -> bool {
+    // SAFETY: no arguments.
+    let window = Duration::from_millis(u64::from(unsafe { GetDoubleClickTime() }));
+    CLOSED_AT
+        .get()
+        .is_some_and(|closed| closed.elapsed() < window)
+}
+
+/// Ends the open menu for a quit; whether one was open.
+#[allow(unsafe_code)]
+pub(super) fn end_for_quit() -> bool {
+    if !OPEN.get() {
+        return false;
+    }
+    QUIT_AFTER.set(true);
+    // SAFETY: no arguments; it ends the menu this thread shows.
+    unsafe { EndMenu() };
+    true
+}
+
+/// Refills the submenu `handle` (a `WM_INITMENUPOPUP`'s `wparam`) from
+/// `entries`, if it is one of the open menu's.
+pub(super) fn refill(handle: WPARAM, entries: &[MenuEntry]) {
+    let place = SUBMENUS.with_borrow(|submenus| {
+        submenus
+            .iter()
+            .position(|&submenu| submenu as WPARAM == handle)
+            .map(|place| (place, submenus[place]))
+    });
+    let Some((place, submenu)) = place else {
+        return;
+    };
+    let children = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            MenuEntry::Submenu { children, .. } => Some(children.as_slice()),
+            _ => None,
+        })
+        .nth(place)
+        .unwrap_or(&[]);
+    clear(submenu);
+    // A line that cannot be added leaves the submenu short; the next open
+    // builds it again.
+    let _ = append_all(submenu, children);
+}
+
+/// A menu built from entries, destroyed (with its submenus) when dropped.
+struct Menu(HMENU);
+
+impl Menu {
+    fn build(entries: &[MenuEntry]) -> io::Result<Menu> {
+        SUBMENUS.with_borrow_mut(Vec::clear);
+        let menu = Menu(new_popup()?);
+        append_all(menu.0, entries)?;
+        Ok(menu)
+    }
+
+    /// Runs the menu at `anchor`; the command chosen, if any.
+    #[allow(unsafe_code)]
+    fn track(&self, hwnd: HWND, (x, y): (i32, i32)) -> Option<u32> {
+        // SAFETY: the metric's index alone.
+        let align = if unsafe { GetSystemMetrics(SM_MENUDROPALIGNMENT) } != 0 {
+            TPM_RIGHTALIGN
+        } else {
+            TPM_LEFTALIGN
+        };
+        let flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | align;
+        // SAFETY: `hwnd` is this thread's window; brought to the front, so
+        // that a click elsewhere closes the menu (KB135788), and sent a
+        // message after, so that the next click on the icon opens it again.
+        // `self.0` is a live menu; no rectangle.
+        let chosen = unsafe {
+            SetForegroundWindow(hwnd);
+            let chosen = TrackPopupMenu(self.0, flags, x, y, 0, hwnd, null());
+            PostMessageW(hwnd, WM_NULL, 0, 0);
+            chosen
+        };
+        u32::try_from(chosen).ok().filter(|&command| command != 0)
+    }
+}
+
+impl Drop for Menu {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        // SAFETY: built by `build`, destroyed once, with its submenus.
+        unsafe { DestroyMenu(self.0) };
+    }
+}
+
+#[allow(unsafe_code)]
+fn new_popup() -> io::Result<HMENU> {
+    // SAFETY: no arguments.
+    let menu = unsafe { CreatePopupMenu() };
+    if menu.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(menu)
+}
+
+/// Appends `entries` to `menu`, remembering each submenu.
+fn append_all(menu: HMENU, entries: &[MenuEntry]) -> io::Result<()> {
+    entries.iter().try_for_each(|entry| append(menu, entry))
+}
+
+#[allow(unsafe_code)]
+fn append(menu: HMENU, entry: &MenuEntry) -> io::Result<()> {
+    let (flags, id, label) = match entry {
+        MenuEntry::Item {
+            label,
+            command,
+            enabled,
+            checked,
+        } => (
+            item_flags(*enabled && command.is_some(), *checked == Some(true)),
+            command.map_or(0, |command| command as usize),
+            Some(label.as_str()),
+        ),
+        MenuEntry::Submenu { label, children } => {
+            let submenu = new_popup()?;
+            if let Err(err) = append_all(submenu, children) {
+                // SAFETY: made above and attached to nothing yet.
+                unsafe { DestroyMenu(submenu) };
+                return Err(err);
+            }
+            SUBMENUS.with_borrow_mut(|submenus| submenus.push(submenu));
+            (MF_POPUP, submenu as usize, Some(label.as_str()))
+        }
+        MenuEntry::Separator => (MF_SEPARATOR, 0, None),
+    };
+    let text = label.map(shown);
+    let text = text.as_ref().map_or(null(), |text| text.as_ptr());
+    // SAFETY: `menu` is a live menu; `text` is NUL-terminated UTF-16 alive
+    // for the call, or null for a separator. A submenu, once appended, is
+    // destroyed with `menu`.
+    if unsafe { AppendMenuW(menu, flags, id, text) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn item_flags(enabled: bool, checked: bool) -> MENU_ITEM_FLAGS {
+    let mut flags = MF_STRING;
+    if !enabled {
+        flags |= MF_GRAYED;
+    }
+    if checked {
+        flags |= MF_CHECKED;
+    }
+    flags
+}
+
+/// `label` as a menu shows it as written: an ampersand would mark an access
+/// key, so two show as one; a tab would push the rest to the right edge.
+fn shown(label: &str) -> Vec<u16> {
+    wide(&label.replace('&', "&&").replace('\t', " "))
+}
+
+/// Removes every line of `menu`.
+#[allow(unsafe_code)]
+fn clear(menu: HMENU) {
+    // SAFETY: `menu` is a live submenu of the open menu; its lines are
+    // items, which `DeleteMenu` removes by position.
+    unsafe {
+        while GetMenuItemCount(menu) > 0 {
+            if DeleteMenu(menu, 0, MF_BYPOSITION) == 0 {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_show_as_written() {
+        assert_eq!(shown("Rock & roll\tmix"), wide("Rock && roll mix"));
+        assert_eq!(shown("Start clicking"), wide("Start clicking"));
+    }
+
+    #[test]
+    fn an_item_is_greyed_when_off_and_checked_when_chosen() {
+        assert_eq!(item_flags(true, false), MF_STRING);
+        assert_eq!(item_flags(false, false), MF_STRING | MF_GRAYED);
+        assert_eq!(item_flags(true, true), MF_STRING | MF_CHECKED);
+    }
+}

@@ -28,13 +28,21 @@ windows-sys = { version = "0.61.2", features = [
     # GUID_SESSION_DISPLAY_STATUS.
     "Win32_System_SystemServices",
     "Win32_System_Threading",
-    # SendInput (WN04).
+    # SendInput (WN04), and the tray menu's double-click time, which tells
+    # a click that closed it from one that opens it again.
     "Win32_UI_Input_KeyboardAndMouse",
+    # The tray icon (Shell_NotifyIconW).
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 # The deadlines a run's timer is handed (WN04); already in the tree through
 # core.
 tokio = { version = "1.54.1", default-features = false, features = ["time"] }
+
+[features]
+# A driver for the device tests: the pointer, the tray icon, its popup and
+# its menu, used from outside (src/desktop.rs).
+desktop = []
 
 [lints]
 workspace = true
