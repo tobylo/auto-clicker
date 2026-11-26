@@ -598,10 +598,11 @@ fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LR
         // A notice the program does not follow is still a wake, reported
         // as such.
         WM_WTSSESSION_CHANGE => {
-            emit(
-                SessionChange::from_code(wparam)
-                    .map_or(WindowEvent::Other(message), WindowEvent::Session),
-            );
+            let change = SessionChange::from_code(wparam);
+            if change.is_some() {
+                hotkeys::session_changed(hwnd);
+            }
+            emit(change.map_or(WindowEvent::Other(message), WindowEvent::Session));
             Some(0)
         }
         WM_POWERBROADCAST => {

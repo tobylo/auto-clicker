@@ -222,6 +222,14 @@ pub(crate) fn end(hwnd: HWND) {
     }
 }
 
+/// The session was locked, unlocked or switched: the keys followed are
+/// forgotten (core's [`Registered::session_changed`]).
+pub(crate) fn session_changed(hwnd: HWND) {
+    with_active(hwnd, |active, keyboard| {
+        active.registered.session_changed(keyboard)
+    });
+}
+
 /// What the window answers to a hotkey's or the keyboard's message;
 /// `None` for any other message, and `Some(None)` to leave it to
 /// `DefWindowProc` after.

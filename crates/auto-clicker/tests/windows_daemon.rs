@@ -1193,11 +1193,23 @@ impl Drop for Unelevated {
         if let Some(daemon) = self.daemon {
             let _ = kill(daemon, false);
         }
+        let task = &self.task;
+        // A launch still going would start its watchdog after the look.
+        powershell(&format!("schtasks /end /tn '{task}' 2>&1 | Out-Null"));
         let watchdogs = match self.watchdog {
             Some(watchdog) => vec![watchdog],
             None => {
                 let mut new = watchdogs_of(&self.listed);
                 new.retain(|pid| !self.before.contains(pid));
+                // Held before they are ended, so each id still names the
+                // watchdog found.
+                for &pid in &new {
+                    if let Ok(held) = desktop::Held::open_checked(desktop::Process(pid), || {
+                        watchdogs_of(&self.listed).contains(&pid)
+                    }) {
+                        self.held.push(held);
+                    }
+                }
                 new
             }
         };
@@ -1208,7 +1220,6 @@ impl Drop for Unelevated {
             }
             let _ = kill(watchdog, true);
         }
-        let task = &self.task;
         powershell(&format!("schtasks /delete /tn '{task}' /f | Out-Null"));
     }
 }

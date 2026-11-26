@@ -561,3 +561,29 @@ fn the_programs_release_lets_go_of_its_seeded_aliases_too() {
         );
     }
 }
+
+#[test]
+fn a_session_change_forgets_a_stop_key_let_go_of_on_another_desktop() {
+    let mut keyboard = FakeKeyboard::default();
+    let mut hotkeys = registered();
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    for code in [CTRL, SHIFT, F6] {
+        hotkeys.key(code, true, &mut keyboard);
+    }
+    hotkeys.key(SHIFT, false, &mut keyboard);
+    hotkeys.key(CTRL, false, &mut keyboard);
+    // The run stopped; F6 comes up on the lock screen, unseen.
+    hotkeys.watch(Watching::default(), &mut keyboard);
+    assert!(
+        keyboard.reading,
+        "F6's raw press still waits for its hotkey"
+    );
+    assert_eq!(hotkeys.session_changed(&mut keyboard), []);
+    assert!(!keyboard.reading);
+    // The next run's first stop press counts.
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    assert_eq!(
+        press(&mut hotkeys, &mut keyboard, F6),
+        [Fired(CLICKING), ModifiersReleased]
+    );
+}
