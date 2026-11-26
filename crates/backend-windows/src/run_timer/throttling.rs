@@ -90,8 +90,14 @@ fn set(opt_out: bool) -> io::Result<()> {
 /// # Errors
 /// When Windows cannot report it.
 #[cfg(test)]
-#[allow(unsafe_code)]
 pub(crate) fn execution_speed_managed() -> io::Result<bool> {
+    Ok(read_state()?.ControlMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED == 0)
+}
+
+/// The process's power throttling state, as Windows reports it.
+#[cfg(test)]
+#[allow(unsafe_code)]
+fn read_state() -> io::Result<PROCESS_POWER_THROTTLING_STATE> {
     use windows_sys::Win32::System::Threading::GetProcessInformation;
 
     let mut state = PROCESS_POWER_THROTTLING_STATE {
@@ -111,7 +117,19 @@ pub(crate) fn execution_speed_managed() -> io::Result<bool> {
     if read == 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(state.ControlMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED == 0)
+    Ok(state)
+}
+
+/// Whether this process has opted out of execution-speed throttling: the
+/// control bit set and the state bit clear (both set would ask for it).
+///
+/// # Errors
+/// When Windows cannot report it.
+#[cfg(test)]
+pub(crate) fn execution_speed_opted_out() -> io::Result<bool> {
+    let state = read_state()?;
+    let bit = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+    Ok(state.ControlMask & bit != 0 && state.StateMask & bit == 0)
 }
 
 fn state_size() -> u32 {

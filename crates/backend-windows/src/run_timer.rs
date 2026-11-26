@@ -47,7 +47,7 @@ use display::DisplayOn;
 pub(crate) use display::display_kept_on;
 use throttling::Throttling;
 #[cfg(test)]
-pub(crate) use throttling::execution_speed_managed;
+pub(crate) use throttling::{execution_speed_managed, execution_speed_opted_out};
 
 /// How long dropping a timer waits for its thread, and the longest a run
 /// waits for a new thread to be ready. The thread only waits on handles, so

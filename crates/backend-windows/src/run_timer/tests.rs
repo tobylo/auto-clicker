@@ -13,7 +13,7 @@ use auto_clicker_core::clicker::{ClickerSettings, Interval, Mode, Repeat, run};
 use auto_clicker_core::input::fake::{Call, FakeBackend, FakeLog};
 use auto_clicker_core::input::{AbsolutePosition, Button, Input, InputBackend, Key, PressState};
 use auto_clicker_core::run::{Ended, Signals};
-use tokio::time::{sleep, timeout};
+use tokio::time::sleep;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use super::*;
@@ -59,15 +59,57 @@ pub(super) fn slow_start(stop: &OwnedHandle) {
     }
 }
 
-/// Makes timer threads fail once ready, as a failed wait or arm would.
+/// Makes timer threads fail once ready and the run has pressed, as a
+/// failed wait or arm would part way through a hold.
 static BROKEN: AtomicBool = AtomicBool::new(false);
 
-/// Called by each timer thread once ready.
+/// Whether a [`Probe`] has pressed since the last [`Broken`] was set.
+static PRESSED: AtomicBool = AtomicBool::new(false);
+
+/// Called by each timer thread once ready: fails once the run has pressed
+/// (within 5 s) while [`BROKEN`] is set.
 pub(super) fn maybe_break() -> io::Result<()> {
-    if BROKEN.load(Ordering::SeqCst) {
-        return Err(io::Error::other("broken on purpose"));
+    if !BROKEN.load(Ordering::SeqCst) {
+        return Ok(());
     }
-    Ok(())
+    let until = Instant::now() + Duration::from_secs(5);
+    while !PRESSED.load(Ordering::SeqCst) && Instant::now() < until {
+        thread::sleep(ms(1));
+    }
+    Err(io::Error::other("broken on purpose"))
+}
+
+/// Sets [`SLOW_START`] until dropped, a failed test included.
+struct SlowStart;
+
+impl SlowStart {
+    fn set(wait_ms: u64) -> SlowStart {
+        SLOW_START.store(wait_ms, Ordering::SeqCst);
+        SlowStart
+    }
+}
+
+impl Drop for SlowStart {
+    fn drop(&mut self) {
+        SLOW_START.store(0, Ordering::SeqCst);
+    }
+}
+
+/// Sets [`BROKEN`] until dropped, a failed test included.
+struct Broken;
+
+impl Broken {
+    fn set() -> Broken {
+        PRESSED.store(false, Ordering::SeqCst);
+        BROKEN.store(true, Ordering::SeqCst);
+        Broken
+    }
+}
+
+impl Drop for Broken {
+    fn drop(&mut self) {
+        BROKEN.store(false, Ordering::SeqCst);
+    }
 }
 
 /// Taken by every test that starts a timer, so no other test's thread or
@@ -201,7 +243,7 @@ impl Wake for Wakes {
 fn no_wait_completes_before_the_thread_is_ready() {
     let _serial = one_at_a_time();
     // Reset only once the thread is past it: it reads it as it starts.
-    SLOW_START.store(300, Ordering::SeqCst);
+    let _slow = SlowStart::set(300);
     runtime().block_on(async {
         let mut timer = WaitableTimer::start().unwrap();
         let wakes = Arc::new(Wakes::default());
@@ -218,20 +260,18 @@ fn no_wait_completes_before_the_thread_is_ready() {
         assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
         assert!(timer.poll_until(&mut cx, past).is_ready());
     });
-    SLOW_START.store(0, Ordering::SeqCst);
 }
 
 #[test]
 fn a_thread_not_ready_within_a_second_fails_the_run_with_nothing_pressed() {
     let _serial = one_at_a_time();
     // Ready after 5 s unless stopped first, as the run's end does.
-    SLOW_START.store(5_000, Ordering::SeqCst);
+    let _slow = SlowStart::set(5_000);
     let slow = clicks(Duration::from_secs(10), None);
-    let ran = run_case(open(false), &slow, signals(never(), never()), None);
-    SLOW_START.store(0, Ordering::SeqCst);
+    let ran = run_case(open(false), &slow, signals(never(), never()), false);
 
-    let failed = matches!(&ran.result, Some(Err(InputError::Timer(err))) if err.kind() == io::ErrorKind::TimedOut);
-    assert!(failed, "{:?}", ran.result);
+    let failed = matches!(&ran.exit, Exit::Failed(InputError::Timer(err)) if err.kind() == io::ErrorKind::TimedOut);
+    assert!(failed, "{:?}", ran.exit);
     assert_eq!(ran.calls, Vec::new());
     let took = ran.took;
     assert!(took >= JOIN_WITHIN && took < ms(3_000), "took {took:?}");
@@ -278,23 +318,29 @@ fn a_wake_for_a_deadline_the_run_moved_on_from_is_not_passed_on() {
 #[test]
 fn a_thread_that_fails_while_serving_ends_a_hold_and_lets_go() {
     let _serial = one_at_a_time();
-    BROKEN.store(true, Ordering::SeqCst);
+    let _broken = Broken::set();
     let hold = ClickerSettings {
         mode: Mode::HoldButton,
         ..ClickerSettings::default()
     };
     // The stop only bounds the test.
-    let ran = run_case(open(false), &hold, signals(after(ms(5_000)), never()), None);
-    BROKEN.store(false, Ordering::SeqCst);
+    let ran = run_case(
+        open(false),
+        &hold,
+        signals(after(ms(5_000)), never()),
+        false,
+    );
 
-    let failed = matches!(ran.result, Some(Err(InputError::Timer(_))));
-    // It may fail before the press or after it; either way nothing is held.
-    let pressed = [
+    assert!(
+        matches!(ran.exit, Exit::Failed(InputError::Timer(_))),
+        "{:?}",
+        ran.exit
+    );
+    let pressed = vec![
         Call::Button(Button::Left, PressState::Down),
         Call::Button(Button::Left, PressState::Up),
     ];
-    let let_go = ran.calls.is_empty() || ran.calls == pressed;
-    assert!(failed && let_go, "{:?} {:?}", ran.result, ran.calls);
+    assert_eq!(ran.calls, pressed);
     assert!(ran.took < Duration::from_secs(1), "took {:?}", ran.took);
 }
 
@@ -322,12 +368,15 @@ fn a_failed_thread_wakes_a_wait_without_a_deadline_with_the_error() {
 
 /// The fake output with this crate's run timer, noting at each press
 /// whether the run had opted out of throttling and kept the display on, and
-/// panicking at a press when told to.
+/// panicking at a press when told to. Every press sets [`PRESSED`].
 struct Probe {
     inner: FakeBackend,
-    during: Arc<Mutex<Vec<During>>>,
+    during: Presses,
     panic_at_press: bool,
 }
+
+/// What held at each press so far.
+type Presses = Arc<Mutex<Vec<During>>>;
 
 /// What held at a press.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -336,19 +385,15 @@ struct During {
     display_on: bool,
 }
 
-const ACTIVE: During = During {
-    opted_out: true,
-    display_on: true,
-};
-
 impl InputBackend for Probe {
     fn button(&mut self, button: Button, state: PressState) -> Result<(), InputError> {
         if state == PressState::Down {
             let during = During {
-                opted_out: !execution_speed_managed().unwrap(),
+                opted_out: execution_speed_opted_out().unwrap(),
                 display_on: display_kept_on().unwrap(),
             };
             self.during.lock().unwrap().push(during);
+            PRESSED.store(true, Ordering::SeqCst);
             assert!(!self.panic_at_press, "a press that panics");
         }
         self.inner.button(button, state)
@@ -380,7 +425,7 @@ impl InputBackend for Probe {
 struct Opened {
     input: Input<Probe>,
     log: FakeLog,
-    during: Arc<Mutex<Vec<During>>>,
+    during: Presses,
 }
 
 fn open(panic_at_press: bool) -> Opened {
@@ -424,42 +469,95 @@ fn after(wait: Duration) -> Signal {
     Box::pin(async move { sleep(wait).await })
 }
 
+/// Fires once the run has pressed, as `during` records it.
+async fn pressed(during: Presses) {
+    while during.lock().unwrap().is_empty() {
+        sleep(ms(1)).await;
+    }
+}
+
+/// Fires once the run has pressed.
+fn after_the_press(during: &Presses) -> Signal {
+    Box::pin(pressed(Arc::clone(during)))
+}
+
+/// How a case's run ended.
+#[derive(Debug)]
+enum Exit {
+    Ended(Ended),
+    Failed(InputError),
+    Panicked,
+    Dropped,
+}
+
 /// What a case's run did.
 struct Ran {
-    /// How the run ended; `None` when it panicked or was dropped.
-    result: Option<Result<Ended, InputError>>,
+    exit: Exit,
     calls: Vec<Call>,
     during: Vec<During>,
     took: Duration,
 }
 
+/// Runs `opened` with `settings` until it ends, or, with
+/// `drop_once_pressed`, drops it once it has pressed.
 fn run_case(
     opened: Opened,
     settings: &ClickerSettings,
     signals: Signals<Signal, Signal>,
-    drop_after: Option<Duration>,
+    drop_once_pressed: bool,
 ) -> Ran {
     let Opened { input, log, during } = opened;
     let start = Instant::now();
     let rng = fastrand::Rng::with_seed(1);
-    let result = catch_unwind(AssertUnwindSafe(|| {
+    let watched = Arc::clone(&during);
+    let exit = catch_unwind(AssertUnwindSafe(|| {
         runtime().block_on(async {
             let running = run(input, settings, rng, signals);
-            match drop_after {
-                Some(wait) => timeout(wait, running).await.ok().map(|end| end.result),
-                None => Some(running.await.result),
+            let dropping = async {
+                if drop_once_pressed {
+                    pressed(watched).await;
+                } else {
+                    pending::<()>().await;
+                }
+            };
+            tokio::select! {
+                end = running => match end.result {
+                    Ok(ended) => Exit::Ended(ended),
+                    Err(err) => Exit::Failed(err),
+                },
+                () = dropping => Exit::Dropped,
             }
         })
     }))
-    .ok()
-    .flatten();
+    .unwrap_or(Exit::Panicked);
     let took = start.elapsed();
     let during = during.lock().unwrap().clone();
     Ran {
-        result,
+        exit,
         calls: log.calls(),
         during,
         took,
+    }
+}
+
+/// How a case is to end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Expect {
+    Ended(Ended),
+    WriteError,
+    Panicked,
+    Dropped,
+}
+
+impl Exit {
+    fn expected(&self) -> Option<Expect> {
+        match self {
+            Exit::Ended(ended) => Some(Expect::Ended(*ended)),
+            Exit::Failed(InputError::Write(_)) => Some(Expect::WriteError),
+            Exit::Failed(_) => None,
+            Exit::Panicked => Some(Expect::Panicked),
+            Exit::Dropped => Some(Expect::Dropped),
+        }
     }
 }
 
@@ -468,11 +566,14 @@ struct Case {
     name: &'static str,
     opened: Opened,
     settings: ClickerSettings,
-    signals: Signals<Signal, Signal>,
-    /// Drops the run this long after its start.
-    drop_after: Option<Duration>,
-    /// How it ends; `None` for an error, a panic or a drop.
-    ended: Option<Ended>,
+    /// Makes the run's signals, given its presses.
+    signals: fn(&Presses) -> Signals<Signal, Signal>,
+    drop_once_pressed: bool,
+    expect: Expect,
+}
+
+fn quiet(_: &Presses) -> Signals<Signal, Signal> {
+    signals(never(), never())
 }
 
 fn cases() -> [Case; 6] {
@@ -481,59 +582,41 @@ fn cases() -> [Case; 6] {
     failing
         .log
         .fail_once(Call::Button(Button::Left, PressState::Down));
-    let case = |name, opened, settings, signals, ended| Case {
+    let case = |name, opened, settings, signals, expect| Case {
         name,
         opened,
         settings,
         signals,
-        drop_after: None,
-        ended,
+        drop_once_pressed: false,
+        expect,
     };
     [
         case(
             "finished",
             open(false),
             clicks(ms(10), Some(5)),
-            signals(never(), never()),
-            Some(Ended::Finished),
+            quiet,
+            Expect::Ended(Ended::Finished),
         ),
         case(
             "stopped",
             open(false),
             slow,
-            signals(after(ms(50)), never()),
-            Some(Ended::Stopped),
+            |during| signals(after_the_press(during), never()),
+            Expect::Ended(Ended::Stopped),
         ),
         case(
             "shut down",
             open(false),
             slow,
-            signals(never(), after(ms(50))),
-            Some(Ended::ShutDown),
+            |during| signals(never(), after_the_press(during)),
+            Expect::Ended(Ended::ShutDown),
         ),
-        case(
-            "write error",
-            failing,
-            slow,
-            signals(never(), never()),
-            None,
-        ),
-        case(
-            "panicked",
-            open(true),
-            slow,
-            signals(never(), never()),
-            None,
-        ),
+        case("write error", failing, slow, quiet, Expect::WriteError),
+        case("panicked", open(true), slow, quiet, Expect::Panicked),
         Case {
-            drop_after: Some(ms(50)),
-            ..case(
-                "dropped",
-                open(false),
-                slow,
-                signals(never(), never()),
-                None,
-            )
+            drop_once_pressed: true,
+            ..case("dropped", open(false), slow, quiet, Expect::Dropped)
         },
     ]
 }
@@ -545,15 +628,14 @@ fn every_way_a_run_ends_leaves_no_thread_and_hands_throttling_back() {
     assert_idle("before the runs", display);
     for case in cases() {
         let name = case.name;
-        let ran = run_case(case.opened, &case.settings, case.signals, case.drop_after);
+        let signals = (case.signals)(&case.opened.during);
+        let ran = run_case(case.opened, &case.settings, signals, case.drop_once_pressed);
         assert_idle(name, display);
-        // Opted out and the display kept on during the run, at every press.
+        // Opted out, and the display kept on when that can be told, at
+        // every press.
         assert!(!ran.during.is_empty(), "{name}: nothing pressed");
-        assert!(
-            ran.during.iter().all(|&during| during == ACTIVE),
-            "{name}: {:?}",
-            ran.during
-        );
+        let active = |during: &During| during.opted_out && (during.display_on || !display);
+        assert!(ran.during.iter().all(active), "{name}: {:?}", ran.during);
         // Whatever ended it, the last press was released.
         let released = Call::Button(Button::Left, PressState::Up);
         assert_eq!(ran.calls.last(), Some(&released), "{name}");
@@ -563,11 +645,12 @@ fn every_way_a_run_ends_leaves_no_thread_and_hands_throttling_back() {
             "{name}: took {:?}",
             ran.took
         );
-        let ended = ran
-            .result
-            .as_ref()
-            .and_then(|result| result.as_ref().ok().copied());
-        assert_eq!(ended, case.ended, "{name}");
+        assert_eq!(
+            ran.exit.expected(),
+            Some(case.expect),
+            "{name}: {:?}",
+            ran.exit
+        );
     }
 }
 
@@ -575,12 +658,14 @@ fn every_way_a_run_ends_leaves_no_thread_and_hands_throttling_back() {
 fn a_stop_while_the_thread_starts_ends_the_run_with_nothing_pressed() {
     let _serial = one_at_a_time();
     // The thread takes 5 s to be ready unless stopped first.
-    SLOW_START.store(5_000, Ordering::SeqCst);
+    let _slow = SlowStart::set(5_000);
     let slow = clicks(Duration::from_secs(10), None);
-    let ran = run_case(open(false), &slow, signals(after(ms(50)), never()), None);
-    SLOW_START.store(0, Ordering::SeqCst);
+    let ran = run_case(open(false), &slow, signals(after(ms(50)), never()), false);
 
-    let ended = ran.result.and_then(Result::ok);
-    assert_eq!((ended, ran.calls), (Some(Ended::Stopped), Vec::new()));
+    let ended = ran.exit.expected();
+    assert_eq!(
+        (ended, ran.calls),
+        (Some(Expect::Ended(Ended::Stopped)), Vec::new())
+    );
     assert!(ran.took < Duration::from_secs(1), "took {:?}", ran.took);
 }
