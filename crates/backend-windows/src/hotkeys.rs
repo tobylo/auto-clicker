@@ -38,8 +38,8 @@ use windows_sys::Win32::UI::Input::{
     RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEKEYBOARD, RegisterRawInputDevices,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, MSG, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, RI_KEY_BREAK,
-    RI_KEY_E0, WM_APP, WM_HOTKEY, WM_INPUT, WM_QUIT,
+    DefWindowProcW, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage, RI_KEY_BREAK, RI_KEY_E0, WM_APP,
+    WM_HOTKEY, WM_INPUT, WM_QUIT,
 };
 
 use crate::message_thread::Remote;
@@ -232,7 +232,7 @@ pub(crate) fn answer(
 ) -> Option<Option<LRESULT>> {
     match message {
         // A key press is never a wake to log (invariant N5).
-        WM_HOTKEY => hotkey(hwnd, wparam, lparam),
+        WM_HOTKEY => hotkey(hwnd, wparam),
         // Left to the default as well, which frees the event's data.
         WM_INPUT => {
             input(hwnd, lparam);
@@ -250,19 +250,8 @@ pub(crate) fn answer(
 /// hotkey reads is newer than all of it. A hotkey that fires never shows
 /// its key's press in raw input (measured in the WN01 VM, build
 /// 26300.9974), so this never counts the hotkey's own press first.
-///
-/// When more input is queued than one turn handles, the hotkey goes to the
-/// back of the queue again, so the rest is handled first and the thread's
-/// other messages are not held up.
-#[allow(unsafe_code)]
-fn hotkey(hwnd: HWND, id: WPARAM, lparam: LPARAM) {
-    if !drain_input(hwnd) {
-        // SAFETY: this thread's own window; no pointers.
-        if unsafe { PostMessageW(hwnd, WM_HOTKEY, id, lparam) } != 0 {
-            return;
-        }
-        // A full queue: the hotkey now, rather than never.
-    }
+fn hotkey(hwnd: HWND, id: WPARAM) {
+    drain_input(hwnd);
     with_active(hwnd, |active, keyboard| {
         let action = active
             .ids
@@ -299,38 +288,33 @@ enum KeyEvent {
     OwnPress,
 }
 
-/// At most this many `WM_INPUT` are handled in one turn ahead of a
-/// hotkey: one press queues a few, and input that never stops coming
-/// cannot hold the thread's other messages back.
-const DRAINED: usize = 256;
-
-/// Handles the `WM_INPUT` waiting in the queue, in order, up to
-/// [`DRAINED`]; whether that was all of it. A `WM_QUIT`, which
-/// `PeekMessage` takes whatever the filter, is posted again for the
-/// thread's loop, which ends on it.
+/// Handles every `WM_INPUT` waiting in the queue, in order. Each takes
+/// microseconds, so no keyboard outruns the loop; only a program flooding
+/// the input stream faster could, which holds up the whole desktop as
+/// well. A `WM_QUIT`, which `PeekMessage` takes whatever the filter, is
+/// posted again for the thread's loop, which ends on it.
 #[allow(unsafe_code)]
-fn drain_input(hwnd: HWND) -> bool {
+fn drain_input(hwnd: HWND) {
     let mut message = MSG::default();
-    for _ in 0..DRAINED {
+    loop {
         // SAFETY: `message` is a live, writable `MSG`; only this window's
         // `WM_INPUT` is taken, and `WM_QUIT`.
         let got = unsafe { PeekMessageW(&mut message, hwnd, WM_INPUT, WM_INPUT, PM_REMOVE) };
         if got == 0 {
-            return true;
+            return;
         }
         if message.message == WM_QUIT {
             // The exit code `PostQuitMessage` put in `wParam`.
             let code = i32::try_from(message.wParam).unwrap_or(i32::MAX);
             // SAFETY: plain call; the thread's loop ends on it.
             unsafe { PostQuitMessage(code) };
-            return true;
+            return;
         }
         input(hwnd, message.lParam);
         // SAFETY: the message as Windows queued it; its default handling
         // frees the raw input's data.
         unsafe { DefWindowProcW(hwnd, WM_INPUT, message.wParam, message.lParam) };
     }
-    false
 }
 
 /// Runs `step` on the active hotkeys, then sends what it says.

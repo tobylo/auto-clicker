@@ -220,6 +220,17 @@ fn a_hotkey_is_set_off_by_every_key_windows_gives_its_virtual_key() {
     assert_eq!(setting_off(key("f6")), [key("f6")]);
 }
 
+/// Lets go of these keys (by scan code) when dropped, so a test that fails
+/// leaves nothing down.
+struct LetGo<'a>(&'a [u16]);
+
+impl Drop for LetGo<'_> {
+    fn drop(&mut self) {
+        let up: Vec<(u16, bool)> = self.0.iter().map(|&scan| (scan, false)).collect();
+        let _ = crate::desktop::keys(&up);
+    }
+}
+
 /// The events that arrive within `within`.
 fn arrived(received: &mpsc::Receiver<HotkeyEvent>, within: Duration) -> Vec<HotkeyEvent> {
     let deadline = Instant::now() + within;
@@ -260,6 +271,7 @@ fn a_tap_seen_both_ways_while_stops_are_read_fires_once() {
     };
     reading.watch(stops).unwrap();
     reads(1);
+    let _up = LetGo(&[0x1d, 0x38, 0x2a, 0x6c]);
     // Each tap's keys go in at once, as a macro pad sends them: its
     // release is queued with its press, behind its hotkey.
     for round in 0..20 {
@@ -280,7 +292,7 @@ fn a_tap_seen_both_ways_while_stops_are_read_fires_once() {
 
 #[test]
 #[ignore = "registers hotkeys and presses keys, which needs a desktop: run in the WN01 VM through `vm run`"]
-fn releases_queued_past_one_turn_go_before_a_newer_hotkey() {
+fn releases_queued_before_a_hotkey_go_first_however_many() {
     use crate::desktop::keys;
     const MODIFIERS: [u16; 3] = [0x1d, 0x38, 0x2a];
     // F24, which no hotkey uses, and F22, `rare`'s recording hotkey.
@@ -298,10 +310,11 @@ fn releases_queued_past_one_turn_go_before_a_newer_hotkey() {
     };
     reading.watch(stops).unwrap();
     reads(1);
-    // In one go: the modifiers down, more input than one turn handles, the
-    // modifiers up, then down again with F22, and kept down.
+    // In one go: the modifiers down, a burst of other input, the modifiers
+    // up, then down again with F22, and kept down.
+    let _up = LetGo(&MODIFIERS);
     let mut tap: Vec<(u16, bool)> = MODIFIERS.iter().map(|&scan| (scan, true)).collect();
-    for _ in 0..DRAINED {
+    for _ in 0..300 {
         tap.extend([(FILLER, true), (FILLER, false)]);
     }
     tap.extend(MODIFIERS.iter().map(|&scan| (scan, false)));
