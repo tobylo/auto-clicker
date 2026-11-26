@@ -175,6 +175,11 @@ function Lock-Setup {
 $SetupLock = $null
 try {
     $SetupLock = Lock-Setup
+    # Holding the lock, no other run is going: what other runs staged and
+    # left (one whose script never started) can go.
+    Get-ChildItem -LiteralPath (Split-Path $PSScriptRoot) -Directory -Filter 'wn13-setup-*' |
+        Where-Object { $_.FullName -ne $PSScriptRoot } |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     Add-Type -Path (Join-Path $PSScriptRoot 'Autologon.cs')
     # Before anything else that can fail: a PC left half uninstalled must
     # not still log tester on at boot.

@@ -24,6 +24,7 @@ $RunnerFiles = 'runner.ps1', 'JobRunner.cs', 'run-job.ps1', 'click-test.ps1', 's
 $Winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 # Each install's own bound; the dev box bounds the whole setup too.
 $InstallSeconds = 2400
+$RustupSeconds = 1200
 $script:Changed = New-Object Collections.Generic.List[string]
 # The files a running runner has loaded: a change to them needs a restart.
 $RunnerCode = 'runner.ps1', 'JobRunner.cs'
@@ -521,10 +522,36 @@ function Install-BuildTools {
     Report-Set 'Build Tools with the C++ tools and a Windows SDK'
 }
 
-# Runs rustup with these arguments and fails when it does.
+# Runs $Path with $Arguments, ending it and everything it started after
+# $Seconds, and returns its exit code and its stdout's lines; its stderr is
+# shown when it fails. Nothing the setup runs while it holds its lock may
+# wait without a deadline.
+function Invoke-Bounded([string] $Path, [string[]] $Arguments, [int] $Seconds) {
+    $info = New-Object Diagnostics.ProcessStartInfo $Path
+    $info.Arguments = $Arguments -join ' '
+    $info.UseShellExecute = $false
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($info)
+    $out = $process.StandardOutput.ReadToEndAsync()
+    $err = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit($Seconds * 1000)) {
+        & taskkill.exe /T /F /PID $process.Id | Out-Null
+        throw "$Path $($info.Arguments) did not finish within $Seconds s"
+    }
+    # Its output once the pipes close, which a child it left may delay.
+    [void] [Threading.Tasks.Task]::WaitAll(@($out, $err), 10000)
+    if ($process.ExitCode -ne 0 -and $err.IsCompleted) { Write-Host $err.Result }
+    $lines = if ($out.IsCompleted) { @($out.Result -split "`r?`n" | Where-Object { $_ }) } else { @() }
+    return [pscustomobject] @{ Code = $process.ExitCode; Lines = $lines }
+}
+
+# Runs rustup with these arguments, within $RustupSeconds, and returns its
+# stdout's lines; fails when it does.
 function Invoke-Rustup([string[]] $Arguments) {
-    & (Join-Path $env:USERPROFILE '.cargo\bin\rustup.exe') @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "rustup $($Arguments -join ' ') failed" }
+    $run = Invoke-Bounded (Join-Path $env:USERPROFILE '.cargo\bin\rustup.exe') $Arguments $RustupSeconds
+    if ($run.Code -ne 0) { throw "rustup $($Arguments -join ' ') failed" }
+    return $run.Lines
 }
 
 # What Rust lacks of stable as tester's default with clippy and rustfmt:
@@ -533,11 +560,9 @@ function Get-MissingRust {
     if (-not (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.cargo\bin\rustup.exe'))) {
         return @('rustup', 'default', 'components')
     }
-    # It fails when no default is set: that is a missing default too. Its
-    # stderr goes nowhere through cmd.exe, since PowerShell 5.1 would turn
-    # it into a terminating error here.
-    $default = & cmd.exe /d /c "$env:USERPROFILE\.cargo\bin\rustup.exe default 2>nul"
-    if ($LASTEXITCODE -ne 0 -or "$default" -notmatch '^stable-') {
+    # It fails when no default is set: that is a missing default too.
+    $default = Invoke-Bounded (Join-Path $env:USERPROFILE '.cargo\bin\rustup.exe') @('default') $RustupSeconds
+    if ($default.Code -ne 0 -or "$($default.Lines)" -notmatch '^stable-') {
         # Stable may not be installed either; adding it brings its components.
         return @('default', 'components')
     }
@@ -586,6 +611,11 @@ function Lock-Setup {
 $SetupLock = $null
 try {
     $SetupLock = Lock-Setup
+    # Holding the lock, no other run is going: what other runs staged and
+    # left (one whose script never started) can go.
+    Get-ChildItem -LiteralPath (Split-Path $PSScriptRoot) -Directory -Filter 'wn13-setup-*' |
+        Where-Object { $_.FullName -ne $PSScriptRoot } |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     Add-Type -Path (Join-Path $PSScriptRoot 'Autologon.cs')
     $testerSid = (Get-LocalUser -Name $User).SID.Value
     Install-Folders $testerSid
