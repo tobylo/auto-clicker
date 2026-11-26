@@ -102,6 +102,10 @@ impl InputBackend for Closing {
     fn scroll(&mut self, notches: i32) -> Result<(), InputError> {
         self.inner.scroll(notches)
     }
+
+    fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError> {
+        self.inner.run_timer()
+    }
 }
 
 struct PerRunPlatform(PerRunShared);

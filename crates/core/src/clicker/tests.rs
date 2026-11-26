@@ -543,3 +543,113 @@ async fn a_clean_run_hands_the_input_back_with_nothing_held() {
         assert_eq!((outcome.input_back, outcome.held), (true, Vec::new()));
     }
 }
+
+// The run's timer
+
+#[tokio::test(start_paused = true)]
+async fn a_run_whose_timer_cannot_start_presses_nothing() {
+    let (input, calls, log) = open();
+    log.fail_timer_once();
+
+    let outcome = run_on(input, &calls, settings(Mode::HoldButton, 100), never()).await;
+
+    let refused = matches!(outcome.result, Err(InputError::Timer(_)));
+    let actual = (refused, outcome.calls, outcome.returned, outcome.input_back);
+    assert_eq!(actual, (true, Vec::new(), ms(0), true));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_waits_on_its_backends_timer_and_drops_it_after_letting_go() {
+    // The timer fires only for what is due at the start: the first press
+    // happens, and its release waits for the stop although the hold's own
+    // deadline passes on tokio's clock long before.
+    let (input, calls, log) = open();
+    log.freeze_timers();
+
+    let outcome = run_on(
+        input,
+        &calls,
+        settings(Mode::Click, 100),
+        stop_after(ms(500)),
+    )
+    .await;
+
+    let (press, release) = left();
+    let expected = vec![(ms(0), press), (ms(500), release)];
+    let actual = (
+        outcome.ended(),
+        outcome.calls,
+        log.timers(),
+        log.timer_drops(),
+    );
+    assert_eq!(actual, (Ended::Stopped, expected, 1, vec![2]));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_timer_that_fails_ends_the_run_and_releases() {
+    let (input, calls, log) = open();
+    log.break_timers();
+
+    let outcome = run_on(input, &calls, settings(Mode::Click, 100), never()).await;
+
+    let (press, release) = left();
+    let failed = matches!(outcome.result, Err(InputError::Timer(_)));
+    let actual = (failed, outcome.calls, outcome.held);
+    assert_eq!(
+        actual,
+        (true, vec![(ms(0), press), (ms(0), release)], Vec::new())
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_timer_that_fails_during_a_hold_ends_it_and_releases() {
+    for mode in [Mode::HoldButton, Mode::HoldKey] {
+        let (input, calls, log) = open();
+        log.break_timers();
+
+        // The stop only bounds the test: the failure ends the hold first.
+        let hold = settings(mode, 100);
+        let outcome = run_on(input, &calls, hold, stop_after(ms(1000))).await;
+
+        let failed = matches!(outcome.result, Err(InputError::Timer(_)));
+        let actual = (failed, outcome.calls.len(), outcome.held);
+        assert_eq!(actual, (true, 2, Vec::new()), "{mode:?}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refused_run_hands_its_input_to_the_next_run() {
+    // Two refusals, then a run: each injected failure counts once.
+    let (mut input, _, log) = open();
+    log.fail_timer_once();
+    log.fail_timer_once();
+    let mut started = Vec::new();
+    for _ in 0..3 {
+        let rng = fastrand::Rng::with_seed(1);
+        let end = run(input, &counted(Mode::Click, 10, 1), rng, never()).await;
+        started.push(end.result.is_ok());
+        input = end.input.unwrap();
+    }
+    assert_eq!((started, log.timers()), (vec![false, false, true], 3));
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_way_a_run_ends_drops_its_timer() {
+    let (input, calls, finished) = open();
+    run_on(input, &calls, counted(Mode::Click, 10, 2), never()).await;
+    let (input, calls, failed) = open();
+    failed.fail_once(down(Button::Left));
+    run_on(input, &calls, counted(Mode::Click, 10, 2), never()).await;
+    let (input, _, dropped) = open();
+    let hold = settings(Mode::HoldButton, 100);
+    let _ = timeout(
+        ms(50),
+        run(input, &hold, fastrand::Rng::with_seed(1), never()),
+    )
+    .await;
+
+    // When dropped, after this many calls: every run lets go of its press
+    // before its timer ends, a dropped one too.
+    let drops = [finished, failed, dropped].map(|log| log.timer_drops());
+    assert_eq!(drops, [vec![4], vec![2], vec![2]]);
+}

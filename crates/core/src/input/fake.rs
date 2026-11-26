@@ -1,8 +1,15 @@
 //! A backend for tests: it records every call and fails the ones it is told to.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::task::{Context, Poll};
+use std::time::Duration;
 
-use super::{AbsolutePosition, Button, Input, InputBackend, InputError, Key, PressState};
+use tokio::time::Instant;
+
+use super::{
+    AbsolutePosition, Button, Input, InputBackend, InputError, Key, PressState, RunTimer,
+    TokioTimer,
+};
 
 /// One call made to the fake backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +27,17 @@ struct State {
     calls: Vec<Call>,
     /// Calls that fail; each entry fails one matching attempt.
     failures: Vec<Call>,
+    /// Run timers made so far, failed attempts included.
+    timers: u32,
+    /// How many of the next attempts to make a run timer fail.
+    timer_failures: u32,
+    /// What new run timers do for a deadline ahead: wait for it (`None`),
+    /// never fire, or fail.
+    ahead: Option<Ahead>,
+    /// For each run timer dropped, how many calls had been made by then.
+    timer_drops: Vec<usize>,
+    /// How long new run timers take to be ready, as Windows' thread does.
+    timer_start: Option<Duration>,
 }
 
 /// The test's view of a [`FakeBackend`], valid after the `Input` that owns
@@ -37,6 +55,64 @@ impl FakeLog {
     /// twice makes two attempts fail.
     pub fn fail_once(&self, call: Call) {
         self.lock().failures.push(call);
+    }
+
+    /// Makes the next attempt to make a run timer fail.
+    pub fn fail_timer_once(&self) {
+        let mut state = self.lock();
+        state.timer_failures = state.timer_failures.saturating_add(1);
+    }
+
+    /// How many run timers were asked for, failed attempts included.
+    pub fn timers(&self) -> u32 {
+        self.lock().timers
+    }
+
+    /// Makes later run timers fire only for a deadline that has already
+    /// passed when it is first polled, never for one ahead: a run on them
+    /// does what is due at its start and then waits until a signal.
+    pub fn freeze_timers(&self) {
+        self.lock().ahead = Some(Ahead::Never);
+    }
+
+    /// Makes later run timers fail for a deadline ahead and for a wait with
+    /// none (a hold), as a timer that stopped working does; a deadline
+    /// already past is still ready.
+    pub fn break_timers(&self) {
+        self.lock().ahead = Some(Ahead::Fail);
+    }
+
+    /// Makes later run timers complete no wait until `after` from when they
+    /// are made, as a timer whose thread is slow to start does.
+    pub fn slow_timers(&self, after: Duration) {
+        self.lock().timer_start = Some(after);
+    }
+
+    /// For each run timer dropped so far, how many calls had been made when
+    /// it was dropped.
+    pub fn timer_drops(&self) -> Vec<usize> {
+        self.lock().timer_drops.clone()
+    }
+
+    fn timer(&self) -> Result<Box<dyn RunTimer>, InputError> {
+        let mut state = self.lock();
+        state.timers = state.timers.saturating_add(1);
+        if state.timer_failures > 0 {
+            state.timer_failures -= 1;
+            return Err(InputError::Timer(std::io::Error::other("injected failure")));
+        }
+        let inner: Box<dyn RunTimer> = match (state.ahead, state.timer_start) {
+            (Some(ahead), _) => Box::new(Stuck(ahead)),
+            (None, Some(after)) => Box::new(SlowToStart {
+                ready_at: Instant::now() + after,
+                inner: TokioTimer::default(),
+            }),
+            (None, None) => TokioTimer::boxed(),
+        };
+        Ok(Box::new(NotedTimer {
+            inner,
+            log: self.clone(),
+        }))
     }
 
     fn record(&self, call: Call) -> Result<(), InputError> {
@@ -57,6 +133,92 @@ impl FakeLog {
     fn lock(&self) -> MutexGuard<'_, State> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// A run timer that notes in the log when it is dropped.
+struct NotedTimer {
+    inner: Box<dyn RunTimer>,
+    log: FakeLog,
+}
+
+impl RunTimer for NotedTimer {
+    fn poll_until(
+        &mut self,
+        cx: &mut Context<'_>,
+        deadline: Instant,
+    ) -> Poll<Result<(), InputError>> {
+        self.inner.poll_until(cx, deadline)
+    }
+
+    fn poll_failed(&mut self, cx: &mut Context<'_>) -> Poll<InputError> {
+        self.inner.poll_failed(cx)
+    }
+}
+
+impl Drop for NotedTimer {
+    fn drop(&mut self) {
+        let mut state = self.log.lock();
+        let calls = state.calls.len();
+        state.timer_drops.push(calls);
+    }
+}
+
+/// A run timer that completes no wait before `ready_at`.
+struct SlowToStart {
+    ready_at: Instant,
+    inner: TokioTimer,
+}
+
+impl RunTimer for SlowToStart {
+    fn poll_until(
+        &mut self,
+        cx: &mut Context<'_>,
+        deadline: Instant,
+    ) -> Poll<Result<(), InputError>> {
+        self.inner.poll_until(cx, deadline.max(self.ready_at))
+    }
+
+    fn poll_failed(&mut self, cx: &mut Context<'_>) -> Poll<InputError> {
+        self.inner.poll_failed(cx)
+    }
+}
+
+/// What a stuck run timer does for a deadline ahead.
+#[derive(Clone, Copy, Debug)]
+enum Ahead {
+    Never,
+    Fail,
+}
+
+/// A run timer that is ready only for a deadline already past.
+struct Stuck(Ahead);
+
+impl RunTimer for Stuck {
+    fn poll_until(
+        &mut self,
+        _cx: &mut Context<'_>,
+        deadline: Instant,
+    ) -> Poll<Result<(), InputError>> {
+        if deadline <= Instant::now() {
+            return Poll::Ready(Ok(()));
+        }
+        match self.0 {
+            Ahead::Never => Poll::Pending,
+            Ahead::Fail => Poll::Ready(Err(broken())),
+        }
+    }
+
+    fn poll_failed(&mut self, _cx: &mut Context<'_>) -> Poll<InputError> {
+        match self.0 {
+            Ahead::Never => Poll::Pending,
+            Ahead::Fail => Poll::Ready(broken()),
+        }
+    }
+}
+
+/// The error a broken run timer fails with.
+fn broken() -> InputError {
+    InputError::Timer(std::io::Error::other("injected timer failure"))
 }
 
 /// An input backend that records calls instead of touching a device.
@@ -98,5 +260,9 @@ impl InputBackend for FakeBackend {
 
     fn scroll(&mut self, notches: i32) -> Result<(), InputError> {
         self.log.record(Call::Scroll(notches))
+    }
+
+    fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError> {
+        self.log.timer()
     }
 }

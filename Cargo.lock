@@ -387,6 +387,9 @@ dependencies = [
 name = "auto-clicker-backend-windows"
 version = "1.0.0"
 dependencies = [
+ "auto-clicker-core",
+ "fastrand",
+ "tokio",
  "windows-sys 0.61.2",
 ]
 

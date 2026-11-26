@@ -9,6 +9,8 @@ publish.workspace = true
 
 # Windows alone: on other systems the crate is empty (lib.rs).
 [target.'cfg(windows)'.dependencies]
+# The input interface output implements (WN04).
+auto-clicker-core = { path = "../core" }
 # The Win32 bindings (M5 brief decision 3): declarations only, no code of
 # their own. Already in Cargo.lock through tokio and std's dependencies.
 windows-sys = { version = "0.61.2", features = [
@@ -26,8 +28,19 @@ windows-sys = { version = "0.61.2", features = [
     # GUID_SESSION_DISPLAY_STATUS.
     "Win32_System_SystemServices",
     "Win32_System_Threading",
+    # SendInput (WN04).
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# The deadlines a run's timer is handed (WN04); already in the tree through
+# core.
+tokio = { version = "1.54.1", default-features = false, features = ["time"] }
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+# Runs over the fake output, to test the run timer (WN04).
+auto-clicker-core = { path = "../core", features = ["fake"] }
+fastrand = "2.5.0"
+tokio = { version = "1.54.1", features = ["rt", "time", "macros"] }
