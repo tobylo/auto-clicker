@@ -8,6 +8,10 @@ Work on this repository's board runs as one session per piece of work: a feature
 - Update [docs/planning/map.md](../planning/map.md) when a slice or spike changes a decision recorded there.
 - An investigation ends with a short decision record in `docs/decisions/`, numbered in sequence, with the evidence (commands, versions, results) that supports it.
 
+## Settling questions ahead
+- Upcoming issues can be settled with the owner in one batch, before their sessions start: proposed answers for each open question, one reviewer agent over all of them, then a briefing and the questions that are the owner's to answer. The answers go into each issue as a "Decisions and open questions (settled <date>)" section.
+- A session whose issue has that section treats its answers as settled and does not ask them again. If they leave nothing open, it does not wait for the owner: its reviewer still rates the plan, and its briefing goes out as information, in a message that does not end its turn, before it starts the work. It stops to ask only about a question the issue does not settle, or a settled answer its reviewer shows to be costly, and then asks as "Planning PRs" says.
+
 ## Planning PRs
 - Before the first question, have one fresh reviewer agent rate your proposals, as the `grill-feature` skill's review step says, and check each challenge against the code. Then send a plain-language briefing of the work, with its links, in a message that ends your turn, and wait for the owner's reply: text above an open dialog does not reliably reach the owner, and links in a dialog cannot be clicked. The briefing lists the low-stakes defaults as going ahead unless the owner objects. Architecture, ongoing burden, anything hard to undo and anything the reviewer challenged come as questions, one at a time, through the dialog, each readable on its own: which work, which question of how many, what is being decided, and what each answer changes, in plain words. Propose an answer, then ask only what is genuinely open.
 - Size each slice to about 1,500 added lines, tests included: review rounds grow with PR size. Where a slice cannot be that small, say why in the breakdown.
