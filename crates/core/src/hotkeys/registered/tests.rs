@@ -340,3 +340,23 @@ fn a_hotkey_windows_refused_is_neither_delivered_nor_matched() {
     hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
     assert_eq!(hotkeys.key(F6, true, &mut keyboard), []);
 }
+
+#[test]
+fn a_hotkey_while_reading_counts_modifiers_whose_raw_events_are_still_queued() {
+    // A run's stops are read; the hotkey arrives before the raw Ctrl and
+    // Shift downs queued behind it, which the key state already shows.
+    let mut keyboard = FakeKeyboard::default();
+    let mut hotkeys = registered();
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    keyboard.down = vec![CTRL, SHIFT];
+    let fired = hotkeys.hotkey(RECORDING, &mut keyboard);
+    assert_eq!(
+        fired,
+        [Fired(RECORDING)],
+        "no release with Ctrl and Shift down"
+    );
+    hotkeys.key(CTRL, true, &mut keyboard);
+    hotkeys.key(SHIFT, true, &mut keyboard);
+    hotkeys.key(SHIFT, false, &mut keyboard);
+    assert_eq!(hotkeys.key(CTRL, false, &mut keyboard), [ModifiersReleased]);
+}

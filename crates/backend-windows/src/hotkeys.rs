@@ -65,6 +65,7 @@ pub(crate) struct Wanted {
 /// Where a reader's events go: to the controller, or a test.
 pub type Sink = Arc<dyn Fn(HotkeyEvent) + Send + Sync>;
 
+#[derive(Clone)]
 struct Wish {
     id: u64,
     bindings: Bindings,
@@ -166,21 +167,22 @@ thread_local! {
 /// The slot changed: registers the wanted reader's hotkeys in place of the
 /// old one's, and passes on what the keyboard is watched for.
 fn changed(hwnd: HWND, remote: &Remote) {
-    let wanted = remote
+    // Copied out, so registering and logging never hold up a runtime that
+    // takes the slot.
+    let wish = remote
         .hotkeys()
         .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    let wish = wanted.reader.as_ref();
+        .unwrap_or_else(PoisonError::into_inner)
+        .reader
+        .clone();
     let current = ACTIVE.with_borrow(|active| active.as_ref().map(|active| active.id));
-    if current != wish.map(|wish| wish.id) {
+    if current != wish.as_ref().map(|wish| wish.id) {
         end(hwnd);
-        if let Some(wish) = wish {
-            let active = register(hwnd, wish);
-            ACTIVE.set(Some(active));
+        if let Some(wish) = &wish {
+            ACTIVE.set(Some(register(hwnd, wish)));
         }
     }
-    let watching = wish.map(|wish| wish.watching.clone()).unwrap_or_default();
-    drop(wanted);
+    let watching = wish.map(|wish| wish.watching).unwrap_or_default();
     with_active(hwnd, |active, keyboard| {
         if active.watching == watching {
             return Vec::new();
