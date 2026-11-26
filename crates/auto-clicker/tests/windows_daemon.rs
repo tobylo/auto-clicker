@@ -204,6 +204,17 @@ fn kill(pid: u32, tree: bool) -> ExitStatus {
         .unwrap()
 }
 
+/// A process the test started, ended and reaped should the test fail
+/// before it ends on its own; one that ended is only reaped.
+struct Reaped(Child);
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// The processes running `program` (a path) that `pid` started. Both: a
 /// process whose parent ended keeps the parent's id, which a later process
 /// may be given.
@@ -817,11 +828,20 @@ fn a_bare_start_launches_the_watchdog_and_exits() {
         children(launcher, WATCHDOG).contains(&watchdog)
     })
     .unwrap();
-    let pid = wait_for("its daemon", || children(watchdog, DAEMON).first().copied());
-    let _daemon_guard = desktop::Held::open_checked(desktop::Process(pid), || {
-        children(watchdog, DAEMON).contains(&pid)
-    })
-    .unwrap();
+    // Until the daemon is held, a failure ends the watchdog's whole tree:
+    // the watchdog is held, so its id still names it.
+    let found = std::panic::catch_unwind(|| {
+        let pid = wait_for("its daemon", || children(watchdog, DAEMON).first().copied());
+        let held = desktop::Held::open_checked(desktop::Process(pid), || {
+            children(watchdog, DAEMON).contains(&pid)
+        })
+        .unwrap();
+        (pid, held)
+    });
+    let (pid, _daemon_guard) = found.unwrap_or_else(|panic| {
+        let _ = kill(watchdog, true);
+        std::panic::resume_unwind(panic)
+    });
     wait_for("the daemon running", || {
         home.log().contains(": running").then_some(())
     });
@@ -852,10 +872,10 @@ fn an_elevated_watchdog_refuses_before_it_writes_or_starts_anything() {
         return;
     }
     let home = Home::new("elevated");
-    let mut watchdog = home.command(WATCHDOG).spawn().unwrap();
-    let pid = watchdog.id();
-    close_message_box(pid, || watchdog.try_wait().unwrap().is_none());
-    assert_eq!(ended(&mut watchdog, END).code(), Some(4));
+    let mut watchdog = Reaped(home.command(WATCHDOG).spawn().unwrap());
+    let pid = watchdog.0.id();
+    close_message_box(pid, || watchdog.0.try_wait().unwrap().is_none());
+    assert_eq!(ended(&mut watchdog.0, END).code(), Some(4));
     assert!(children(pid, DAEMON).is_empty());
     // No log of its own, and no daemon's.
     assert!(!home.log_path().parent().unwrap().exists());
@@ -866,11 +886,11 @@ fn an_elevated_watchdog_refuses_before_it_writes_or_starts_anything() {
 fn arguments_it_does_not_take_are_refused_never_a_new_start() {
     for arguments in [&["--table", "4", "--watchdog", "8"][..], &["--quit"]] {
         let home = Home::new("refused");
-        let mut daemon = home.command(DAEMON).args(arguments).spawn().unwrap();
-        let pid = daemon.id();
-        close_message_box(pid, || daemon.try_wait().unwrap().is_none());
-        assert_eq!(ended(&mut daemon, END).code(), Some(5), "{arguments:?}");
-        assert!(children(daemon.id(), WATCHDOG).is_empty());
+        let mut daemon = Reaped(home.command(DAEMON).args(arguments).spawn().unwrap());
+        let pid = daemon.0.id();
+        close_message_box(pid, || daemon.0.try_wait().unwrap().is_none());
+        assert_eq!(ended(&mut daemon.0, END).code(), Some(5), "{arguments:?}");
+        assert!(children(daemon.0.id(), WATCHDOG).is_empty());
         // Nothing was started, nothing logged.
         assert!(!home.log_path().exists(), "{arguments:?}");
     }

@@ -442,6 +442,16 @@ fn holding(output: FakeOutput) -> (Controller<FakeOutput>, Links) {
     Controller::new(output, None, config, None)
 }
 
+/// Runs `controller` beside `steps` until both end, failing past a bound
+/// far above what they take: a controller that never quits fails the test
+/// rather than hanging it.
+fn run_until_quit(controller: Controller<FakeOutput>, steps: impl Future<Output = ()>) {
+    let both = async { tokio::join!(controller.run(), steps) };
+    runtime()
+        .block_on(async { tokio::time::timeout(Duration::from_secs(30), both).await })
+        .expect("the controller did not quit within 30 s");
+}
+
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_time()
@@ -483,7 +493,7 @@ fn a_lock_from_the_message_thread_releases_a_held_button_at_once() {
         assert_eq!(output.presses(0), [PressState::Down, PressState::Up]);
         send.send(Message::Quit).unwrap();
     };
-    runtime().block_on(async { tokio::join!(controller.run(), steps) });
+    run_until_quit(controller, steps);
     drop(events);
     message_thread.join().unwrap();
 }
@@ -515,7 +525,7 @@ fn the_watchdogs_end_stops_a_hold_at_once_releases_and_quits() {
         assert!(ending.elapsed() < AT_ONCE, "{:?}", ending.elapsed());
     };
     // The controller ends on its own: the watchdog's end quits it.
-    runtime().block_on(async { tokio::join!(controller.run(), steps) });
+    run_until_quit(controller, steps);
     assert!(ended.load(std::sync::atomic::Ordering::Acquire));
 }
 
@@ -586,7 +596,7 @@ fn locking_the_desktop_releases_a_held_button_at_once_and_unlocking_allows_start
         .await;
         send.send(Message::Quit).unwrap();
     };
-    runtime().block_on(async { tokio::join!(controller.run(), steps) });
+    run_until_quit(controller, steps);
     released.raise(ENDED);
     thread.quit_and_join(AT_ONCE).unwrap();
     let runs = output.0.lock().unwrap().len();
