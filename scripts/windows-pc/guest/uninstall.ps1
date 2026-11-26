@@ -45,13 +45,15 @@ function Get-RunnerTask([string] $Name) {
     }
 }
 
-# Whether anything of the setup's is here: its own C:\wn01 (one another
-# account made does not count) or a runner task.
+# Whether anything of the setup's may be here: its own C:\wn01, a C:\wn01
+# whose owner or rules cannot be read (which may be the setup's), a runner
+# a stopped uninstall could not end, or a runner task. The root is looked
+# at first, as that check cannot fail; a readable C:\wn01 another account
+# made does not count.
 function Test-SetupPresent {
-    if (@($Tasks | Where-Object { $null -ne (Get-RunnerTask $_) }).Count -gt 0) { return $true }
-    # A runner a stopped uninstall could not end: a retry finishes the job.
+    if ((Get-RootState) -in 'setup', 'unreadable') { return $true }
     if (@(Get-RunnerProcesses).Count -gt 0) { return $true }
-    return (Test-Path -LiteralPath $Root) -and (Test-SetupRoot)
+    return @($Tasks | Where-Object { $null -ne (Get-RunnerTask $_) }).Count -gt 0
 }
 
 function Remove-RunnerTask([string] $Name) {
@@ -80,10 +82,21 @@ function Remove-Runners {
 # SYSTEM own, inheriting nothing, that only they can write (tester may read).
 # One another account made or can write is left alone, and nothing in it is
 # read.
-function Test-SetupRoot {
-    # A root whose owner or rules cannot be read is not the setup's.
-    try { return Test-SetupRootReadable } catch { return $false }
+# C:\wn01 as 'absent', 'setup' (the setup's own), 'foreign' (readable, and
+# not the setup's) or 'unreadable' (its owner or rules cannot be read).
+function Get-RootState {
+    if (-not (Test-Path -LiteralPath $Root)) { return 'absent' }
+    try {
+        if (Test-SetupRootReadable) { return 'setup' }
+        return 'foreign'
+    } catch {
+        return 'unreadable'
+    }
 }
+
+# Whether C:\wn01 is the setup's own; one that cannot be read is not, so
+# nothing in it is read or removed.
+function Test-SetupRoot { return (Get-RootState) -eq 'setup' }
 
 function Test-SetupRootReadable {
     $item = Get-Item -LiteralPath $Root -Force -ErrorAction Stop
@@ -214,7 +227,7 @@ try {
     Remove-OldStages
     Remove-Runners
     if ((Test-Path -LiteralPath $Root) -and -not (Test-SetupRoot)) {
-        Write-Output "$Root was not made by the setup: left alone, and no setting put back from it"
+        Write-Output "$Root was not made by the setup, or cannot be read: left alone, and no setting put back from it"
     } elseif (Test-Path -LiteralPath $Root) {
         # restore.json goes with C:\wn01 only once every setting is back.
         Restore-Settings
