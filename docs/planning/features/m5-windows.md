@@ -1,6 +1,6 @@
 # M5: Run on Windows 11
 
-- Milestone M5, scope gate G5 (#107). Investigation X03 (#109), slices WN01 (#108), WN02 to WN12 (#110 to #120), WN06b (#132) and WN06c (#135); [github-map.json](../github-map.json) maps the codes.
+- Milestone M5, scope gate G5 (#107). Investigation X03 (#109), slices WN01 (#108), WN02 to WN12 (#110 to #120), WN06b (#132) and WN06c (#135), and the task WN13 (#133); [github-map.json](../github-map.json) maps the codes.
 - On Windows this brief replaces map D1's tray, D7's paths, file calls and input reader, and D12's layer-shell surfaces; everything else in the map holds on both systems.
 - Maturity: mapped and settled 2026-11-23, before the spike. X03 measured the mechanisms on 2026-11-25 ([decision record 0006](../../decisions/0006-windows.md)); decisions 5, 6 and 9 and invariant N5 changed with the owner that day, and decisions 2, 7 to 10 and 15 gained what the spike measured.
 - Diagram: [what stays, what Windows adds, and a hotkey click with a kill mid-hold](https://prlens.dev/c/IqawE6ShSVjC6_CUfjrqQg).
@@ -33,7 +33,7 @@ Out of scope: Windows 10; ARM64; macOS; games whose anti-cheat ignores injected 
 14. **The settings window** is the same Slint program on Slint's Windows backend. It talks to the daemon over its standard input and output pipes instead of a socket pair. The renderer is femtovg if it works on Windows, otherwise Slint's software renderer (WN10 decides).
 15. **The tray** re-adds its icon when Explorer restarts (`TaskbarCreated`). Locking, switching user, sleep and the display turning off stop a run, as logind's facts do on Linux (the display since Modern Standby may announce no sleep; WN05). The on-screen display's windows (topmost, layered, click-through, non-activating) took no focus and no input from the window under them in X03; a topmost window activated later covers them until they re-assert topmost (0006 point 8).
 16. **Install:** the owner builds a reviewed commit on the Windows machine (`cargo build --locked --release`, MSVC toolchain). A PowerShell script, run with `-ExecutionPolicy Bypass`, copies the programs to `%LOCALAPPDATA%\Programs\auto-clicker`, registers the watchdog (which starts the daemon) to start at login under the user's `Run` key, upgrades a running install by asking the daemon to quit first, and uninstalls. The program is unsigned: SmartScreen asks before the first run, and Defender may flag a program that injects input; the guide says how to allow it.
-17. **Tests.** A `windows-2025` CI job runs the gates of `scripts/gates.sh` on the workspace, and cargo-deny checks the Windows target too. Before a commit, Windows-only code is checked on the dev box with clippy for the Windows target, and its tests run in the VM. Device tests on Windows are `#[ignore]`d and run in the test VM (WN01) by the session, through a scheduled task in the VM's logged-in desktop, since a program started over SSH has no desktop to inject into (WN01). The PR names the VM's Windows build. What needs a real graphics card (a game at full speed, fullscreen behaviour, timing without a hypervisor) is measured on real hardware when the owner has some, and marked as VM-only until then.
+17. **Tests.** A `windows-2025` CI job runs the gates of `scripts/gates.sh` on the workspace, and cargo-deny checks the Windows target too. Before a commit, Windows-only code is checked on the dev box with clippy for the Windows target, and its tests run in the VM. Device tests on Windows are `#[ignore]`d and run in the test VM (WN01) by the session, through a scheduled task in the VM's logged-in desktop, since a program started over SSH has no desktop to inject into (WN01). The PR names the VM's Windows build. What needs real hardware (timing without a hypervisor, fullscreen behaviour, a real graphics card) is measured by the session on the owner's Windows 11 test PC, which runs the same desktop runner and is reached with `scripts/windows-pc/pc` (WN13, [windows-pc.md](../../agents/windows-pc.md)); the PR names the PC's Windows build too. A game at full speed and a real mouse stay with the owner.
 
 ## Invariants
 
@@ -79,6 +79,7 @@ About 1,500 added lines each.
 | WN10 | The settings window, hotkey capture and rebinding, and the fixed-point picker on Windows | WN08, WN09 |
 | WN11 | The on-screen display on Windows | WN09 |
 | WN12 | Install, upgrade and uninstall script, guide and README for Windows | WN06b, WN10, WN11 |
+| WN13 | The owner's Windows 11 test PC: the VM's desktop runner, autologon and a `pc` command on the dev box, for measurements that need real hardware | WN01 |
 
 The clicker is usable at the cursor after WN08, with the watchdog in place; a release Windows blocked is sent again once WN06b is in; at a fixed point after WN10.
 

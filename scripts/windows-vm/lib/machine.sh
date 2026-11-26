@@ -1,6 +1,7 @@
 # Starting, reaching and stopping one QEMU machine whose files live in a
 # directory (a build's temp directory, or the VM's run directory).
-# Sourced by scripts/windows-vm/vm, after lib/common.sh.
+# Sourced by scripts/windows-vm/vm, after lib/common.sh (and lib/remote.sh,
+# whose vm_ssh it calls).
 # shellcheck shell=bash
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -168,30 +169,6 @@ kill_machine() {
     end_process "$dir" qemu || return 1
     end_process "$dir" swtpm || return 1
     rm -f "$dir/monitor.sock" "$dir/swtpm.sock"
-}
-
-# SSH to tester in the VM whose keys are in $2, ended after $1 seconds.
-# HOSTKEY=accept-new only while a build first meets the VM; afterwards the
-# recorded key must match. (A function, so callers pass the deadline here:
-# `bounded` cannot run a shell function.)
-vm_ssh() {
-    local seconds="$1" keys="$2"
-    shift 2
-    bounded "$seconds" ssh -F /dev/null -p "$SSH_PORT" -i "$keys/key" -o IdentitiesOnly=yes \
-        -o UserKnownHostsFile="$keys/known_hosts" -o StrictHostKeyChecking="${HOSTKEY:-yes}" \
-        -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-        -o LogLevel=ERROR tester@127.0.0.1 "$@"
-}
-
-# Copies local file or folder $4 into folder $3 in the VM whose keys are in
-# $2, within $1 seconds, as a tar stream over SSH: Windows' OpenSSH server
-# ends its SFTP subsystem at once, so scp and sftp do not work.
-vm_push() {
-    local seconds="$1" keys="$2" dest="$3" path="$4"
-    [[ "$dest" =~ ^[A-Za-z]:[A-Za-z0-9_.\\-]*$ ]] || die "use a Windows folder without spaces or quotes: $dest"
-    [[ -e "$path" ]] || die "no such file or folder: $path"
-    tar -c -f - -C "$(dirname "$path")" -- "$(basename "$path")" |
-        vm_ssh "$seconds" "$keys" "New-Item -ItemType Directory -Force $dest | Out-Null; cmd /c 'tar -x -f - -C $dest'; exit \$LASTEXITCODE"
 }
 
 # Waits up to $3 seconds for SSH into the machine in $1 (keys in $2) to answer,

@@ -74,7 +74,7 @@ scripts/windows-vm/vm stop
 
 - One command uses the VM at a time. Every command but `status` and `screen` takes a lock: a second session's command waits, and gives up with a message once its deadline passes. The lock covers one command, not a series: another session's command can run between two of yours. Stop the VM when your runs are done, unless it was already running when you started: then another session is using it, and `stop` or `reset` would end its work. The VM never starts on its own.
 - The PR names the VM's Windows build, as `vm status` prints it.
-- A measurement that needs a real graphics card (a game at full speed, fullscreen behaviour, timing without a hypervisor) is marked VM-only.
+- A measurement that needs real hardware (timing without a hypervisor, fullscreen behaviour, a real graphics card) runs on the owner's test PC instead, through `scripts/windows-pc/pc`, which shares this runner and the code of `run`, `ssh` and `push` ([windows-pc.md](windows-pc.md)).
 
 ## Resetting and rebuilding
 

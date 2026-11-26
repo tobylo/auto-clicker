@@ -1,5 +1,5 @@
-# `vm selftest`: checks a running VM against what WN01 promises.
-# Sourced by scripts/windows-vm/vm.
+# `vm selftest`: checks a running VM against what WN01 promises. The click
+# and deadline checks are in lib/remote.sh. Sourced by scripts/windows-vm/vm.
 # shellcheck shell=bash
 
 # Addresses other machines could use to reach the dev box.
@@ -60,34 +60,6 @@ check_network() {
     vm_push 60 "$VM_DIR" "C:\\work" "$SCRIPT_DIR/guest/net-check.ps1"
     vm_ssh 300 "$VM_DIR" "C:\\work\\net-check.ps1 -Targets $targets; exit \$LASTEXITCODE" ||
         die "the VM reaches more than it should"
-}
-
-check_click() {
-    log "running the click test in the desktop"
-    vm_push 60 "$VM_DIR" "C:\\work" "$SCRIPT_DIR/guest/click-test.ps1"
-    run_job "$VM_DIR" normal 60 'C:\work' \
-        'powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\work\click-test.ps1' ||
-        die "the injected click did not reach the test window"
-}
-
-# The ids of the VM's ping processes, one per line.
-ping_ids() {
-    vm_ssh 60 "$VM_DIR" '@(Get-Process -Name PING -ErrorAction SilentlyContinue).Id' | tr -d '\r'
-}
-
-# A job that outlives its deadline is ended with everything it started: a
-# ping in the background and one in front, both far longer than the deadline.
-# Pings that ran before the job are not its own and are left out.
-check_deadline() {
-    local rc=0 before after left
-    before="$(ping_ids)" || die "could not list the VM's processes"
-    log "running a job past its 5 s deadline"
-    run_job "$VM_DIR" normal 5 'C:\work' 'start /b ping -n 600 127.0.0.1 >NUL & ping -n 600 127.0.0.1 >NUL' >/dev/null 2>&1 || rc=$?
-    ((rc == 124)) || die "a job past its deadline returned $rc, not 124"
-    after="$(ping_ids)" || die "could not list the VM's processes"
-    left="$(grep -cvxF -f <(echo "$before") <<<"$after" || true)"
-    [[ "$left" == 0 ]] || die "$left ping process(es) outlived the job's deadline"
-    log "ok   a job past its deadline was ended with its whole tree"
 }
 
 check_screen() {
