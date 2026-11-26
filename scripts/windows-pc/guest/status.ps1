@@ -30,7 +30,10 @@ function Get-SleepMinutes {
 # Whether $Process is the runner that wrote $Ready: a PowerShell that
 # started before it, not another process that has the pid now.
 function Test-RunnerProcess($Process, $Ready) {
-    if ($null -eq $Process -or $Process.ProcessName -ne 'powershell') { return $false }
+    if ($null -eq $Process) { return $false }
+    # An exited process stays findable while someone holds a handle to it.
+    if ($Process.HasExited) { return $false }
+    if ($Process.ProcessName -ne 'powershell') { return $false }
     return $Process.StartTime -le $Ready.LastWriteTime
 }
 
@@ -39,7 +42,9 @@ function Get-RunnerState([string] $Queue, [datetime] $Boot) {
     $ready = Get-Item -LiteralPath "C:\wn01\queue\$Queue\ready" -ErrorAction SilentlyContinue
     if ($null -eq $ready) { return 'not set up' }
     if ($ready.LastWriteTime -lt $Boot) { return 'not started since the boot' }
-    $process = Get-Process -Id ([int] (Get-Content -LiteralPath $ready.FullName)) -ErrorAction SilentlyContinue
+    $id = 0
+    if (-not [int]::TryParse((Get-Content -LiteralPath $ready.FullName -Raw), [ref] $id)) { return 'not running' }
+    $process = Get-Process -Id $id -ErrorAction SilentlyContinue
     if (-not (Test-RunnerProcess $process $ready)) { return 'not running' }
     return "running since $($process.StartTime.ToString('yyyy-MM-dd HH:mm'))"
 }

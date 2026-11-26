@@ -1,7 +1,8 @@
 # Reaching a Windows machine that runs the desktop runner (guest/runner.ps1):
 # SSH, copying files in, handing jobs to the runner, and the commands and
 # checks built on them. Shared by scripts/windows-vm/vm and
-# scripts/windows-pc/pc, after lib/base.sh. The caller sets:
+# scripts/windows-pc/pc, after lib/base.sh. The caller sets every one of
+# these, so none comes from the environment:
 #   SSH_PORT       the port of the machine's sshd
 #   SSH_HOST       its address (default 127.0.0.1, the VM's forward)
 #   SSH_KEY_FILE   the private key (default: key in the keys directory)

@@ -19,8 +19,13 @@ VM_DIR="$STATE_DIR/vm"
 # A started VM: the overlay on the base disk, copies of the variables and TPM
 # state, sockets and logs. `vm reset` removes it.
 RUN_DIR="$VM_DIR/run"
-# lib/remote.sh's commands reach the VM with its key and known_hosts.
+# lib/remote.sh's commands reach the VM with its key and known_hosts, on the
+# loopback forward, never where the caller's environment points.
 KEYS_DIR="$VM_DIR"
+SSH_HOST=127.0.0.1
+SSH_KEY_FILE=""
+SSH_HOST_ALIAS=""
+REMOTE_PREFIX=""
 SSH_PORT="${WN01_SSH_PORT:-52222}"
 # It goes into QEMU's comma-separated -netdev option: a port and nothing else.
 [[ "$SSH_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && ((SSH_PORT <= 65535)) || {

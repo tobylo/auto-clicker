@@ -21,23 +21,36 @@ $Trusted = 'S-1-5-32-544', 'S-1-5-18'
 
 function Get-RunnerProcesses {
     Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
-        Where-Object { $_.CommandLine -like "*$Root\runner.ps1*" }
+        Where-Object { $_.CommandLine -like "*-File $Root\runner.ps1 -Queue *" }
 }
 
+# Whether process $Id still runs. Windows keeps an exited process findable
+# while another program holds a handle to it, so being found is not enough.
+function Test-ProcessAlive([int] $Id) {
+    $process = Get-Process -Id $Id -ErrorAction SilentlyContinue
+    return $null -ne $process -and -not $process.HasExited
+}
+
+function Remove-RunnerTask([string] $Name) {
+    if (-not (Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue)) { return }
+    Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $Name -Confirm:$false
+    Write-Output "removed task $Name"
+}
+
+# Ends runner process $Process, or stops the uninstall before C:\wn01 goes.
+function Stop-RunnerProcess($Process) {
+    Invoke-CimMethod -InputObject $Process -MethodName Terminate | Out-Null
+    Wait-Process -Id $Process.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+    if (Test-ProcessAlive $Process.ProcessId) { throw "runner process $($Process.ProcessId) did not end" }
+    Write-Output "ended runner process $($Process.ProcessId)"
+}
+
+# Ending a task can leave its PowerShell running; a job it ran ends with it,
+# since the job object closes with the runner.
 function Remove-Runners {
-    foreach ($name in $Tasks) {
-        if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
-            Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
-            Unregister-ScheduledTask -TaskName $name -Confirm:$false
-            Write-Output "removed task $name"
-        }
-    }
-    # Ending a task can leave its PowerShell running; a job it ran ends with
-    # it, since the job object closes with the runner.
-    foreach ($process in @(Get-RunnerProcesses)) {
-        Invoke-CimMethod -InputObject $process -MethodName Terminate | Out-Null
-        Write-Output "ended runner process $($process.ProcessId)"
-    }
+    foreach ($name in $Tasks) { Remove-RunnerTask $name }
+    foreach ($process in @(Get-RunnerProcesses)) { Stop-RunnerProcess $process }
 }
 
 # Whether C:\wn01 is the setup's: a plain folder the administrators or
@@ -61,7 +74,8 @@ function Restore-Settings {
     if (-not (Test-Path -LiteralPath $path)) { return }
     $saved = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     # Only for the account it was read from, by SID.
-    $expiry = $saved.PSObject.Properties["passwordNeverExpires:$((Get-LocalUser -Name $User).SID.Value)"]
+    $account = Get-LocalUser -Name $User -ErrorAction SilentlyContinue
+    $expiry = if ($account) { $saved.PSObject.Properties["passwordNeverExpires:$($account.SID.Value)"] }
     if ($expiry) {
         Set-LocalUser -Name $User -PasswordNeverExpires ([bool] $expiry.Value)
         Write-Output "put back: tester's password never expires = $($expiry.Value)"

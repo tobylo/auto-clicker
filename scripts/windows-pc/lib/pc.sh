@@ -9,6 +9,9 @@ SSH_PORT=22
 # needs only the config changed.
 SSH_HOST_ALIAS=win11-test
 KEYS_DIR="$STATE_DIR"
+# Set by read_config.
+SSH_HOST=""
+SSH_KEY_FILE=""
 # Before every command sent: scripts may run (the PC's policy is Windows'
 # default, Restricted, and the setup leaves it so), output is UTF-8, and PATH
 # holds what tester's logon would, cargo included, as an SSH session's does not.

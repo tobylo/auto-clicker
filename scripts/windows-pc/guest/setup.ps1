@@ -27,7 +27,6 @@ $InstallSeconds = 2400
 $script:Changed = New-Object Collections.Generic.List[string]
 # The files a running runner has loaded: a change to them needs a restart.
 $RunnerCode = 'runner.ps1', 'JobRunner.cs'
-$script:ToolchainChanged = $false
 
 # Reports go to the host, not the pipeline, so they never become part of a
 # function's result.
@@ -114,6 +113,11 @@ function Test-SetupFolder($Item, [string] $Owner) {
 function Set-Security([string] $Path, [bool] $Protected, [object[]] $Rules = @()) {
     $made = -not (Test-Path -LiteralPath $Path -PathType Container)
     if ($made) { New-Item -ItemType Directory -Path $Path | Out-Null }
+    # tester may write in queue\normal: a junction there would take the
+    # rules below to wherever it points.
+    if ((Get-Item -LiteralPath $Path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "$Path is a junction or link: remove it, then run the setup again"
+    }
     $want = New-Security $Protected $Rules
     if (-not $made -and (Test-Security (Get-Acl -LiteralPath $Path) $want)) {
         Report-Ok "security of $Path"
@@ -139,11 +143,13 @@ function Install-Folders([string] $TesterSid) {
     foreach ($folder in 'queue', 'queue\high', 'queue\high\inbox', 'queue\high\work', 'queue\high\outbox') {
         Set-Security "$Root\$folder" $false
     }
-    Set-Security "$Root\queue\normal" $false @(New-Rule $TesterSid 'Modify')
+    # The inbox first, made with its parent while tester can write in
+    # neither, so nothing of tester's is in it when it is protected.
     Set-Security "$Root\queue\normal\inbox" $true @(
         (New-Rule $Admins $full), (New-Rule $System $full),
         (New-Rule $TesterSid 'ReadAndExecute' 'None'),
         (New-Rule $TesterSid 'ReadAndExecute, Delete, WriteAttributes' 'ObjectInherit' 'InheritOnly'))
+    Set-Security "$Root\queue\normal" $false @(New-Rule $TesterSid 'Modify')
     foreach ($folder in 'queue\normal\work', 'queue\normal\outbox') {
         Set-Security "$Root\$folder" $false
     }
@@ -166,7 +172,7 @@ function Install-RunnerFiles {
         # Their tasks are disabled first, so no logon starts a runner on half
         # the new files; that changes their export, so Install-RunnerTask
         # registers them again, enabled, once every file is in.
-        if ($name -in $RunnerCode) { 'normal', 'high' | ForEach-Object { Suspend-Runner $_ } }
+        if ($name -in $RunnerCode) { Suspend-Runners }
         Copy-Item -LiteralPath $source -Destination $target -Force
         (Get-Item -LiteralPath $target).LastWriteTime = Get-Date
         Report-Set "file $target"
@@ -206,17 +212,38 @@ function Save-Original([string] $Name, $Value) {
     Write-DurableFile $path ($saved | ConvertTo-Json -Compress)
 }
 
+# Disables queue $Queue's task and ends its runner. The disabled task no
+# longer matches its record, so Install-RunnerTask registers it again and
+# the runner restarts, even after a setup stopped half-way. Only a task that
+# does not exist yet is passed over.
 function Suspend-Runner([string] $Queue) {
-    Disable-ScheduledTask -TaskName "wn01-runner-$Queue" -ErrorAction SilentlyContinue | Out-Null
+    if (Get-ScheduledTask -TaskName "wn01-runner-$Queue" -ErrorAction SilentlyContinue) {
+        Disable-ScheduledTask -TaskName "wn01-runner-$Queue" -ErrorAction Stop | Out-Null
+    }
     Stop-Runner $Queue
 }
 
+function Suspend-Runners { 'normal', 'high' | ForEach-Object { Suspend-Runner $_ } }
+
+# Whether process $Id still runs. Windows keeps an exited process findable
+# while another program holds a handle to it, so being found is not enough.
+function Test-ProcessAlive([int] $Id) {
+    $process = Get-Process -Id $Id -ErrorAction SilentlyContinue
+    return $null -ne $process -and -not $process.HasExited
+}
+
+# Ends queue $Queue's runner and fails unless it is gone within 10 s.
 function Stop-Runner([string] $Queue) {
     Stop-ScheduledTask -TaskName "wn01-runner-$Queue" -ErrorAction SilentlyContinue
     # Ending the task can leave its PowerShell running.
-    Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
-        Where-Object { $_.CommandLine -like "*$Root\runner.ps1 -Queue $Queue*" } |
-        ForEach-Object { Invoke-CimMethod -InputObject $_ -MethodName Terminate | Out-Null }
+    foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
+                Where-Object { $_.CommandLine -like "*-File $Root\runner.ps1 -Queue $Queue" })) {
+        Invoke-CimMethod -InputObject $process -MethodName Terminate | Out-Null
+        Wait-Process -Id $process.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+        if (Test-ProcessAlive $process.ProcessId) {
+            throw "the $Queue runner (process $($process.ProcessId)) did not end"
+        }
+    }
 }
 
 function Test-TesterLoggedOn {
@@ -229,8 +256,12 @@ function Test-TesterLoggedOn {
 function Test-RunnerCurrent([string] $Queue) {
     $ready = Get-Item -LiteralPath (Join-Path $Root "queue\$Queue\ready") -ErrorAction SilentlyContinue
     if ($null -eq $ready) { return $false }
-    $process = Get-Process -Id ([int] (Get-Content -LiteralPath $ready.FullName)) -ErrorAction SilentlyContinue
-    if ($null -eq $process -or $process.ProcessName -ne 'powershell') { return $false }
+    # A ready file that names no pid is stale.
+    $id = 0
+    if (-not [int]::TryParse((Get-Content -LiteralPath $ready.FullName -Raw), [ref] $id)) { return $false }
+    if (-not (Test-ProcessAlive $id)) { return $false }
+    $process = Get-Process -Id $id
+    if ($process.ProcessName -ne 'powershell') { return $false }
     $installed = ($RunnerCode | ForEach-Object { (Get-Item -LiteralPath (Join-Path $Root $_)).LastWriteTime } |
             Measure-Object -Maximum).Maximum
     return $process.StartTime -gt $installed -and $process.StartTime -le $ready.LastWriteTime
@@ -283,8 +314,7 @@ function Install-RunnerTask([string] $Queue, [string] $RunLevel) {
 # installed files under the current task; a setup stopped half-way leaves a
 # runner older than its files, which the next run restarts.
 function Install-Runner([string] $Queue, [string] $RunLevel) {
-    # A runner started before the toolchain changed hands its jobs an old PATH.
-    $changed = (Install-RunnerTask $Queue $RunLevel) -or $script:ToolchainChanged
+    $changed = Install-RunnerTask $Queue $RunLevel
     if (-not (Test-TesterLoggedOn)) {
         Write-Host "     wn01-runner-$Queue starts at tester's next logon (tester is not logged on)"
         return
@@ -453,13 +483,14 @@ function Install-BuildTools {
         $tools = & "$installer\vswhere.exe" -products Microsoft.VisualStudio.Product.BuildTools -latest -property installationPath
     }
     $add = '--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'
+    # A runner started before the toolchain changes hands its jobs an old PATH.
+    Suspend-Runners
     if ($tools) {
         Invoke-Installer "$installer\setup.exe" @('modify', '--installPath', "`"$tools`"", $add, '--quiet', '--norestart') @(0, 3010)
     } else {
         Install-WingetPackage 'Microsoft.VisualStudio.2022.BuildTools' @('--override', "`"--wait --quiet --norestart $add`"")
     }
     Report-Set 'Build Tools with the C++ tools and a Windows SDK'
-    $script:ToolchainChanged = $true
 }
 
 # Runs rustup with these arguments and fails when it does.
@@ -494,11 +525,12 @@ function Install-Rust {
         Report-Ok 'Rust stable with clippy and rustfmt'
         return
     }
+    # A runner started before the toolchain changes hands its jobs an old PATH.
+    Suspend-Runners
     if ('rustup' -in $missing) { Install-WingetPackage 'Rustlang.Rustup' }
     if ('default' -in $missing) { Invoke-Rustup @('default', 'stable') | Out-Host }
     if ('components' -in $missing) { Invoke-Rustup @('component', 'add', 'clippy', 'rustfmt', '--toolchain', 'stable') | Out-Host }
     Report-Set 'Rust stable with clippy and rustfmt'
-    $script:ToolchainChanged = $true
 }
 
 $Password = [Console]::In.ReadLine()
