@@ -45,6 +45,11 @@ function Get-RunnerTask([string] $Name) {
     }
 }
 
+function Test-SetupPresent {
+    if (Test-Path -LiteralPath $Root) { return $true }
+    return @($Tasks | Where-Object { $null -ne (Get-RunnerTask $_) }).Count -gt 0
+}
+
 function Remove-RunnerTask([string] $Name) {
     if ($null -eq (Get-RunnerTask $Name)) { return }
     Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
@@ -186,6 +191,14 @@ $SetupLock = $null
 try {
     $SetupLock = Lock-Setup
     Add-Type -Path (Join-Path $PSScriptRoot 'Autologon.cs')
+    # The setup makes C:\wn01 before it touches automatic logon, and this
+    # turns automatic logon off before it removes C:\wn01: with neither the
+    # folder nor a runner task here, nothing is the setup's, and automatic
+    # logon set up some other way is left as it is.
+    if (-not (Test-SetupPresent)) {
+        Write-Output 'uninstall: nothing of the setup''s is on this PC (no C:\wn01, no runner task); automatic logon is left as it is'
+        exit 0
+    }
     # Before anything else that can fail: a PC left half uninstalled must
     # not still log tester on at boot.
     Disable-AutoLogon

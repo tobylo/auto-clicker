@@ -160,8 +160,10 @@ cmd_setup() {
     take_lock 600
     ensure_password
     require_running
-    log "setting the PC up (deadline 3600 s)"
-    run_staged 3600 setup.ps1 "${files[@]}" <"$STATE_DIR/password" || die "the setup failed"
+    # Above the sum of the setup's own bounds when it installs everything:
+    # two installers at 40 min and two rustup calls at 20 min each.
+    log "setting the PC up (deadline 9000 s)"
+    run_staged 9000 setup.ps1 "${files[@]}" <"$STATE_DIR/password" || die "the setup failed"
     if tester_logged_on; then
         wait_runners "$KEYS_DIR" 120
         log "both runners run"

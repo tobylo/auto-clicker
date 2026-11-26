@@ -522,13 +522,16 @@ function Install-BuildTools {
     Report-Set 'Build Tools with the C++ tools and a Windows SDK'
 }
 
-# Ends process $Id and everything it started, within 30 s.
+# Ends process $Id and everything it started, within 30 s, and fails when
+# the process still runs after that. The setup's lock goes with the setup's
+# own process, so the message tells the next run to wait.
 function Stop-Tree([int] $Id) {
     $kill = Start-Process -FilePath taskkill.exe -ArgumentList '/T', '/F', '/PID', $Id -PassThru -NoNewWindow
     $null = $kill.Handle
-    if (-not $kill.WaitForExit(30000)) {
-        $kill.Kill()
-        throw "process $Id and what it started could not be ended within 30 s"
+    if (-not $kill.WaitForExit(30000)) { $kill.Kill() }
+    Wait-Process -Id $Id -Timeout 10 -ErrorAction SilentlyContinue
+    if (Test-ProcessAlive $Id) {
+        throw "process $Id could not be ended and may still change the PC: wait for it to end before running the setup again"
     }
 }
 

@@ -14,7 +14,9 @@ PC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pc")
 
 class PcTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        # Under /tmp, not TMPDIR: pc takes only paths of letters, digits and
+        # ._/+-, and TMPDIR may hold a space.
+        self.tmp = tempfile.TemporaryDirectory(dir="/tmp")
         self.state = os.path.join(self.tmp.name, "state")
         os.mkdir(self.state)
         self.key = os.path.join(self.tmp.name, "key")
