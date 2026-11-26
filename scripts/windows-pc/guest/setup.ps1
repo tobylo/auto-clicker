@@ -107,17 +107,26 @@ function Test-SetupFolder($Item, [string] $Owner) {
     return $Owner -in $Admins, $System
 }
 
+# Refuses a junction or link at $Path or at any folder between it and
+# C:\wn01, before anything there is made or changed: tester may write in
+# queue\normal, and a link there would take the setup's changes to wherever
+# it points.
+function Assert-NoLink([string] $Path) {
+    for ($at = $Path; $at.Length -gt $Root.Length; $at = Split-Path $at) {
+        $item = Get-Item -LiteralPath $at -Force -ErrorAction SilentlyContinue
+        if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "$at is a junction or link: remove it, then run the setup again"
+        }
+    }
+}
+
 # Gives folder $Path exactly these explicit rules, owned by the
 # administrators; $Protected stops it inheriting from its parent. A missing
 # folder is made.
 function Set-Security([string] $Path, [bool] $Protected, [object[]] $Rules = @()) {
+    Assert-NoLink $Path
     $made = -not (Test-Path -LiteralPath $Path -PathType Container)
     if ($made) { New-Item -ItemType Directory -Path $Path | Out-Null }
-    # tester may write in queue\normal: a junction there would take the
-    # rules below to wherever it points.
-    if ((Get-Item -LiteralPath $Path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
-        throw "$Path is a junction or link: remove it, then run the setup again"
-    }
     $want = New-Security $Protected $Rules
     if (-not $made -and (Test-Security (Get-Acl -LiteralPath $Path) $want)) {
         Report-Ok "security of $Path"
@@ -212,12 +221,23 @@ function Save-Original([string] $Name, $Value) {
     Write-DurableFile $path ($saved | ConvertTo-Json -Compress)
 }
 
+# Task $Name, or $null when Windows says there is none; any other failure
+# to look it up stops the setup rather than reading as "no task".
+function Get-RunnerTask([string] $Name) {
+    try {
+        return Get-ScheduledTask -TaskName $Name -ErrorAction Stop
+    } catch {
+        if ($_.CategoryInfo.Category -eq 'ObjectNotFound') { return $null }
+        throw
+    }
+}
+
 # Disables queue $Queue's task and ends its runner. The disabled task no
 # longer matches its record, so Install-RunnerTask registers it again and
 # the runner restarts, even after a setup stopped half-way. Only a task that
 # does not exist yet is passed over.
 function Suspend-Runner([string] $Queue) {
-    if (Get-ScheduledTask -TaskName "wn01-runner-$Queue" -ErrorAction SilentlyContinue) {
+    if (Get-RunnerTask "wn01-runner-$Queue") {
         Disable-ScheduledTask -TaskName "wn01-runner-$Queue" -ErrorAction Stop | Out-Null
     }
     Stop-Runner $Queue
@@ -279,7 +299,7 @@ function Get-TaskText($Action, $Trigger, $Principal, $Settings) {
 # Whether task $Name is registered, as $Record says it was registered with
 # definition $Want.
 function Test-TaskRecorded([string] $Name, [string] $Record, [string] $Want) {
-    if ($null -eq (Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue)) { return $false }
+    if ($null -eq (Get-RunnerTask $Name)) { return $false }
     if (-not (Test-Path -LiteralPath $Record)) { return $false }
     return (Get-Content -LiteralPath $Record -Raw) -ceq "$Want`n$(Export-ScheduledTask -TaskName $Name)"
 }

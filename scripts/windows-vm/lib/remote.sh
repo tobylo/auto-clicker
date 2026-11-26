@@ -42,10 +42,12 @@ vm_push() {
 # Whether both runner tasks run (each writes its pid to `ready` when it
 # starts). A `ready` from an earlier boot names a pid some other process may
 # have now, so it must be newer than the boot, and the process must be a
-# PowerShell that started before it wrote the file. One check, within 60 s.
+# PowerShell that started before it wrote the file and has not exited
+# (Windows keeps an exited process findable while a handle to it is open).
+# One check, within 60 s.
 runners_ready() {
     local check
-    check='$boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime; foreach ($q in "normal","high") { $f = Get-Item "C:\wn01\queue\$q\ready" -ErrorAction Stop; if ($f.LastWriteTime -lt $boot) { exit 1 }; $p = Get-Process -Id ([int](Get-Content -LiteralPath $f.FullName -ErrorAction Stop)) -ErrorAction Stop; if ($p.ProcessName -ne "powershell" -or $p.StartTime -gt $f.LastWriteTime) { exit 1 } }'
+    check='$boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime; foreach ($q in "normal","high") { $f = Get-Item "C:\wn01\queue\$q\ready" -ErrorAction Stop; if ($f.LastWriteTime -lt $boot) { exit 1 }; $p = Get-Process -Id ([int](Get-Content -LiteralPath $f.FullName -ErrorAction Stop)) -ErrorAction Stop; if ($p.HasExited -or $p.ProcessName -ne "powershell" -or $p.StartTime -gt $f.LastWriteTime) { exit 1 } }'
     vm_ssh 60 "$1" "$check" >/dev/null 2>&1
 }
 
