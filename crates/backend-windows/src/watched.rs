@@ -40,9 +40,19 @@ pub struct Watched<B = Output, P = Desktop> {
     output: B,
     probe: P,
     table: Arc<Table>,
-    /// Whether a release is owed since the last one delivered: only the
-    /// first of a run of them is logged.
-    owing: bool,
+    /// The releases that may not have arrived, counted while the output
+    /// is open and logged once it is dropped, after every release was
+    /// tried: a log write that stalls holds up none of them.
+    missed: Missed,
+}
+
+/// Releases that may not have arrived, by why.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Missed {
+    /// The context did not allow delivery.
+    pub(crate) blocked: u32,
+    /// The context allowed it, yet Windows took none of it.
+    pub(crate) refused: u32,
 }
 
 impl Watched {
@@ -60,7 +70,7 @@ impl<B: InputBackend, P: Probe> Watched<B, P> {
             output,
             probe,
             table,
-            owing: false,
+            missed: Missed::default(),
         }
     }
 
@@ -84,20 +94,12 @@ impl<B: InputBackend, P: Probe> Watched<B, P> {
         let sent = send(&mut self.output, item, PressState::Up);
         let after = self.probe.context();
         match judge(before, after, &sent) {
-            Delivery::Delivered => {
-                self.table.clear(item);
-                self.owing = false;
+            Delivery::Delivered => self.table.clear(item),
+            Delivery::Blocked => {
+                self.missed.blocked = self.missed.blocked.saturating_add(1);
             }
-            outcome => {
-                if !std::mem::replace(&mut self.owing, true) {
-                    let why = sent
-                        .err()
-                        .map_or_else(String::new, |err| format!(": {err}"));
-                    log::line(format_args!(
-                        "auto-clicker: a release may not have arrived ({outcome:?}{why}); \
-                         it stays owed, and the watchdog sends it when the daemon ends"
-                    ));
-                }
+            Delivery::Refused => {
+                self.missed.refused = self.missed.refused.saturating_add(1);
             }
         }
     }
@@ -136,10 +138,26 @@ impl<B: InputBackend, P: Probe> InputBackend for Watched<B, P> {
     }
 }
 
+impl<B, P> Drop for Watched<B, P> {
+    /// Says how many releases may not have arrived, once every release was
+    /// tried ([`Input`] releases what it holds before its output goes).
+    fn drop(&mut self) {
+        let Missed { blocked, refused } = self.missed;
+        if blocked == 0 && refused == 0 {
+            return;
+        }
+        log::line(format_args!(
+            "auto-clicker: {blocked} releases may not have arrived as Windows blocked them and \
+             {refused} as it refused them; they stay owed, and the watchdog sends them when the \
+             daemon ends"
+        ));
+    }
+}
+
 impl<B, P> std::fmt::Debug for Watched<B, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Watched")
-            .field("owing", &self.owing)
+            .field("missed", &self.missed)
             .finish_non_exhaustive()
     }
 }

@@ -148,6 +148,19 @@ fn a_release_that_may_not_have_arrived_stays_owed_and_the_run_goes_on() {
         assert!(input.release_key(Key::new(17).unwrap()).is_ok(), "{name}");
         assert!(!input.is_held(w()), "{name}");
         assert!(table.owes(w()), "{name}");
+        // Counted, to be logged once the output goes, after every release.
+        let expected = if name == "refused" {
+            Missed {
+                blocked: 0,
+                refused: 1,
+            }
+        } else {
+            Missed {
+                blocked: 1,
+                refused: 0,
+            }
+        };
+        assert_eq!(input.backend().missed, expected, "{name}");
     }
 }
 

@@ -199,19 +199,6 @@ fn kill(pid: u32, tree: bool) -> ExitStatus {
         .unwrap()
 }
 
-/// The watchdogs running from the program these tests built.
-fn watchdogs_here() -> Vec<u32> {
-    let watchdog = WATCHDOG.replace('\'', "''");
-    powershell(&format!(
-        "Get-CimInstance Win32_Process -Filter \"Name = 'auto-clicker-watchdog.exe'\" \
-         | Where-Object {{ $_.ExecutablePath -eq '{watchdog}' }} \
-         | ForEach-Object {{ $_.ProcessId }}"
-    ))
-    .lines()
-    .filter_map(|line| line.trim().parse().ok())
-    .collect()
-}
-
 /// The processes `pid` started that still run.
 fn children(pid: u32) -> Vec<u32> {
     powershell(&format!(
@@ -659,10 +646,13 @@ fn holding(what: &str, config: &str, key: u16) -> (Home, Daemon) {
 /// How long after `since` `key` read up; fails past [`RELEASED`].
 fn released(key: u16, since: Instant) -> Duration {
     loop {
-        if !desktop::is_down(key) {
-            return since.elapsed();
+        let up = !desktop::is_down(key);
+        // Read after the key: an upper bound, even when it read up at once.
+        let elapsed = since.elapsed();
+        assert!(elapsed < RELEASED, "not up within {RELEASED:?}");
+        if up {
+            return elapsed;
         }
-        assert!(since.elapsed() < RELEASED, "still held after {RELEASED:?}");
         sleep(Duration::from_millis(1));
     }
 }
@@ -762,12 +752,15 @@ fn a_bare_start_launches_the_watchdog_and_exits() {
     let home = Home::new("bare");
     let mut bare = home.command(DAEMON).spawn().unwrap();
     assert!(ended(&mut bare, END).success());
-    let watchdog = wait_for("the watchdog", || watchdogs_here().first().copied());
+    // The bare start's own watchdog, as its child: `bare` still holds the
+    // ended process, so its id names no other.
+    let launcher = bare.id();
+    let watchdog = wait_for("the watchdog", || children(launcher).first().copied());
     // Ended however the test ends: a daemon left running would hold the
     // session's single instance. Each held only once it is still the
     // process found, so the id named it.
     let _watchdog_guard = desktop::Held::open_checked(desktop::Process(watchdog), || {
-        watchdogs_here().contains(&watchdog)
+        children(launcher).contains(&watchdog)
     })
     .unwrap();
     let pid = wait_for("its daemon", || children(watchdog).first().copied());
