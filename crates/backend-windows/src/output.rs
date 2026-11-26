@@ -136,7 +136,10 @@ fn key_event(code: Code, state: PressState) -> INPUT {
 }
 
 /// The virtual desktop's width and height: the bounding box of every
-/// monitor, whatever its origin. `None` when Windows reports no size.
+/// monitor, whatever its origin. `None` when Windows reports no size. In
+/// physical pixels only in a process that is per-monitor DPI aware, as the
+/// daemon is to be (M5 brief decision 10); a DPI-unaware one is given scaled
+/// sizes, and its moves land off by the scale.
 #[allow(unsafe_code)]
 fn virtual_desktop() -> Option<(u32, u32)> {
     // SAFETY: plain queries.
