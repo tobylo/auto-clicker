@@ -272,14 +272,19 @@ fn send(event: &INPUT) -> Result<(), InputError> {
     if inserted == 1 {
         return Ok(());
     }
-    let error = io::Error::last_os_error();
-    Err(InputError::Write(match error.raw_os_error() {
+    Err(refused(io::Error::last_os_error()))
+}
+
+/// The error for an event Windows did not take, given the thread's last
+/// error: "access denied" when Windows set none.
+fn refused(last: io::Error) -> InputError {
+    InputError::Write(match last.raw_os_error() {
         Some(0) | None => io::Error::new(
             io::ErrorKind::PermissionDenied,
             "Windows did not take the event (a window of higher integrity has the focus)",
         ),
-        Some(_) => error,
-    }))
+        Some(_) => last,
+    })
 }
 
 #[cfg(test)]

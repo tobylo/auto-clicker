@@ -227,3 +227,33 @@ fn without_a_desktop_size_a_position_goes_as_it_is() {
     let position = AbsolutePosition { x: 34, y: 65_535 };
     assert_eq!(on_pixels(position, None), position);
 }
+
+#[test]
+fn a_refused_event_without_a_reason_is_access_denied() {
+    let silent = refused(io::Error::from_raw_os_error(0));
+    assert!(
+        matches!(&silent, InputError::Write(err) if err.kind() == io::ErrorKind::PermissionDenied),
+        "{silent:?}"
+    );
+    let given = refused(io::Error::from_raw_os_error(87));
+    assert!(
+        matches!(&given, InputError::Write(err) if err.raw_os_error() == Some(87)),
+        "{given:?}"
+    );
+}
+
+#[test]
+fn output_waits_on_its_own_timer_thread() {
+    use crate::run_timer::tests::{live, one_at_a_time};
+    let _serial = one_at_a_time();
+    let before = live();
+    let timer = Output { _private: () }.run_timer().unwrap();
+    // The thread counts itself once it runs.
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while live() == before && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(live(), before + 1);
+    drop(timer);
+    assert_eq!(live(), before);
+}

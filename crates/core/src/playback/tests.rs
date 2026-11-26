@@ -376,6 +376,21 @@ async fn a_run_waits_on_its_backends_timer_and_drops_it_at_the_end() {
     assert_eq!(actual, (Ended::Stopped, Vec::new(), 1, vec![0]));
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_timer_that_fails_ends_playing_with_nothing_more_sent() {
+    // The stop only bounds the test: the failure ends the run first.
+    let (input, calls, log) = timed_input();
+    log.break_timers();
+    let forever = playback(click(), 1.0, Repeat::UntilStopped);
+
+    let end = play(input, &forever, &Motion::Relative, stop_after(ms(1000))).await;
+
+    let failed = matches!(end.result, Err(InputError::Timer(_)));
+    let calls = calls.lock().unwrap().clone();
+    let held = end.input.map(|input| input.held().count());
+    assert_eq!((failed, calls, held), (true, Vec::new(), Some(0)));
+}
+
 // Late wakes and bursts
 
 /// Polls `future` once.

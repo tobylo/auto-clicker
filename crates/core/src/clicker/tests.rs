@@ -618,6 +618,22 @@ async fn a_timer_that_fails_during_a_hold_ends_it_and_releases() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_refused_run_hands_its_input_to_the_next_run() {
+    // Two refusals, then a run: each injected failure counts once.
+    let (mut input, _, log) = open();
+    log.fail_timer_once();
+    log.fail_timer_once();
+    let mut started = Vec::new();
+    for _ in 0..3 {
+        let rng = fastrand::Rng::with_seed(1);
+        let end = run(input, &counted(Mode::Click, 10, 1), rng, never()).await;
+        started.push(end.result.is_ok());
+        input = end.input.unwrap();
+    }
+    assert_eq!((started, log.timers()), (vec![false, false, true], 3));
+}
+
+#[tokio::test(start_paused = true)]
 async fn every_way_a_run_ends_drops_its_timer() {
     let (input, calls, finished) = open();
     run_on(input, &calls, counted(Mode::Click, 10, 2), never()).await;

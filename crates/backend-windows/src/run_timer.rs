@@ -123,10 +123,6 @@ impl WaitableTimer {
                 let _finished = finished;
                 #[cfg(test)]
                 let _live = tests::Live::new();
-                #[cfg(test)]
-                tests::slow_start();
-                let _display = DisplayOn::request();
-                wake(served.lock().make_ready());
                 serve_until_stopped(&served, &timer);
             })?;
         Ok(WaitableTimer {
@@ -245,10 +241,10 @@ impl Drop for WaitableTimer {
     }
 }
 
-/// The thread's body. A failure or a panic is recorded for the run, whose
-/// next poll ends it with the error.
+/// The thread's body. A failure or a panic, before the thread is ready
+/// too, is recorded for the run, whose next poll ends it with the error.
 fn serve_until_stopped(shared: &Shared, timer: &OwnedHandle) {
-    let failure = match catch_unwind(AssertUnwindSafe(|| serve(shared, timer))) {
+    let failure = match catch_unwind(AssertUnwindSafe(|| ready_then_serve(shared, timer))) {
         Ok(Ok(())) => return,
         Ok(Err(err)) => (err.kind(), err.to_string()),
         Err(_) => (
@@ -274,6 +270,18 @@ fn wake(waker: Option<Waker>) {
     if let Some(waker) = waker {
         waker.wake();
     }
+}
+
+/// Asks Windows to keep the display on for as long as the thread serves,
+/// tells the run it is ready, and serves.
+fn ready_then_serve(shared: &Shared, timer: &OwnedHandle) -> io::Result<()> {
+    #[cfg(test)]
+    tests::slow_start(&shared.stop);
+    let _display = DisplayOn::request();
+    wake(shared.lock().make_ready());
+    #[cfg(test)]
+    tests::maybe_break()?;
+    serve(shared, timer)
 }
 
 /// Waits on the stop event, the change event and the timer until stopped.
@@ -391,4 +399,4 @@ fn wait_any(handles: &[HANDLE; 3]) -> io::Result<usize> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

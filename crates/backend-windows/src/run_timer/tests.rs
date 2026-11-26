@@ -5,7 +5,7 @@ use std::future::{Future, pending, poll_fn};
 use std::num::NonZeroU32;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, MutexGuard};
 use std::task::Wake;
 
@@ -14,6 +14,7 @@ use auto_clicker_core::input::fake::{Call, FakeBackend, FakeLog};
 use auto_clicker_core::input::{AbsolutePosition, Button, Input, InputBackend, Key, PressState};
 use auto_clicker_core::run::{Ended, Signals};
 use tokio::time::{sleep, timeout};
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use super::*;
 
@@ -38,23 +39,42 @@ impl Drop for Live {
     }
 }
 
+/// Run timer threads alive now.
+pub(crate) fn live() -> usize {
+    LIVE.load(Ordering::SeqCst)
+}
+
 /// How long a timer thread waits before it asks to keep the display on and
-/// is ready, in ms; 0 in all but the test that sets it.
+/// is ready, in ms, unless told to stop; 0 in all but the tests that set it.
 static SLOW_START: AtomicU64 = AtomicU64::new(0);
 
-/// Called by each timer thread as it starts.
-pub(super) fn slow_start() {
-    let wait = SLOW_START.load(Ordering::SeqCst);
+/// Called by each timer thread as it starts: waits [`SLOW_START`], ending
+/// at once on `stop`.
+#[allow(unsafe_code)]
+pub(super) fn slow_start(stop: &OwnedHandle) {
+    let wait = u32::try_from(SLOW_START.load(Ordering::SeqCst)).unwrap();
     if wait > 0 {
-        thread::sleep(ms(wait));
+        // SAFETY: an open event handle, alive for the call.
+        unsafe { WaitForSingleObject(stop.as_raw_handle(), wait) };
     }
+}
+
+/// Makes timer threads fail once ready, as a failed wait or arm would.
+static BROKEN: AtomicBool = AtomicBool::new(false);
+
+/// Called by each timer thread once ready.
+pub(super) fn maybe_break() -> io::Result<()> {
+    if BROKEN.load(Ordering::SeqCst) {
+        return Err(io::Error::other("broken on purpose"));
+    }
+    Ok(())
 }
 
 /// Taken by every test that starts a timer, so no other test's thread or
 /// opt-out is counted in its checks.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
-fn one_at_a_time() -> MutexGuard<'static, ()> {
+pub(crate) fn one_at_a_time() -> MutexGuard<'static, ()> {
     ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -196,6 +216,67 @@ fn no_wait_completes_before_the_thread_is_ready() {
     // Woken once ready, and ready then.
     assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
     assert!(timer.poll_until(&mut cx, past).is_ready());
+}
+
+#[test]
+fn a_failed_thread_ends_a_wait_for_a_deadline_with_the_error() {
+    let _serial = one_at_a_time();
+    runtime().block_on(async {
+        let mut timer = WaitableTimer::start().unwrap();
+        wait(&mut timer, tokio::time::Instant::now()).await;
+        fail(&timer.shared, (io::ErrorKind::Other, "broken".to_owned()));
+        let waker = std::task::Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        let ahead = tokio::time::Instant::now() + Duration::from_secs(10);
+        let failed = timer.poll_until(&mut cx, ahead);
+        assert!(
+            matches!(&failed, Poll::Ready(Err(InputError::Timer(err))) if err.to_string() == "broken"),
+            "{failed:?}"
+        );
+    });
+}
+
+#[test]
+fn a_wake_for_a_deadline_the_run_moved_on_from_is_not_passed_on() {
+    let _serial = one_at_a_time();
+    runtime().block_on(async {
+        let mut timer = WaitableTimer::start().unwrap();
+        wait(&mut timer, tokio::time::Instant::now()).await;
+        let wakes = Arc::new(Wakes::default());
+        let waker = Arc::clone(&wakes).into();
+        let mut cx = Context::from_waker(&waker);
+        let start = tokio::time::Instant::now();
+        let (first, second) = (start + ms(5_000), start + ms(6_000));
+        assert!(timer.poll_until(&mut cx, first).is_pending());
+        let moved_from = timer.shared.lock().request.unwrap();
+        assert!(timer.poll_until(&mut cx, second).is_pending());
+        fire(&timer.shared, moved_from);
+        assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
+        assert!(timer.poll_until(&mut cx, second).is_pending());
+    });
+}
+
+#[test]
+fn a_thread_that_fails_while_serving_ends_a_hold_and_lets_go() {
+    let _serial = one_at_a_time();
+    BROKEN.store(true, Ordering::SeqCst);
+    let hold = ClickerSettings {
+        mode: Mode::HoldButton,
+        ..ClickerSettings::default()
+    };
+    // The stop only bounds the test.
+    let ran = run_case(open(false), &hold, signals(after(ms(5_000)), never()), None);
+    BROKEN.store(false, Ordering::SeqCst);
+
+    let failed = matches!(ran.result, Some(Err(InputError::Timer(_))));
+    // It may fail before the press or after it; either way nothing is held.
+    let pressed = [
+        Call::Button(Button::Left, PressState::Down),
+        Call::Button(Button::Left, PressState::Up),
+    ];
+    let let_go = ran.calls.is_empty() || ran.calls == pressed;
+    assert!(failed && let_go, "{:?} {:?}", ran.result, ran.calls);
+    assert!(ran.took < Duration::from_secs(1), "took {:?}", ran.took);
 }
 
 #[test]
@@ -471,7 +552,8 @@ fn every_way_a_run_ends_leaves_no_thread_and_hands_throttling_back() {
 #[test]
 fn a_stop_while_the_thread_starts_ends_the_run_with_nothing_pressed() {
     let _serial = one_at_a_time();
-    SLOW_START.store(300, Ordering::SeqCst);
+    // The thread takes 5 s to be ready unless stopped first.
+    SLOW_START.store(5_000, Ordering::SeqCst);
     let slow = clicks(Duration::from_secs(10), None);
     let ran = run_case(open(false), &slow, signals(after(ms(50)), never()), None);
     SLOW_START.store(0, Ordering::SeqCst);
