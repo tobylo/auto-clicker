@@ -81,8 +81,10 @@ impl InputBackend for Output {
         send(&absolute_event(on_pixels(position, virtual_desktop())))
     }
 
+    /// More than [`MOST_NOTCHES`] either way fails, naming the amount,
+    /// rather than turning the wheel less than asked.
     fn scroll(&mut self, notches: i32) -> Result<(), InputError> {
-        send(&scroll_event(notches))
+        send(&scroll_event(notches).ok_or_else(|| too_far(notches))?)
     }
 
     fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError> {
@@ -206,16 +208,26 @@ const NOTCH: i32 = 120;
 /// signed 16-bit amount, so more would wrap round to the other direction.
 const MOST_NOTCHES: i32 = i16::MAX as i32 / NOTCH;
 
-/// The wheel turned by `notches`, positive up as on Linux, at most
+/// The wheel turned by `notches`, positive up as on Linux; `None` past
 /// [`MOST_NOTCHES`] either way.
-fn scroll_event(notches: i32) -> INPUT {
-    let amount = notches.clamp(-MOST_NOTCHES, MOST_NOTCHES) * NOTCH;
+fn scroll_event(notches: i32) -> Option<INPUT> {
+    if notches.unsigned_abs() > MOST_NOTCHES.unsigned_abs() {
+        return None;
+    }
     // `mouseData` carries the signed amount in its bits.
-    mouse_event(MOUSEINPUT {
-        mouseData: amount.cast_unsigned(),
+    Some(mouse_event(MOUSEINPUT {
+        mouseData: (notches * NOTCH).cast_unsigned(),
         dwFlags: MOUSEEVENTF_WHEEL,
         ..MOUSEINPUT::default()
-    })
+    }))
+}
+
+/// The error for a wheel turn too far for one event.
+fn too_far(notches: i32) -> InputError {
+    InputError::Write(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("Windows turns the wheel at most {MOST_NOTCHES} notches at once, not {notches}"),
+    ))
 }
 
 /// `mouse` as an input event, with the marker.

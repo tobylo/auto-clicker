@@ -51,7 +51,7 @@ fn every_event_carries_the_marker() {
     let others = [
         mouse_event(moved(1, 2)),
         absolute_event(AbsolutePosition { x: 1, y: 2 }),
-        scroll_event(1),
+        scroll_event(1).unwrap(),
     ];
     let mice: Vec<INPUT> = buttons.chain(others).collect();
     assert!(
@@ -120,23 +120,35 @@ fn a_key_windows_lacks_fails_to_press_and_its_release_sends_nothing() {
 }
 
 #[test]
-fn the_wheel_turns_120_a_notch_up_positive_and_keeps_its_direction() {
-    let turn = |notches| mouse(&scroll_event(notches));
-    assert_eq!(turn(1).dwFlags, MOUSEEVENTF_WHEEL);
+fn the_wheel_turns_120_a_notch_up_positive_and_never_wraps() {
+    let turn = |notches| scroll_event(notches).map(|event| mouse(&event));
+    assert_eq!(turn(1).unwrap().dwFlags, MOUSEEVENTF_WHEEL);
     // Windows reads the amount as a signed 16-bit number.
-    let delivered = |notches| i16::try_from(turn(notches).mouseData.cast_signed()).unwrap();
+    let delivered =
+        |notches| turn(notches).map(|event| i16::try_from(event.mouseData.cast_signed()).unwrap());
     let cases = [
-        (1, 120),
-        (-3, -360),
-        (273, 32_760),
-        (274, 32_760),
-        (-274, -32_760),
-        (i32::MAX, 32_760),
-        (i32::MIN, -32_760),
+        (1, Some(120)),
+        (-3, Some(-360)),
+        (273, Some(32_760)),
+        (-273, Some(-32_760)),
+        (274, None),
+        (-274, None),
+        (i32::MAX, None),
+        (i32::MIN, None),
     ];
     for (notches, amount) in cases {
         assert_eq!(delivered(notches), amount, "{notches}");
     }
+}
+
+#[test]
+fn a_wheel_turn_too_far_for_one_event_fails_naming_it() {
+    let mut output = Output { _private: () };
+    let refused = output.scroll(274);
+    assert!(
+        matches!(&refused, Err(InputError::Write(err)) if err.kind() == io::ErrorKind::InvalidInput && err.to_string().contains("274")),
+        "{refused:?}"
+    );
 }
 
 #[test]
