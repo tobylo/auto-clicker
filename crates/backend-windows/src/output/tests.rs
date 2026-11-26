@@ -120,13 +120,23 @@ fn a_key_windows_lacks_fails_to_press_and_its_release_sends_nothing() {
 }
 
 #[test]
-fn the_wheel_turns_120_a_notch_up_positive_and_saturates() {
+fn the_wheel_turns_120_a_notch_up_positive_and_keeps_its_direction() {
     let turn = |notches| mouse(&scroll_event(notches));
     assert_eq!(turn(1).dwFlags, MOUSEEVENTF_WHEEL);
-    assert_eq!(turn(1).mouseData.cast_signed(), 120);
-    assert_eq!(turn(-3).mouseData.cast_signed(), -360);
-    assert_eq!(turn(i32::MAX).mouseData.cast_signed(), i32::MAX);
-    assert_eq!(turn(i32::MIN).mouseData.cast_signed(), i32::MIN);
+    // Windows reads the amount as a signed 16-bit number.
+    let delivered = |notches| i16::try_from(turn(notches).mouseData.cast_signed()).unwrap();
+    let cases = [
+        (1, 120),
+        (-3, -360),
+        (273, 32_760),
+        (274, 32_760),
+        (-274, -32_760),
+        (i32::MAX, 32_760),
+        (i32::MIN, -32_760),
+    ];
+    for (notches, amount) in cases {
+        assert_eq!(delivered(notches), amount, "{notches}");
+    }
 }
 
 #[test]

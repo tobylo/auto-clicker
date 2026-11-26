@@ -199,9 +199,14 @@ fn absolute_event(position: AbsolutePosition) -> INPUT {
 /// One wheel notch in `mouseData` (Windows' `WHEEL_DELTA`).
 const NOTCH: i32 = 120;
 
-/// The wheel turned by `notches`, positive up as on Linux.
+/// The most notches one event carries: Windows hands a wheel turn on as a
+/// signed 16-bit amount, so more would wrap round to the other direction.
+const MOST_NOTCHES: i32 = i16::MAX as i32 / NOTCH;
+
+/// The wheel turned by `notches`, positive up as on Linux, at most
+/// [`MOST_NOTCHES`] either way.
 fn scroll_event(notches: i32) -> INPUT {
-    let amount = notches.saturating_mul(NOTCH);
+    let amount = notches.clamp(-MOST_NOTCHES, MOST_NOTCHES) * NOTCH;
     // `mouseData` carries the signed amount in its bits.
     mouse_event(MOUSEINPUT {
         mouseData: amount.cast_unsigned(),
