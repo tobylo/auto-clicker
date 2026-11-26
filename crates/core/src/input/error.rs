@@ -36,7 +36,8 @@ pub enum InputError {
     /// why. Whatever was held is released by the compositor.
     SessionLost(String),
     /// The run's timer could not be started, so the run did not begin and
-    /// pressed nothing.
+    /// pressed nothing; or it stopped working part way, which ends the run
+    /// and releases what it held.
     Timer(io::Error),
 }
 
