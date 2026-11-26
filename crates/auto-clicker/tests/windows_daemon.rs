@@ -63,11 +63,13 @@ impl Home {
         let mut daemon = Daemon {
             watchdog,
             pid: None,
+            held: None,
         };
         let id = daemon.watchdog.id();
-        daemon.pid = Some(wait_for("the watchdog's daemon", || {
-            children(id).first().copied()
-        }));
+        let pid = wait_for("the watchdog's daemon", || children(id).first().copied());
+        // Held while the watchdog still holds it, so the id is the daemon's.
+        daemon.held = Some(desktop::Held::open(desktop::Process(pid)).unwrap());
+        daemon.pid = Some(pid);
         daemon
     }
 
@@ -136,6 +138,9 @@ struct Daemon {
     watchdog: Child,
     /// The daemon's process id, once found.
     pid: Option<u32>,
+    /// The daemon's process, held from when it was found: ended through
+    /// this handle, never by an id another process may have by then.
+    held: Option<desktop::Held>,
 }
 
 impl Daemon {
@@ -150,19 +155,15 @@ impl Daemon {
 }
 
 impl Drop for Daemon {
-    /// The daemon first: its watchdog then releases what it held and ends
-    /// on its own. A watchdog killed first would leave the daemon's
-    /// message box in front of the next test.
+    /// The daemon first, through its handle: its watchdog then releases
+    /// what it held and ends on its own. A watchdog killed first would
+    /// leave the daemon's message box in front of the next test. A daemon
+    /// not found yet goes with its watchdog's tree.
     fn drop(&mut self) {
-        // Only while the watchdog runs: it holds the daemon's process, so
-        // the id is still the daemon's and not another process's.
-        // A daemon not found yet goes with its watchdog's tree.
-        if let Ok(None) = self.watchdog.try_wait() {
-            let _ = match self.pid {
-                Some(pid) => kill(pid, false),
-                None => kill(self.watchdog.id(), true),
-            };
+        if self.held.is_none() && matches!(self.watchdog.try_wait(), Ok(None)) {
+            let _ = kill(self.watchdog.id(), true);
         }
+        drop(self.held.take());
         let deadline = Instant::now() + END;
         while matches!(self.watchdog.try_wait(), Ok(None)) && Instant::now() < deadline {
             sleep(Duration::from_millis(20));
@@ -186,16 +187,6 @@ fn kill(pid: u32, tree: bool) -> ExitStatus {
         .stderr(Stdio::null())
         .status()
         .unwrap()
-}
-
-/// A process the test did not start itself, ended when dropped; forgotten
-/// once it ended on its own.
-struct Ended(u32);
-
-impl Drop for Ended {
-    fn drop(&mut self) {
-        let _ = kill(self.0, false);
-    }
 }
 
 /// The processes `pid` started that still run.
@@ -760,9 +751,9 @@ fn a_bare_start_launches_the_watchdog_and_exits() {
     });
     // Ended however the test ends: a daemon left running would hold the
     // session's single instance.
-    let watchdog_guard = Ended(watchdog);
+    let _watchdog_guard = desktop::Held::open(desktop::Process(watchdog)).unwrap();
     let pid = wait_for("its daemon", || children(watchdog).first().copied());
-    let daemon_guard = Ended(pid);
+    let _daemon_guard = desktop::Held::open(desktop::Process(pid)).unwrap();
     wait_for("the daemon running", || {
         home.log().contains(": running").then_some(())
     });
@@ -781,9 +772,24 @@ fn a_bare_start_launches_the_watchdog_and_exits() {
         );
         sleep(Duration::from_millis(50));
     }
-    // Both ended: their ids may be another process's by now.
-    std::mem::forget(daemon_guard);
-    std::mem::forget(watchdog_guard);
+}
+
+#[test]
+#[ignore = "must run elevated, in the desktop: the WN01 VM through `vm run --elevated`"]
+fn an_elevated_watchdog_refuses_before_it_writes_or_starts_anything() {
+    assert_eq!(
+        auto_clicker_backend_windows::is_elevated().ok(),
+        Some(true),
+        "run this test elevated"
+    );
+    let home = Home::new("elevated");
+    let mut watchdog = home.command(WATCHDOG).spawn().unwrap();
+    let pid = watchdog.id();
+    close_message_box(pid, || watchdog.try_wait().unwrap().is_none());
+    assert_eq!(ended(&mut watchdog, END).code(), Some(4));
+    assert!(children(pid).is_empty());
+    // No log of its own, and no daemon's.
+    assert!(!home.log_path().parent().unwrap().exists());
 }
 
 #[test]

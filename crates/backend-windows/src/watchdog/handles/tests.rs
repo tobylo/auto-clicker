@@ -2,6 +2,7 @@ use std::os::windows::io::AsRawHandle;
 
 use auto_clicker_core::input::{Held, Key};
 use windows_sys::Win32::Foundation::GetHandleInformation;
+use windows_sys::Win32::System::Threading::TerminateProcess;
 
 use super::*;
 
@@ -52,6 +53,11 @@ fn flags(handle: usize) -> Option<u32> {
 
 #[test]
 fn a_child_inherits_the_table_and_the_watchdog_and_nothing_else() {
+    // A child that lost its test name runs every test, this one included:
+    // it starts no child of its own.
+    if argument("table").is_some() {
+        return;
+    }
     let section = Section::create().unwrap();
     section.table().mark(key(17));
     // Inheritable, but not in the list: the child must not have it. A
@@ -74,10 +80,27 @@ fn a_child_inherits_the_table_and_the_watchdog_and_nothing_else() {
         .to_vec()
     })
     .unwrap();
-    assert_eq!(daemon.wait().unwrap(), 0, "the child's checks failed");
+    assert_eq!(exit_code(&daemon), 0, "the child's checks failed");
     // The child marked a key of its own in the table it was given.
     assert!(section.table().owes(key(30)));
     drop(stray);
+}
+
+/// How the child `daemon` ended, waiting a minute at most: past that it is
+/// killed and the test fails.
+#[allow(unsafe_code)]
+fn exit_code(daemon: &Daemon) -> u32 {
+    let process = daemon.process.as_raw_handle();
+    // SAFETY: a live process handle with full access.
+    if unsafe { WaitForSingleObject(process, 60_000) } != WAIT_OBJECT_0 {
+        // SAFETY: as above.
+        unsafe { TerminateProcess(process, 1) };
+        panic!("the child did not end within a minute");
+    }
+    let mut code = 0u32;
+    // SAFETY: as above; `code` is writable.
+    assert_ne!(unsafe { GetExitCodeProcess(process, &mut code) }, 0);
+    code
 }
 
 /// The value of `name=` among the arguments.
@@ -116,6 +139,9 @@ fn handles_that_are_not_what_they_should_be_are_refused_and_left_open() {
     let process = own_process().unwrap();
     let table = section.raw() as usize;
     let watchdog = process.as_raw_handle() as usize;
+    // A real handle that is no process: only the process check refuses it.
+    let second = Section::create().unwrap();
+    let other = second.raw() as usize;
     for (name, handles) in [
         (
             "the same handle twice",
@@ -139,15 +165,22 @@ fn handles_that_are_not_what_they_should_be_are_refused_and_left_open() {
             },
         ),
         (
-            "a section for the watchdog",
+            "no handle for the watchdog",
             Handles {
                 table,
                 watchdog: 0x7ff0,
             },
         ),
+        (
+            "a section for the watchdog",
+            Handles {
+                table,
+                watchdog: other,
+            },
+        ),
     ] {
         assert!(attach(handles).is_err(), "{name}");
     }
-    // Both are still open: a refusal closes nothing.
-    assert!(flags(table).is_some() && flags(watchdog).is_some());
+    // All are still open: a refusal closes nothing.
+    assert!(flags(table).is_some() && flags(watchdog).is_some() && flags(other).is_some());
 }

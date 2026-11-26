@@ -237,12 +237,6 @@ pub struct Attached {
 /// turned off.
 #[allow(unsafe_code)]
 pub fn attach(handles: Handles) -> io::Result<Attached> {
-    if handles.table == handles.watchdog {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "the table and the watchdog are given the same handle",
-        ));
-    }
     let section = handles.table as HANDLE;
     let watchdog = handles.watchdog as HANDLE;
     let table = map(section).map_err(|err| context(err, "the table cannot be mapped"))?;

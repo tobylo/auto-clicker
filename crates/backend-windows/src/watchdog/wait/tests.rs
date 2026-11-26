@@ -53,3 +53,16 @@ fn a_stopped_wait_ends_at_once_and_says_nothing() {
     // The thread is gone, and with it the sender: nothing was told.
     assert_eq!(calls.recv(), Err(mpsc::RecvError));
 }
+
+#[test]
+fn a_wait_that_fails_counts_as_the_watchdogs_end() {
+    // A section cannot be waited on: the wait fails at once.
+    let section = crate::watchdog::Section::create().unwrap();
+    // SAFETY: the section's handle stays open while it is borrowed.
+    #[allow(unsafe_code)]
+    let borrowed = unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(section.raw()) };
+    let handle = borrowed.try_clone_to_owned().unwrap();
+    let (wait, calls) = waiting(handle);
+    calls.recv_timeout(AT_ONCE).unwrap();
+    assert!(wait.stop(AT_ONCE));
+}

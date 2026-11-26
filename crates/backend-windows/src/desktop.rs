@@ -208,6 +208,49 @@ pub fn is_down(key: VIRTUAL_KEY) -> bool {
     state.cast_unsigned() & 0x8000 != 0
 }
 
+/// A process held by its handle, so its id cannot pass to another process
+/// while it is held; ended when dropped, unless it already ended.
+pub struct Held(std::os::windows::io::OwnedHandle);
+
+impl Held {
+    /// Holds process `pid`, with the right to end it and wait on it.
+    ///
+    /// # Errors
+    /// No such process, or it cannot be opened.
+    #[allow(unsafe_code)]
+    pub fn open(Process(pid): Process) -> io::Result<Held> {
+        use std::os::windows::io::FromRawHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        };
+        let access = PROCESS_TERMINATE | PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION;
+        // SAFETY: plain call; the handle, if any, is owned below.
+        let process = unsafe { OpenProcess(access, 0, pid) };
+        if process.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: a new handle that nothing else owns.
+        Ok(Held(unsafe {
+            std::os::windows::io::OwnedHandle::from_raw_handle(process)
+        }))
+    }
+}
+
+impl Drop for Held {
+    /// Ends the process at once, as Task Manager's "End task" does, and
+    /// waits up to five seconds for it to be gone.
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Threading::{TerminateProcess, WaitForSingleObject};
+        // SAFETY: a live process handle with the right to end it; one that
+        // already ended refuses, harmlessly.
+        unsafe { TerminateProcess(self.0.as_raw_handle(), 1) };
+        // SAFETY: as above, with the right to wait on it.
+        unsafe { WaitForSingleObject(self.0.as_raw_handle(), 5_000) };
+    }
+}
+
 /// Whether process `pid` is per-monitor DPI aware (version 2); `None` when
 /// it cannot be asked.
 #[allow(unsafe_code)]

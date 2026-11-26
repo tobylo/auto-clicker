@@ -117,3 +117,16 @@ fn open_log() {
     };
     let _ = log::to_file(&path);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_watchdog_ends_with_the_daemons_whole_code_or_1_when_it_lost_it() {
+        assert_eq!(log_end(7, Ok(0)), 0);
+        // A crash's status, past a byte.
+        assert_eq!(log_end(7, Ok(0xC000_0005)), 0xC000_0005);
+        assert_eq!(log_end(7, Err(io::Error::other("gone"))), 1);
+    }
+}
