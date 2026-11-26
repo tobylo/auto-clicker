@@ -1151,11 +1151,11 @@ fn kill_quietly(pid: u32, tree: bool) {
         .status();
 }
 
-/// Whether process `pid` still runs, for cleanup: not when it cannot be
-/// asked.
+/// Whether process `pid` still runs, for cleanup: taken as running when it
+/// cannot be asked, so a watchdog keeps its time to release.
 fn alive_quietly(pid: u32) -> bool {
     let script = format!("[bool](Get-Process -Id {pid} -ErrorAction SilentlyContinue)");
-    desktop::powershell(&script, Duration::from_secs(60)).is_ok_and(|out| out.trim() == "True")
+    desktop::powershell(&script, Duration::from_secs(60)).map_or(true, |out| out.trim() == "True")
 }
 
 impl Unelevated {
