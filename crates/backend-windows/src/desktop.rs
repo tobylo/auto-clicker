@@ -458,9 +458,15 @@ mod tests {
             let name = format!("{}.{}.{}.left", parts[0], parts[1], at + by);
             first.path.with_file_name(name)
         };
-        // What a run that crashed left at the next two names.
+        // What a run that crashed left at the next two names; made new, so
+        // nothing that was there is touched.
         for by in [1, 2] {
-            std::fs::write(next(by), "kept").unwrap();
+            let mut left = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(next(by))
+                .unwrap();
+            std::io::Write::write_all(&mut left, b"kept").unwrap();
         }
         let made = Output::new("left").unwrap();
         assert!(made.read().unwrap().is_empty());
