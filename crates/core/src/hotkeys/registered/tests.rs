@@ -539,3 +539,21 @@ fn letting_go_of_a_key_leaves_an_alias_whose_own_state_is_down() {
     // Y, still held since before, repeats: no press.
     assert_eq!(hotkeys.key(Y, true, &mut keyboard), []);
 }
+
+#[test]
+fn the_programs_release_lets_go_of_its_seeded_aliases_too() {
+    const ENTER: u16 = 28;
+    const KEYPAD_ENTER: u16 = 96;
+    let enter = Binding::parse("Ctrl+Shift+Enter").unwrap();
+    let both = |binding: Binding| vec![binding.key(), Key::new(KEYPAD_ENTER).unwrap()];
+    let mut hotkeys = Registered::new(vec![(CLICKING, enter)], both);
+    // The program's keypad Enter, which the key state shows as both.
+    let mut keyboard = holding(&[ENTER, KEYPAD_ENTER]);
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    keyboard.down.clear();
+    hotkeys.own_release(KEYPAD_ENTER, &mut keyboard);
+    assert_eq!(
+        press(&mut hotkeys, &mut keyboard, ENTER),
+        [Fired(CLICKING), ModifiersReleased]
+    );
+}

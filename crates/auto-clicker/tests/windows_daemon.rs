@@ -1108,6 +1108,9 @@ struct Unelevated {
     /// ran before the task: any other is the task's, should finding it fail.
     listed: String,
     before: Vec<u32>,
+    /// Handles on both, once found and checked: while they are held, the
+    /// ids name these processes and no other.
+    held: Vec<desktop::Held>,
 }
 
 /// The watchdogs running from `path`.
@@ -1155,6 +1158,7 @@ impl Unelevated {
             daemon: None,
             listed: listed.clone(),
             before: before.clone(),
+            held: Vec::new(),
         };
         powershell(&format!(
             "schtasks /create /tn '{task}' /tr '\"{script}\"' /sc once /st 23:59 /rl limited /it /f | Out-Null; schtasks /run /tn '{task}' | Out-Null"
@@ -1164,8 +1168,18 @@ impl Unelevated {
             new.retain(|pid| !before.contains(pid));
             new.first().copied()
         });
+        let held = desktop::Held::open_checked(desktop::Process(watchdog), || {
+            watchdogs_of(&listed).contains(&watchdog)
+        })
+        .unwrap();
+        started.held.push(held);
         started.watchdog = Some(watchdog);
         let daemon = wait_for("its daemon", || children(watchdog, DAEMON).first().copied());
+        let held = desktop::Held::open_checked(desktop::Process(daemon), || {
+            children(watchdog, DAEMON).contains(&daemon)
+        })
+        .unwrap();
+        started.held.push(held);
         started.daemon = Some(daemon);
         (started, desktop::Process(daemon))
     }
@@ -1173,7 +1187,8 @@ impl Unelevated {
 
 impl Drop for Unelevated {
     /// Ends the daemon first, so its watchdog releases whatever it held,
-    /// then the watchdog should it still run.
+    /// then the watchdog should it still run. The handles, dropped last,
+    /// end whatever is left.
     fn drop(&mut self) {
         if let Some(daemon) = self.daemon {
             let _ = kill(daemon, false);

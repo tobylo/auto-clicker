@@ -312,7 +312,7 @@ fn releases_queued_before_a_hotkey_go_first_however_many() {
     reads(1);
     // In one go: the modifiers down, a burst of other input, the modifiers
     // up, then down again with F22, and kept down.
-    let _up = LetGo(&MODIFIERS);
+    let _up = LetGo(&[MODIFIERS[0], MODIFIERS[1], MODIFIERS[2], FILLER, F22]);
     let mut tap: Vec<(u16, bool)> = MODIFIERS.iter().map(|&scan| (scan, true)).collect();
     for _ in 0..300 {
         tap.extend([(FILLER, true), (FILLER, false)]);

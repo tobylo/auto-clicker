@@ -194,6 +194,7 @@ impl Registered {
         if self.reading && self.seeded.contains(&code) {
             self.seeded.retain(|&seeded| seeded != code);
             self.held.retain(|&held| held != code);
+            self.forget_seeded_aliases(code, keyboard);
             self.settle(keyboard, &mut events);
         }
         events
@@ -286,7 +287,7 @@ impl Registered {
             || self.hotkeys.iter().any(|taken| taken.keys.contains(&code))
     }
 
-    /// The user let go of `code`. A key the system takes for the same one
+    /// `code` came up. A key the system takes for the same one
     /// may share its key state (keypad Enter is Enter's): a seed of one that
     /// no raw event confirmed, and that the key state now says is up, was
     /// this key. One whose own state is still down (Z beside Y on another
