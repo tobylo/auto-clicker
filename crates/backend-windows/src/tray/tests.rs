@@ -113,3 +113,11 @@ pub fn content(title: &str) -> TrayContent {
         ],
     }
 }
+
+#[test]
+fn without_explorers_restart_notice_a_refused_icon_stays_on_the_ladder() {
+    assert!(on_ladder(true, || true));
+    assert!(!on_ladder(true, || false));
+    // Waiting for a notice that cannot be heard would wait for ever.
+    assert!(on_ladder(false, || false));
+}

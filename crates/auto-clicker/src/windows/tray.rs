@@ -92,7 +92,9 @@ pub async fn follow(
     commands: Commands,
 ) {
     loop {
-        let shown = content(&views.borrow_and_update(), language, icon_side(), &commands);
+        // Drawn from a copy: the controller's next view waits on no drawing.
+        let view = views.borrow_and_update().clone();
+        let shown = content(&view, language, icon_side(), &commands);
         if let Err(err) = remote.show_tray(shown) {
             if err.kind() == std::io::ErrorKind::NotConnected {
                 return;

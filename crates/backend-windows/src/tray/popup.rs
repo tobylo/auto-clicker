@@ -1,13 +1,16 @@
 //! The popup that shows every line while the pointer rests on the icon:
 //! the taskbar's own tooltip keeps 127 characters, and the tray has more to
 //! say. A window of the message thread's own, made the first time it shows,
-//! never active and never taking a click, in the tooltip's colours and the
-//! status bar's font. Its text is also its window text, which screen
+//! never active and never taking a click (layered and transparent, so a
+//! click reaches whatever window is below, another program's included), in
+//! the tooltip's colours and the status bar's font. Its text is also its window text, which screen
 //! readers and the device tests read.
 //!
 //! It shows beside the pointer resting on the icon, and hides when the
 //! pointer leaves, when the menu opens, when Explorer restarts or refuses
-//! the icon (no leave would follow) and when the window goes.
+//! the icon (no leave would follow) and when the window goes. It stays on
+//! the screen: one taller than the work area shows from the top and loses
+//! its last lines, which the log also holds.
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -17,18 +20,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_INFOBK, COLOR_INFOTEXT, CreateFontIndirectW, DEFAULT_GUI_FONT, DT_CALCRECT,
-    DT_NOPREFIX, DT_WORDBREAK, DeleteObject, DrawTextW, EndPaint, FW_BOLD, FillRect, GetDC,
-    GetMonitorInfoW, GetStockObject, GetSysColor, GetSysColorBrush, HDC, HFONT, HGDIOBJ,
-    InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, PAINTSTRUCT,
+    DT_EDITCONTROL, DT_NOPREFIX, DT_WORDBREAK, DeleteObject, DrawTextW, EndPaint, FW_BOLD,
+    FillRect, GetDC, GetMonitorInfoW, GetStockObject, GetSysColor, GetSysColorBrush, HDC, HFONT,
+    HGDIOBJ, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, PAINTSTRUCT,
     ReleaseDC, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CS_DROPSHADOW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HWND_TOPMOST,
-    NONCLIENTMETRICSW, RegisterClassW, SPI_GETNONCLIENTMETRICS, SW_HIDE, SWP_NOACTIVATE,
-    SWP_SHOWWINDOW, SetWindowPos, SetWindowTextW, ShowWindow, SystemParametersInfoW,
-    UnregisterClassW, WM_NCHITTEST, WM_PAINT, WNDCLASSW, WS_BORDER, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    LWA_ALPHA, NONCLIENTMETRICSW, RegisterClassW, SPI_GETNONCLIENTMETRICS, SW_HIDE, SWP_NOACTIVATE,
+    SWP_SHOWWINDOW, SetLayeredWindowAttributes, SetWindowPos, SetWindowTextW, ShowWindow,
+    SystemParametersInfoW, UnregisterClassW, WINDOW_EX_STYLE, WM_PAINT, WNDCLASSW, WS_BORDER,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use super::{icon_side, text};
@@ -39,8 +42,15 @@ const WIDTH: i32 = 420;
 /// The space around the text, and between the popup and the icon.
 const PADDING: i32 = 6;
 const GAP: i32 = 8;
-/// `HTTRANSPARENT`: a click passes through to the window below.
-const TRANSPARENT_HIT: LRESULT = -1;
+/// Never in front of the user's work, never active, never on the taskbar,
+/// and never hit: layered and transparent, a click goes to the window
+/// below whichever thread owns it (`HTTRANSPARENT` passes it only to the
+/// same thread's windows).
+const EX_STYLE: WINDOW_EX_STYLE =
+    WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT;
+/// How the text is laid out: wrapped at words, a word longer than a line
+/// broken, and `&` shown as written.
+const TEXT: u32 = DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX;
 
 /// Names each thread's popup class apart, so tests can run several.
 static CLASSES: AtomicU64 = AtomicU64::new(0);
@@ -114,7 +124,8 @@ pub(super) fn destroy() {
     }
 }
 
-/// Makes the popup, hidden; whether it exists.
+/// Makes the popup, hidden; whether it exists. A popup that cannot be made
+/// leaves nothing behind, and the next hover tries again.
 #[allow(unsafe_code)]
 fn create(owner: HWND) -> bool {
     let n = CLASSES.fetch_add(1, Ordering::Relaxed);
@@ -140,7 +151,7 @@ fn create(owner: HWND) -> bool {
     // window, so the popup goes with it and never shows on the taskbar.
     let popup = unsafe {
         CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+            EX_STYLE,
             class.as_ptr(),
             null(),
             WS_POPUP | WS_BORDER,
@@ -154,10 +165,17 @@ fn create(owner: HWND) -> bool {
             null(),
         )
     };
+    if popup.is_null() {
+        // SAFETY: the class registered above, with no window.
+        unsafe { UnregisterClassW(class.as_ptr(), instance) };
+        return false;
+    }
+    // SAFETY: `popup` is the layered window made above; fully opaque.
+    unsafe { SetLayeredWindowAttributes(popup, 0, u8::MAX, LWA_ALPHA) };
     CLASS.set(Some(class));
     POPUP.set(popup);
     FONTS.set(Some(fonts()));
-    !popup.is_null()
+    true
 }
 
 /// The status bar's font, and a bold one for the title; the stock font
@@ -274,13 +292,7 @@ fn text_rect(dc: HDC, font: Option<HFONT>, text: &str, top: i32) -> RECT {
     // `text` is NUL-terminated (length -1) and alive for the call.
     unsafe {
         let old = font.map(|font| SelectObject(dc, font as HGDIOBJ));
-        DrawTextW(
-            dc,
-            text.as_ptr(),
-            -1,
-            &mut rect,
-            DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX,
-        );
+        DrawTextW(dc, text.as_ptr(), -1, &mut rect, DT_CALCRECT | TEXT);
         if let Some(old) = old {
             SelectObject(dc, old);
         }
@@ -328,21 +340,22 @@ fn work_area() -> RECT {
 }
 
 /// Where a popup `width` by `height` goes beside `icon`: centred on it,
-/// above it when it fits there, else below, and inside `work`.
+/// above it when it fits there, else below, and inside `work`, its top
+/// edge first when it is taller.
 fn position(width: i32, height: i32, icon: RECT, work: RECT) -> (i32, i32) {
     let centre = icon.left + (icon.right - icon.left) / 2;
     let above = icon.top - GAP - height;
     let y = if above >= work.top {
         above
     } else {
-        (icon.bottom + GAP).min(work.bottom - height)
+        (icon.bottom + GAP).min(work.bottom - height).max(work.top)
     };
     let x = (centre - width / 2).min(work.right - width).max(work.left);
     (x, y)
 }
 
-/// The popup's window procedure: it paints, lets clicks through, and leaves
-/// the rest to Windows. A panic is not let out of it.
+/// The popup's window procedure: it paints, and leaves the rest to
+/// Windows. A panic is not let out of it.
 #[allow(unsafe_code)]
 unsafe extern "system" fn popup_procedure(
     hwnd: HWND,
@@ -355,7 +368,6 @@ unsafe extern "system" fn popup_procedure(
             paint(hwnd);
             Some(0)
         }
-        WM_NCHITTEST => Some(TRANSPARENT_HIT),
         _ => None,
     }));
     match answered {
@@ -395,7 +407,7 @@ fn draw(dc: HDC, font: Option<HFONT>, text: &str, mut rect: RECT) {
     // SAFETY: as in `text_rect`, drawing instead of measuring.
     unsafe {
         let old = font.map(|font| SelectObject(dc, font as HGDIOBJ));
-        DrawTextW(dc, text.as_ptr(), -1, &mut rect, DT_WORDBREAK | DT_NOPREFIX);
+        DrawTextW(dc, text.as_ptr(), -1, &mut rect, TEXT);
         if let Some(old) = old {
             SelectObject(dc, old);
         }
@@ -427,5 +439,7 @@ mod tests {
         let top = rect(1700, 0, 1732, 40);
         let work = rect(0, 48, 1920, 1080);
         assert_eq!(position(200, 100, top, work), (1616, 48));
+        // Taller than the work area: from its top, the title first.
+        assert_eq!(position(200, 2000, top, work), (1616, 48));
     }
 }

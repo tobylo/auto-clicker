@@ -174,31 +174,44 @@ fn append_all(menu: HMENU, entries: &[MenuEntry]) -> io::Result<()> {
     entries.iter().try_for_each(|entry| append(menu, entry))
 }
 
+/// Appends `entry` to `menu`; a submenu is remembered once it is attached,
+/// and destroyed when it cannot be.
 #[allow(unsafe_code)]
 fn append(menu: HMENU, entry: &MenuEntry) -> io::Result<()> {
-    let (flags, id, label) = match entry {
+    match entry {
         MenuEntry::Item {
             label,
             command,
             enabled,
             checked,
-        } => (
-            item_flags(*enabled && command.is_some(), *checked == Some(true)),
-            command.map_or(0, |command| command as usize),
-            Some(label.as_str()),
-        ),
+        } => {
+            let flags = item_flags(*enabled && command.is_some(), *checked == Some(true));
+            let id = command.map_or(0, |command| command as usize);
+            append_line(menu, flags, id, Some(label))
+        }
         MenuEntry::Submenu { label, children } => {
             let submenu = new_popup()?;
-            if let Err(err) = append_all(submenu, children) {
-                // SAFETY: made above and attached to nothing yet.
+            let attached = append_all(submenu, children)
+                .and_then(|()| append_line(menu, MF_POPUP, submenu as usize, Some(label)));
+            if attached.is_err() {
+                // SAFETY: made above and attached to nothing.
                 unsafe { DestroyMenu(submenu) };
-                return Err(err);
+            } else {
+                SUBMENUS.with_borrow_mut(|submenus| submenus.push(submenu));
             }
-            SUBMENUS.with_borrow_mut(|submenus| submenus.push(submenu));
-            (MF_POPUP, submenu as usize, Some(label.as_str()))
+            attached
         }
-        MenuEntry::Separator => (MF_SEPARATOR, 0, None),
-    };
+        MenuEntry::Separator => append_line(menu, MF_SEPARATOR, 0, None),
+    }
+}
+
+#[allow(unsafe_code)]
+fn append_line(
+    menu: HMENU,
+    flags: MENU_ITEM_FLAGS,
+    id: usize,
+    label: Option<&str>,
+) -> io::Result<()> {
     let text = label.map(shown);
     let text = text.as_ref().map_or(null(), |text| text.as_ptr());
     // SAFETY: `menu` is a live menu; `text` is NUL-terminated UTF-16 alive
@@ -249,6 +262,57 @@ mod tests {
     fn labels_show_as_written() {
         assert_eq!(shown("Rock & roll\tmix"), wide("Rock && roll mix"));
         assert_eq!(shown("Start clicking"), wide("Start clicking"));
+    }
+
+    #[test]
+    fn a_submenu_that_cannot_be_attached_is_not_kept() {
+        SUBMENUS.with_borrow_mut(Vec::clear);
+        let play = MenuEntry::Submenu {
+            label: "Play".to_owned(),
+            children: vec![MenuEntry::Separator],
+        };
+        // No menu to attach it to.
+        assert!(append(std::ptr::null_mut(), &play).is_err());
+        assert!(SUBMENUS.with_borrow(Vec::is_empty));
+        let menu = Menu::build(std::slice::from_ref(&play)).unwrap();
+        assert_eq!(SUBMENUS.with_borrow(Vec::len), 1);
+        drop(menu);
+    }
+
+    fn item(label: &str) -> MenuEntry {
+        MenuEntry::Item {
+            label: label.to_owned(),
+            command: Some(1),
+            enabled: true,
+            checked: None,
+        }
+    }
+
+    fn play(children: Vec<MenuEntry>) -> MenuEntry {
+        MenuEntry::Submenu {
+            label: "Play".to_owned(),
+            children,
+        }
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn an_opening_submenu_is_refilled_from_the_latest_entries() {
+        let built = vec![item("Start"), play(vec![item("one")])];
+        let menu = Menu::build(&built).unwrap();
+        let submenu = SUBMENUS.with_borrow(|submenus| submenus[0]);
+        // SAFETY: a live menu of this test's.
+        let count = || unsafe { GetMenuItemCount(submenu) };
+        let latest = vec![item("Start"), play(vec![item("one"), item("two")])];
+        // Another menu's handle is left alone.
+        refill(menu.0 as WPARAM, &latest);
+        assert_eq!(count(), 1);
+        refill(submenu as WPARAM, &latest);
+        assert_eq!(count(), 2);
+        // Emptied when the latest has none.
+        refill(submenu as WPARAM, &[item("Start")]);
+        assert_eq!(count(), 0);
+        drop(menu);
     }
 
     #[test]

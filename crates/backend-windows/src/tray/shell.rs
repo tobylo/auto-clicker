@@ -36,8 +36,10 @@ pub(super) trait Calls {
     /// Sets the version of an icon that is there.
     fn version(&mut self) -> io::Result<()>;
     fn delete(&mut self);
-    /// Whether a taskbar is there to show the icon.
-    fn taskbar_present(&mut self) -> bool;
+    /// Whether a refused icon is tried again on the ladder: a taskbar is
+    /// there to show it, or Explorer's restart notice cannot be heard.
+    /// Otherwise it waits for that notice.
+    fn tries_on_ladder(&mut self) -> bool;
     /// Tells the message thread's handler `event`.
     fn tell(&mut self, event: WindowEvent);
 }
@@ -191,11 +193,9 @@ impl<C: Calls> Icon<C> {
         if let Some(shown) = inbox.show {
             self.shown = Some(shown);
         }
-        // Explorer started: whatever showed went with the old one, so the
-        // icon is added afresh, with the latest picture.
         if inbox.restarted {
             self.tries = 0;
-            return self.add(now);
+            return self.readd(now);
         }
         match self.state {
             State::Absent => self.add(now),
@@ -210,6 +210,26 @@ impl<C: Calls> Icon<C> {
             return;
         };
         match self.calls.add(&shown) {
+            Ok(()) => self.shown_now(),
+            Err(err) => self.failed(err, now),
+        }
+    }
+
+    /// Explorer said it started: whatever showed went with the old one, so
+    /// the icon is added afresh, with the latest picture. The notice can
+    /// also come while the icon is still there, which refuses the add; a
+    /// change then keeps it, and nothing is said.
+    fn readd(&mut self, now: Instant) {
+        let Some(shown) = self.shown.clone() else {
+            return;
+        };
+        let kept = self.calls.add(&shown).or_else(|refused| {
+            self.calls
+                .modify(&shown)
+                .and_then(|()| self.calls.version())
+                .map_err(|_| refused)
+        });
+        match kept {
             Ok(()) => self.shown_now(),
             Err(err) => self.failed(err, now),
         }
@@ -252,7 +272,7 @@ impl<C: Calls> Icon<C> {
     /// The taskbar refused the icon: tried again on the ladder while a
     /// taskbar is there, else once Explorer says it started.
     fn failed(&mut self, err: io::Error, now: Instant) {
-        self.state = if self.calls.taskbar_present() {
+        self.state = if self.calls.tries_on_ladder() {
             let delay = RETRY_DELAYS[self.tries.min(RETRY_DELAYS.len() - 1)];
             self.tries = self.tries.saturating_add(1);
             State::Retrying {

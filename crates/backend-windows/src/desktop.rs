@@ -6,7 +6,7 @@
 use std::io;
 use std::ptr::{null, null_mut};
 
-use windows_sys::Win32::Foundation::{HWND, RECT};
+use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, MOUSEEVENTF_ABSOLUTE,
     MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
@@ -15,9 +15,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::Shell::{NOTIFYICONIDENTIFIER, Shell_NotifyIconGetRect};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, FindWindowW, GetMenuItemCount, GetMenuItemRect,
-    GetMenuState, GetMenuStringW, GetSystemMetrics, GetWindowTextW, HMENU, IsWindowVisible,
-    MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MN_GETHMENU, SM_CXSCREEN,
-    SM_CYSCREEN, SendMessageW,
+    GetMenuState, GetMenuStringW, GetSystemMetrics, GetWindowRect, GetWindowTextW, HMENU,
+    IsWindowVisible, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MN_GETHMENU,
+    SM_CXSCREEN, SM_CYSCREEN, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WindowFromPoint,
 };
 
 use crate::message::wide;
@@ -103,11 +103,30 @@ pub fn tray_icon(process: Process) -> Option<Area> {
 }
 
 /// The text of process `pid`'s tray popup while it shows.
-pub fn popup_text(Process(pid): Process) -> Option<String> {
+pub fn popup_text(process: Process) -> Option<String> {
+    shown_popup(process).map(text)
+}
+
+/// Whether process `pid`'s tray popup, while it shows, is the window a
+/// click on its middle would reach, as this thread sees it.
+#[allow(unsafe_code)]
+pub fn popup_takes_clicks(process: Process) -> Option<bool> {
+    let popup = shown_popup(process)?;
+    let mut rect = RECT::default();
+    // SAFETY: any handle may be asked; `rect` is live.
+    if unsafe { GetWindowRect(popup, &mut rect) } == 0 {
+        return None;
+    }
+    let Point { x, y } = Area::from(rect).centre();
+    // SAFETY: a point alone.
+    let hit = unsafe { WindowFromPoint(POINT { x, y }) };
+    Some(hit == popup)
+}
+
+fn shown_popup(Process(pid): Process) -> Option<HWND> {
     (0..64)
         .filter_map(|n| window(&format!("auto-clicker.tray-popup.{pid}.{n}")))
         .find(|&popup| visible(popup))
-        .map(text)
 }
 
 /// Moves the pointer to `to` as a mouse would, through the steps a mouse
@@ -151,13 +170,17 @@ pub fn press(key: VIRTUAL_KEY) -> io::Result<()> {
     send_key(key, KEYEVENTF_KEYUP)
 }
 
-/// The menu that shows, if one does.
+/// The menu that shows, if one does; none when its thread does not answer
+/// within half a second.
 #[allow(unsafe_code)]
 pub fn shown_menu() -> Option<Menu> {
     let window = window("#32768").filter(|&menu| visible(menu))?;
-    // SAFETY: `window` is a menu window; the message asks for its menu.
-    let menu = unsafe { SendMessageW(window, MN_GETHMENU, 0, 0) } as HMENU;
-    (!menu.is_null()).then_some(Menu(menu))
+    let mut menu = 0;
+    // SAFETY: `window` is a menu window; the message asks for its menu,
+    // written to `menu`, live for the call.
+    let answered =
+        unsafe { SendMessageTimeoutW(window, MN_GETHMENU, 0, 0, SMTO_ABORTIFHUNG, 500, &mut menu) };
+    (answered != 0 && menu != 0).then_some(Menu(menu as HMENU))
 }
 
 /// A line of a menu, as it shows.

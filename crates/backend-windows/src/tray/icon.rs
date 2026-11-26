@@ -188,17 +188,25 @@ mod tests {
     fn pixels_become_bgra_and_a_mask_of_the_clear_ones() {
         let mut rgba = vec![0u8; 17 * 17 * 4];
         rgba[..4].copy_from_slice(&[1, 2, 3, 0xff]);
+        // The second row's tenth pixel is covered too.
+        let second = (17 + 9) * 4;
+        rgba[second..second + 4].copy_from_slice(&[0, 0, 0, 0x80]);
         let (and, xor) = planes(&TrayIcon { side: 17, rgba }).unwrap();
         assert_eq!(&xor[..4], &[3, 2, 1, 0xff]);
         // Rows of 17 bits padded to 32; the first pixel is covered.
         assert_eq!(and.len(), 4 * 17);
         assert_eq!(&and[..4], &[0x7f, 0xff, 0x80, 0]);
-        assert!(
-            planes(&TrayIcon {
-                side: 2,
-                rgba: vec![0; 15]
-            })
-            .is_err()
-        );
+        assert_eq!(&and[4..8], &[0xff, 0xbf, 0x80, 0]);
+        // Not whole pixels, or not a square's worth.
+        for bytes in [15, 12] {
+            assert!(
+                planes(&TrayIcon {
+                    side: 2,
+                    rgba: vec![0; bytes]
+                })
+                .is_err(),
+                "{bytes}"
+            );
+        }
     }
 }

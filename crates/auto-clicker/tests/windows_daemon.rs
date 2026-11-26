@@ -343,7 +343,8 @@ fn promoted_icon(pid: desktop::Process) -> desktop::Area {
     let daemon = std::path::Path::new(DAEMON).canonicalize().unwrap();
     // Windows names the program without the verbatim prefix.
     let daemon = daemon.display().to_string();
-    let daemon = daemon.trim_start_matches(r"\\?\");
+    // Quoted for PowerShell: an apostrophe is doubled.
+    let daemon = daemon.trim_start_matches(r"\\?\").replace('\'', "''");
     let script = format!(
         "$n = 0; Get-ChildItem 'HKCU:\\Control Panel\\NotifyIconSettings' | ForEach-Object {{ \
          $p = Get-ItemProperty $_.PSPath; if ($p.ExecutablePath -eq '{daemon}') {{ \

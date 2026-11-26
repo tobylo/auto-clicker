@@ -51,7 +51,8 @@ pub fn promote(exe: &Path) {
         "$n = 0; Get-ChildItem 'HKCU:\\Control Panel\\NotifyIconSettings' | ForEach-Object {{ \
          $p = Get-ItemProperty $_.PSPath; if ($p.ExecutablePath -eq '{}') {{ \
          Set-ItemProperty $_.PSPath -Name IsPromoted -Value 1 -Type DWord; $n++ }} }}; $n",
-        exe.display()
+        // Quoted for PowerShell: an apostrophe is doubled.
+        exe.display().to_string().replace('\'', "''")
     );
     let promoted = wait_for("entry in the taskbar's settings", || {
         let count: u32 = powershell(&script).trim().parse().unwrap_or(0);
@@ -173,6 +174,8 @@ fn the_popup_shows_every_line_while_the_pointer_rests_on_the_icon() {
     desktop::move_pointer(on_icon).unwrap();
     let text = wait_for("popup", || desktop::popup_text(pid));
     assert_eq!(text, "Auto clicker: idle\nA first line\nRock & roll");
+    // A click on it reaches the window below, from any thread.
+    assert_eq!(desktop::popup_takes_clicks(pid), Some(false));
     // New content shows while it is open.
     let mut counting = content("Auto clicker: starts in 3 s");
     counting.details.push("A third line".to_owned());

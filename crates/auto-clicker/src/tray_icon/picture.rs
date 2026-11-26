@@ -196,6 +196,17 @@ mod tests {
             // The bolt and the line between the buttons, in the tile's
             // darker colour.
             assert_eq!(at(image, 32, 40)[..3], at(image, 31, 14)[..3]);
+            // The line below the buttons, in the same colour.
+            assert_eq!(at(image, 40, 26)[..3], at(image, 31, 14)[..3]);
+            // The mouse's rounded corners: the tile shows in the top one
+            // and beside the bottom one, which the body fills.
+            assert_eq!(at(image, 19, 9), at(image, 8, 9));
+            assert_eq!(at(image, 35, 52), opaque(WHITE));
+            assert_eq!(at(image, 16, 30), at(image, 8, 30));
+        }
+        // Recording's dot covers the bottom corner's side.
+        for image in [&idle, &clicking] {
+            assert_eq!(at(image, 40, 55), at(image, 8, 55));
         }
         // The lit left button.
         assert_eq!(at(&idle, 25, 18), opaque(IDLE.button));
@@ -204,7 +215,10 @@ mod tests {
         assert!(at(&idle, 5, 2)[0] > at(&idle, 5, 60)[0]);
         // Only recording has the dot, red inside a white ring.
         assert_eq!(at(&recording, 50, 50), opaque(RED));
+        assert_eq!(at(&recording, 50, 58), opaque(RED));
         assert_eq!(at(&recording, 61, 50), opaque(WHITE));
+        // Past the ring, the tile.
+        assert_eq!(at(&recording, 50, 36), at(&idle, 50, 36));
         assert_ne!(at(&idle, 50, 50), opaque(RED));
     }
 
@@ -218,6 +232,8 @@ mod tests {
             let middle = i32::from(side) / 2;
             assert_eq!(at(&image, 1, middle)[3], 0xff, "{side} px");
         }
+        // Scaled from the grid: the right button at half size.
+        assert_eq!(at(&draw(Picture::Clicking, 32), 20, 10), opaque(WHITE));
     }
 
     #[test]
@@ -225,5 +241,8 @@ mod tests {
         assert!(inside(Point { x: 32.0, y: 40.0 }, &BOLT));
         assert!(!inside(Point { x: 26.0, y: 32.0 }, &BOLT));
         assert!(!inside(Point { x: 38.0, y: 50.0 }, &BOLT));
+        assert!(inside(Point { x: 32.5, y: 46.0 }, &BOLT));
+        assert!(!inside(Point { x: 37.0, y: 46.0 }, &BOLT));
+        assert!(!inside(Point { x: 30.0, y: 46.0 }, &BOLT));
     }
 }

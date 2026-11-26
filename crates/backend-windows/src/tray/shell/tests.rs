@@ -42,7 +42,7 @@ impl Calls for Fake {
         self.calls.push("delete".to_owned());
     }
 
-    fn taskbar_present(&mut self) -> bool {
+    fn tries_on_ladder(&mut self) -> bool {
         !self.no_taskbar
     }
 
@@ -216,6 +216,40 @@ fn with_no_taskbar_the_icon_waits_for_explorer_and_comes_back_with_it() {
 }
 
 #[test]
+fn a_restart_notice_while_the_icon_is_there_keeps_it_unsaid() {
+    let mut icon = Icon::new(Fake {
+        adds: VecDeque::from([true, false, false]),
+        modifies: VecDeque::from([true, false]),
+        ..Fake::default()
+    });
+    let now = Instant::now();
+    icon.take(shown("idle"), now);
+    seen(&mut icon);
+    // The add is refused, since the icon is there: a change keeps it.
+    icon.take(restarted(), now);
+    assert_eq!(
+        seen(&mut icon),
+        (strings(&["add idle", "modify idle", "version"]), vec![])
+    );
+    assert_eq!(icon.state, State::Shown);
+    // Neither goes through: refused, and tried again on the ladder.
+    icon.take(restarted(), now);
+    assert_eq!(
+        seen(&mut icon),
+        (
+            strings(&["add idle", "modify idle"]),
+            strings(&["unshown: refused"])
+        )
+    );
+    assert_eq!(
+        icon.state,
+        State::Retrying {
+            due: now + RETRY_DELAYS[0]
+        }
+    );
+}
+
+#[test]
 fn an_icon_never_added_or_gone_with_explorer_is_not_removed() {
     let mut never = Icon::new(Fake::default());
     never.remove();
@@ -254,7 +288,7 @@ impl Calls for Counted {
         self.note("delete".to_owned());
     }
 
-    fn taskbar_present(&mut self) -> bool {
+    fn tries_on_ladder(&mut self) -> bool {
         true
     }
 
@@ -283,6 +317,58 @@ fn the_thread_shows_the_latest_and_removes_the_icon_on_its_way_out() {
     assert_eq!(*calls.lock().unwrap(), strings(&["add idle", "delete"]));
 }
 
+/// A taskbar that refuses the first add, then takes the icon.
+struct RefusedOnce(Arc<Mutex<Vec<String>>>);
+
+impl Calls for RefusedOnce {
+    fn add(&mut self, shown: &Shown) -> io::Result<()> {
+        let mut calls = self.0.lock().unwrap();
+        calls.push(format!("add {}", shown.title));
+        if calls.len() == 1 {
+            return Err(io::Error::other("refused"));
+        }
+        Ok(())
+    }
+
+    fn modify(&mut self, shown: &Shown) -> io::Result<()> {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("modify {}", shown.title));
+        Err(io::Error::other("not there"))
+    }
+
+    fn version(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn delete(&mut self) {}
+
+    fn tries_on_ladder(&mut self) -> bool {
+        true
+    }
+
+    fn tell(&mut self, _: WindowEvent) {}
+}
+
+#[test]
+fn the_thread_tries_a_refused_icon_again_when_due_by_itself() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let shell = Shell::spawn(RefusedOnce(Arc::clone(&calls))).unwrap();
+    shell.show(shown("idle").show.unwrap());
+    // The first step of the ladder, and room for a slow runner.
+    let deadline = Instant::now() + RETRY_DELAYS[0] + Duration::from_secs(10);
+    while calls.lock().unwrap().len() < 3 {
+        assert!(Instant::now() < deadline, "{:?}", calls.lock().unwrap());
+        thread::sleep(Duration::from_millis(10));
+    }
+    shell.remove(Duration::from_secs(10));
+    assert_eq!(
+        *calls.lock().unwrap(),
+        strings(&["add idle", "modify idle", "add idle"])
+    );
+}
+
 /// A taskbar that never answers, as a hung Explorer does.
 struct Hung;
 
@@ -302,7 +388,7 @@ impl Calls for Hung {
 
     fn delete(&mut self) {}
 
-    fn taskbar_present(&mut self) -> bool {
+    fn tries_on_ladder(&mut self) -> bool {
         true
     }
 

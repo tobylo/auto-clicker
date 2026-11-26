@@ -117,12 +117,14 @@ thread_local! {
 pub(crate) fn register(hwnd: HWND, remote: Remote) {
     let name = wide("TaskbarCreated");
     // SAFETY: `name` is NUL-terminated UTF-16, alive for the call.
-    TASKBAR_CREATED.set(unsafe { RegisterWindowMessageW(name.as_ptr()) });
+    let taskbar_created = unsafe { RegisterWindowMessageW(name.as_ptr()) };
+    TASKBAR_CREATED.set(taskbar_created);
     let outbox = Outbox::default();
     let calls = Win32 {
         window: Target(hwnd),
         remote,
         outbox: outbox.clone(),
+        hears_restart: taskbar_created != 0,
     };
     match Shell::spawn(calls) {
         Ok(shell) => {
@@ -279,6 +281,9 @@ struct Win32 {
     window: Target,
     remote: Remote,
     outbox: Outbox,
+    /// Whether `TaskbarCreated` was registered, so Explorer's restart is
+    /// heard.
+    hears_restart: bool,
 }
 
 impl Calls for Win32 {
@@ -298,12 +303,8 @@ impl Calls for Win32 {
         icon::delete(self.window.0);
     }
 
-    #[allow(unsafe_code)]
-    fn taskbar_present(&mut self) -> bool {
-        let class = wide("Shell_TrayWnd");
-        // SAFETY: `class` is NUL-terminated UTF-16 alive for the call; no
-        // title. It reads the window list, and waits on no other program.
-        !unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) }.is_null()
+    fn tries_on_ladder(&mut self) -> bool {
+        on_ladder(self.hears_restart, taskbar_present)
     }
 
     fn tell(&mut self, event: WindowEvent) {
@@ -311,6 +312,22 @@ impl Calls for Win32 {
         // A window that is gone has no handler left to tell.
         let _ = self.remote.post(WM_TRAY_NEWS, 0, 0);
     }
+}
+
+/// Whether a refused icon is tried again on the ladder rather than when
+/// Explorer says it started: always when that cannot be heard, else while
+/// a taskbar is there.
+fn on_ladder(hears_restart: bool, taskbar_present: impl FnOnce() -> bool) -> bool {
+    !hears_restart || taskbar_present()
+}
+
+/// Whether a taskbar is there to show the icon.
+#[allow(unsafe_code)]
+fn taskbar_present() -> bool {
+    let class = wide("Shell_TrayWnd");
+    // SAFETY: `class` is NUL-terminated UTF-16 alive for the call; no
+    // title. It reads the window list, and waits on no other program.
+    !unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) }.is_null()
 }
 
 #[cfg(test)]
