@@ -48,8 +48,8 @@ function Get-RunnerTask([string] $Name) {
 # Whether anything of the setup's may be here: its own C:\wn01, a C:\wn01
 # whose owner or rules cannot be read (which may be the setup's), a runner
 # a stopped uninstall could not end, or a runner task. The root is looked
-# at first, as that check cannot fail; a readable C:\wn01 another account
-# made does not count.
+# at first, as Get-RootState answers rather than fails; a readable C:\wn01
+# another account made does not count.
 function Test-SetupPresent {
     if ((Get-RootState) -in 'setup', 'unreadable') { return $true }
     if (@(Get-RunnerProcesses).Count -gt 0) { return $true }
@@ -85,8 +85,8 @@ function Remove-Runners {
 # C:\wn01 as 'absent', 'setup' (the setup's own), 'foreign' (readable, and
 # not the setup's) or 'unreadable' (its owner or rules cannot be read).
 function Get-RootState {
-    if (-not (Test-Path -LiteralPath $Root)) { return 'absent' }
     try {
+        if (-not (Test-Path -LiteralPath $Root -ErrorAction Stop)) { return 'absent' }
         if (Test-SetupRootReadable) { return 'setup' }
         return 'foreign'
     } catch {
