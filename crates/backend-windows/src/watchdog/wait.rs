@@ -48,8 +48,17 @@ pub fn wait_for_watchdog(
     let thread = thread::Builder::new()
         .name("watchdog wait".to_owned())
         .spawn(move || {
-            if wait(&waited.0, &waited.1) {
-                ended();
+            match wait(&waited.0, &waited.1) {
+                Woken::Stopped => {}
+                Woken::Ended => ended(),
+                // Told before the log is written: a log write that stalls
+                // must not keep the controller unwatched.
+                Woken::Failed(err) => {
+                    ended();
+                    log::line(format_args!(
+                        "auto-clicker: the watchdog cannot be waited on: {err}"
+                    ));
+                }
             }
             let _ = finished.send(());
         })?;
@@ -60,23 +69,26 @@ pub fn wait_for_watchdog(
     })
 }
 
-/// Waits until the watchdog ends (true) or `stop` is set (false). A wait
-/// that fails counts as the watchdog's end.
+/// What ended a wait.
+enum Woken {
+    /// The stop event was set.
+    Stopped,
+    /// The watchdog's process ended.
+    Ended,
+    /// The wait failed, which counts as the watchdog's end.
+    Failed(io::Error),
+}
+
+/// Waits until the watchdog ends or `stop` is set.
 #[allow(unsafe_code)]
-fn wait(stop: &OwnedHandle, watchdog: &OwnedHandle) -> bool {
+fn wait(stop: &OwnedHandle, watchdog: &OwnedHandle) -> Woken {
     let both: [HANDLE; 2] = [stop.as_raw_handle(), watchdog.as_raw_handle()];
     // SAFETY: both handles are open for the call, owned by the caller.
     let woken = unsafe { WaitForMultipleObjects(2, both.as_ptr(), 0, INFINITE) };
     match woken {
-        WAIT_OBJECT_0 => false,
-        woken if woken == WAIT_OBJECT_0 + 1 => true,
-        _ => {
-            log::line(format_args!(
-                "auto-clicker: the watchdog cannot be waited on: {}",
-                io::Error::last_os_error()
-            ));
-            true
-        }
+        WAIT_OBJECT_0 => Woken::Stopped,
+        woken if woken == WAIT_OBJECT_0 + 1 => Woken::Ended,
+        _ => Woken::Failed(io::Error::last_os_error()),
     }
 }
 
