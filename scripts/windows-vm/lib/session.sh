@@ -1,5 +1,6 @@
-# The commands a session uses on a built VM: start, stop, status, ssh, run,
-# screen, key and reset. Sourced by scripts/windows-vm/vm.
+# The commands a session uses on a built VM: start, stop, status, screen, key
+# and reset (ssh, push and run are in lib/remote.sh). Sourced by
+# scripts/windows-vm/vm.
 # shellcheck shell=bash
 
 # Seconds since 1970 at which the running Windows booted, from the VM whose
@@ -7,27 +8,6 @@
 boot_time() {
     vm_ssh 60 "$1" '([DateTimeOffset] (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).ToUnixTimeSeconds()' |
         tr -d '\r'
-}
-
-# Waits up to $2 seconds until both runner tasks in the VM run (each writes
-# its pid to `ready` when it starts). A `ready` from an earlier boot names a
-# pid some other process may have now, so it must be newer than the boot, and
-# the process must be a PowerShell that started before it wrote the file.
-wait_runners() {
-    local dir="$1" deadline=$((SECONDS + $2)) check
-    check='$boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime; foreach ($q in "normal","high") { $f = Get-Item "C:\wn01\queue\$q\ready" -ErrorAction Stop; if ($f.LastWriteTime -lt $boot) { exit 1 }; $p = Get-Process -Id ([int](Get-Content -LiteralPath $f.FullName -ErrorAction Stop)) -ErrorAction Stop; if ($p.ProcessName -ne "powershell" -or $p.StartTime -gt $f.LastWriteTime) { exit 1 } }'
-    until vm_ssh 60 "$dir" "$check" >/dev/null 2>&1; do
-        ((SECONDS < deadline)) || die "the runner tasks did not start within $2 s"
-        sleep 5
-    done
-}
-
-# Hands a command to a runner queue in the desktop and returns its exit code.
-run_job() {
-    local keys="$1" queue="$2" seconds="$3" workdir="$4" command="$5" encoded
-    encoded="$(printf '%s' "$command" | base64 -w0)"
-    vm_ssh $((seconds + 120)) "$keys" \
-        "C:\\wn01\\run-job.ps1 -CommandBase64 $encoded -TimeoutSeconds $seconds -Queue $queue -WorkDir '$workdir'; exit \$LASTEXITCODE"
 }
 
 # Under the lock: puts back a VM an interrupted rebuild left aside first.
@@ -116,55 +96,6 @@ cmd_status() {
     fi
     [[ -f "$RUN_DIR/disk.qcow2" ]] && echo "changes: kept since the last reset (vm reset discards them)"
     return 0
-}
-
-# How long `vm ssh` and `vm push` may take: WN01_SSH_TIMEOUT, default an hour.
-ssh_seconds() {
-    seconds_arg WN01_SSH_TIMEOUT "${WN01_SSH_TIMEOUT:-3600}" 86400
-}
-
-cmd_ssh() {
-    local seconds
-    seconds="$(ssh_seconds)"
-    take_lock 600
-    require_running
-    vm_ssh "$seconds" "$VM_DIR" "$@"
-}
-
-cmd_push() {
-    (($# >= 1 && $# <= 2)) || die "usage: vm push LOCAL_FILE_OR_FOLDER [WINDOWS_FOLDER, default C:\\work]"
-    local seconds
-    seconds="$(ssh_seconds)"
-    take_lock 600
-    require_running
-    vm_push "$seconds" "$VM_DIR" "${2:-C:\\work}" "$1"
-}
-
-# The value after option $1, or a usage error when there is none.
-option_value() {
-    (($# >= 2)) || die "$1 takes a value"
-    printf '%s' "$2"
-}
-
-cmd_run() {
-    local queue=normal seconds=120 workdir='C:\work'
-    while (($#)); do
-        case "$1" in
-            --elevated) queue=high ;;
-            --timeout) seconds="$(option_value "$@")"; shift ;;
-            --workdir) workdir="$(option_value "$@")"; shift ;;
-            --) shift; break ;;
-            *) break ;;
-        esac
-        shift
-    done
-    (($#)) || die "usage: vm run [--elevated] [--timeout SECONDS] [--workdir DIR] -- COMMAND..."
-    seconds="$(seconds_arg --timeout "$seconds" 3600)"
-    # It goes inside PowerShell quotes, which also end at typographic quotes.
-    [[ "$workdir" =~ ^[A-Za-z]:[A-Za-z0-9_.\\-]*$ ]] || die "use a Windows folder without spaces or quotes for --workdir: $workdir"
-    take_lock "$seconds"
-    require_running
-    run_job "$VM_DIR" "$queue" "$seconds" "$workdir" "$*"
 }
 
 cmd_screen() {

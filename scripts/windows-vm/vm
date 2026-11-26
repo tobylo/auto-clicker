@@ -26,6 +26,8 @@ LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
 source "$LIB/common.sh"
 # shellcheck source=lib/machine.sh
 source "$LIB/machine.sh"
+# shellcheck source=lib/remote.sh
+source "$LIB/remote.sh"
 # shellcheck source=lib/build.sh
 source "$LIB/build.sh"
 # shellcheck source=lib/session.sh

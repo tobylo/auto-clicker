@@ -1,17 +1,17 @@
-# Shared settings and helpers for scripts/windows-vm/vm. Sourced, not run.
+# The VM's settings and helpers for scripts/windows-vm/vm. Sourced, not run.
 # shellcheck shell=bash
 
-STATE_DIR="${WN01_STATE_DIR:-$HOME/.local/share/auto-clicker-vm}"
+TOOL_NAME=vm
+MACHINE_NAME="the VM"
+# shellcheck source=base.sh
+source "$(dirname "${BASH_SOURCE[0]}")/base.sh"
+
 # Running processes are recognised by the spelling of their directory, so
-# every session uses the one physical path, with each symbolic link resolved.
+# every session uses the one physical path, which set_state_dir resolves.
 # Paths under it go into QEMU's comma-separated options and the proxy's
-# command line, which GLib splits as a shell would: only characters that mean
-# nothing to either are allowed.
-[[ "$STATE_DIR" == /* ]] && STATE_DIR="$(realpath -m -- "$STATE_DIR")" &&
-    [[ "$STATE_DIR" =~ ^/[A-Za-z0-9._/+-]+$ ]] || {
-    echo "vm: the state directory must be an absolute path whose resolved form has letters, digits and ._/+- only: '$STATE_DIR'" >&2
-    exit 2
-}
+# command line, which GLib splits as a shell would: set_state_dir allows only
+# characters that mean nothing to either.
+set_state_dir "${WN01_STATE_DIR:-$HOME/.local/share/auto-clicker-vm}"
 CACHE_DIR="$STATE_DIR/cache"
 # The current VM: its clean base disk, firmware variables and TPM state, the
 # SSH key and password, and what the build recorded (info.json).
@@ -19,13 +19,14 @@ VM_DIR="$STATE_DIR/vm"
 # A started VM: the overlay on the base disk, copies of the variables and TPM
 # state, sockets and logs. `vm reset` removes it.
 RUN_DIR="$VM_DIR/run"
+# lib/remote.sh's commands reach the VM with its key and known_hosts.
+KEYS_DIR="$VM_DIR"
 SSH_PORT="${WN01_SSH_PORT:-52222}"
 # It goes into QEMU's comma-separated -netdev option: a port and nothing else.
 [[ "$SSH_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && ((SSH_PORT <= 65535)) || {
     echo "vm: WN01_SSH_PORT must be a port number, not '$SSH_PORT'" >&2
     exit 2
 }
-LOCK_FILE="$STATE_DIR/lock"
 
 # Microsoft's Windows 11 Enterprise evaluation, 26H2, en-US, x64 (build
 # 26300.9457), and its SHA-256 as Microsoft publishes it at
@@ -44,36 +45,6 @@ OPENSSH_FILE="OpenSSH-Win64-v10.4.0.0.msi"
 OVMF_CODE=/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd
 OVMF_VARS=/usr/share/edk2/x64/OVMF_VARS.4m.fd
 
-# The script's own stderr, kept as fd 8: an exit trap that runs while a
-# command's stderr is sent elsewhere (`vm_ssh ... 2>/dev/null`) still reports.
-exec 8>&2
-
-log() {
-    printf '%s vm: %s\n' "$(date -u +%H:%M:%S)" "$*" >&8
-}
-
-die() {
-    log "error: $*"
-    exit 1
-}
-
-# Runs a command, killing it after $1 seconds. --foreground keeps it in our
-# process group, so Ctrl-C reaches it; 9>&- keeps it from holding the VM's
-# lock should it outlive us, and 8>&- from holding our stderr open.
-bounded() {
-    local seconds="$1"
-    shift
-    timeout --foreground --kill-after=10 "$seconds" "$@" 8>&- 9>&-
-}
-
-# Checks that $2 is a whole number of seconds from 1 to $3, written in decimal
-# without leading zeros (bash would read 010 as octal), and prints it.
-seconds_arg() {
-    local name="$1" value="$2" max="$3"
-    [[ "$value" =~ ^[1-9][0-9]{0,5}$ ]] && ((value <= max)) || die "$name takes 1 to $max seconds, not '$value'"
-    printf '%s' "$value"
-}
-
 require_tools() {
     local tool missing=()
     for tool in qemu-system-x86_64 qemu-img swtpm socat mformat mcopy ssh ssh-keygen tar \
@@ -85,16 +56,6 @@ require_tools() {
     [[ -x /usr/bin/python3 ]] || missing+=("/usr/bin/python3")
     [[ -w /dev/kvm ]] || missing+=("/dev/kvm access")
     ((${#missing[@]} == 0)) || die "missing: ${missing[*]}"
-}
-
-# Takes the VM's lock for the rest of this process, waiting at most $1
-# seconds: one session at a time builds, starts, stops, resets or runs a job.
-# Daemons started under it close fd 9, or they would hold it after we exit.
-take_lock() {
-    mkdir -p "$STATE_DIR"
-    chmod 700 "$STATE_DIR"
-    exec 9>"$LOCK_FILE"
-    flock -w "$1" 9 || die "another session is using the VM (lock held for over $1 s)"
 }
 
 # Keeps copy-on-write off for the disk images on btrfs, where it fragments them.
