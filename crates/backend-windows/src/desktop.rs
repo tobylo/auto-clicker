@@ -3,8 +3,8 @@
 //! user's hand would. Built for tests alone (the `desktop` feature), so the
 //! daemon's tests drive Windows without `unsafe` of their own.
 
-use std::fs::File;
-use std::io;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use std::ptr::{null, null_mut};
@@ -327,8 +327,12 @@ pub fn powershell(script: &str, within: Duration) -> io::Result<String> {
     stdout.read()
 }
 
-/// A file a child writes its output to, removed when dropped.
-struct Output(PathBuf);
+/// A file a child writes its output to, made afresh (never one that was
+/// there) and removed when dropped.
+struct Output {
+    path: PathBuf,
+    file: File,
+}
 
 impl Output {
     fn new(kind: &str) -> io::Result<Output> {
@@ -336,22 +340,33 @@ impl Output {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let name = format!("auto-clicker-desktop.{}.{n}.{kind}", std::process::id());
         let path = std::env::temp_dir().join(name);
-        File::create(&path)?;
-        Ok(Output(path))
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        Ok(Output { path, file })
     }
 
+    /// The file for the child to write to: the one made here.
     fn file(&self) -> io::Result<File> {
-        File::create(&self.0)
+        self.file.try_clone()
     }
 
+    /// What it holds now: a program the script started may write on, and
+    /// is not waited for.
     fn read(&self) -> io::Result<String> {
-        Ok(String::from_utf8_lossy(&std::fs::read(&self.0)?).into_owned())
+        let length = self.file.metadata()?.len();
+        let mut read = Vec::new();
+        File::open(&self.path)?
+            .take(length)
+            .read_to_end(&mut read)?;
+        Ok(String::from_utf8_lossy(&read).into_owned())
     }
 }
 
 impl Drop for Output {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -421,11 +436,16 @@ mod tests {
         let late = powershell("Start-Sleep -Seconds 60", Duration::from_secs(5)).unwrap_err();
         assert_eq!(late.kind(), io::ErrorKind::TimedOut);
         assert!(asked.elapsed() < Duration::from_secs(30));
-        // A program it started still holds its output: it is done when it
-        // ends.
-        let asked = Instant::now();
-        let started = "Start-Process ping -ArgumentList '-n 60 127.0.0.1' -NoNewWindow";
-        powershell(started, Duration::from_secs(30)).unwrap();
-        assert!(asked.elapsed() < Duration::from_secs(20));
+        // A program it started still writes to its output: it is done when
+        // it ends, with what was there then.
+        for started in [
+            "Start-Process ping -ArgumentList '-n 60 127.0.0.1' -NoNewWindow",
+            "Start-Process powershell -ArgumentList '-Command', 'for ($i = 0; $i -lt 600; $i++) { \"x\" * 4096; Start-Sleep -Milliseconds 50 }' \
+             -NoNewWindow; Start-Sleep -Seconds 1",
+        ] {
+            let asked = Instant::now();
+            powershell(started, Duration::from_secs(30)).unwrap();
+            assert!(asked.elapsed() < Duration::from_secs(20), "{started}");
+        }
     }
 }
