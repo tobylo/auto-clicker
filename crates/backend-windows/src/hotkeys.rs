@@ -420,7 +420,7 @@ fn register(hwnd: HWND, wish: &Wish) -> Active {
     let mut taken = Vec::new();
     let mut refused = Vec::new();
     for (index, (action, binding)) in wish.bindings.actions().into_iter().enumerate() {
-        let id = i32::try_from(index).unwrap_or(i32::MAX).saturating_add(1);
+        let id = hotkey_id(wish.id, index);
         match register_one(hwnd, id, binding) {
             Ok(()) => {
                 ids.push((id, action));
@@ -450,6 +450,19 @@ fn register(hwnd: HWND, wish: &Wish) -> Active {
         watching: Watching::default(),
         registered: Registered::new(taken, |binding| setting_off(binding.key())),
     }
+}
+
+/// The hotkey ids a program may use run from 0 to 0xBFFF.
+const HOTKEY_IDS: u64 = 0xC000;
+
+/// The id of a reader's `index`th hotkey: each reader its own three, so a
+/// `WM_HOTKEY` still queued from a reader that was replaced matches none of
+/// its replacement's (they come round again only after 16,383 readers).
+fn hotkey_id(reader: u64, index: usize) -> i32 {
+    let block = reader % (HOTKEY_IDS / 3 - 1);
+    let index = u64::try_from(index).unwrap_or(0) % 3;
+    // Below 0xC000, so it fits.
+    i32::try_from(block * 3 + index + 1).unwrap_or(1)
 }
 
 /// Keys Windows reports in raw input otherwise than they are sent, which

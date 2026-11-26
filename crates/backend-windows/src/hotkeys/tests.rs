@@ -340,3 +340,19 @@ fn a_hotkey_on_a_key_raw_input_reports_otherwise_is_not_registered_yet() {
     }
     assert_eq!(not_yet(binding("Ctrl+Shift+F6")), None);
 }
+
+#[test]
+fn a_replacement_reader_takes_hotkey_ids_of_its_own() {
+    let first: Vec<i32> = (0..3).map(|index| hotkey_id(7, index)).collect();
+    let next: Vec<i32> = (0..3).map(|index| hotkey_id(8, index)).collect();
+    assert!(
+        first.iter().all(|id| !next.contains(id)),
+        "{first:?} {next:?}"
+    );
+    for reader in [0, 1, u64::MAX] {
+        for index in 0..3 {
+            let id = hotkey_id(reader, index);
+            assert!((1..0xC000).contains(&id), "{reader} {index}: {id}");
+        }
+    }
+}
