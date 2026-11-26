@@ -469,16 +469,18 @@ fn after(wait: Duration) -> Signal {
     Box::pin(async move { sleep(wait).await })
 }
 
-/// Fires once the run has pressed, as `during` records it.
-async fn pressed(during: Presses) {
-    while during.lock().unwrap().is_empty() {
+/// Fires once the run has let go of its first click, as `log` records it:
+/// the run then waits out its interval on the timer.
+async fn released(log: FakeLog) {
+    let up = Call::Button(Button::Left, PressState::Up);
+    while !log.calls().contains(&up) {
         sleep(ms(1)).await;
     }
 }
 
-/// Fires once the run has pressed.
-fn after_the_press(during: &Presses) -> Signal {
-    Box::pin(pressed(Arc::clone(during)))
+/// Fires once the run waits out its interval after the first click.
+fn in_the_interval(log: &FakeLog) -> Signal {
+    Box::pin(released(log.clone()))
 }
 
 /// How a case's run ended.
@@ -499,23 +501,23 @@ struct Ran {
 }
 
 /// Runs `opened` with `settings` until it ends, or, with
-/// `drop_once_pressed`, drops it once it has pressed.
+/// `drop_in_the_interval`, drops it once it waits out its interval.
 fn run_case(
     opened: Opened,
     settings: &ClickerSettings,
     signals: Signals<Signal, Signal>,
-    drop_once_pressed: bool,
+    drop_in_the_interval: bool,
 ) -> Ran {
     let Opened { input, log, during } = opened;
     let start = Instant::now();
     let rng = fastrand::Rng::with_seed(1);
-    let watched = Arc::clone(&during);
+    let watched = log.clone();
     let exit = catch_unwind(AssertUnwindSafe(|| {
         runtime().block_on(async {
             let running = run(input, settings, rng, signals);
             let dropping = async {
-                if drop_once_pressed {
-                    pressed(watched).await;
+                if drop_in_the_interval {
+                    released(watched).await;
                 } else {
                     pending::<()>().await;
                 }
@@ -567,12 +569,12 @@ struct Case {
     opened: Opened,
     settings: ClickerSettings,
     /// Makes the run's signals, given its presses.
-    signals: fn(&Presses) -> Signals<Signal, Signal>,
-    drop_once_pressed: bool,
+    signals: fn(&FakeLog) -> Signals<Signal, Signal>,
+    drop_in_the_interval: bool,
     expect: Expect,
 }
 
-fn quiet(_: &Presses) -> Signals<Signal, Signal> {
+fn quiet(_: &FakeLog) -> Signals<Signal, Signal> {
     signals(never(), never())
 }
 
@@ -587,7 +589,7 @@ fn cases() -> [Case; 6] {
         opened,
         settings,
         signals,
-        drop_once_pressed: false,
+        drop_in_the_interval: false,
         expect,
     };
     [
@@ -602,20 +604,20 @@ fn cases() -> [Case; 6] {
             "stopped",
             open(false),
             slow,
-            |during| signals(after_the_press(during), never()),
+            |log| signals(in_the_interval(log), never()),
             Expect::Ended(Ended::Stopped),
         ),
         case(
             "shut down",
             open(false),
             slow,
-            |during| signals(never(), after_the_press(during)),
+            |log| signals(never(), in_the_interval(log)),
             Expect::Ended(Ended::ShutDown),
         ),
         case("write error", failing, slow, quiet, Expect::WriteError),
         case("panicked", open(true), slow, quiet, Expect::Panicked),
         Case {
-            drop_once_pressed: true,
+            drop_in_the_interval: true,
             ..case("dropped", open(false), slow, quiet, Expect::Dropped)
         },
     ]
@@ -628,8 +630,13 @@ fn every_way_a_run_ends_leaves_no_thread_and_hands_throttling_back() {
     assert_idle("before the runs", display);
     for case in cases() {
         let name = case.name;
-        let signals = (case.signals)(&case.opened.during);
-        let ran = run_case(case.opened, &case.settings, signals, case.drop_once_pressed);
+        let signals = (case.signals)(&case.opened.log);
+        let ran = run_case(
+            case.opened,
+            &case.settings,
+            signals,
+            case.drop_in_the_interval,
+        );
         assert_idle(name, display);
         // Opted out, and the display kept on when that can be told, at
         // every press.
@@ -639,7 +646,8 @@ fn every_way_a_run_ends_leaves_no_thread_and_hands_throttling_back() {
         // Whatever ended it, the last press was released.
         let released = Call::Button(Button::Left, PressState::Up);
         assert_eq!(ran.calls.last(), Some(&released), "{name}");
-        // Stop, shutdown and the drop end the 10 s wait at once.
+        // Stop, shutdown and the drop end the 10 s wait at once: they come
+        // once the first click is let go, as the run waits out its interval.
         assert!(
             ran.took < Duration::from_secs(1),
             "{name}: took {:?}",
