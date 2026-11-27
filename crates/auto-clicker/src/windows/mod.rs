@@ -24,8 +24,8 @@ mod tray;
 
 use std::io;
 use std::process::{Command, ExitCode};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use auto_clicker_backend_windows::watchdog::{
@@ -221,7 +221,9 @@ fn run(attached: Attached) -> (ExitCode, bool) {
     };
     let Attached { table, watchdog } = attached;
     let (config, config_error, file) = load_config();
-    let (mut controller, links) = Controller::new(Windows::new(table), None, config, config_error);
+    let message_thread = Arc::new(OnceLock::new());
+    let platform = Windows::new(table, Arc::clone(&message_thread));
+    let (mut controller, links) = Controller::new(platform, None, config, config_error);
     controller.keep_config_file(file);
     controller.keep_current_file(CurrentFile::of_environment());
     let released = Arc::new(Mark::default());
@@ -237,6 +239,8 @@ fn run(attached: Attached) -> (ExitCode, bool) {
                 );
             }
         };
+    // Before the controller runs, so its reader finds the thread.
+    let _ = message_thread.set(thread.remote());
     // No run starts unwatched: the controller has not run yet.
     let watchdog_ended = Arc::new(AtomicBool::new(false));
     let told = on_watchdog_end(links.send.clone(), Arc::clone(&watchdog_ended));

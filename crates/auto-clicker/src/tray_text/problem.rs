@@ -2,7 +2,7 @@
 //! Quoted text stays as it is.
 
 use auto_clicker_core::controller::{Blocked, NoRecording};
-use auto_clicker_core::hotkeys::{Refusal, Unavailable};
+use auto_clicker_core::hotkeys::{NotRegistered, Refusal, Unavailable, Unregistered};
 use auto_clicker_core::message::{
     ConfigProblem, InputFailure, NoOnScreen, NoPointer, NoPositions, NoScreens, Problem,
 };
@@ -14,6 +14,11 @@ pub(super) fn swedish(problem: &Problem) -> String {
     match problem {
         Problem::Config(problem) => config(problem),
         Problem::Hotkeys(why) => unavailable(why),
+        Problem::HotkeysRefused(refused) => refused
+            .iter()
+            .map(unregistered)
+            .collect::<Vec<_>>()
+            .join("; "),
         Problem::Blocked(why) => format!("Kan inte börja klicka: {}", blocked(why)),
         Problem::Input(why) => format!("Kan inte börja klicka: {}", input(why)),
         Problem::Unlisted(why) => format!("Inspelningarna kan inte listas: {why}"),
@@ -151,6 +156,19 @@ pub(super) fn unavailable(why: &Unavailable) -> String {
              starta om programmet"
         ),
         Unavailable::Desktop(why) => format!("{OFF}: {why}"),
+    }
+}
+
+/// A hotkey Windows refused, and why.
+fn unregistered(refused: &Unregistered) -> String {
+    let hotkey = refused.hotkey;
+    match &refused.why {
+        NotRegistered::Taken => {
+            format!("snabbtangenten {hotkey} fungerar inte: ett annat program använder den")
+        }
+        NotRegistered::Failed(why) => {
+            format!("snabbtangenten {hotkey} fungerar inte: Windows nekade den: {why}")
+        }
     }
 }
 

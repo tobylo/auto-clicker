@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::Action;
+use super::{Action, Binding, Bindings};
 use crate::input::Key;
 use crate::message::Quoted;
 
@@ -64,6 +64,17 @@ impl Trigger {
         Trigger {
             text: Some(shown.trim().to_owned()),
             keys: keys_of(description),
+        }
+    }
+
+    /// The trigger of a binding the program registered itself (Windows'
+    /// `RegisterHotKey`): shown as the binding is, and set off by exactly
+    /// `keys`: its key and every key the system takes for it (Enter and
+    /// keypad Enter are one virtual key on Windows).
+    pub fn bound(binding: Binding, keys: Vec<Key>) -> Trigger {
+        Trigger {
+            text: Some(binding.to_string()),
+            keys: Some(keys),
         }
     }
 
@@ -120,6 +131,17 @@ impl Triggers {
             toggle_clicking: Trigger::UNKNOWN,
             toggle_recording: Trigger::UNKNOWN,
             toggle_playback: Trigger::UNKNOWN,
+        }
+    }
+
+    /// The triggers of bindings the program registered itself, each set
+    /// off by exactly the keys `keys_of` gives for it.
+    pub fn bound(bindings: &Bindings, keys_of: impl Fn(Binding) -> Vec<Key>) -> Triggers {
+        let bound = |binding| Trigger::bound(binding, keys_of(binding));
+        Triggers {
+            toggle_clicking: bound(bindings.toggle_clicking),
+            toggle_recording: bound(bindings.toggle_recording),
+            toggle_playback: bound(bindings.toggle_playback),
         }
     }
 
@@ -319,6 +341,38 @@ mod tests {
             "Ctrl+Alt+Meta+F1, Ctrl+Shift+F10, Ctrl+Shift+F11, Ctrl+Shift+F12, Ctrl+Shift+F13, F9";
         let keys = Trigger::reported(dropped).keys.unwrap();
         assert!(keys.contains(&key("f9")), "{keys:?}");
+    }
+
+    #[test]
+    fn a_bound_trigger_refuses_exactly_its_keys_whatever_the_key() {
+        let space = Binding::parse("Ctrl+Space").unwrap();
+        let bindings = Bindings {
+            toggle_clicking: space,
+            ..Bindings::default()
+        };
+        // Another key the system takes for F7's, as keypad Enter is Enter.
+        let keys_of = |binding: Binding| match binding.key() {
+            f7 if f7 == key("f7") => vec![f7, key("kpenter")],
+            other => vec![other],
+        };
+        let triggers = Triggers::bound(&bindings, keys_of);
+        assert!(triggers.refusal(key("kpenter")).is_some());
+        assert_eq!(
+            triggers.refusal(key("space")),
+            Some(Refusal::HotkeyKey {
+                key: key("space"),
+                trigger: "Ctrl+Space".to_owned().into(),
+            })
+        );
+        assert!(triggers.refusal(key("f7")).is_some());
+        assert!(triggers.refusal(key("f8")).is_some());
+        for name in ["f6", "w", "enter"] {
+            assert_eq!(triggers.refusal(key(name)), None, "{name}");
+        }
+        assert_eq!(
+            triggers.of(Action::ToggleClicking).text(),
+            Some("Ctrl+Space")
+        );
     }
 
     #[test]

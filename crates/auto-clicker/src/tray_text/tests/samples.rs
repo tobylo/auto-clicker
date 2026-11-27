@@ -1,7 +1,7 @@
 //! One value of each kind of message, for the Swedish tests.
 
 use auto_clicker_core::controller::{Blocked, NoRecording};
-use auto_clicker_core::hotkeys::{Binding, Refusal, Unavailable};
+use auto_clicker_core::hotkeys::{Binding, NotRegistered, Refusal, Unavailable, Unregistered};
 use auto_clicker_core::input::Key;
 use auto_clicker_core::message::{
     ConfigProblem, Hindrance, InputFailure, NoOnScreen, NoPointer, NoPositions, NoScreens, Notice,
@@ -93,6 +93,16 @@ pub(super) fn problems() -> Vec<Problem> {
         Problem::Unlisted(quoted()),
         Problem::CurrentUnread(quoted()),
         Problem::CurrentUnkept(quoted()),
+        Problem::HotkeysRefused(vec![
+            Unregistered {
+                hotkey: Binding::parse("Ctrl+Shift+F6").unwrap(),
+                why: NotRegistered::Taken,
+            },
+            Unregistered {
+                hotkey: Binding::parse("Ctrl+Shift+F8").unwrap(),
+                why: NotRegistered::Failed(quoted()),
+            },
+        ]),
     ];
     all.extend(unavailables().into_iter().map(Problem::Hotkeys));
     all.extend(blocked().into_iter().map(Problem::Blocked));
@@ -149,6 +159,7 @@ pub(super) fn hindrances() -> Vec<Hindrance> {
         Hindrance::NoClock,
         Hindrance::Screens(PointScreens::Changed),
         Hindrance::Screens(PointScreens::Unknown),
+        Hindrance::Elevated,
     ];
     all.extend(blocked().into_iter().map(Hindrance::Blocked));
     all.extend(refusals().into_iter().map(Hindrance::OwnKey));

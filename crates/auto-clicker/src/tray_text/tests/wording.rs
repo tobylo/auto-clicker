@@ -2,7 +2,7 @@
 //! lines.
 
 use auto_clicker_core::controller::{Blocked, NoRecording, Routes};
-use auto_clicker_core::hotkeys::{Refusal, Unavailable};
+use auto_clicker_core::hotkeys::{Binding, NotRegistered, Refusal, Unavailable, Unregistered};
 use auto_clicker_core::input::Key;
 use auto_clicker_core::message::{
     ConfigProblem, Hindrance, InputFailure, Notice, PlayStart, PointScreens, Problem, Quoted,
@@ -435,5 +435,33 @@ fn swedish_tooltip_lines_read_as_written() {
     assert_eq!(
         details(&forever, Language::Swedish)[3],
         "Meta+P spelar upp den aktuella inspelningen tills den stoppas, och stoppar den"
+    );
+}
+
+#[test]
+fn windows_hotkey_refusals_name_the_hotkey_and_the_program_in_front() {
+    let elevated = Notice::Refused {
+        start: Start::Clicking,
+        why: Hindrance::Elevated,
+    };
+    assert_eq!(
+        elevated.to_string(),
+        "Not started: Auto Clicker can't click into a program running as administrator"
+    );
+    assert_eq!(
+        notice::swedish(&elevated),
+        "Startade inte: Auto Clicker kan inte klicka i ett program som körs som administratör"
+    );
+    let taken = Problem::HotkeysRefused(vec![Unregistered {
+        hotkey: Binding::parse("Ctrl+Shift+F7").unwrap(),
+        why: NotRegistered::Taken,
+    }]);
+    assert_eq!(
+        taken.to_string(),
+        "hotkey Ctrl+Shift+F7 does not work: another program uses it"
+    );
+    assert_eq!(
+        problem::swedish(&taken),
+        "snabbtangenten Ctrl+Shift+F7 fungerar inte: ett annat program använder den"
     );
 }

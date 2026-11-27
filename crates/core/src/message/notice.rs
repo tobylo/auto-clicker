@@ -103,6 +103,10 @@ pub enum Hindrance {
     Hotkeys(Unavailable),
     /// The fixed point was picked on other screens than these.
     Screens(PointScreens),
+    /// The window in front runs as administrator, or cannot be told not
+    /// to (Windows' delivery check, M5 brief decision 7), and Windows drops
+    /// what the program sends it.
+    Elevated,
 }
 
 /// Why clicking at a picked point cannot go on: the screens it was picked
@@ -148,6 +152,9 @@ impl fmt::Display for Hindrance {
             Hindrance::NoClock => f.write_str("the clock could not be read"),
             Hindrance::Hotkeys(why) => why.fmt(f),
             Hindrance::Screens(why) => why.fmt(f),
+            Hindrance::Elevated => {
+                f.write_str("Auto Clicker can't click into a program running as administrator")
+            }
         }
     }
 }

@@ -3,8 +3,9 @@
 //! uses `unsafe`. It answers whether the process runs elevated, reads the
 //! user's display languages, shows a message, claims the daemon's single
 //! instance and runs the message thread, which hears the session's and the
-//! power notices and shows the tray icon, sends input, and keeps the table
-//! the watchdog releases from should the daemon die; hotkeys and the rest
+//! power notices and shows the tray icon, registers the hotkeys and reads the
+//! keyboard while they need it, sends input, and keeps the table the
+//! watchdog releases from should the daemon die; recording and the rest
 //! arrive with the later M5 slices.
 
 // Windows alone; on other systems the crate is empty.
@@ -15,6 +16,7 @@ mod delivery;
 pub mod desktop;
 mod dpi;
 mod elevation;
+mod hotkeys;
 mod instance;
 mod language;
 mod message;
@@ -26,9 +28,10 @@ mod tray;
 pub mod watchdog;
 mod watched;
 
-pub use delivery::{Context, Delivery};
+pub use delivery::{Context, Delivery, foreground_takes_input};
 pub use dpi::become_per_monitor_aware;
 pub use elevation::is_elevated;
+pub use hotkeys::{HotkeyReading, Sink};
 pub use instance::{ClaimError, Instance, claim};
 pub use language::display_languages;
 pub use message::show_error;

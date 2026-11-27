@@ -33,6 +33,9 @@ impl Said<'_> {
         match problem {
             Problem::Config(problem) => self.config(problem),
             Problem::Hotkeys(why) => self.unavailable(why),
+            // Windows' alone: this window never sees it on Linux, and the
+            // Windows window (WN10) says it in its own words.
+            Problem::HotkeysRefused(_) => s(problem),
             Problem::Blocked(why) => t.invoke_problem_clicking(self.blocked(why)),
             Problem::Input(why) => t.invoke_problem_clicking(self.input(why)),
             Problem::Unlisted(why) => t.invoke_problem_unlisted(s(why)),
