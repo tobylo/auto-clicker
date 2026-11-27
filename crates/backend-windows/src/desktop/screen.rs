@@ -3,7 +3,7 @@
 //! put back as it was however the test ends.
 
 use std::fmt;
-use std::io;
+use std::io::{self, Write as _};
 use std::ptr::null;
 
 use windows_sys::Win32::Foundation::POINT;
@@ -153,7 +153,8 @@ fn put_back(before: &DEVMODEW) -> io::Result<()> {
 impl Drop for DisplayMode {
     fn drop(&mut self) {
         if let Some(Err(err)) = self.before.take().map(|before| put_back(&before)) {
-            eprintln!("{err}");
+            // Never a panic here: a drop may run while one unwinds.
+            let _ = writeln!(io::stderr().lock(), "{err}");
         }
     }
 }
