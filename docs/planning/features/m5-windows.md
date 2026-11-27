@@ -1,6 +1,6 @@
 # M5: Run on Windows 11
 
-- Milestone M5, scope gate G5 (#107). Investigation X03 (#109), slices WN01 (#108), WN02 to WN12 (#110 to #120), WN06b (#132) and WN06c (#135), and the task WN13 (#133); [github-map.json](../github-map.json) maps the codes.
+- Milestone M5, scope gate G5 (#107). Investigation X03 (#109), slices WN01 (#108), WN02 to WN12 (#110 to #120), WN06b (#132), WN06c (#135) and WN14 (#138), and the task WN13 (#133); [github-map.json](../github-map.json) maps the codes.
 - On Windows this brief replaces map D1's tray, D7's paths, file calls and input reader, and D12's layer-shell surfaces; everything else in the map holds on both systems.
 - Maturity: mapped and settled 2026-11-23, before the spike. X03 measured the mechanisms on 2026-11-25 ([decision record 0006](../../decisions/0006-windows.md)); decisions 5, 6 and 9 and invariant N5 changed with the owner that day, and decisions 2, 7 to 10 and 15 gained what the spike measured.
 - Diagram: [what stays, what Windows adds, and a hotkey click with a kill mid-hold](https://prlens.dev/c/IqawE6ShSVjC6_CUfjrqQg).
@@ -71,7 +71,7 @@ About 1,500 added lines each.
 | WN04 | Output backend: SendInput, scan codes, absolute moves, the marker, the run timer (decision 5) | WN03, X03 |
 | WN05 | The daemon on Windows: message thread, single instance, session lock and sleep, shutdown | WN03, X03 |
 | WN06 | The watchdog: the shared table, the handles, both deaths, output for the daemon, decision 7's check, per-monitor DPI awareness | WN04, WN05 |
-| WN06c | 10 ms clicks meet C02's bound on real hardware with decision 7's check in place | WN06 |
+| WN06c | What holds 10 ms clicks up on real hardware, measured with decision 7's check in place; done as an investigation ([0007](../../decisions/0007-click-timing-on-real-hardware.md)), with C02's bound there handed to WN14 | WN06 |
 | WN06b | Releases sent again when Windows blocked them, the watchdog's own included; a new start waits for a previous watchdog | WN06, WN06c |
 | WN07 | The tray on Windows | WN05 |
 | WN08 | Hotkeys on Windows, and never pressing a hotkey's key | WN06, WN07 |
@@ -80,6 +80,7 @@ About 1,500 added lines each.
 | WN11 | The on-screen display on Windows | WN09 |
 | WN12 | Install, upgrade and uninstall script, guide and README for Windows | WN06b, WN10, WN11 |
 | WN13 | The owner's Windows 11 test PC: the VM's desktop runner, autologon and a `pc` command on the dev box, for measurements that need real hardware | WN01 |
+| WN14 | What a mouse button's `SendInput` waits on in its slow spells on real hardware, whether the program can avoid it, and so whether 10 ms clicks meet C02's bound there | WN06c |
 
 The clicker is usable at the cursor after WN08, with the watchdog in place; a release Windows blocked is sent again once WN06b is in; at a fixed point after WN10.
 
@@ -128,7 +129,24 @@ The clicker is usable at the cursor after WN08, with the watchdog in place; a re
   - The watchdog dies: a thread of the daemon's sleeps on the watchdog's process and a stop event and sends the controller Quit directly (a post to the message thread's window could fail on a full queue and leave the daemon unwatched), which stops any run at once and releases. The daemon lets go of its name, says why in the user's language ("sign out and in again, or run auto-clicker.exe") and exits with 6. A daemon whose watchdog died sends no release again (WN06b). Tests: `the_watchdogs_end_is_told_at_once`, `a_stopped_wait_ends_at_once_and_says_nothing`, `the_watchdogs_end_stops_a_hold_at_once_releases_and_quits`, `the_watchdogs_end_stops_a_hold_at_once_and_the_daemon_says_why` (VM: released 2.6 ms after the kill).
   - Per-monitor DPI awareness: `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` is the daemon's first act, before any window, without a manifest; a failure is logged once the log is open. The tray's icon size and the popup's fonts then follow the system DPI, read at start. Tests: `the_daemon_is_per_monitor_dpi_aware`, and at 150 % in the VM `absolute_moves_land_on_every_pixel_of_a_row_and_a_column` (0 of 3,000 missed on 1920×1080), the tray's device tests and `every_tray_item_sends_what_it_sends_on_linux`.
   - Idle: the idle test counts the watchdog's threads too (VM: no context switch in 60 s).
-  - On the owner's PC (Windows 11 build 26300, Intel UHD Graphics, 1920×1080 at 125 %, Swedish), every device test passes but `clicks_at_10_12_and_15_ms_arrive_on_time`, which misses C02's 1 ms p99 in about 1 run in 6, mostly at 10 ms; main misses in none of 54 runs there. Interleaved runs from one build put the cost in decision 7's check around each release, which holds the click loop up; caching the window's integrity and judging the release later did not help. Merged with this known, and taken up in WN06c (#135), before WN06b.
+  - On the owner's PC (Windows 11 build 26300, Intel UHD Graphics, 1920×1080 at 125 %, Swedish), every device test passes but `clicks_at_10_12_and_15_ms_arrive_on_time`, which misses C02's 1 ms p99 in about 1 run in 6, mostly at 10 ms; main misses in none of 54 runs there. Interleaved runs from one build put the cost in decision 7's check around each release, which holds the click loop up; caching the window's integrity and judging the release later did not help. Merged with this known, and taken up in WN06c (#135), before WN06b. WN06c found the check is not the cause.
+- WN06c, settled 2026-11-27. Measured on the owner's PC: Windows 11 build 26300.9974, an i9-10980HK laptop on AC, Intel UHD Graphics, 1920×1080 at 300 Hz and 125 %. Decision 7's check is not what makes 10 ms clicks miss there, and the output path stays as WN06 left it.
+  - How: each click was traced (the run timer's wake, the task's poll, each `SendInput`, the check, and the arrival in the receiver window), with the plain output and `Watched` with the check in interleaved runs from one build, each run on a fresh thread. The trace was for measuring only and is not merged.
+  - The cause is a mouse button's `SendInput` itself. On this PC it takes about 0.5 ms (p50 561 µs per button event on its own, against 113 µs in the VM, and 495 to 508 µs per press in the traced runs; a relative move takes 164 µs, a key 121 µs), mostly waiting rather than working. Most periods off by 1 ms or more are presses whose `SendInput` took 1 ms or more to return (104 of 138 with the plain output and 53 of 90 with the check, just after the first reboot); the event reaches the window about 0.13 ms after it returns.
+  - The rest of the path is small and the same in every arm: the timer wakes about 0.2 ms late at the median and 0.65 to 0.68 ms at a run's p99. The check costs 0.12 ms before the send and about 0.3 ms after it at the median, about 5 ms before the next press, which it does not reach.
+  - Slow sends come in spells, and they hit the plain output as hard as the check:
+
+    | 10 ms runs | Plain output: runs missed | With the check: runs missed |
+    | --- | --- | --- |
+    | Just after a reboot (01:24) | 4 of 20 (138 periods off) | 2 of 20 (90 periods off) |
+    | Four batches over the next 40 minutes | 0 of 80 | 0 of 80 |
+    | The unchanged timing test, after them | | 0 of 27 (worst p99 0.80 ms) |
+    | After a second reboot (08:37) | 20 of 20 | 20 of 20 |
+
+    In the last spell the PC was nearly idle, and about a quarter of button `SendInput` calls took about 16 ms, one 60 Hz frame; the unchanged test failed every run at all three intervals (p99 11 to 17 ms). Windows then also listed a Microsoft Basic Display Adapter beside the Intel UHD.
+  - On 26 November main's own p99 sat at 0.71 to 0.97 ms at 10 ms, with no margin, so a spell of slow sends tipped 5 of WN06's 54 runs over. That is what WN06's entry read as the check's cost.
+  - Ruled out: CPU load (eight busy loops at normal priority), the priority class (tests through `pc run` start at BelowNormal, the runner task's default; Normal changed nothing), the display being off before a run, and the runtime thread becoming a GUI thread.
+  - #135's first criterion, 30 passing runs at each interval, is not claimed: runs that pass in a quiet spell prove no fix. What a slow button `SendInput` waits on, and whether the program can avoid it, is WN14 (#138). The evidence is [0007](../../decisions/0007-click-timing-on-real-hardware.md).
 - WN06b: the daemon sending owed releases again (hooks on the foreground and desktop events only while something is owed, `WTS_SESSION_UNLOCK`), timed tries for a refused release (100 ms doubling, at most 5), the watchdog waiting until every release is delivered (its window, hooks and session registration before its first check), a daemon whose watchdog died sending what it owes before it exits, and a new start refusing starts while a previous watchdog still sends (its named mutex; the race between a dying daemon's watchdog taking the mutex and a new daemon looking is narrow, and its worst outcome a stray key-up). A release sent again lands in whatever window is then in front; the guide (WN12) says so. Settled by X03 (0006 points 6 and 7): the signals to send again.
 - WN07, settled 2026-11-26 (tests in `backend-windows/src/tray/`, `auto-clicker/src/windows/tray/tests.rs`, `auto-clicker/tests/windows_daemon.rs`; device tests passed in the VM on build 26300.9974):
   - Lifted for both trays: `tray_icon` (pictures as straight RGBA), `tray_text` and the menu's model (`tray_menu`) now sit in `src/`, and the Linux tray turns them into its own types. The Swedish folder reasons are one constant per system: "varken XDG_DATA_HOME eller HOME är satt" on Linux, "LOCALAPPDATA är inte satt till en absolut mapp" (and APPDATA's) on Windows. The tooltip names no routes on Windows. Tests: `a_missing_folder_is_named_as_each_system_names_it`, `the_tooltip_speaks_the_language_line_by_line`.
