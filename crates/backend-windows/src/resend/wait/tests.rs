@@ -34,15 +34,20 @@ fn w() -> Key {
 /// on after it.
 type Outcome = (Ended, Vec<Call>, bool);
 
+/// How long a test waits for a wait it ended, or one that ends by itself.
+const ENDS: Duration = Duration::from_secs(10);
+
 /// Runs the wait for W's release on a thread of its own, its output
 /// refusing the release `refusals` times; the stop, the questions the
 /// probe was asked, and the wait's end with the calls sent and whether the
-/// hooks were still on after it.
-fn waiting(refusals: usize) -> (Arc<Stop>, mpsc::Receiver<bool>, thread::JoinHandle<Outcome>) {
+/// hooks were still on after it, sent once it ends so a test waits for it
+/// with a deadline.
+fn waiting(refusals: usize) -> (Arc<Stop>, mpsc::Receiver<bool>, mpsc::Receiver<Outcome>) {
     let stop = Arc::new(Stop::new().unwrap());
     let (asked, questions) = mpsc::channel();
+    let (end, ended) = mpsc::channel();
     let shared = Arc::clone(&stop);
-    let thread = thread::spawn(move || {
+    thread::spawn(move || {
         let (output, log) = FakeBackend::new();
         for _ in 0..refusals {
             log.fail_once(Call::Key(w(), PressState::Up));
@@ -53,15 +58,15 @@ fn waiting(refusals: usize) -> (Arc<Stop>, mpsc::Receiver<bool>, thread::JoinHan
             probe: Watching(asked),
         };
         let ended = send_until_delivered(&mut resend, &mut via, &shared, None);
-        (ended, log.calls(), hooked_here())
+        let _ = end.send((ended, log.calls(), hooked_here()));
     });
-    (stop, questions, thread)
+    (stop, questions, ended)
 }
 
 #[test]
 fn a_refused_release_is_delivered_by_a_timed_try_with_the_hooks_on_and_then_off() {
-    let (_stop, questions, thread) = waiting(1);
-    let (ended, calls, hooked_after) = thread.join().unwrap();
+    let (_stop, questions, outcome) = waiting(1);
+    let (ended, calls, hooked_after) = outcome.recv_timeout(ENDS).unwrap();
     assert!(matches!(ended, Ended::Delivered), "{ended:?}");
     assert_eq!(calls.len(), 2, "the first pass and one timed try");
     let hooked: Vec<bool> = questions.try_iter().collect();
@@ -74,17 +79,24 @@ fn a_refused_release_is_delivered_by_a_timed_try_with_the_hooks_on_and_then_off(
 
 #[test]
 fn a_stop_ends_the_timed_tries_at_once() {
-    let (stop, questions, thread) = waiting(100);
+    let (stop, questions, outcome) = waiting(100);
     // The first pass was refused; its timed try is 100 ms away.
-    questions.recv_timeout(Duration::from_secs(10)).unwrap();
-    questions.recv_timeout(Duration::from_secs(10)).unwrap();
-    let stopping = Instant::now();
+    questions.recv_timeout(ENDS).unwrap();
+    questions.recv_timeout(ENDS).unwrap();
+    let refused = Instant::now();
     stop.set();
-    let (ended, calls, hooked_after) = thread.join().unwrap();
+    let stopping = Instant::now();
+    // Bounded well above the 50 ms below, so a wait that ignores the stop
+    // fails here rather than hanging the test.
+    let (ended, calls, hooked_after) = outcome.recv_timeout(Duration::from_secs(1)).unwrap();
     let took = stopping.elapsed();
     assert!(matches!(ended, Ended::Stopped), "{ended:?}");
     assert!(took < Duration::from_millis(50), "took {took:?}");
-    assert_eq!(calls.len(), 1, "a timed try went after the stop");
+    // Only a stop set before the try was due can have kept it from going;
+    // a test thread held up past it says nothing either way.
+    if stopping.duration_since(refused) < Duration::from_millis(80) {
+        assert_eq!(calls.len(), 1, "a timed try went after the stop");
+    }
     assert!(!hooked_after);
 }
 
@@ -113,7 +125,8 @@ fn what_else_the_wait_sleeps_on_is_taken_once_and_the_wait_goes_on() {
     let (taken, took) = mpsc::channel();
     let (asked, questions) = mpsc::channel();
     let (shared_stop, shared_event) = (Arc::clone(&stop), Arc::clone(&event));
-    let thread = thread::spawn(move || {
+    let (end, outcome) = mpsc::channel();
+    thread::spawn(move || {
         let (output, log) = FakeBackend::new();
         // Refused for good: the wait outlives its timed tries.
         for _ in 0..100 {
@@ -128,15 +141,74 @@ fn what_else_the_wait_sleeps_on_is_taken_once_and_the_wait_goes_on() {
             output,
             probe: Watching(asked),
         };
-        send_until_delivered(&mut resend, &mut via, &shared_stop, Some(&mut flag))
+        let _ = end.send(send_until_delivered(
+            &mut resend,
+            &mut via,
+            &shared_stop,
+            Some(&mut flag),
+        ));
     });
     questions.recv_timeout(Duration::from_secs(10)).unwrap();
     // Set for good, as a free mutex stays: taken once, then not waited on.
     event.set();
     assert_eq!(took.recv_timeout(Duration::from_secs(10)), Ok(false));
     stop.set();
-    let ended = thread.join().unwrap();
+    let ended = outcome.recv_timeout(ENDS).unwrap();
     assert!(matches!(ended, Ended::Stopped), "{ended:?}");
+}
+
+#[test]
+fn what_else_is_taken_abandoned_and_a_result_it_was_not_given_is_an_error() {
+    let event = Arc::new(Stop::new().unwrap());
+    let (sent, took) = mpsc::channel();
+    let mut flag = Flag {
+        event,
+        taken: Some(sent),
+    };
+    assert!(matches!(
+        taken(WAIT_ABANDONED_0 + 1, Some(&mut flag)),
+        Ok(Woke::Other)
+    ));
+    assert_eq!(took.try_recv(), Ok(true));
+    assert!(taken(WAIT_OBJECT_0 + 2, Some(&mut flag)).is_err());
+    assert!(taken(WAIT_OBJECT_0 + 1, None::<&mut Flag>).is_err());
+}
+
+/// Posts `message` to this thread's own queue.
+#[allow(unsafe_code)]
+fn post_here(message: u32) {
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
+    // SAFETY: no pointers; this thread has a queue, made by `pump` first.
+    let posted = unsafe { PostThreadMessageW(GetCurrentThreadId(), message, 0, 0) };
+    assert_ne!(posted, 0, "{}", io::Error::last_os_error());
+}
+
+#[test]
+fn a_message_wakes_the_wait_and_wm_quit_ends_it() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::WM_USER;
+    // An empty queue (made now): the wait goes on.
+    assert!(pump());
+    assert!(matches!(
+        woke(WAIT_OBJECT_0 + 1, 1, None::<&mut Flag>),
+        Ok(Woke::Other)
+    ));
+    post_here(WM_USER);
+    assert!(matches!(
+        woke(WAIT_OBJECT_0 + 1, 1, None::<&mut Flag>),
+        Ok(Woke::Other)
+    ));
+    post_here(WM_QUIT);
+    assert!(matches!(
+        woke(WAIT_OBJECT_0 + 1, 1, None::<&mut Flag>),
+        Ok(Woke::Stopped)
+    ));
+    // With what else is waited on, messages come one handle later.
+    post_here(WM_QUIT);
+    assert!(matches!(
+        woke(WAIT_OBJECT_0 + 2, 2, None::<&mut Flag>),
+        Ok(Woke::Stopped)
+    ));
 }
 
 #[test]

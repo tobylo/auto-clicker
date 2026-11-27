@@ -107,7 +107,9 @@ fn a_refused_release_gets_five_timed_tries_doubling_then_events_only() {
     let mut now = start;
     let mut waits = Vec::new();
     let mut next = resend.pass(Cause::Event, now, &mut via);
-    while let Next::Until(due) = next {
+    // At most ten turns, so tries that never end fail rather than hang.
+    for _ in 0..10 {
+        let Next::Until(due) = next else { break };
         waits.push(due - now);
         now = due;
         next = resend.pass(Cause::Timer, now, &mut via);

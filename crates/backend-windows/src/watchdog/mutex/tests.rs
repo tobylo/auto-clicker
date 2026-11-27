@@ -121,3 +121,27 @@ fn a_second_watchdog_waits_for_the_first_and_then_holds_it() {
     );
     drop(wait);
 }
+
+#[test]
+fn a_dropped_wait_ends_and_says_nothing() {
+    let name = unique("dropped");
+    let (go, holder) = held_elsewhere(&name, false);
+    let (wait, freed) = waiting_on(&name);
+    drop(wait);
+    go.send(()).unwrap();
+    holder.join().unwrap();
+    assert!(freed.recv_timeout(Duration::from_millis(200)).is_err());
+}
+
+#[test]
+fn a_watchdog_takes_a_mutex_an_earlier_one_abandoned() {
+    let name = unique("taken-abandoned");
+    let (go, holder) = held_elsewhere(&name, true);
+    // Kept open, so the abandoned mutex outlives its holder's thread.
+    let kept = open_named(&name).unwrap().unwrap();
+    go.send(()).unwrap();
+    holder.join().unwrap();
+    let holding = Holding::take_named(&name).unwrap();
+    assert!(holding.held() && holding.handle().is_none());
+    drop((holding, kept));
+}
