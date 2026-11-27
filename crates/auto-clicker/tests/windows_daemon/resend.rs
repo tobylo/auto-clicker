@@ -98,6 +98,8 @@ fn a_new_start_refuses_starts_while_an_earlier_watchdog_still_sends() {
         later.log().contains("EarlierWatchdogDone").then_some(())
     });
     popup_once(pid, icon, |text| !earlier_said(text));
+    // The earlier release arrived, so the hold below is the new daemon's.
+    assert!(!desktop::is_down(VK_F13));
     choose(icon, None, label("Start clicking"));
     wait_for("the new hold", || desktop::is_down(VK_F13).then_some(()));
     drop(second);
@@ -134,6 +136,11 @@ fn a_release_the_lock_screen_blocked_is_sent_again_after_unlock() {
         sleep(Duration::from_millis(50));
     }
     let unlocked = Instant::now();
+    // The window the release is to reach is in front again, as before.
+    assert!(
+        front.in_front(),
+        "the test's window is not in front after the unlock"
+    );
     watchdog_said(&home, DELIVERED_LATER, DELIVERED);
     println!("delivered {:?} after the unlock", unlocked.elapsed());
     wait_for("the release in the window", || {

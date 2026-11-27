@@ -16,7 +16,9 @@
 //! key: a space to raise the field, the password from that state folder,
 //! then `ret`), as 0006's `drive.py unlock` does. It passes by unless
 //! `AUTO_CLICKER_TEST_UNLOCK` is set; run it alone, and unlock once the
-//! VM's screen shows the lock. The quotes keep the `&&` for the VM's
+//! VM's screen has shown the lock for about ten seconds: the test kills the
+//! daemon a second after the lock and checks the release stayed owed, and
+//! an unlock before that delivers it at once. The quotes keep the `&&` for the VM's
 //! `cmd.exe`, which runs the command:
 //!
 //! ```text
