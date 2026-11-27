@@ -6,6 +6,7 @@ use std::pin::pin;
 use std::task::Poll;
 
 use auto_clicker_core::controller::{ReaderCommand, ReaderCommands};
+use auto_clicker_core::hotkeys::HotkeyEvent::Configured;
 use auto_clicker_core::hotkeys::{
     Action, DESKTOP_RELEASE_PAUSE, HotkeyEvent, HotkeyStatus, Trigger, Triggers,
 };
@@ -195,9 +196,7 @@ where
         };
         let event = match wake {
             Wake::ReleaseDue => Some(session.release_due()),
-            Wake::Configured(operation, result) => {
-                Some(HotkeyEvent::Configured { operation, result })
-            }
+            Wake::Configured(operation, result) => Some(Configured { operation, result }),
             Wake::Command(ReaderCommand::ConfigureShortcuts {
                 operation,
                 activation_token,
@@ -211,6 +210,7 @@ where
                     None
                 }
             },
+            Wake::Command(ReaderCommand::Watch(_)) => None,
             Wake::Signal(Some(Signal::Activated(id))) => session.activated(&id),
             Wake::Signal(Some(Signal::Deactivated(_))) => {
                 session.deactivated(Instant::now());

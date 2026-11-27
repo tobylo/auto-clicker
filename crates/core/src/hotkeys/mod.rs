@@ -12,6 +12,7 @@
 mod binding;
 mod capture;
 mod matcher;
+mod registered;
 mod trigger;
 
 use std::fmt;
@@ -23,6 +24,7 @@ use crate::message::Quoted;
 pub use binding::{Binding, Modifier, Modifiers};
 pub use capture::{Capture, Captured};
 pub use matcher::{DeviceId, KeyEvent, Matcher, Reaction};
+pub use registered::{Keyboard, Registered, Watching};
 pub use trigger::{DESKTOP_RELEASE_PAUSE, Refusal, Trigger, Triggers};
 
 /// What a hotkey asks the controller to do.
@@ -128,7 +130,45 @@ pub enum HotkeyEvent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HotkeyStatus {
     Available,
+    /// Hotkeys work, but the system refused these when the program
+    /// registered them: they never fire. At most one per action.
+    Refused(Vec<Unregistered>),
     Unavailable(Unavailable),
+}
+
+/// A hotkey the system refused to register for the program.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Unregistered {
+    pub hotkey: Binding,
+    pub why: NotRegistered,
+}
+
+/// Why the system refused a hotkey.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotRegistered {
+    /// Another program holds the combination.
+    Taken,
+    /// Any other refusal; the system's words.
+    Failed(Quoted),
+}
+
+impl fmt::Display for Unregistered {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let hotkey = self.hotkey;
+        match &self.why {
+            NotRegistered::Taken => {
+                write!(f, "hotkey {hotkey} does not work: another program uses it")
+            }
+            NotRegistered::Failed(why) => {
+                write!(
+                    f,
+                    "hotkey {hotkey} does not work: Windows refused it: {why}"
+                )
+            }
+        }
+    }
 }
 
 /// Why hotkeys cannot be read.

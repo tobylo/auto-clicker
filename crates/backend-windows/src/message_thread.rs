@@ -46,6 +46,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
 };
 
+use crate::hotkeys::{self, Wanted};
 use crate::message::wide;
 use crate::session::{SessionState, query};
 use crate::tray::{self, TrayContent, WM_TRAY_REFRESH};
@@ -188,6 +189,8 @@ struct Shared {
     /// The tray's content not yet taken by the thread: while it is there,
     /// a refresh is on its way.
     tray: Mutex<Option<TrayContent>>,
+    /// The hotkeys the runtime wants registered, and what for.
+    hotkeys: Mutex<Wanted>,
 }
 
 /// A window handle that may cross threads: Windows lets any thread post to
@@ -217,6 +220,7 @@ impl MessageThread {
         let remote = Remote(Arc::new(Shared {
             window: Mutex::new(None),
             tray: Mutex::new(None),
+            hotkeys: Mutex::new(Wanted::default()),
         }));
         let (ready, readiness) = mpsc::channel();
         let (finished, done) = mpsc::channel();
@@ -291,6 +295,20 @@ impl Remote {
         }
         self.post(WM_TRAY_REFRESH, 0, 0)
             .inspect_err(|_| *slot = None)
+    }
+
+    /// Runs `with` on this thread's own remote, while the window lives.
+    pub(crate) fn on_thread(with: impl FnOnce(&Remote)) {
+        SHARED.with_borrow(|shared| {
+            if let Some(shared) = shared {
+                with(shared);
+            }
+        });
+    }
+
+    /// What the runtime wants of the hotkeys.
+    pub(crate) fn hotkeys(&self) -> &Mutex<Wanted> {
+        &self.0.hotkeys
     }
 
     /// Posts `message` to the window, under the lock that its destruction
@@ -570,21 +588,21 @@ unsafe extern "system" fn window_procedure(
 /// What the window answers to `message`; `None` leaves it to Windows'
 /// default.
 fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-    if let Some(result) = tray::answer(hwnd, message, wparam, lparam) {
-        return Some(result);
+    let handled = tray::answer(hwnd, message, wparam, lparam)
+        .map(Some)
+        .or_else(|| hotkeys::answer(hwnd, message, wparam, lparam));
+    if let Some(result) = handled {
+        return result;
     }
     match message {
         // A notice the program does not follow is still a wake, reported
         // as such.
         WM_WTSSESSION_CHANGE => {
-            emit(
-                SessionChange::from_code(wparam)
-                    .map_or(WindowEvent::Other(message), WindowEvent::Session),
-            );
+            session_notice(hwnd, wparam);
             Some(0)
         }
         WM_POWERBROADCAST => {
-            power(wparam, lparam);
+            power(hwnd, wparam, lparam);
             Some(1)
         }
         // Never holds up a logoff: answered at once, before anything that
@@ -632,15 +650,33 @@ fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LR
     }
 }
 
+/// A `WM_WTSSESSION_CHANGE`: the hotkeys forget the keys followed, since
+/// the keyboard went to another desktop meanwhile, and the handler hears it;
+/// one the program does not follow is still a wake, reported as such.
+fn session_notice(hwnd: HWND, code: WPARAM) {
+    let change = SessionChange::from_code(code);
+    if change.is_some() {
+        hotkeys::session_changed(hwnd);
+    }
+    emit(change.map_or(
+        WindowEvent::Other(WM_WTSSESSION_CHANGE),
+        WindowEvent::Session,
+    ));
+}
+
 /// A `WM_POWERBROADCAST`; one the program does not follow (the power
 /// source changing, say) is still a wake, reported as such.
-fn power(event: WPARAM, lparam: LPARAM) {
+fn power(hwnd: HWND, event: WPARAM, lparam: LPARAM) {
     let event = match u32::try_from(event) {
         Ok(PBT_APMSUSPEND) => Some(WindowEvent::Suspend),
         Ok(PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND) => Some(WindowEvent::Resume),
         Ok(PBT_POWERSETTINGCHANGE) => display_setting(lparam).map(WindowEvent::Display),
         _ => None,
     };
+    // What the keyboard did across sleep is not known.
+    if matches!(event, Some(WindowEvent::Suspend | WindowEvent::Resume)) {
+        hotkeys::session_changed(hwnd);
+    }
     emit(event.unwrap_or(WindowEvent::Other(WM_POWERBROADCAST)));
 }
 
@@ -751,6 +787,7 @@ fn unwatch(hwnd: HWND) {
     READY.set(false);
     kill_retry_timer(hwnd);
     tray::remove();
+    hotkeys::end(hwnd);
     if SESSION_WATCHED.replace(false) {
         // SAFETY: `hwnd` is still alive (this runs in its `WM_DESTROY`) and
         // was registered. A failure leaves a registration that ends with

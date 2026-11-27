@@ -143,6 +143,9 @@ impl Said<'_> {
             Hindrance::NoClock => t.invoke_no_clock(),
             Hindrance::Hotkeys(why) => self.unavailable(why),
             Hindrance::Screens(why) => self.point_screens(*why),
+            // Windows' alone: this window never sees it on Linux, and the
+            // Windows window (WN10) says it in its own words.
+            Hindrance::Elevated => s(why),
         }
     }
 

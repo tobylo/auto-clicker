@@ -33,7 +33,7 @@ fn every_notice_has_a_swedish_form_that_keeps_quoted_text() {
     let all = notices();
     // A sample of each kind of notice and of each reason inside one.
     assert_eq!(kinds(&all), 8);
-    assert_eq!(kinds(&hindrances()), 12);
+    assert_eq!(kinds(&hindrances()), 13);
     assert_eq!(kinds(&unplayables()), 6);
     assert_eq!(kinds(&stops()), 8);
     assert_eq!(kinds(&savings()), 3);
@@ -45,7 +45,7 @@ fn every_notice_has_a_swedish_form_that_keeps_quoted_text() {
 #[test]
 fn every_problem_has_a_swedish_form_that_keeps_quoted_text() {
     let all = problems();
-    assert_eq!(kinds(&all), 9);
+    assert_eq!(kinds(&all), 10);
     assert_eq!(kinds(&no_screens()), 6);
     assert_eq!(kinds(&no_on_screens()), 4);
     assert_eq!(kinds(&no_pointers()), 6);

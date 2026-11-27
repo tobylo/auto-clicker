@@ -423,3 +423,14 @@ async fn recording_waits_while_a_start_waits_for_its_devices() {
     })
     .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_hotkey_start_on_a_platform_with_the_default_checks_begins() {
+    local(async {
+        let (d, gates) = per_run_daemon(Mode::HoldButton).await;
+        d.press_hotkey().await;
+        d.hotkey(HotkeyEvent::ModifiersReleased).await;
+        assert!(gates.open_in_flight());
+    })
+    .await;
+}

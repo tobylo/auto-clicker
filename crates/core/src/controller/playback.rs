@@ -155,7 +155,7 @@ impl<P: Platform> Controller<P> {
     }
 
     fn play_from_hotkey(&mut self) {
-        if !self.may_play() {
+        if !self.may_play() || !self.foreground_allows(Start::Playback) {
             return;
         }
         let Some(job) = self.load_current() else {

@@ -909,3 +909,52 @@ async fn quitting_mid_press_releases_and_closes_the_devices_at_once() {
     })
     .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn playback_is_read_for_any_hotkey_until_it_stops() {
+    use crate::hotkeys::Watching;
+    local(async {
+        let (d, _) = daemon_with_hold(playing(once())).await;
+        d.play_until_w_is_down().await;
+        let any = Watching {
+            release: false,
+            stops: Action::ALL.to_vec(),
+        };
+        let wait = Watching {
+            release: true,
+            stops: Vec::new(),
+        };
+        assert_eq!(d.watched().await, [wait, any]);
+        d.hotkey(HotkeyEvent::Fired(Action::ToggleRecording)).await;
+        assert_eq!(d.watched().await, [Watching::default()]);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn playback_into_a_window_running_as_administrator_is_refused_from_the_hotkey() {
+    const REFUSED: &str =
+        "Not playing: Auto Clicker can't click into a program running as administrator";
+    local(async {
+        let (d, _) = daemon_with_hold(playing(once())).await;
+        d.shared.with(|r| r.elevated_front = true);
+        d.hotkey(PLAY).await;
+        d.assert_idle_after(&[]);
+        assert_eq!(d.notice(), REFUSED);
+    })
+    .await;
+    // Still held after two seconds, with such a window in front by then:
+    // it does not play anyway.
+    local(async {
+        let (d, _) = daemon_with_hold(playing(once())).await;
+        d.hotkey(PLAY).await;
+        d.shared.with(|r| r.elevated_front = true);
+        sleep(PLAY_RELEASE_WAIT).await;
+        d.settle().await;
+        sleep(ms(600)).await;
+        d.settle().await;
+        d.assert_idle_after(&[]);
+        assert_eq!(d.notice(), REFUSED);
+    })
+    .await;
+}

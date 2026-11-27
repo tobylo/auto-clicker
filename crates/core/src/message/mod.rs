@@ -36,7 +36,7 @@ pub use titled::Titled;
 use crate::config::ConfigError;
 use crate::controller::Blocked;
 use crate::dirs::NO_CONFIG_DIR;
-use crate::hotkeys::Unavailable;
+use crate::hotkeys::{Unavailable, Unregistered};
 
 /// What is wrong now, as the tray and the settings window list it.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -46,6 +46,8 @@ pub enum Problem {
     Config(ConfigProblem),
     /// Hotkeys cannot be read.
     Hotkeys(Unavailable),
+    /// The system refused these hotkeys: they never fire.
+    HotkeysRefused(Vec<Unregistered>),
     /// The session lets nothing start.
     Blocked(Blocked),
     /// The devices could not be opened.
@@ -69,6 +71,13 @@ impl fmt::Display for Problem {
         match self {
             Problem::Config(problem) => problem.fmt(f),
             Problem::Hotkeys(why) => why.fmt(f),
+            Problem::HotkeysRefused(refused) => {
+                for (index, hotkey) in refused.iter().enumerate() {
+                    let separator = if index == 0 { "" } else { "; " };
+                    write!(f, "{separator}{hotkey}")?;
+                }
+                Ok(())
+            }
             Problem::Blocked(why) => write!(f, "Clicking cannot start: {why}"),
             Problem::Input(why) => write!(f, "Clicking cannot start: {why}"),
             Problem::Unlisted(why) => write!(f, "The recordings cannot be listed: {why}"),

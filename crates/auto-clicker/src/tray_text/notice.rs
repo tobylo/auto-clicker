@@ -69,6 +69,9 @@ fn hindrance(why: &Hindrance) -> String {
         Hindrance::NoClock => "klockan kunde inte läsas".to_owned(),
         Hindrance::Hotkeys(why) => unavailable(why),
         Hindrance::Screens(why) => point_screens(*why).to_owned(),
+        Hindrance::Elevated => {
+            "Auto Clicker kan inte klicka i ett program som körs som administratör".to_owned()
+        }
     }
 }
 

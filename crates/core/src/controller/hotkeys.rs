@@ -8,7 +8,7 @@ use std::task::Poll;
 
 use tokio::sync::mpsc;
 
-use crate::hotkeys::HotkeyEvent;
+use crate::hotkeys::{HotkeyEvent, Watching};
 
 /// A running hotkey reader. The controller polls it inside its own loop and
 /// stops it by dropping it.
@@ -40,6 +40,10 @@ pub enum ReaderCommand {
         operation: u64,
         activation_token: Option<String>,
     },
+    /// Read the keyboard for this from now on: sent whenever it changes,
+    /// and to a new reader when it is not nothing. A reader that reads the
+    /// keyboards all the time, or the desktop's shortcuts, ignores it.
+    Watch(Watching),
 }
 
 /// Where a reader gets the controller's commands.
