@@ -16,12 +16,12 @@ const OPEN: Context = Context {
 };
 
 /// The desktop as open, telling the test of each question and whether the
-/// hooks were on when it was asked.
-struct Watching(mpsc::Sender<bool>);
+/// hooks were on when it was asked, and when.
+struct Watching(mpsc::Sender<(bool, Instant)>);
 
 impl Probe for Watching {
     fn context(&mut self) -> Context {
-        let _ = self.0.send(hooked_here());
+        let _ = self.0.send((hooked_here(), Instant::now()));
         OPEN
     }
 }
@@ -42,7 +42,9 @@ const ENDS: Duration = Duration::from_secs(10);
 /// probe was asked, and the wait's end with the calls sent and whether the
 /// hooks were still on after it, sent once it ends so a test waits for it
 /// with a deadline.
-fn waiting(refusals: usize) -> (Arc<Stop>, mpsc::Receiver<bool>, mpsc::Receiver<Outcome>) {
+type Questions = mpsc::Receiver<(bool, Instant)>;
+
+fn waiting(refusals: usize) -> (Arc<Stop>, Questions, mpsc::Receiver<Outcome>) {
     let stop = Arc::new(Stop::new().unwrap());
     let (asked, questions) = mpsc::channel();
     let (end, ended) = mpsc::channel();
@@ -69,7 +71,7 @@ fn a_refused_release_is_delivered_by_a_timed_try_with_the_hooks_on_and_then_off(
     let (ended, calls, hooked_after) = outcome.recv_timeout(ENDS).unwrap();
     assert!(matches!(ended, Ended::Delivered), "{ended:?}");
     assert_eq!(calls.len(), 2, "the first pass and one timed try");
-    let hooked: Vec<bool> = questions.try_iter().collect();
+    let hooked: Vec<bool> = questions.try_iter().map(|(on, _)| on).collect();
     assert!(
         !hooked.is_empty() && hooked.iter().all(|&on| on),
         "{hooked:?}"
@@ -82,8 +84,9 @@ fn a_stop_ends_the_timed_tries_at_once() {
     let (stop, questions, outcome) = waiting(100);
     // The first pass was refused; its timed try is 100 ms away.
     questions.recv_timeout(ENDS).unwrap();
-    questions.recv_timeout(ENDS).unwrap();
-    let refused = Instant::now();
+    // Asked on the wait's thread after the refused send, so at or after
+    // the pass's start, which the timed try counts from.
+    let (_, refused) = questions.recv_timeout(ENDS).unwrap();
     stop.set();
     let stopping = Instant::now();
     // Bounded well above the 50 ms below, so a wait that ignores the stop
@@ -215,8 +218,12 @@ fn a_message_wakes_the_wait_and_wm_quit_ends_it() {
 fn a_timeout_ends_after_its_deadline_and_never_waits_for_ever() {
     let now = Instant::now();
     assert_eq!(timeout_until(now), 0);
+    // Rounded up to whole milliseconds; zero if this thread was held up
+    // past the deadline before the clock was read.
     let soon = timeout_until(Instant::now() + Duration::from_micros(1500));
-    assert!((1..=2).contains(&soon), "{soon}");
+    assert!(soon <= 2, "{soon}");
+    let later = timeout_until(Instant::now() + Duration::from_secs(60));
+    assert!((59_000..=60_000).contains(&later), "{later}");
     let far = Instant::now() + Duration::from_secs(u64::from(u32::MAX));
     assert_eq!(timeout_until(far), INFINITE - 1);
 }
