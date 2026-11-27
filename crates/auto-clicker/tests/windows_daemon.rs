@@ -1143,9 +1143,13 @@ fn quietly(script: &str) {
 /// Ends process `pid` (and its tree when `tree`) for cleanup, never
 /// panicking.
 fn kill_quietly(pid: u32, tree: bool) {
-    let tree = if tree { " /T" } else { "" };
-    let spawned = Command::new("cmd")
-        .args(["/c", &format!("taskkill /F{tree} /PID {pid}")])
+    let mut command = Command::new("taskkill");
+    command.arg("/F");
+    if tree {
+        command.arg("/T");
+    }
+    let spawned = command
+        .args(["/PID", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
