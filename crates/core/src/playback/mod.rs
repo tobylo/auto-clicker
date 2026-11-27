@@ -22,7 +22,7 @@ pub use plan::{COVER_US, DELIVERY_DELAY_US};
 pub use settings::{PlaybackSettings, Speed};
 
 use crate::clicker::Repeat;
-use crate::recording::{Event, Layout, Recording};
+use crate::recording::{Event, Layout, Recording, System};
 use plan::Plan;
 
 /// The shortest recording that may play more than once. Shorter ones would
@@ -104,15 +104,17 @@ impl Playback {
         &self.recording
     }
 
-    /// How it plays on `current`, the layout now (`None` when unknown), and
-    /// why its positions are not used when it has some that are not.
-    pub fn motion(&self, current: Option<&Layout>) -> (Motion, Option<Fallback>) {
+    /// How it plays on `current`, the layout now (`None` when unknown), of
+    /// `system`, and why its positions are not used when it has some that
+    /// are not. Positions taken on another system play as a changed layout
+    /// does: with relative motion and its notice (M5 brief decision 11).
+    pub fn motion(&self, current: Option<&Layout>, system: System) -> (Motion, Option<Fallback>) {
         let Some(plan) = &self.plan else {
             return (Motion::Relative, None);
         };
         match current {
             None => (Motion::Relative, Some(Fallback::Unknown)),
-            Some(layout) if plan.fits(layout) => (Motion::Positions(layout.clone()), None),
+            Some(layout) if plan.fits(layout, system) => (Motion::Positions(layout.clone()), None),
             Some(_) => (Motion::Relative, Some(Fallback::Changed)),
         }
     }

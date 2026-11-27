@@ -24,6 +24,45 @@ pub(crate) fn started() -> (MessageThread, mpsc::Receiver<WindowEvent>) {
     (thread, received)
 }
 
+/// Sends `message` to `remote`'s window and waits for its answer, at most
+/// [`ARRIVAL`]: for a test to hand it what Windows only sends.
+#[allow(unsafe_code)]
+pub(crate) fn send(
+    remote: &Remote,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> io::Result<()> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SMTO_ABORTIFHUNG, SendMessageTimeoutW};
+    let Some(Window(hwnd)) = *remote
+        .0
+        .window
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+    else {
+        return Err(io::Error::from(io::ErrorKind::NotConnected));
+    };
+    let within = u32::try_from(ARRIVAL.as_millis()).unwrap_or(u32::MAX);
+    // SAFETY: the thread's window, which answers without taking the
+    // window's lock (released above); `lparam` is the caller's, alive
+    // for the call; no result is asked for.
+    let sent = unsafe {
+        SendMessageTimeoutW(
+            hwnd,
+            message,
+            wparam,
+            lparam,
+            SMTO_ABORTIFHUNG,
+            within,
+            null_mut(),
+        )
+    };
+    if sent == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// What a test follows of an event; `None` for what Windows sends on its
 /// own (the session's and the display's state, other messages), which
 /// differs between a runner and a desktop.
@@ -42,6 +81,7 @@ fn followed(event: &WindowEvent) -> Option<String> {
         WindowEvent::TrayShown => Some("TrayShown".to_owned()),
         WindowEvent::TrayRestarted => Some("TrayRestarted".to_owned()),
         WindowEvent::EarlierWatchdogDone => Some("EarlierWatchdogDone".to_owned()),
+        WindowEvent::ScreensChanged => Some("ScreensChanged".to_owned()),
         // A runner has no taskbar; a desktop has one.
         WindowEvent::TrayUnshown(_)
         | WindowEvent::SessionRead(_)

@@ -233,7 +233,7 @@ pub(crate) fn sendable() -> impl Iterator<Item = Key> {
 /// window message or a hook gives them), or `None` for one the table lacks.
 /// Pause is read by its virtual key, which Windows reports with scan code
 /// 0x45, NumLock's. For reading keys back: hotkeys (WN08) and recording
-/// (WN09).
+/// (WN09b).
 pub fn key(scan: u8, extended: bool, virtual_key: u16) -> Option<Key> {
     let code = if virtual_key == VK_PAUSE {
         PAUSE

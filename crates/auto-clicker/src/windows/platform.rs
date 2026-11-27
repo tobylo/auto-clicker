@@ -2,7 +2,8 @@
 //! table the watchdog releases from should the daemon die (M5 brief
 //! decision 6): the daemon runs only with a watchdog attached, so no press
 //! is ever sent without one. Hotkeys are registered on the message thread
-//! (decision 9); recording arrives with WN09.
+//! (decision 9), which also reads the screens (decision 10); recording
+//! arrives with WN09b.
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -15,7 +16,8 @@ use auto_clicker_core::controller::{
 };
 use auto_clicker_core::hotkeys::{HotkeyEvent, HotkeyStatus, Unavailable};
 use auto_clicker_core::input::Input;
-use auto_clicker_core::recording::{LocalTime, recordings_dir};
+use auto_clicker_core::message::NoScreens;
+use auto_clicker_core::recording::{Layout, LocalTime, recordings_dir};
 
 /// The daemon's platform on Windows.
 pub struct Windows {
@@ -106,9 +108,17 @@ impl Platform for Windows {
         self.started.elapsed()
     }
 
-    /// Recordings arrive with WN09, which names them by the local time.
+    /// Recordings arrive with WN09b, which names them by the local time.
     fn local_time(&self) -> Option<LocalTime> {
         None
+    }
+
+    /// The monitors in physical pixels, as the message thread last read
+    /// them; it tells the controller when they change.
+    fn layout(&self) -> Result<Layout, NoScreens> {
+        self.thread
+            .get()
+            .map_or(Err(NoScreens::NotWhole), Remote::screens)
     }
 
     fn recordings_dir(&self) -> Option<PathBuf> {

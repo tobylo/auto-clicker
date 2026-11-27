@@ -318,6 +318,10 @@ fn unplayables_read_as_before() {
             unplayable(Unplayable::PressesHotkeyKey(modifier.clone())),
             &format!("Not playing R (2026-11-09 18:04:05): it presses a hotkey's key: {modifier}"),
         ),
+        (
+            unplayable(Unplayable::UnsendableKey { code: 194 }),
+            "Not playing R (2026-11-09 18:04:05): it presses a key this computer cannot send (key code 194)",
+        ),
     ]);
 }
 

@@ -16,17 +16,21 @@
 //!   says nothing, since they come by different paths.
 //! - A recording whose positions Hyprland reported sends every move,
 //!   covered or not, each followed by its position, since there a position
-//!   may cover the moves of a game holding the pointer
-//!   ([`PointerSource::sends_every_move`], W01 decision 15). A position
-//!   goes before each press, release or wheel turn that comes between it
-//!   and a move it covers, as above, and again at its own place, after the
-//!   moves it covers; one at the time of a move after it is sent again
-//!   after that move. So no click is played between a move and its
-//!   position.
+//!   may cover the moves of a game holding the pointer (W01 decision 15,
+//!   [`sends_every_move`](crate::recording::PointerSource::sends_every_move)).
+//!   A position goes before each press, release or wheel turn that comes
+//!   between it and a move it covers, as above, and again at its own
+//!   place, after the moves it covers; one at the time of a move after it
+//!   is sent again after that move. So no click is played between a move
+//!   and its position.
+//! - Positions play only on the system that took them, on screens with the
+//!   places and sizes they lie on ([`Plan::fits`]): logical pixels on Linux
+//!   and physical ones on Windows name different places on the same
+//!   screens (M5 brief decision 11).
 //!
 //! The plan holds only event indices: a recording's events are not copied.
 
-use crate::recording::{Change, Event, Layout, Output, PointerSource, Recording};
+use crate::recording::{Change, Event, Layout, Output, Recording, System};
 
 /// How soon after a relative move a position must follow to cover it.
 pub const COVER_US: u64 = 5_000;
@@ -43,6 +47,8 @@ pub(super) struct Plan {
     order: Vec<Step>,
     /// Every output of the recording's layout a position lies on.
     used: Vec<Output>,
+    /// The system whose screens the positions lie on.
+    system: System,
 }
 
 impl Plan {
@@ -51,12 +57,11 @@ impl Plan {
     /// many).
     pub(super) fn new(recording: &Recording) -> Option<Plan> {
         let layout = recording.layout()?;
+        let source = recording.positions_from()?;
         let events = recording.events();
         let count = u32::try_from(events.len()).ok()?;
         let same_time = covered_at_same_time(events);
-        let every = recording
-            .positions_from()
-            .is_some_and(PointerSource::sends_every_move);
+        let every = source.sends_every_move();
         let (covered, hoists) = cover(events, count, same_time.clone(), every);
         let order = if every {
             every_move(events, &same_time, hoists)
@@ -66,13 +71,15 @@ impl Plan {
         Some(Plan {
             order,
             used: used_outputs(layout, events),
+            system: source.system(),
         })
     }
 
-    /// Whether positions can be played on `current`: every output they lie
-    /// on is there with the same place and size.
-    pub(super) fn fits(&self, current: &Layout) -> bool {
-        current.keeps(&self.used)
+    /// Whether positions can be played on `current`, the layout of
+    /// `system`: they were taken on that system (M5 brief decision 11), and
+    /// every output they lie on is there with the same place and size.
+    pub(super) fn fits(&self, current: &Layout, system: System) -> bool {
+        self.system == system && current.keeps(&self.used)
     }
 
     /// The events to send, each with the time to send it at.

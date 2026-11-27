@@ -348,6 +348,16 @@ fn a_daemon_that_found_an_earlier_watchdog_says_so_from_its_first_word() {
 }
 
 #[test]
+fn a_change_of_the_screens_tells_the_controller_and_nothing_else() {
+    let (mut notices, mut inbox, _released) = notices();
+    notices.handle(WindowEvent::ScreensChanged);
+    // A display change that left the screens as they were is only a wake.
+    notices.handle(WindowEvent::Other(0x7e));
+    notices.handle(WindowEvent::ScreensChanged);
+    assert_eq!(drained(&mut inbox), vec![Message::LayoutChanged; 2]);
+}
+
+#[test]
 fn a_close_logoff_or_the_threads_end_quits() {
     let (mut notices, mut inbox, released) = notices();
     notices.handle(WindowEvent::Close);

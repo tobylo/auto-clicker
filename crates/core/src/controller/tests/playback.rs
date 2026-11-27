@@ -626,6 +626,43 @@ async fn a_recording_too_short_to_repeat_is_refused() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_recording_that_presses_a_key_the_output_cannot_send_is_refused() {
+    local(async {
+        let shared = shared_with_recordings();
+        let a = recordable(30).unwrap();
+        let b = recordable(48).unwrap();
+        let events = [
+            (0, Change::Press(a)),
+            (100, Change::Release(a)),
+            (200, Change::Press(b)),
+            (300, Change::Release(b)),
+        ];
+        let file = shared.store("18:00:00", 500, &events);
+        UNSENDABLE.set(vec![48]);
+        let d = daemon_with(playing(Repeat::Times(NonZeroU32::MIN)), shared, true).await;
+        let refused = format!(
+            "Not playing {LABEL}: it presses a key this computer cannot send (key code 48)"
+        );
+
+        d.send(Message::Play(file)).await;
+        assert_eq!(
+            (d.activity(), d.notice()),
+            (Activity::Idle, refused.clone())
+        );
+        d.hotkey(PLAY).await;
+        assert_eq!((d.activity(), d.notice()), (Activity::Idle, refused));
+        sleep(secs(5)).await;
+        d.assert_idle_after(&[]);
+
+        // With every key it presses sendable, it starts.
+        UNSENDABLE.set(Vec::new());
+        d.hotkey(PLAY).await;
+        assert_eq!(d.activity(), Activity::PlayWaitingForRelease);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn playback_repeats_and_runs_at_the_configured_speed() {
     local(async {
         let config = Config {

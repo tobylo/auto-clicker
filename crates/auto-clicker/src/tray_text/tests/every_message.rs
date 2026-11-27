@@ -34,7 +34,7 @@ fn every_notice_has_a_swedish_form_that_keeps_quoted_text() {
     // A sample of each kind of notice and of each reason inside one.
     assert_eq!(kinds(&all), 8);
     assert_eq!(kinds(&hindrances()), 13);
-    assert_eq!(kinds(&unplayables()), 6);
+    assert_eq!(kinds(&unplayables()), 7);
     assert_eq!(kinds(&stops()), 8);
     assert_eq!(kinds(&savings()), 3);
     for notice in all {

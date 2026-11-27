@@ -81,6 +81,9 @@ struct Record {
     recordings: Option<Arc<TempDir>>,
     /// The local time is unreadable.
     no_local_time: bool,
+    /// The system the platform says it is; Linux when `None`, whatever the
+    /// tests run on, since their recordings are KWin's.
+    system: Option<System>,
     /// The reader gets its hotkeys from the desktop.
     desktop_reader: bool,
     /// The reader reads the keyboards and reports the triggers of the
@@ -232,7 +235,18 @@ impl Devices {
     }
 }
 
+thread_local! {
+    /// The codes of keys the test's devices cannot send, for the test on
+    /// this thread.
+    pub(super) static UNSENDABLE: std::cell::RefCell<Vec<u16>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 impl InputBackend for Devices {
+    fn sends(key: Key) -> bool {
+        UNSENDABLE.with_borrow(|codes| !codes.contains(&key.code()))
+    }
+
     fn button(&mut self, button: Button, state: PressState) -> Result<(), InputError> {
         self.note(Call::Button(button, state));
         self.inner.button(button, state)
@@ -319,6 +333,10 @@ impl Platform for FakePlatform {
 
     fn event_clock(&self) -> Duration {
         self.0.clock()
+    }
+
+    fn system(&self) -> System {
+        self.0.with(|r| r.system.unwrap_or(System::Linux))
     }
 
     fn local_time(&self) -> Option<LocalTime> {

@@ -466,7 +466,7 @@ fn hotkey_id(reader: u64, index: usize) -> i32 {
 }
 
 /// Keys Windows reports in raw input otherwise than they are sent, which
-/// WN09 measures before reading them back: SysRq (Alt+PrintScreen comes as
+/// WN09b measures before reading them back: SysRq (Alt+PrintScreen comes as
 /// plain 0x54), Pause (Ctrl+Pause comes as Break), Hangeul and Hanja. A
 /// hotkey on one could not be stopped behind a game that turns hotkeys
 /// off, so it is not registered yet.

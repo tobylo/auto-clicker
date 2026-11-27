@@ -35,6 +35,19 @@ pub trait InputBackend {
     /// Linux's backends return [`TokioTimer::boxed`](super::TokioTimer::boxed).
     /// An error refuses the run before anything is pressed.
     fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError>;
+
+    /// Whether this output can send `key` at all. On Windows a key with
+    /// neither a scan code nor a virtual key cannot be sent, so a recording
+    /// that presses one is refused before it plays (WN04). A backend that
+    /// wraps another forwards it; a boxed backend, chosen at run time, sends
+    /// every key, as Linux's do.
+    fn sends(key: Key) -> bool
+    where
+        Self: Sized,
+    {
+        let _ = key;
+        true
+    }
 }
 
 impl<B: InputBackend + ?Sized> InputBackend for Box<B> {

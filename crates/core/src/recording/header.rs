@@ -9,7 +9,7 @@
 use std::io::Read;
 
 use super::library::FileName;
-use super::{VERSION, VERSION_HYPRLAND, VERSION_POSITIONS, check_name};
+use super::{VERSION, VERSION_POSITIONS, VERSION_SOURCE, check_name};
 use crate::fs::Folder;
 
 /// How much of a file is read for its name. The name is at most 200
@@ -32,7 +32,7 @@ pub(super) fn name(folder: &Folder, file: &FileName) -> Option<String> {
 
 /// The name in `start`, the first bytes of a recording file.
 fn parse(start: &[u8]) -> Option<String> {
-    let rest = [VERSION, VERSION_POSITIONS, VERSION_HYPRLAND]
+    let rest = [VERSION, VERSION_POSITIONS, VERSION_SOURCE]
         .into_iter()
         .find_map(|version| {
             let prefix = format!("{{\"version\":{version},\"name\":");

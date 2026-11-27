@@ -11,7 +11,7 @@ use crate::recording::tests::positions::{at, two_screens};
 use crate::recording::{
     Change, Created, Event, FileName, Layout, Point, Recording, recordable, save,
 };
-use crate::recording::{PointerSource, Taken, Track};
+use crate::recording::{PointerSource, System, Taken, Track};
 
 const W: u16 = 17;
 const HELD_FOR: Duration = Duration::from_millis(500);
@@ -46,6 +46,12 @@ fn store(shared: &Shared, with_positions: bool) -> FileName {
 
 /// The same, with `extra` positions too.
 fn store_with(shared: &Shared, with_positions: bool, extra: &[Event]) -> FileName {
+    let source = with_positions.then_some(PointerSource::Kwin);
+    store_by(shared, source, extra)
+}
+
+/// The same, with positions from `source` if any.
+fn store_by(shared: &Shared, source: Option<PointerSource>, extra: &[Event]) -> FileName {
     let held = recordable(W).unwrap();
     let mut events = vec![
         Event {
@@ -58,7 +64,7 @@ fn store_with(shared: &Shared, with_positions: bool, extra: &[Event]) -> FileNam
         },
     ];
     let created = Created::parse("2026-11-09T18:00:00.000+01:00").unwrap();
-    let recording = if with_positions {
+    let recording = if let Some(source) = source {
         events.insert(
             0,
             Event {
@@ -74,7 +80,7 @@ fn store_with(shared: &Shared, with_positions: bool, extra: &[Event]) -> FileNam
             1_000_000,
             Track {
                 layout: two_screens(),
-                source: PointerSource::Kwin,
+                source,
                 events,
             },
         )
@@ -166,6 +172,33 @@ async fn positions_that_cannot_play_fall_back_and_say_why() {
             assert_eq!(d.notice(), why.to_string());
             assert_eq!(d.shared.calls(), [w(PressState::Down)]);
         }
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn positions_from_the_other_system_play_relative_motion_with_the_notice() {
+    local(async {
+        let cases = [
+            (PointerSource::Kwin, System::Windows),
+            (PointerSource::Hyprland, System::Windows),
+            (PointerSource::Windows, System::Linux),
+        ];
+        for (source, system) in cases {
+            let (d, _) = daemon_playing(Some(two_screens()), false).await;
+            d.shared.with(|r| r.system = Some(system));
+            let file = store_by(&d.shared, Some(source), &[]);
+            d.play_file_until_w_is_down(&file).await;
+            assert_eq!(d.notice(), Fallback::Changed.to_string(), "{source:?}");
+            assert_eq!(d.shared.calls(), [w(PressState::Down)], "{source:?}");
+        }
+        // On its own system, the same screens play its positions.
+        let (d, _) = daemon_playing(Some(two_screens()), false).await;
+        d.shared.with(|r| r.system = Some(System::Windows));
+        let file = store_by(&d.shared, Some(PointerSource::Windows), &[]);
+        d.play_file_until_w_is_down(&file).await;
+        assert_eq!(d.view().notice, None);
+        assert!(matches!(d.shared.calls()[0], Call::MoveAbsolute(_)));
     })
     .await;
 }

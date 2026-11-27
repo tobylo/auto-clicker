@@ -33,3 +33,5 @@ A recording with positions is version 2 on Plasma: it adds the screens it was ma
 ```
 
 A recording whose positions came from Hyprland is version 3: version 2 with `"positions_from":"hyprland"` after `duration_us`. Its positions were rounded down, so playback puts each one in the middle of its pixel, and it plays every mouse movement it holds, wherever it plays (see [Playing a recording](playback.md)). Builds older than this one do not read version 3.
+
+A recording whose positions came from Windows is also version 3, with `"positions_from":"windows"`. Its screens are the monitors in physical pixels, each `scale_milli` the monitor's DPI over 96 in thousandths (120 DPI is 1250), and its positions are whole physical pixels; it plays only the movements no position covers, as version 2 does. Positions play only on the system that took them: a Windows recording played on Linux, or a Linux one on Windows, plays its relative motion and says its positions are not used. Builds older than this one refuse `"windows"`.

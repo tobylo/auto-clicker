@@ -1,5 +1,6 @@
 //! What reported a recording's positions, and how that decides the way
-//! they play (W01 brief, "Settled by W01d").
+//! they play (W01 brief, "Settled by W01d"), and on which system they can
+//! play at all (M5 brief decision 11).
 
 use super::{Layout, Point};
 use crate::input::AbsolutePosition;
@@ -21,9 +22,42 @@ pub enum PointerSource {
     /// play as KWin's and are written as version 2, which reads back as
     /// [`PointerSource::Kwin`].
     CursorSessions,
+    /// Windows' pointer (version 3): whole physical pixels, on monitors in
+    /// physical pixels (M5 brief decision 10).
+    Windows,
+}
+
+/// The system a recording's positions belong to: they mean the same
+/// place only on the system that took them, whatever its screens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum System {
+    /// Linux: logical pixels, from KWin, Hyprland or a display's cursor
+    /// sessions.
+    Linux,
+    /// Windows: physical pixels.
+    Windows,
+}
+
+impl System {
+    /// The system this program runs on.
+    pub const CURRENT: System = if cfg!(windows) {
+        System::Windows
+    } else {
+        System::Linux
+    };
 }
 
 impl PointerSource {
+    /// The system whose screens the positions lie on.
+    pub fn system(self) -> System {
+        match self {
+            PointerSource::Kwin | PointerSource::Hyprland | PointerSource::CursorSessions => {
+                System::Linux
+            }
+            PointerSource::Windows => System::Windows,
+        }
+    }
+
     /// Whether every relative move is sent at playback, covered or not: a
     /// position may cover a move a game holding the pointer needs, and the
     /// compositor ignores the absolute move then (W01 decision 15).
