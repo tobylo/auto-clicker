@@ -247,7 +247,7 @@ fn a_new_display_mode_is_read_again_and_told() {
     let mode = DisplayMode::set(other.0, other.1).unwrap();
     changed(&received);
     assert_eq!(size(&remote.screens().unwrap()), other);
-    drop(mode);
+    mode.restore().unwrap();
     changed(&received);
     assert_eq!(remote.screens().unwrap(), before);
     thread.quit_and_join(JOIN).unwrap();

@@ -38,22 +38,26 @@ pub fn screen_size() -> (i32, i32) {
     unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) }
 }
 
-/// The primary screen in another display mode, until dropped: then the
-/// mode it had before, read when it was changed, comes back, whether or
-/// not that mode is the one saved in the registry.
+/// The primary screen in another display mode, until restored or
+/// dropped: then the mode it had before, read when it was changed, comes
+/// back, whether or not that mode is the one saved in the registry. A test
+/// restores it to see the result; a drop, as on a panic, says on stderr
+/// when Windows refused it.
 pub struct DisplayMode {
-    /// The mode the screen had before.
-    before: DEVMODEW,
+    /// The mode the screen had before, until it is put back.
+    before: Option<DEVMODEW>,
 }
 
 impl fmt::Debug for DisplayMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let DEVMODEW {
-            dmPelsWidth,
-            dmPelsHeight,
-            ..
-        } = self.before;
-        write!(f, "DisplayMode {{ before: {dmPelsWidth}x{dmPelsHeight} }}")
+        match self.before {
+            Some(DEVMODEW {
+                dmPelsWidth,
+                dmPelsHeight,
+                ..
+            }) => write!(f, "DisplayMode {{ before: {dmPelsWidth}x{dmPelsHeight} }}"),
+            None => f.write_str("DisplayMode { restored }"),
+        }
     }
 }
 
@@ -111,15 +115,45 @@ impl DisplayMode {
                 "the display mode {width}x{height} was refused: {changed}"
             )));
         }
-        Ok(DisplayMode { before })
+        Ok(DisplayMode {
+            before: Some(before),
+        })
+    }
+
+    /// Puts the mode the screen had before back.
+    ///
+    /// # Errors
+    /// Windows refused it: the screen stays in the test's mode.
+    pub fn restore(mut self) -> io::Result<()> {
+        self.before
+            .take()
+            .map_or(Ok(()), |before| put_back(&before))
     }
 }
 
+/// Changes the primary screen to `before` for now, saving nothing.
+#[allow(unsafe_code)]
+fn put_back(before: &DEVMODEW) -> io::Result<()> {
+    // SAFETY: a mode Windows read as current, of its own size; flags 0
+    // change it for now and save nothing.
+    let changed = unsafe { ChangeDisplaySettingsW(before, 0) };
+    if changed != DISP_CHANGE_SUCCESSFUL {
+        let DEVMODEW {
+            dmPelsWidth,
+            dmPelsHeight,
+            ..
+        } = *before;
+        return Err(io::Error::other(format!(
+            "the display mode {dmPelsWidth}x{dmPelsHeight} was not put back: {changed}"
+        )));
+    }
+    Ok(())
+}
+
 impl Drop for DisplayMode {
-    #[allow(unsafe_code)]
     fn drop(&mut self) {
-        // SAFETY: the mode Windows read as current before the change, of
-        // its own size; flags 0 change it for now and save nothing.
-        unsafe { ChangeDisplaySettingsW(&self.before, 0) };
+        if let Some(Err(err)) = self.before.take().map(|before| put_back(&before)) {
+            eprintln!("{err}");
+        }
     }
 }
