@@ -5,8 +5,9 @@
 //!
 //! Marking is a store to shared memory, nothing more, so a click never
 //! waits on the watchdog. A release that may not have arrived stays marked:
-//! the backend owns it from then on, and the run goes on (WN06b sends it
-//! again; until then the watchdog sends it once the daemon ends).
+//! the backend owns it from then on, and the run goes on. The watchdog sends
+//! it once the daemon ends, and again until it arrives; the daemon sending
+//! it again while it runs is WN06d's.
 
 use std::sync::Arc;
 

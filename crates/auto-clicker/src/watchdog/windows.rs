@@ -4,12 +4,11 @@ use std::io;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use auto_clicker_backend_windows::show_error;
 use auto_clicker_backend_windows::watchdog::{
-    DAEMON, Owed, Section, arguments, release, start_daemon,
+    DAEMON, Owed, Released, Section, Stayed, arguments, release, start_daemon,
 };
-use auto_clicker_backend_windows::{Delivery, show_error};
 use auto_clicker_core::dirs::log_path;
-use auto_clicker_core::input::Held;
 use auto_clicker_core::locale::Language;
 use auto_clicker_core::log;
 
@@ -43,9 +42,15 @@ pub fn main() -> ExitCode {
     // Read once: from here on nothing writes it, and nothing in it is
     // trusted.
     let owed = Owed::parse(&section.table().copy());
-    let sent = release(&owed);
+    let released = release(&owed);
     let code = log_end(daemon.id(), ended);
-    log_released(&owed, &sent);
+    log_released(&owed, &released);
+    // What may not have arrived is sent again until it does, or the
+    // session ends (WN06b); a new daemon refuses starts meanwhile.
+    let missed = released.missed();
+    if let Some(line) = stayed_line(&released.send_until_delivered(), missed) {
+        log::line(format_args!("auto-clicker-watchdog: {line}"));
+    }
     // The daemon's own exit code, whole, so whoever started the watchdog
     // learns how the daemon ended, a crash's status included.
     std::process::exit(code.cast_signed())
@@ -71,26 +76,43 @@ fn log_end(pid: u32, ended: io::Result<u32>) -> u32 {
     }
 }
 
-/// Logs how many releases the table owed and how many of those sent may
-/// not have arrived; never which keys.
-fn log_released(owed: &Owed, sent: &[(Held, Delivery)]) {
+/// Logs how many releases the table owed and how many of those may not
+/// have arrived; never which keys.
+fn log_released(owed: &Owed, released: &Released) {
     if owed.rejected > 0 {
         log::line(format_args!(
             "auto-clicker-watchdog: {} entries of the table named no key or button",
             owed.rejected
         ));
     }
-    if sent.is_empty() {
+    if released.owed == 0 {
         return;
     }
-    let missed = sent
-        .iter()
-        .filter(|(_, delivery)| *delivery != Delivery::Delivered)
-        .count();
+    let missed = released.missed();
+    let again = if missed > 0 {
+        "; sending them again once Windows lets them arrive"
+    } else {
+        ""
+    };
     log::line(format_args!(
-        "auto-clicker-watchdog: released {} held, {missed} of them maybe not delivered",
-        sent.len()
+        "auto-clicker-watchdog: released {} held, {missed} of them maybe not delivered{again}",
+        released.owed
     ));
+}
+
+/// What the log says of the watchdog's stay for `missed` releases; nothing
+/// when there was none.
+fn stayed_line(stayed: &Stayed, missed: usize) -> Option<String> {
+    match stayed {
+        Stayed::Delivered if missed == 0 => None,
+        Stayed::Delivered => Some(format!("the {missed} releases left are delivered")),
+        Stayed::SessionEnds(left) => {
+            Some(format!("the session ends with {left} releases still owed"))
+        }
+        Stayed::Failed(err, left) => {
+            Some(format!("cannot wait to send {left} releases again: {err}"))
+        }
+    }
 }
 
 /// The daemon's program, beside this one.
@@ -128,5 +150,23 @@ mod tests {
         // A crash's status, past a byte.
         assert_eq!(log_end(7, Ok(0xC000_0005)), 0xC000_0005);
         assert_eq!(log_end(7, Err(io::Error::other("gone"))), 1);
+    }
+
+    #[test]
+    fn a_stay_that_did_not_deliver_everything_says_how_many_are_left() {
+        assert_eq!(stayed_line(&Stayed::Delivered, 0), None);
+        assert_eq!(
+            stayed_line(&Stayed::Delivered, 2).as_deref(),
+            Some("the 2 releases left are delivered")
+        );
+        assert_eq!(
+            stayed_line(&Stayed::SessionEnds(2), 3).as_deref(),
+            Some("the session ends with 2 releases still owed")
+        );
+        let failed = Stayed::Failed(io::Error::other("no window"), 1);
+        assert_eq!(
+            stayed_line(&failed, 1).as_deref(),
+            Some("cannot wait to send 1 releases again: no window")
+        );
     }
 }

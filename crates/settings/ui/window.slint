@@ -68,6 +68,7 @@ export global Texts {
     public pure function blocked-locked() -> string { @tr("the screen is locked") }
     public pure function blocked-inactive() -> string { @tr("another session is in front") }
     public pure function blocked-sleeping() -> string { @tr("the computer is going to sleep") }
+    public pure function blocked-earlier-releasing() -> string { @tr("an earlier Auto Clicker is still letting go of held keys") }
     public pure function blocked-unknown(why: string) -> string { @tr("the session state is unknown: {}", why) }
     public pure function input-no-permission(why: string) -> string { @tr("no permission to open /dev/uinput ({}); install the package's udev rule and log in again, or add your user to the `input` group", why) }
     public pure function input-uinput-missing(why: string) -> string { @tr("/dev/uinput is not available ({}); load the kernel module with `sudo modprobe uinput`", why) }

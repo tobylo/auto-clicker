@@ -6,6 +6,7 @@ use auto_clicker_core::input::TokioTimer;
 use super::*;
 
 const OPEN: Context = Context {
+    connected: true,
     desktop_has_input: true,
     foreground: 7,
     foreground_allowed: true,

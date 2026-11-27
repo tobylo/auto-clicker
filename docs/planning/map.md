@@ -59,7 +59,7 @@ An auto clicker with macro record and playback, made for playing games: on Wayla
 | M2 Record and playback | Record and replay routines, with absolute positions if X01 succeeds |
 | M3 Settings window | Clicker options and hotkey rebinding (U01), a recordings list (U02), picking the fixed point on the screen (U03), the tray's and the window's messages in the user's language (U04) |
 | M4 Portal backend | libei output, GlobalShortcuts hotkeys, backend auto-selection; recording stays on the kernel backend (X02: InputCapture takes the input from the game); with the desktop's shortcuts the tray turns Record off and says it needs the `input` group (P03); `auto` routes per job by access, and the tooltip names them (P04) |
-| M5 Windows | Windows 11 with feature parity, after the X03 spike in a VM on the dev box; clicker usable at the cursor after WN08, with blocked releases sent again from WN06b ([brief](features/m5-windows.md)) |
+| M5 Windows | Windows 11 with feature parity, after the X03 spike in a VM on the dev box; clicker usable at the cursor after WN08, with blocked releases sent again by the watchdog from WN06b and by the daemon from WN06d ([brief](features/m5-windows.md)) |
 
 The issues, their codes and blockers are on [the Project](https://github.com/users/tobylo/projects/4); [github-map.json](github-map.json) maps codes to issue numbers.
 

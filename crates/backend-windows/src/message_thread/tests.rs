@@ -41,6 +41,7 @@ fn followed(event: &WindowEvent) -> Option<String> {
         WindowEvent::TrayChosen(command) => Some(format!("TrayChosen({command})")),
         WindowEvent::TrayShown => Some("TrayShown".to_owned()),
         WindowEvent::TrayRestarted => Some("TrayRestarted".to_owned()),
+        WindowEvent::EarlierWatchdogDone => Some("EarlierWatchdogDone".to_owned()),
         // A runner has no taskbar; a desktop has one.
         WindowEvent::TrayUnshown(_)
         | WindowEvent::SessionRead(_)
@@ -93,8 +94,9 @@ fn notices_reach_the_handler_in_order_and_quit_ends_the_thread() {
     for (message, wparam) in posts {
         remote.post(message, wparam, 0).unwrap();
     }
+    remote.earlier_watchdog_done().unwrap();
     assert_eq!(
-        next_followed(&received, 10),
+        next_followed(&received, 11),
         [
             "Lock",
             "Disconnect",
@@ -105,7 +107,8 @@ fn notices_reach_the_handler_in_order_and_quit_ends_the_thread() {
             "Resume",
             "EndSession",
             "Close",
-            "Lock"
+            "Lock",
+            "EarlierWatchdogDone"
         ]
     );
     let quitting = Instant::now();

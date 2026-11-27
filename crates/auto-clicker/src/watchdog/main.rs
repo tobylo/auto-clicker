@@ -1,8 +1,9 @@
 //! The watchdog (M5 brief decision 6): what starts at login on Windows. It
 //! starts the daemon as its child, shares the table of what the daemon
 //! holds, sleeps on the daemon's process, and once the daemon has ended,
-//! for whatever reason, releases what the table still holds and exits with
-//! the daemon's exit code. Being the parent, it outlives "End process tree"
+//! for whatever reason, releases what the table still holds, sends again
+//! what Windows blocked until it arrives or the session ends, and exits
+//! with the daemon's exit code. Being the parent, it outlives "End process tree"
 //! on the daemon, and a kill by the daemon's name.
 //!
 //! Windows alone: elsewhere it says so and exits.

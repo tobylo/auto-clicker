@@ -29,10 +29,12 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use auto_clicker_backend_windows::watchdog::{
-    self as launch, Attached, Launch, WATCHDOG, attach, wait_for_watchdog,
+    self as launch, Attached, Earlier, EarlierWait, Launch, WATCHDOG, WatchdogWait, attach,
+    earlier_watchdog, wait_for_watchdog,
 };
 use auto_clicker_backend_windows::{
-    ClaimError, Instance, JoinError, MessageThread, become_per_monitor_aware, claim, show_error,
+    ClaimError, Instance, JoinError, MessageThread, Remote, become_per_monitor_aware, claim,
+    show_error,
 };
 use auto_clicker_core::controller::Controller;
 use auto_clicker_core::dirs::{NO_DATA_DIR, log_path};
@@ -57,7 +59,8 @@ const EXIT_ALREADY_RUNNING: u8 = 3;
 const EXIT_LAUNCH: u8 = 5;
 /// The daemon's watchdog ended, so it stopped.
 const EXIT_WATCHDOG_ENDED: u8 = 6;
-/// How long the wait on the watchdog may take to end once stopped.
+/// How long the wait on the watchdog, or on an earlier one, may take to
+/// end once stopped.
 const WATCHDOG_WAIT_STOP: Duration = Duration::from_secs(1);
 /// How long the message thread may take to create its window.
 const MESSAGE_THREAD_START: Duration = Duration::from_secs(5);
@@ -228,6 +231,11 @@ fn run(attached: Attached) -> (ExitCode, bool) {
     controller.keep_current_file(CurrentFile::of_environment());
     let released = Arc::new(Mark::default());
     let mut notices = Notices::new(links.send.clone(), Arc::clone(&released));
+    // Looked for before the thread runs, so no start is allowed before it.
+    let earlier = look_for_earlier_watchdog();
+    if earlier.is_some() {
+        notices.earlier_watchdog();
+    }
     let commands = notices.commands();
     let thread =
         match MessageThread::spawn(move |event| notices.handle(event), MESSAGE_THREAD_START) {
@@ -241,6 +249,7 @@ fn run(attached: Attached) -> (ExitCode, bool) {
         };
     // Before the controller runs, so its reader finds the thread.
     let _ = message_thread.set(thread.remote());
+    let earlier = earlier.and_then(|earlier| wait_for_earlier(earlier, thread.remote()));
     // No run starts unwatched: the controller has not run yet.
     let watchdog_ended = Arc::new(AtomicBool::new(false));
     let told = on_watchdog_end(links.send.clone(), Arc::clone(&watchdog_ended));
@@ -275,12 +284,72 @@ fn run(attached: Attached) -> (ExitCode, bool) {
     // sleep waiting for that may go on, whether or not its report was
     // passed on before the runtime stopped.
     released.raise(ENDED);
-    if !wait.stop(WATCHDOG_WAIT_STOP) {
+    stop_waits(wait, earlier);
+    (end(thread), watchdog_ended.load(Ordering::Acquire))
+}
+
+/// Stops the waits on the watchdog and on an earlier one, each within its
+/// deadline, and logs one that did not end in time.
+fn stop_waits(watchdog: WatchdogWait, earlier: Option<EarlierWait>) {
+    if !watchdog.stop(WATCHDOG_WAIT_STOP) {
         log::line(format_args!(
             "auto-clicker: the wait on the watchdog did not end in time"
         ));
     }
-    (end(thread), watchdog_ended.load(Ordering::Acquire))
+    if let Some(earlier) = earlier
+        && !earlier.stop(WATCHDOG_WAIT_STOP)
+    {
+        log::line(format_args!(
+            "auto-clicker: the wait on the earlier watchdog did not end in time"
+        ));
+    }
+}
+
+/// An earlier watchdog that still sends releases, if there is one: then
+/// starts are refused until it is done. One that cannot be looked for
+/// counts as none, so a broken name never refuses starts for good; its
+/// worst outcome is a stray key-up.
+fn look_for_earlier_watchdog() -> Option<Earlier> {
+    match earlier_watchdog() {
+        Ok(earlier) => earlier,
+        Err(err) => {
+            log::line(format_args!(
+                "auto-clicker: cannot look for an earlier watchdog ({err}); starting as if none"
+            ));
+            None
+        }
+    }
+}
+
+/// Waits for `earlier` to be done, then tells the message thread through
+/// `remote`, which allows starts again. A wait that cannot start, or that
+/// fails, tells it at once.
+fn wait_for_earlier(earlier: Earlier, remote: Remote) -> Option<EarlierWait> {
+    let told = remote.clone();
+    let waiting = earlier.wait(move |failed| {
+        // Told before the log is written.
+        let posted = told.earlier_watchdog_done();
+        if let Some(err) = failed {
+            log::line(format_args!(
+                "auto-clicker: the earlier watchdog cannot be waited on ({err}); starting as if it were done"
+            ));
+        }
+        if let Err(err) = posted {
+            log::line(format_args!(
+                "auto-clicker: the message thread could not be told the earlier watchdog is done: {err}"
+            ));
+        }
+    });
+    match waiting {
+        Ok(wait) => Some(wait),
+        Err(err) => {
+            let _ = remote.earlier_watchdog_done();
+            log::line(format_args!(
+                "auto-clicker: cannot wait for the earlier watchdog ({err}); starting as if it were done"
+            ));
+            None
+        }
+    }
 }
 
 /// Passes the controller's reports of letting go before sleep to the

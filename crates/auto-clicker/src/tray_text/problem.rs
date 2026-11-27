@@ -107,6 +107,9 @@ pub(super) fn blocked(why: &Blocked) -> String {
         Blocked::Locked => "skärmen är låst".to_owned(),
         Blocked::Inactive => "en annan session är framme".to_owned(),
         Blocked::Sleeping => "datorn ska gå i viloläge".to_owned(),
+        Blocked::EarlierReleasing => {
+            "ett tidigare Auto Clicker släpper fortfarande nedtryckta tangenter".to_owned()
+        }
         Blocked::Unknown(why) => format!("sessionens läge är okänt: {why}"),
     }
 }

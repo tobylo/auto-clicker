@@ -50,6 +50,34 @@ fn told(events: Vec<WindowEvent>) -> Vec<Told> {
 }
 
 #[test]
+fn an_earlier_watchdog_refuses_starts_after_the_lock_until_it_is_done() {
+    let mut session = Session {
+        earlier: true,
+        ..Session::default()
+    };
+    let told: Vec<Told> = [
+        WindowEvent::SessionRead(Ok(UNLOCKED)),
+        lock(),
+        unlock(),
+        WindowEvent::EarlierWatchdogDone,
+        WindowEvent::EarlierWatchdogDone,
+    ]
+    .iter()
+    .map(|event| session.apply(event))
+    .collect();
+    assert_eq!(
+        told,
+        [
+            Told::Session(Some(Blocked::EarlierReleasing)),
+            Told::Session(Some(Blocked::Locked)),
+            Told::Session(Some(Blocked::EarlierReleasing)),
+            Told::Session(None),
+            Told::Nothing,
+        ]
+    );
+}
+
+#[test]
 fn the_first_read_says_whether_clicking_may_run() {
     assert_eq!(
         told(vec![WindowEvent::SessionRead(Ok(UNLOCKED))]),
@@ -302,6 +330,21 @@ fn notices() -> (Notices, mpsc::UnboundedReceiver<Message>, Arc<Mark>) {
 
 fn drained(inbox: &mut mpsc::UnboundedReceiver<Message>) -> Vec<Message> {
     std::iter::from_fn(|| inbox.try_recv().ok()).collect()
+}
+
+#[test]
+fn a_daemon_that_found_an_earlier_watchdog_says_so_from_its_first_word() {
+    let (mut notices, mut inbox, _released) = notices();
+    notices.earlier_watchdog();
+    notices.handle(WindowEvent::SessionRead(Ok(UNLOCKED)));
+    notices.handle(WindowEvent::EarlierWatchdogDone);
+    assert_eq!(
+        drained(&mut inbox),
+        [
+            Message::Session(Some(Blocked::EarlierReleasing)),
+            Message::Session(None)
+        ]
+    );
 }
 
 #[test]

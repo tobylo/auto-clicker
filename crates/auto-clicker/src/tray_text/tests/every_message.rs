@@ -49,7 +49,7 @@ fn every_problem_has_a_swedish_form_that_keeps_quoted_text() {
     assert_eq!(kinds(&no_screens()), 6);
     assert_eq!(kinds(&no_on_screens()), 4);
     assert_eq!(kinds(&no_pointers()), 6);
-    assert_eq!(kinds(&blocked()), 4);
+    assert_eq!(kinds(&blocked()), 5);
     assert_eq!(kinds(&inputs()), 10);
     assert_eq!(kinds(&unavailables()), 5);
     assert_eq!(kinds(&refusals()), 4);

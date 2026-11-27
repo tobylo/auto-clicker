@@ -32,6 +32,7 @@ pub(super) fn blocked() -> Vec<Blocked> {
         Blocked::Locked,
         Blocked::Inactive,
         Blocked::Sleeping,
+        Blocked::EarlierReleasing,
         Blocked::Unknown(QUOTED.to_owned().into()),
     ]
 }

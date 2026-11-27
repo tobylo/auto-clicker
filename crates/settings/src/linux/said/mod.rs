@@ -113,6 +113,7 @@ impl Said<'_> {
             Blocked::Locked => t.invoke_blocked_locked(),
             Blocked::Inactive => t.invoke_blocked_inactive(),
             Blocked::Sleeping => t.invoke_blocked_sleeping(),
+            Blocked::EarlierReleasing => t.invoke_blocked_earlier_releasing(),
             Blocked::Unknown(why) => t.invoke_blocked_unknown(s(why)),
         }
     }
