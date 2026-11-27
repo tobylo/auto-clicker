@@ -71,7 +71,7 @@ About 1,500 added lines each.
 | WN04 | Output backend: SendInput, scan codes, absolute moves, the marker, the run timer (decision 5) | WN03, X03 |
 | WN05 | The daemon on Windows: message thread, single instance, session lock and sleep, shutdown | WN03, X03 |
 | WN06 | The watchdog: the shared table, the handles, both deaths, output for the daemon, decision 7's check, per-monitor DPI awareness | WN04, WN05 |
-| WN06c | 10 ms clicks meet C02's bound on real hardware with decision 7's check in place | WN06 |
+| WN06c | What holds 10 ms clicks up on real hardware, measured with decision 7's check in place; done as an investigation ([0007](../../decisions/0007-click-timing-on-real-hardware.md)), with C02's bound there handed to WN14 | WN06 |
 | WN06b | Releases sent again when Windows blocked them, the watchdog's own included; a new start waits for a previous watchdog | WN06, WN06c |
 | WN07 | The tray on Windows | WN05 |
 | WN08 | Hotkeys on Windows, and never pressing a hotkey's key | WN06, WN07 |
@@ -80,7 +80,7 @@ About 1,500 added lines each.
 | WN11 | The on-screen display on Windows | WN09 |
 | WN12 | Install, upgrade and uninstall script, guide and README for Windows | WN06b, WN10, WN11 |
 | WN13 | The owner's Windows 11 test PC: the VM's desktop runner, autologon and a `pc` command on the dev box, for measurements that need real hardware | WN01 |
-| WN14 | What a mouse button's `SendInput` waits on in its slow spells on real hardware, and whether the program can avoid it | WN06c |
+| WN14 | What a mouse button's `SendInput` waits on in its slow spells on real hardware, whether the program can avoid it, and so whether 10 ms clicks meet C02's bound there | WN06c |
 
 The clicker is usable at the cursor after WN08, with the watchdog in place; a release Windows blocked is sent again once WN06b is in; at a fixed point after WN10.
 
