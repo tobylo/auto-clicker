@@ -283,7 +283,7 @@ fn area_of(window: HWND) -> Option<Area> {
 }
 
 /// Locks the session, as Windows+L does; it is unlocked by hand (in the
-/// VM, `vm key` types the password).
+/// VM, through the QEMU monitor: see `tests/windows_daemon.rs`).
 ///
 /// # Errors
 /// Windows refused.

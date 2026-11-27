@@ -9,10 +9,15 @@
 //! ```
 //!
 //! One test locks the session and waits up to three minutes for it to be
-//! unlocked by hand: `vm key` types the password from the dev box. It
-//! passes by unless `AUTO_CLICKER_TEST_UNLOCK` is set; run it alone, and
-//! unlock once the VM's screen shows the lock. The quotes keep the `&&`
-//! for the VM's `cmd.exe`, which runs the command:
+//! unlocked from the dev box. `vm key` waits on the lock the running
+//! `vm run` holds (docs/decisions/0006, "Tooling found broken"), so type
+//! the password straight into the QEMU monitor instead
+//! (`~/.local/share/auto-clicker-vm/vm/run/monitor.sock`, one `sendkey` per
+//! key: a space to raise the field, the password from that state folder,
+//! then `ret`), as 0006's `drive.py unlock` does. It passes by unless
+//! `AUTO_CLICKER_TEST_UNLOCK` is set; run it alone, and unlock once the
+//! VM's screen shows the lock. The quotes keep the `&&` for the VM's
+//! `cmd.exe`, which runs the command:
 //!
 //! ```text
 //! scripts/windows-vm/vm run --timeout 900 --workdir 'C:\work\<dir>' -- 'set AUTO_CLICKER_TEST_UNLOCK=1&& cargo test --locked -p auto-clicker --test windows_daemon -- --ignored --exact resend::a_release_the_lock_screen_blocked_is_sent_again_after_unlock'

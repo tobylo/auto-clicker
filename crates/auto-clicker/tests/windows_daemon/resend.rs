@@ -127,7 +127,7 @@ fn a_release_the_lock_screen_blocked_is_sent_again_after_unlock() {
     assert!(kill(daemon.id(), false).success());
     watchdog_said(&home, STAYS, END);
     assert_eq!(desktop::Front::key_ups(VK_F13), ups, "a release arrived");
-    println!("locked: unlock the session (vm key)");
+    println!("locked: unlock the session through the QEMU monitor");
     let deadline = Instant::now() + Duration::from_secs(180);
     while !auto_clicker_backend_windows::foreground_takes_input() {
         assert!(Instant::now() < deadline, "not unlocked within 3 minutes");
