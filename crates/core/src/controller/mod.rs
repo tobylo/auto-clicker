@@ -58,11 +58,11 @@ use crate::message::{
     ConfigProblem, Hindrance, InputFailure, NoOnScreen, NoPointer, NoScreens, Notice, Problem,
     Start, Stop, Titled,
 };
-use crate::recording::{FileName, Layout, LocalTime, RecordingFeed, RecordingSlot};
+use crate::recording::{FileName, Layout, LocalTime, RecordingFeed, RecordingSlot, System};
 use crate::run::{Ended, RunEnd, Signals};
 use crate::window::{CaptureEnd, Outcome};
 use hotkeys::HotkeySource;
-use playback::Playing;
+use playback::{Playing, Screens};
 use recordings::Shelf;
 use screen::LayoutSource;
 
@@ -181,6 +181,12 @@ pub trait Platform {
 
     /// The route its devices take.
     const OUTPUT: Route = Route::Kernel;
+
+    /// The system it runs on, whose screens a recording's positions must
+    /// have been taken on to play (M5 brief decision 11).
+    fn system(&self) -> System {
+        System::CURRENT
+    }
 
     /// Opens the input devices. The future owns what it opened so far:
     /// dropping it part way closes that again.
@@ -985,9 +991,13 @@ impl<P: Platform> Controller<P> {
             shutdown: signal(shutdown_signal),
         };
         let layout = self.platform.layout().ok();
+        let screens = Screens {
+            layout: layout.as_ref(),
+            system: self.platform.system(),
+        };
         self.notice = match &job {
             Job::Click => None,
-            Job::Play(playing) => playing.start_notice(layout.as_ref()),
+            Job::Play(playing) => playing.start_notice(screens),
         };
         let playing = job.playing().cloned();
         let keys = job.own_keys(&self.config);
@@ -998,7 +1008,7 @@ impl<P: Platform> Controller<P> {
                 let run = Box::pin(async move { run(input, &settings, rng, signals).await });
                 (run, None)
             }
-            Job::Play(playing) => playing.run(input, layout.as_ref(), signals),
+            Job::Play(playing) => playing.run(input, screens, signals),
         };
         self.state = State::Running(Running {
             playing,

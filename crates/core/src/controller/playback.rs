@@ -29,10 +29,18 @@ use super::{Controller, Job, PLAY_RELEASE_WAIT, Platform, RunFuture, State};
 use crate::input::{Held, Input, InputBackend, Key};
 use crate::message::{Hindrance, Notice, PlayStart, Start, Stop, Titled, Unplayable};
 use crate::playback::{MIN_LOOP_LENGTH, Motion, Playback, play};
-use crate::recording::{Change, FileName, Layout, LoadError, Recording, load};
+use crate::recording::{Change, FileName, Layout, LoadError, Recording, System, load};
 use crate::run::Signals;
 
 /// A recording about to play: loaded, checked, and named for the tray.
+/// The screens a playback starts on: the layout now, if known, and the
+/// system it belongs to.
+#[derive(Clone, Copy)]
+pub(super) struct Screens<'a> {
+    pub(super) layout: Option<&'a Layout>,
+    pub(super) system: System,
+}
+
 pub(super) struct Playing {
     playback: Playback,
     label: Titled,
@@ -61,20 +69,20 @@ impl Playing {
         }
     }
 
-    /// What the tray says when it starts on `layout`, the current one, if
-    /// anything.
-    pub(super) fn start_notice(&self, layout: Option<&Layout>) -> Option<Notice> {
+    /// What the tray says when it starts on `screens`, the current ones,
+    /// if anything.
+    pub(super) fn start_notice(&self, screens: Screens<'_>) -> Option<Notice> {
         let held = self.modifier_held.then(|| PLAY_RELEASE_WAIT.as_secs());
-        let (_, fallback) = self.playback.motion(layout);
+        let (_, fallback) = self.playback.motion(screens.layout, screens.system);
         PlayStart::new(held, fallback).map(Notice::Playing)
     }
 
-    /// The run that plays it on `input`, on `layout`, the current one; and
-    /// the layout it moves to positions on, if it does.
+    /// The run that plays it on `input`, on `screens`, the current ones;
+    /// and the layout it moves to positions on, if it does.
     pub(super) fn run<B, S, D>(
         self,
         input: Input<B>,
-        layout: Option<&Layout>,
+        screens: Screens<'_>,
         signals: Signals<S, D>,
     ) -> (RunFuture<B>, Option<Layout>)
     where
@@ -82,7 +90,7 @@ impl Playing {
         S: Future<Output = ()> + 'static,
         D: Future<Output = ()> + 'static,
     {
-        let (motion, _) = self.playback.motion(layout);
+        let (motion, _) = self.playback.motion(screens.layout, screens.system);
         let positions = match &motion {
             Motion::Positions(layout) => Some(layout.clone()),
             Motion::Relative => None,
@@ -224,6 +232,10 @@ impl<P: Platform> Controller<P> {
         // one of their keys would set it off by itself.
         let playing = playback.and_then(|playback| {
             let keys = pressed_keys(playback.recording());
+            if let Some(key) = keys.iter().find(|&&key| !P::Backend::sends(key)) {
+                let code = key.code();
+                return Err(Unplayable::UnsendableKey { code });
+            }
             match self.own_key_refusal(&OwnKeys::Recording(Arc::clone(&keys))) {
                 Some(why) => Err(Unplayable::PressesHotkeyKey(why)),
                 None => Ok(Playing {

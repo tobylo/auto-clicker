@@ -177,6 +177,11 @@ pub enum Unplayable {
     },
     /// It presses a key the desktop's hotkeys use.
     PressesHotkeyKey(Refusal),
+    /// It presses a key this system has no key for, by its Linux key code:
+    /// on Windows, a key no scan code or virtual key sends (WN04).
+    UnsendableKey {
+        code: u16,
+    },
 }
 
 impl From<&LoadError> for Unplayable {
@@ -204,6 +209,10 @@ impl fmt::Display for Unplayable {
                 "it is shorter than {ms} ms, too short to play more than once"
             ),
             Unplayable::PressesHotkeyKey(why) => write!(f, "it presses a hotkey's key: {why}"),
+            Unplayable::UnsendableKey { code } => write!(
+                f,
+                "it presses a key this computer cannot send (key code {code})"
+            ),
         }
     }
 }

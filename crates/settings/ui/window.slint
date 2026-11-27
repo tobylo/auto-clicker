@@ -149,6 +149,7 @@ export global Texts {
     public pure function file-invalid(why: string) -> string { @tr("invalid recording" => "{}", why) }
     public pure function too-short(ms: string) -> string { @tr("it is shorter than {} ms, too short to play more than once", ms) }
     public pure function presses-hotkey-key(why: string) -> string { @tr("it presses a hotkey's key: {}", why) }
+    public pure function unsendable-key(code: string) -> string { @tr("it presses a key this computer cannot send (key code {})", code) }
     public pure function stopped(why: string) -> string { @tr("Stopped: {}", why) }
     public pure function layout-changed() -> string { @tr("Playback stopped: the screen layout changed") }
     public pure function layout-unknown() -> string { @tr("Playback stopped: the screen layout is no longer known") }

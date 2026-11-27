@@ -120,6 +120,12 @@ impl Notices {
                 return;
             }
             WindowEvent::Close => return self.send(Message::Quit),
+            // The controller reads the new screens itself: a playback on
+            // positions whose screens moved stops (M5 brief decision 10).
+            WindowEvent::ScreensChanged => {
+                self.send(Message::LayoutChanged);
+                return log::line(format_args!("auto-clicker: heard {event:?}"));
+            }
             WindowEvent::Ended { failure } => {
                 self.send(Message::Quit);
                 if let Some(failure) = failure {

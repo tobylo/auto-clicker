@@ -31,8 +31,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::message::wide;
 
 mod front;
+mod screen;
 
 pub use front::Front;
+pub use screen::{DisplayMode, display_sizes, pointer, screen_size};
 
 /// A rectangle on the screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

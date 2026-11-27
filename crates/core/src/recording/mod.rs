@@ -43,7 +43,7 @@ pub use layout::{Layout, MAX_OUTPUTS, Output, OutputSpec, Point, Rect};
 pub use library::{FileName, Found, Listing, LoadError, MAX_FILE_BYTES, list, load};
 pub use manage::{ChangeError, Changed, Doomed, Removed, delete, rename};
 pub use recorder::{Ending, KeyInput, Recorder, Taken};
-pub use source::PointerSource;
+pub use source::{PointerSource, System};
 pub use store::{recordings_dir, remove_stale, save};
 pub use tap::{RecordingFeed, RecordingSlot};
 
@@ -56,9 +56,10 @@ pub const VERSION: u64 = 1;
 /// The format version of a recording with positions and their layout.
 pub const VERSION_POSITIONS: u64 = 2;
 
-/// The format version of a recording whose positions Hyprland reported:
-/// version 2 with a `positions_from` field (W01 brief, "Settled by W01d").
-pub const VERSION_HYPRLAND: u64 = 3;
+/// The format version of a recording that names where its positions came
+/// from: version 2 with a `positions_from` field, `"hyprland"` (W01 brief,
+/// "Settled by W01d") or `"windows"` (M5 brief decision 11).
+pub const VERSION_SOURCE: u64 = 3;
 
 /// The longest recording: a recording stops and saves when it reaches this.
 pub const MAX_DURATION: Duration = Duration::from_secs(60 * 60);

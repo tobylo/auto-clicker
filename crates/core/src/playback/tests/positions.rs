@@ -388,7 +388,7 @@ fn positions_play_while_the_screens_they_lie_on_are_unchanged() {
     for current in cases {
         let expected = Motion::Positions(current.clone());
         assert_eq!(
-            playback.motion(Some(&current)),
+            playback.motion(Some(&current), System::Linux),
             (expected, None),
             "{current:?}"
         );
@@ -411,7 +411,7 @@ fn a_screen_a_position_lies_on_that_moved_resized_or_went_falls_back() {
     ];
     for current in cases {
         assert_eq!(
-            playback.motion(Some(&current)),
+            playback.motion(Some(&current), System::Linux),
             (Motion::Relative, Some(Fallback::Changed)),
             "{current:?}"
         );
@@ -419,14 +419,46 @@ fn a_screen_a_position_lies_on_that_moved_resized_or_went_falls_back() {
 }
 
 #[test]
+fn positions_play_only_on_the_system_that_took_them_whatever_its_screens() {
+    let events = [(0, at(10, 10)), (1_000, at(2_000, 1_200))];
+    let same = two_screens();
+    let cases = [
+        (PointerSource::Kwin, System::Linux, true),
+        (PointerSource::Hyprland, System::Linux, true),
+        (PointerSource::CursorSessions, System::Linux, true),
+        (PointerSource::Windows, System::Windows, true),
+        (PointerSource::Kwin, System::Windows, false),
+        (PointerSource::Hyprland, System::Windows, false),
+        (PointerSource::CursorSessions, System::Windows, false),
+        (PointerSource::Windows, System::Linux, false),
+    ];
+    for (source, system, plays) in cases {
+        let playback = once(positioned_by(source, 100_000, &events));
+        let expected = if plays {
+            (Motion::Positions(same.clone()), None)
+        } else {
+            (Motion::Relative, Some(Fallback::Changed))
+        };
+        assert_eq!(
+            playback.motion(Some(&same), system),
+            expected,
+            "{source:?} on {system:?}"
+        );
+    }
+}
+
+#[test]
 fn an_unknown_layout_falls_back_and_a_recording_without_positions_says_nothing() {
     assert_eq!(
-        on_the_panel().motion(None),
+        on_the_panel().motion(None, System::Linux),
         (Motion::Relative, Some(Fallback::Unknown))
     );
     let plain = once(click());
-    assert_eq!(plain.motion(None), (Motion::Relative, None));
-    assert_eq!(plain.motion(Some(&two_screens())), (Motion::Relative, None));
+    assert_eq!(plain.motion(None, System::Linux), (Motion::Relative, None));
+    assert_eq!(
+        plain.motion(Some(&two_screens()), System::Linux),
+        (Motion::Relative, None)
+    );
 }
 
 #[tokio::test(start_paused = true)]

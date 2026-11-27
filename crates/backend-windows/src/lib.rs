@@ -25,6 +25,7 @@ mod message_thread;
 mod output;
 mod resend;
 mod run_timer;
+mod screens;
 mod session;
 mod tray;
 pub mod watchdog;

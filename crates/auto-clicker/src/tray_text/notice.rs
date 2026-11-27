@@ -98,6 +98,11 @@ fn unplayable(why: &Unplayable) -> String {
         Unplayable::PressesHotkeyKey(why) => {
             format!("den trycker på en snabbtangents tangent: {}", own_key(why))
         }
+        Unplayable::UnsendableKey { code } => {
+            format!(
+                "den trycker på en tangent som den här datorn inte kan skicka (tangentkod {code})"
+            )
+        }
     }
 }
 

@@ -1,7 +1,10 @@
 //! Where the pointer was: a point on the screens, and the screen layout it
 //! lies on.
 //!
-//! Both are in whole logical pixels, as KWin reports them (decision 0001).
+//! On Linux both are in whole logical pixels, as KWin reports them
+//! (decision 0001); on Windows in whole physical pixels, as a per-monitor
+//! DPI aware program reads the monitors and the pointer (M5 brief decision
+//! 10), from the virtual desktop's top-left corner.
 //! A [`Layout`] is only ever built through [`Layout::new`], which checks it,
 //! so a layout from a file and one from the compositor are the same type
 //! with the same rules: one to [`MAX_OUTPUTS`] outputs, each of positive
@@ -16,8 +19,8 @@ use crate::input::AbsolutePosition;
 /// The most outputs a layout may have.
 pub const MAX_OUTPUTS: usize = 16;
 
-/// A point on the screens, in whole logical pixels from the layout's
-/// top-left corner.
+/// A point on the screens, in whole pixels from the layout's top-left
+/// corner: logical on Linux, physical on Windows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Point {
@@ -25,7 +28,7 @@ pub struct Point {
     pub y: u32,
 }
 
-/// A rectangle in logical pixels.
+/// A rectangle in whole pixels: logical on Linux, physical on Windows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rect {
@@ -35,10 +38,13 @@ pub struct Rect {
     pub height: u32,
 }
 
-/// One output (a screen): its rectangle in logical pixels and its scale in
-/// thousandths (1.25 is 1250). The scale is stored, but whether positions
-/// still fit a layout never depends on it ([`Layout::same_screens`],
-/// [`Layout::keeps`]): logical positions do not.
+/// One output (a screen): its rectangle and its scale in thousandths (1.25
+/// is 1250). On Linux the rectangle is in logical pixels and the scale the
+/// compositor's; on Windows the rectangle is in physical pixels and the
+/// scale the monitor's DPI over 96 (120 DPI is 1250). The scale is stored,
+/// but whether positions still fit a layout never depends on it
+/// ([`Layout::same_screens`], [`Layout::keeps`]): logical positions do not
+/// depend on it, and physical ones mean the same pixel whatever it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Output {
     rect: Rect,

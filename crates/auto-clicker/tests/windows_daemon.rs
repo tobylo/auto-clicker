@@ -49,6 +49,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use auto_clicker_backend_windows::desktop;
 use auto_clicker_core::locale::Language;
 
+#[path = "windows_daemon/positions.rs"]
+mod positions;
 #[path = "windows_daemon/resend.rs"]
 mod resend;
 #[path = "windows_daemon/unelevated.rs"]
@@ -666,7 +668,7 @@ fn every_tray_item_sends_what_it_sends_on_linux() {
         lines,
         [
             line("Start clicking", false),
-            // No positions until WN09 reads the pointer: as on Linux, it
+            // No positions until WN09b reads the pointer: as on Linux, it
             // says so.
             line("Record (movement only)", false),
             line("Play", false),
@@ -1065,7 +1067,7 @@ fn each_hotkey_starts_and_stops_its_job_while_another_window_has_focus() {
     stays_up();
     assert!(front.in_front(), "the window lost the focus");
     // The recording hotkey reaches the controller too, which cannot
-    // record on Windows before WN09 names recordings by the local time.
+    // record on Windows before WN09b names recordings by the local time.
     let icon = promoted_icon(pid);
     combination(F7);
     popup_once(pid, icon, |text| {

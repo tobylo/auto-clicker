@@ -150,6 +150,10 @@ impl<B: InputBackend, P: Probe> InputBackend for Watched<B, P> {
     fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError> {
         self.output.run_timer()
     }
+
+    fn sends(key: Key) -> bool {
+        B::sends(key)
+    }
 }
 
 impl<B, P> Drop for Watched<B, P> {

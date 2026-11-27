@@ -26,6 +26,8 @@ use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use auto_clicker_core::message::NoScreens;
+use auto_clicker_core::recording::Layout;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Power::{
@@ -48,6 +50,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use crate::hotkeys::{self, Wanted};
 use crate::message::wide;
+use crate::screens;
 use crate::session::{self, Heard, SessionState, query};
 use crate::tray::{self, TrayContent, WM_TRAY_REFRESH};
 
@@ -120,6 +123,10 @@ pub enum WindowEvent {
     /// An earlier watchdog, which still sent releases when the daemon
     /// started, has let go of its mutex ([`Remote::earlier_watchdog_done`]).
     EarlierWatchdogDone,
+    /// The screens changed, or can no longer be read
+    /// ([`Remote::screens`]): a display change that left them as they were
+    /// is only a wake ([`WindowEvent::Other`]).
+    ScreensChanged,
     /// A message the thread does not act on, by its number: what woke it.
     Other(u32),
     /// The thread left its message loop and is about to end; always the
@@ -207,6 +214,9 @@ struct Shared {
     tray: Mutex<Option<TrayContent>>,
     /// The hotkeys the runtime wants registered, and what for.
     hotkeys: Mutex<Wanted>,
+    /// The screens as last read: when the window was made, and at each
+    /// display change since.
+    screens: Mutex<Result<Layout, NoScreens>>,
 }
 
 /// A window handle that may cross threads: Windows lets any thread post to
@@ -237,6 +247,7 @@ impl MessageThread {
             window: Mutex::new(None),
             tray: Mutex::new(None),
             hotkeys: Mutex::new(Wanted::default()),
+            screens: Mutex::new(Err(NoScreens::NotWhole)),
         }));
         let (ready, readiness) = mpsc::channel();
         let (finished, done) = mpsc::channel();
@@ -335,6 +346,11 @@ impl Remote {
     /// What the runtime wants of the hotkeys.
     pub(crate) fn hotkeys(&self) -> &Mutex<Wanted> {
         &self.0.hotkeys
+    }
+
+    /// The screens as last read ([`crate::screens`]).
+    pub(crate) fn screens_slot(&self) -> &Mutex<Result<Layout, NoScreens>> {
+        &self.0.screens
     }
 
     /// Posts `message` to the window, under the lock that its destruction
@@ -454,6 +470,8 @@ fn serve(
         .window
         .lock()
         .unwrap_or_else(PoisonError::into_inner) = Some(Window(hwnd));
+    // Once the window exists, so a change after the reading reaches it.
+    shared.keep_screens(screens::read());
     // The display first: a registration that fails says so before the
     // session's first read can allow a start.
     watch_display(hwnd);
@@ -626,6 +644,7 @@ unsafe extern "system" fn window_procedure(
 /// default.
 fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     let handled = tray::answer(hwnd, message, wparam, lparam)
+        .or_else(|| screens::answer(message))
         .map(Some)
         .or_else(|| hotkeys::answer(hwnd, message, wparam, lparam));
     if let Some(result) = handled {

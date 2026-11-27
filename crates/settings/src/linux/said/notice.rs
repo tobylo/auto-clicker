@@ -165,6 +165,7 @@ impl Said<'_> {
             Unplayable::Invalid(why) => t.invoke_file_invalid(s(why)),
             Unplayable::TooShort { ms } => t.invoke_too_short(s(ms)),
             Unplayable::PressesHotkeyKey(why) => t.invoke_presses_hotkey_key(self.own_key(why)),
+            Unplayable::UnsendableKey { code } => t.invoke_unsendable_key(s(code)),
         }
     }
 

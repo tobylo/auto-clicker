@@ -22,9 +22,16 @@
 //! ]}
 //! ```
 //!
-//! A recording whose positions Hyprland reported is version 3: version 2
-//! with `"positions_from":"hyprland"` after `duration_us`. Its positions
-//! are floored, and every move it holds is played ([`PointerSource`]).
+//! A recording that names where its positions came from is version 3:
+//! version 2 with `positions_from` after `duration_us`.
+//! - `"hyprland"`: Hyprland reported them. They are floored, and every move
+//!   the recording holds is played ([`PointerSource`]).
+//! - `"windows"`: Windows did. Its layout is the monitors in physical
+//!   pixels, each `scale_milli` the monitor's DPI over 96 in thousandths
+//!   (120 DPI is 1250), and its positions are whole physical pixels.
+//!
+//! Positions play only on the system that took them ([`super::System`]): a
+//! Windows recording plays its relative motion on Linux, and the reverse.
 //!
 //! Times are microseconds since the start. Keys and buttons go by their
 //! kernel names ([`super::codes`]). A file is parsed whole, then checked by
@@ -40,24 +47,29 @@ use serde_json::error::Category;
 
 use super::{
     Change, Created, Event, InvalidRecording, Layout, MAX_DURATION_US, Output, Point,
-    PointerSource, Recording, Rect, Track, VERSION, VERSION_HYPRLAND, VERSION_POSITIONS, codes,
+    PointerSource, Recording, Rect, Track, VERSION, VERSION_POSITIONS, VERSION_SOURCE, codes,
 };
 
-/// The `positions_from` of a version 3 file: the one value it may hold.
-const FROM_HYPRLAND: &str = "hyprland";
+/// The values a version 3 file's `positions_from` may hold, and the source
+/// each names.
+const SOURCES: [(&str, PointerSource); 2] = [
+    ("hyprland", PointerSource::Hyprland),
+    ("windows", PointerSource::Windows),
+];
 
 impl Recording {
     /// Writes the recording, one event per line: as version 3 when Hyprland
-    /// reported its positions, version 2 when KWin or a display's cursor
-    /// sessions did, version 1 without positions.
+    /// or Windows reported its positions, version 2 when KWin or a display's
+    /// cursor sessions did, version 1 without positions.
     ///
     /// # Errors
     /// Only what `out` returns.
     pub fn write_json(&self, out: &mut dyn Write) -> io::Result<()> {
-        let version = match self.positions_from() {
-            Some(PointerSource::Hyprland) => VERSION_HYPRLAND,
-            Some(PointerSource::Kwin | PointerSource::CursorSessions) => VERSION_POSITIONS,
-            None => VERSION,
+        let named = self.positions_from().and_then(source_name);
+        let version = match (named, &self.layout) {
+            (Some(_), _) => VERSION_SOURCE,
+            (None, Some(_)) => VERSION_POSITIONS,
+            (None, None) => VERSION,
         };
         write!(out, "{{\"version\":{version},\"name\":")?;
         serde_json::to_writer(&mut *out, &self.name)?;
@@ -66,8 +78,8 @@ impl Recording {
             ",\"created\":\"{}\",\"duration_us\":{}",
             self.created, self.duration_us
         )?;
-        if version == VERSION_HYPRLAND {
-            write!(out, ",\"positions_from\":\"{FROM_HYPRLAND}\"")?;
+        if let Some(name) = named {
+            write!(out, ",\"positions_from\":\"{name}\"")?;
         }
         if let Some(layout) = &self.layout {
             write_layout(out, layout)?;
@@ -87,15 +99,16 @@ impl Recording {
     /// The file is not JSON, does not have a recording's layout, has a
     /// version other than 1, 2 or 3, is a version 1 file with a layout or a
     /// position, a version 2 or 3 file without a layout, a version 3 file
-    /// whose positions are not from Hyprland, a version 1 or 2 file that says
+    /// whose positions are from neither Hyprland nor Windows, a version 1 or
+    /// 2 file that says
     /// where its positions came from, or holds a recording
     /// [`Recording::new`] or [`Recording::with_positions`] refuses.
     pub fn from_json(bytes: &[u8]) -> Result<Recording, InvalidRecording> {
         let header: Header = serde_json::from_slice(bytes).map_err(malformed)?;
-        if ![VERSION, VERSION_POSITIONS, VERSION_HYPRLAND].contains(&header.version) {
+        if ![VERSION, VERSION_POSITIONS, VERSION_SOURCE].contains(&header.version) {
             return Err(InvalidRecording::new(format!(
                 "the file is a version {} recording; this program reads versions \
-                 {VERSION} to {VERSION_HYPRLAND}",
+                 {VERSION} to {VERSION_SOURCE}",
                 header.version
             )));
         }
@@ -176,17 +189,27 @@ impl Write for Counter {
     }
 }
 
+/// The `positions_from` a version 3 file names `source` by; `None` for a
+/// source written as version 2.
+fn source_name(source: PointerSource) -> Option<&'static str> {
+    SOURCES
+        .iter()
+        .find(|&&(_, named)| named == source)
+        .map(|&(name, _)| name)
+}
+
 /// What reported the positions of a version `version` file whose
-/// `positions_from` is `from`: only version 3 says, and only Hyprland.
+/// `positions_from` is `from`: only version 3 says, Hyprland or Windows.
 fn file_source(version: u64, from: Option<&str>) -> Result<PointerSource, InvalidRecording> {
-    match (version, from) {
-        (VERSION_HYPRLAND, Some(FROM_HYPRLAND)) => Ok(PointerSource::Hyprland),
-        (VERSION_HYPRLAND, _) => Err(InvalidRecording::new(format!(
-            "a version {VERSION_HYPRLAND} recording's positions are from \"{FROM_HYPRLAND}\""
+    let named = from.and_then(|from| SOURCES.iter().find(|&&(name, _)| name == from));
+    match (version, from, named) {
+        (VERSION_SOURCE, _, Some(&(_, source))) => Ok(source),
+        (VERSION_SOURCE, _, None) => Err(InvalidRecording::new(format!(
+            "a version {VERSION_SOURCE} recording's positions are from \"hyprland\" or \"windows\""
         ))),
-        (_, None) => Ok(PointerSource::Kwin),
-        (_, Some(_)) => Err(InvalidRecording::new(format!(
-            "only a version {VERSION_HYPRLAND} recording says where its positions came from"
+        (_, None, _) => Ok(PointerSource::Kwin),
+        (_, Some(_), _) => Err(InvalidRecording::new(format!(
+            "only a version {VERSION_SOURCE} recording says where its positions came from"
         ))),
     }
 }

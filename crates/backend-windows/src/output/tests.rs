@@ -107,6 +107,25 @@ fn pause_goes_by_its_virtual_key_alone() {
 }
 
 #[test]
+fn the_output_sends_exactly_the_keys_windows_has_a_code_for() {
+    for key in Key::CODES.filter_map(Key::new) {
+        assert_eq!(
+            Output::sends(key),
+            keys::code(key).is_some(),
+            "{}",
+            key.code()
+        );
+    }
+    // KEY_MACRO: recordable on Linux, no key on Windows; A has one.
+    assert!(!Output::sends(Key::new(112).unwrap()));
+    assert!(Output::sends(Key::new(30).unwrap()));
+    // What the daemon's output says.
+    assert!(!<crate::Watched as InputBackend>::sends(
+        Key::new(112).unwrap()
+    ));
+}
+
+#[test]
 fn a_key_windows_lacks_fails_to_press_and_its_release_sends_nothing() {
     let mut output = Output { _private: () };
     // KEY_MACRO: recordable on Linux, no key on Windows.

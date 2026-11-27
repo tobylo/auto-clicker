@@ -632,6 +632,9 @@ msgstr "den är kortare än {} ms, för kort för att spelas mer än en gång"
 msgid "it presses a hotkey's key: {}"
 msgstr "den trycker på en snabbtangents tangent: {}"
 
+msgid "it presses a key this computer cannot send (key code {})"
+msgstr "den trycker på en tangent som den här datorn inte kan skicka (tangentkod {})"
+
 msgid "Stopped: {}"
 msgstr "Stoppat: {}"
 

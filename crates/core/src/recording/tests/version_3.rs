@@ -1,9 +1,14 @@
-//! Version 3: positions Hyprland reported (W01 brief, "Settled by W01d").
+//! Version 3: positions Hyprland reported (W01 brief, "Settled by W01d")
+//! or Windows did (M5 brief decision 11).
 
 use super::positions::{at, two_screens};
 use super::*;
 
 fn from_hyprland() -> Recording {
+    from(PointerSource::Hyprland)
+}
+
+fn from(source: PointerSource) -> Recording {
     let events = vec![
         event(0, at(640, 400)),
         event(1_200, Change::Move { dx: 3, dy: -2 }),
@@ -15,7 +20,7 @@ fn from_hyprland() -> Recording {
         5_000,
         Track {
             layout: two_screens(),
-            source: PointerSource::Hyprland,
+            source,
             events,
         },
     )
@@ -39,6 +44,25 @@ fn hyprlands_positions_are_written_as_version_3_and_round_trip() {
     let read = Recording::from_json(text.as_bytes()).unwrap();
     assert_eq!(read, recording);
     assert_eq!(read.positions_from(), Some(PointerSource::Hyprland));
+}
+
+#[test]
+fn windows_positions_are_written_as_version_3_and_round_trip() {
+    let recording = from(PointerSource::Windows);
+    let text = json(&recording);
+    let start = r#"{"version":3,"name":"n","created":"2026-11-09T18:04:05.123+01:00","duration_us":5000,"positions_from":"windows","layout":["#;
+    assert!(text.starts_with(start), "{text}");
+    let read = Recording::from_json(text.as_bytes()).unwrap();
+    assert_eq!(read, recording);
+    assert_eq!(read.positions_from(), Some(PointerSource::Windows));
+    // Played as reported, each covered move skipped.
+    assert!(!PointerSource::Windows.sends_every_move());
+    let layout = two_screens();
+    let point = Point { x: 2047, y: 0 };
+    assert_eq!(
+        PointerSource::Windows.absolute(&layout, point),
+        layout.absolute(point)
+    );
 }
 
 #[test]
@@ -75,17 +99,31 @@ fn a_source_in_any_other_form_is_refused() {
     let cases = [
         (
             file(3, &format!(",{LAYOUT}")),
-            "a version 3 recording's positions are from \"hyprland\"",
+            "a version 3 recording's positions are from \"hyprland\" or \"windows\"",
         ),
         (
             file(3, &format!(r#","positions_from":"kwin",{LAYOUT}"#)),
-            "a version 3 recording's positions are from \"hyprland\"",
+            "a version 3 recording's positions are from \"hyprland\" or \"windows\"",
         ),
         (
             file(3, &format!(r#","positions_from":"Hyprland",{LAYOUT}"#)),
-            "a version 3 recording's positions are from \"hyprland\"",
+            "a version 3 recording's positions are from \"hyprland\" or \"windows\"",
+        ),
+        // A source a newer build adds: refused, as this build's own were
+        // by the builds before them.
+        (
+            file(3, &format!(r#","positions_from":"macos",{LAYOUT}"#)),
+            "a version 3 recording's positions are from \"hyprland\" or \"windows\"",
+        ),
+        (
+            file(3, &format!(r#","positions_from":"Windows",{LAYOUT}"#)),
+            "a version 3 recording's positions are from \"hyprland\" or \"windows\"",
         ),
         (file(3, hyprland), "a version 3 recording needs a layout"),
+        (
+            file(2, &format!(r#","positions_from":"windows",{LAYOUT}"#)),
+            "only a version 3 recording says where its positions came from",
+        ),
         (
             file(2, &format!("{hyprland},{LAYOUT}")),
             "only a version 3 recording says where its positions came from",

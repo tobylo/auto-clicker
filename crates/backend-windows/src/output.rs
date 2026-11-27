@@ -93,6 +93,11 @@ impl InputBackend for Output {
         send(&scroll_event(notches).ok_or_else(|| too_far(notches))?)
     }
 
+    /// A key Windows has a scan code or a virtual key for (WN04, WN09).
+    fn sends(key: Key) -> bool {
+        keys::code(key).is_some()
+    }
+
     fn run_timer(&mut self) -> Result<Box<dyn RunTimer>, InputError> {
         WaitableTimer::start()
             .map(|timer| Box::new(timer) as Box<dyn RunTimer>)

@@ -181,6 +181,7 @@ pub(super) fn unplayables() -> Vec<Unplayable> {
         Unplayable::TooLarge { mib: 256 },
         Unplayable::Invalid(quoted()),
         Unplayable::TooShort { ms: 20 },
+        Unplayable::UnsendableKey { code: 194 },
     ];
     all.extend(refusals().into_iter().map(Unplayable::PressesHotkeyKey));
     all
