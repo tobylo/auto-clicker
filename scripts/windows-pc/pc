@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# The owner's Windows 11 test PC, reached from the dev box over SSH. See
+# docs/agents/windows-pc.md.
+#
+#   pc setup                 set the PC up: the desktop runner, automatic
+#                            logon to tester, the toolchain; run again, it
+#                            changes nothing that is already right
+#   pc run [--elevated] [--timeout S] [--workdir DIR] -- COMMAND...
+#                            run COMMAND in tester's desktop; prints its output
+#                            and exits with its exit code
+#   pc screen [FILE.png]     capture the desktop
+#   pc push PATH [DIR]       copy a local file or folder into DIR on the PC
+#                            (default C:\work)
+#   pc ssh [COMMAND]         PowerShell over SSH, as tester (elevated)
+#   pc selftest              check focus, the click, the deadline and the screen
+#   pc status                Windows, logon, lock screen, runners, focus
+#   pc uninstall             remove what setup added
+set -euo pipefail
+# Functions run inside $(...) stop at their first failure too.
+shopt -s inherit_errexit
+
+PC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VM_LIB="$PC_DIR/../windows-vm/lib"
+TOOL_NAME=pc
+MACHINE_NAME="the PC"
+# shellcheck source=../windows-vm/lib/base.sh
+source "$VM_LIB/base.sh"
+set_state_dir "${WN13_STATE_DIR:-$HOME/.local/share/auto-clicker-pc}"
+# shellcheck source=../windows-vm/lib/remote.sh
+source "$VM_LIB/remote.sh"
+# shellcheck source=lib/pc.sh
+source "$PC_DIR/lib/pc.sh"
+
+usage() {
+    sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//' >&2
+    exit 2
+}
+
+main() {
+    local command="${1:-}"
+    (($#)) && shift
+    case "$command" in
+        setup | run | screen | push | ssh | selftest | status | uninstall)
+            read_config
+            "cmd_$command" "$@"
+            ;;
+        *) usage ;;
+    esac
+}
+
+main "$@"

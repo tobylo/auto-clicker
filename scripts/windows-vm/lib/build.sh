@@ -1,6 +1,7 @@
 # `vm build`: from Microsoft's image to a clean, provisioned VM, built in a
 # temp directory beside the current VM and swapped in only on success.
-# Sourced by scripts/windows-vm/vm, after lib/common.sh and lib/machine.sh.
+# Sourced by scripts/windows-vm/vm, after lib/common.sh, lib/machine.sh and
+# lib/remote.sh.
 # shellcheck shell=bash
 
 BUILD_DIR=""
