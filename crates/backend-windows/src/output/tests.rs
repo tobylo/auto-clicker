@@ -119,9 +119,12 @@ fn the_output_sends_exactly_the_keys_windows_has_a_code_for() {
     // KEY_MACRO: recordable on Linux, no key on Windows; A has one.
     assert!(!Output::sends(Key::new(112).unwrap()));
     assert!(Output::sends(Key::new(30).unwrap()));
-    // What the daemon's output says.
+    // What the daemon's output says, both ways.
     assert!(!<crate::Watched as InputBackend>::sends(
         Key::new(112).unwrap()
+    ));
+    assert!(<crate::Watched as InputBackend>::sends(
+        Key::new(30).unwrap()
     ));
 }
 

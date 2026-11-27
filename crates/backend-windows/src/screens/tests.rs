@@ -83,8 +83,9 @@ fn a_monitors_scale_is_its_dpi_over_96_in_thousandths() {
         (144, Some(1500)),
         (168, Some(1750)),
         (192, Some(2000)),
-        // To the nearest thousandth.
+        // To the nearest thousandth, down and up.
         (97, Some(1010)),
+        (107, Some(1115)),
         (0, None),
         // Past what a scale holds.
         (u32::MAX, None),
@@ -122,14 +123,18 @@ fn next_display_event(received: &mpsc::Receiver<WindowEvent>, message: u32) -> S
     next_display_event_by(received, message, Instant::now() + ARRIVAL)
 }
 
-/// The same, arriving by `deadline`.
+/// The same, arriving by `deadline`: past it the wait fails, even with
+/// other events still queued, which a receive with no time left returns.
 fn next_display_event_by(
     received: &mpsc::Receiver<WindowEvent>,
     message: u32,
     deadline: Instant,
 ) -> String {
     loop {
-        let left = deadline.saturating_duration_since(Instant::now());
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())
+            .expect("the display event came by its deadline");
         match received.recv_timeout(left).unwrap() {
             WindowEvent::ScreensChanged => return "ScreensChanged".to_owned(),
             WindowEvent::Other(woken) if woken == message => return "Other".to_owned(),
