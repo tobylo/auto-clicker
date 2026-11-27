@@ -4,7 +4,7 @@
 
 use std::io;
 use std::ptr::{null, null_mut};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -15,7 +15,8 @@ use windows_sys::Win32::UI::Input::{RAWINPUTDEVICE, RIDEV_NOHOTKEYS, RegisterRaw
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
     GetMessageW, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SW_SHOW, ShowWindow,
-    UnregisterClassW, WM_APP, WM_DESTROY, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    UnregisterClassW, WM_APP, WM_DESTROY, WM_KEYUP, WM_SYSKEYUP, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    WS_VISIBLE,
 };
 
 use super::Area;
@@ -26,6 +27,8 @@ const WM_CLOSE_FRONT: u32 = WM_APP + 1;
 
 /// Names each window's class apart.
 static CLASSES: AtomicU64 = AtomicU64::new(0);
+/// How many key-ups the test's windows were sent, by virtual key.
+static KEY_UPS: [AtomicU32; 256] = [const { AtomicU32::new(0) }; 256];
 
 /// The window, on a thread of its own, until dropped.
 pub struct Front {
@@ -61,6 +64,14 @@ impl Front {
             right: 640,
             bottom: 480,
         })
+    }
+
+    /// How many key-ups of `key` (a virtual key) the test's windows were
+    /// sent, while they had the keyboard's focus, since the process started.
+    pub fn key_ups(key: u16) -> u32 {
+        KEY_UPS
+            .get(usize::from(key))
+            .map_or(0, |count| count.load(Ordering::Acquire))
     }
 
     /// Whether it is the window in front.
@@ -194,6 +205,13 @@ unsafe extern "system" fn procedure(
             // SAFETY: no arguments but the exit code.
             unsafe { PostQuitMessage(0) };
             0
+        }
+        WM_KEYUP | WM_SYSKEYUP => {
+            if let Some(count) = KEY_UPS.get(wparam) {
+                count.fetch_add(1, Ordering::AcqRel);
+            }
+            // SAFETY: what Windows passed in.
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
         }
         // SAFETY: what Windows passed in.
         _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },

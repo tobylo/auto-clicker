@@ -48,11 +48,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use crate::hotkeys::{self, Wanted};
 use crate::message::wide;
-use crate::session::{SessionState, query};
+use crate::session::{self, Heard, SessionState, query};
 use crate::tray::{self, TrayContent, WM_TRAY_REFRESH};
 
 /// Posted by [`Remote::quit`]: destroy the window and end the thread.
 const WM_QUIT_REQUEST: u32 = WM_APP + 1;
+/// Posted by [`Remote::earlier_watchdog_done`].
+const WM_EARLIER_DONE: u32 = WM_APP + 6;
 /// The timer that tries the session notices' registration, or the
 /// session's read, again.
 const RETRY_TIMER: usize = 1;
@@ -115,6 +117,9 @@ pub enum WindowEvent {
     /// Explorer started again (`TaskbarCreated`): the tray's icon is added
     /// afresh.
     TrayRestarted,
+    /// An earlier watchdog, which still sent releases when the daemon
+    /// started, has let go of its mutex ([`Remote::earlier_watchdog_done`]).
+    EarlierWatchdogDone,
     /// A message the thread does not act on, by its number: what woke it.
     Other(u32),
     /// The thread left its message loop and is about to end; always the
@@ -139,7 +144,7 @@ impl SessionChange {
     /// The change a `WM_WTSSESSION_CHANGE` with this `wParam` reports; none
     /// for the ones the program does not follow (logon, logoff, remote
     /// control).
-    fn from_code(code: usize) -> Option<SessionChange> {
+    pub(crate) fn from_code(code: usize) -> Option<SessionChange> {
         let code = u32::try_from(code).ok()?;
         match code {
             WTS_SESSION_LOCK => Some(SessionChange::Lock),
@@ -147,6 +152,17 @@ impl SessionChange {
             WTS_CONSOLE_CONNECT | WTS_REMOTE_CONNECT => Some(SessionChange::Connect),
             WTS_CONSOLE_DISCONNECT | WTS_REMOTE_DISCONNECT => Some(SessionChange::Disconnect),
             _ => None,
+        }
+    }
+
+    /// What the change says of the session's connection: only the session
+    /// at the screen can be unlocked; a lock says nothing, since a remote
+    /// desktop left is locked too.
+    pub(crate) fn heard(self) -> Option<Heard> {
+        match self {
+            SessionChange::Unlock | SessionChange::Connect => Some(Heard::Connected),
+            SessionChange::Disconnect => Some(Heard::Disconnected),
+            SessionChange::Lock => None,
         }
     }
 }
@@ -295,6 +311,16 @@ impl Remote {
         }
         self.post(WM_TRAY_REFRESH, 0, 0)
             .inspect_err(|_| *slot = None)
+    }
+
+    /// Tells the thread's handler that an earlier watchdog is done
+    /// ([`WindowEvent::EarlierWatchdogDone`]).
+    ///
+    /// # Errors
+    /// The window is gone, or Windows refused the post: its queue is full,
+    /// so the thread is hung.
+    pub fn earlier_watchdog_done(&self) -> io::Result<()> {
+        self.post(WM_EARLIER_DONE, 0, 0)
     }
 
     /// Runs `with` on this thread's own remote, while the window lives.
@@ -478,14 +504,25 @@ fn class_name() -> Vec<u16> {
 }
 
 /// Registers `class` and creates its hidden top-level window.
-#[allow(unsafe_code)]
 fn create_window(class: &[u16]) -> io::Result<HWND> {
+    hidden_window(class, window_procedure)
+}
+
+/// Registers `class` with `procedure` and creates its hidden top-level
+/// window: one that hears what Windows tells top-level windows alone
+/// (logoff, sleep), never shown and with no taskbar button. The watchdog's
+/// window is one too.
+#[allow(unsafe_code)]
+pub(crate) fn hidden_window(
+    class: &[u16],
+    procedure: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+) -> io::Result<HWND> {
     // SAFETY: a null name asks for this program's own module, which needs
     // no freeing.
     let instance = unsafe { GetModuleHandleW(null()) };
     let window_class = WNDCLASSW {
         style: 0,
-        lpfnWndProc: Some(window_procedure),
+        lpfnWndProc: Some(procedure),
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: instance,
@@ -530,7 +567,7 @@ fn create_window(class: &[u16]) -> io::Result<HWND> {
 }
 
 #[allow(unsafe_code)]
-fn unregister_class(class: &[u16]) {
+pub(crate) fn unregister_class(class: &[u16]) {
     // SAFETY: `class` is the NUL-terminated name registered with this
     // module; no window of it is left. A failure leaves only a class name,
     // freed with the process.
@@ -624,6 +661,10 @@ fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LR
             emit(WindowEvent::Close);
             Some(0)
         }
+        WM_EARLIER_DONE => {
+            emit(WindowEvent::EarlierWatchdogDone);
+            Some(0)
+        }
         WM_TIMER if wparam == RETRY_TIMER => {
             kill_retry_timer(hwnd);
             watch_session(hwnd);
@@ -655,7 +696,10 @@ fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LR
 /// one the program does not follow is still a wake, reported as such.
 fn session_notice(hwnd: HWND, code: WPARAM) {
     let change = SessionChange::from_code(code);
-    if change.is_some() {
+    if let Some(change) = change {
+        if let Some(heard) = change.heard() {
+            session::follow(heard);
+        }
         hotkeys::session_changed(hwnd);
     }
     emit(change.map_or(
@@ -717,7 +761,9 @@ fn watch_session(hwnd: HWND) {
     if !SESSION_WATCHED.get() {
         // SAFETY: `hwnd` is this thread's live window.
         if unsafe { WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) } == 0 {
-            emit(WindowEvent::SessionUnwatched(io::Error::last_os_error()));
+            let err = io::Error::last_os_error();
+            session::follow(Heard::Lost);
+            emit(WindowEvent::SessionUnwatched(err));
             schedule_retry(hwnd);
             return;
         }
@@ -725,6 +771,10 @@ fn watch_session(hwnd: HWND) {
     }
     let read = query();
     let failed = read.is_err();
+    session::follow(
+        read.as_ref()
+            .map_or(Heard::Lost, |state| Heard::Read(*state)),
+    );
     emit(WindowEvent::SessionRead(read));
     if failed {
         schedule_retry(hwnd);

@@ -973,6 +973,7 @@ async fn a_blocked_session_stops_clicking_and_refuses_starts() {
         Blocked::Locked,
         Blocked::Inactive,
         Blocked::Sleeping,
+        Blocked::EarlierReleasing,
         Blocked::Unknown("lost".to_owned().into()),
     ];
     for reason in reasons {

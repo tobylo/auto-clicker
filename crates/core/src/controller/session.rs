@@ -17,6 +17,10 @@ pub enum Blocked {
     Inactive,
     /// The computer is about to sleep.
     Sleeping,
+    /// An earlier Auto Clicker's watchdog still sends releases Windows
+    /// blocked, and a new run could press a key it is about to let go of
+    /// (Windows).
+    EarlierReleasing,
     /// The session state could not be read; the reason. A state that cannot
     /// be read is never taken for "unlocked".
     Unknown(Quoted),
@@ -28,6 +32,9 @@ impl fmt::Display for Blocked {
             Blocked::Locked => f.write_str("the screen is locked"),
             Blocked::Inactive => f.write_str("another session is in front"),
             Blocked::Sleeping => f.write_str("the computer is going to sleep"),
+            Blocked::EarlierReleasing => {
+                f.write_str("an earlier Auto Clicker is still letting go of held keys")
+            }
             Blocked::Unknown(reason) => write!(f, "the session state is unknown: {reason}"),
         }
     }

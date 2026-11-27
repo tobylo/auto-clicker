@@ -6,10 +6,10 @@
 //! key up although the program in front never saw it come up. So neither
 //! `SendInput`'s result nor the key state says whether a release arrived;
 //! the context does: a release counts as delivered only when, both before
-//! and after it was sent, the user's desktop has input and the window in
-//! front belongs to a process whose integrity can be read and is not above
-//! this program's own, with the same window in front both times
-//! (docs/decisions/0006, point 6).
+//! and after it was sent, the session is connected, the user's desktop has
+//! input and the window in front belongs to a process whose integrity can
+//! be read and is not above this program's own, with the same window in
+//! front both times (docs/decisions/0006, point 6).
 
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
@@ -29,9 +29,15 @@ use windows_sys::Win32::System::Threading::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
+use crate::session;
+
 /// What was in front at one moment, as far as a release is concerned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Context {
+    /// Whether the session is connected to the console or a remote
+    /// desktop: a disconnected one has no input, though its desktop still
+    /// opens.
+    pub connected: bool,
     /// Whether the user's desktop has input (`OpenInputDesktop` succeeds);
     /// not on the lock screen or a UAC prompt.
     pub desktop_has_input: bool,
@@ -45,7 +51,7 @@ pub struct Context {
 impl Context {
     /// Whether a release sent now could arrive.
     pub fn allows_delivery(self) -> bool {
-        self.desktop_has_input && self.foreground != 0 && self.foreground_allowed
+        self.connected && self.desktop_has_input && self.foreground != 0 && self.foreground_allowed
     }
 }
 
@@ -85,8 +91,21 @@ pub fn foreground_takes_input() -> bool {
     context().allows_delivery()
 }
 
-/// What is in front now.
+/// What is in front now, the session's connection as last heard
+/// ([`session::connected`]): the daemon's notices are handled on a thread
+/// of their own, so they keep up, and a release needs no read of its own.
 pub fn context() -> Context {
+    context_with(session::connected())
+}
+
+/// What is in front now, the session's connection read now: for the
+/// watchdog, whose notices wait in its queue behind the pass that checks.
+pub(crate) fn context_read() -> Context {
+    context_with(session::read_connected())
+}
+
+/// What is in front now, `connected` saying whether the session is.
+fn context_with(connected: bool) -> Context {
     let desktop_has_input = input_desktop();
     // SAFETY: no arguments.
     #[allow(unsafe_code)]
@@ -95,6 +114,7 @@ pub fn context() -> Context {
     let foreground_allowed =
         !window.is_null() && not_above(window_integrity(window), own_integrity());
     Context {
+        connected,
         desktop_has_input,
         foreground,
         foreground_allowed,
@@ -200,6 +220,7 @@ mod tests {
     use super::*;
 
     const OPEN: Context = Context {
+        connected: true,
         desktop_has_input: true,
         foreground: 7,
         foreground_allowed: true,
@@ -224,8 +245,13 @@ mod tests {
             foreground: 8,
             ..OPEN
         };
+        // A remote desktop left: its desktop opens, but nothing takes input.
+        let disconnected = Context {
+            connected: false,
+            ..OPEN
+        };
         assert_eq!(judge(OPEN, OPEN, &SENT), Delivery::Delivered);
-        for blocked in [locked, elevated, nothing] {
+        for blocked in [locked, elevated, nothing, disconnected] {
             assert_eq!(
                 judge(blocked, OPEN, &SENT),
                 Delivery::Blocked,

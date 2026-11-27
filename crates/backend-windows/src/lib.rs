@@ -5,7 +5,8 @@
 //! instance and runs the message thread, which hears the session's and the
 //! power notices and shows the tray icon, registers the hotkeys and reads the
 //! keyboard while they need it, sends input, and keeps the table the
-//! watchdog releases from should the daemon die; recording and the rest
+//! watchdog releases from should the daemon die, sending again what Windows
+//! blocked until it arrives; recording and the rest
 //! arrive with the later M5 slices.
 
 // Windows alone; on other systems the crate is empty.
@@ -22,6 +23,7 @@ mod language;
 mod message;
 mod message_thread;
 mod output;
+mod resend;
 mod run_timer;
 mod session;
 mod tray;

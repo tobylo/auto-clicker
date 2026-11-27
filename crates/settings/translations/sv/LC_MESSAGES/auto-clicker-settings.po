@@ -391,6 +391,9 @@ msgstr "en annan session är framme"
 msgid "the computer is going to sleep"
 msgstr "datorn ska gå i viloläge"
 
+msgid "an earlier Auto Clicker is still letting go of held keys"
+msgstr "ett tidigare Auto Clicker släpper fortfarande nedtryckta tangenter"
+
 msgid "the session state is unknown: {}"
 msgstr "sessionens läge är okänt: {}"
 

@@ -282,6 +282,25 @@ fn area_of(window: HWND) -> Option<Area> {
     (unsafe { GetWindowRect(window, &mut rect) } != 0).then(|| Area::from(rect))
 }
 
+/// Locks the session, as Windows+L does; it is unlocked by hand (in the
+/// VM, through the QEMU monitor: see `tests/windows_daemon.rs`).
+///
+/// # Errors
+/// Windows refused.
+pub fn lock() -> io::Result<()> {
+    // Windows' own entry point, through the program it ships for that.
+    let status = Command::new("rundll32.exe")
+        .arg("user32.dll,LockWorkStation")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other(format!("rundll32 ended with {status}")));
+    }
+    Ok(())
+}
+
 /// Presses and releases the key `key` (a virtual key code).
 pub fn press(key: VIRTUAL_KEY) -> io::Result<()> {
     send_key(key, 0)?;

@@ -90,6 +90,13 @@ impl Notices {
         }
     }
 
+    /// Refuses starts until [`WindowEvent::EarlierWatchdogDone`]: an
+    /// earlier watchdog still sends releases. Called before the thread
+    /// runs, so the first thing the controller is told says so.
+    pub fn earlier_watchdog(&mut self) {
+        self.session.earlier = true;
+    }
+
     /// The menu's commands, for the tray to draw the menu with.
     pub fn commands(&self) -> Commands {
         self.commands.clone()
@@ -134,6 +141,7 @@ impl Notices {
         if matches!(
             event,
             WindowEvent::Session(_)
+                | WindowEvent::EarlierWatchdogDone
                 | WindowEvent::Suspend
                 | WindowEvent::Resume
                 | WindowEvent::Display(_)
@@ -234,6 +242,8 @@ struct Session {
     /// Why the display's state cannot be followed, when it cannot: then
     /// the display could turn off unheard, so starts are refused.
     display_unwatched: Option<String>,
+    /// Whether an earlier watchdog still sends releases.
+    earlier: bool,
     /// What the controller was last told; `None` before anything was.
     told: Option<Option<Blocked>>,
     /// How many times sleep was announced.
@@ -260,6 +270,7 @@ impl Session {
                 self.display_unwatched =
                     Some(format!("the display's state cannot be followed: {err}"));
             }
+            WindowEvent::EarlierWatchdogDone => self.earlier = false,
             _ => return Told::Nothing,
         }
         if self.announces_sleep(event, was_asleep) {
@@ -323,7 +334,8 @@ impl Session {
 
     /// Why clicking may not run, or `None` when it may: sleep first, then
     /// a session state not known, then a display not followed, then core's
-    /// order of the lock and another session in front.
+    /// order of the lock and another session in front, then an earlier
+    /// watchdog still sending releases.
     fn blocked(&self) -> Option<Blocked> {
         if self.asleep() {
             return Some(Blocked::Sleeping);
@@ -338,12 +350,14 @@ impl Session {
         if let Some(why) = &self.display_unwatched {
             return Some(Blocked::Unknown(why.clone().into()));
         }
-        SessionFacts {
+        let facts = SessionFacts {
             locked,
             active,
             sleeping: false,
-        }
-        .blocked()
+        };
+        facts
+            .blocked()
+            .or_else(|| self.earlier.then_some(Blocked::EarlierReleasing))
     }
 }
 
