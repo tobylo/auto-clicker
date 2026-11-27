@@ -12,6 +12,9 @@ const START_AT: desktop::Point = desktop::Point { x: 1000, y: 700 };
 /// (600, 400), then 40 counts right at 100 ms with its position, then F13
 /// held to 19 s, so it still plays when the tray is read; the test stops it.
 fn positioned(source: &str) -> String {
+    // The daemon's physical pixels, not a scaled desktop's virtual ones:
+    // `Home::new` makes the process aware only after this.
+    let _ = auto_clicker_backend_windows::become_per_monitor_aware();
     let (width, height) = desktop::screen_size();
     let (version, from) = match source {
         "kwin" => (2, String::new()),
