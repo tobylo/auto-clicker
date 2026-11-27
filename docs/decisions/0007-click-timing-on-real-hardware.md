@@ -10,8 +10,8 @@
 
 ## Decisions
 
-1. **Decision 7's check stays as it is, around each release.** It is not what makes 10 ms clicks miss C02's bound on real hardware. The check costs 0.12 ms before the send and 0.31 ms after it at the median. It runs about 5 ms before the next press, and no press waits on it. In every batch where runs missed, the plain output missed as often as the check, or more.
-2. **What makes periods late is a mouse button's own `SendInput`.** On this PC it takes about 0.5 ms, most of it waiting rather than working. In some spells it takes 1 to 16 ms. Almost every period off by 1 ms or more is a press whose `SendInput` took 1 ms or more to return. The event reaches the window within 0.1 ms after the call returns.
+1. **Decision 7's check stays as it is, around each release.** It is not what makes 10 ms clicks miss C02's bound on real hardware. The check costs 0.12 ms before the send and 0.27 to 0.32 ms after it at the median. It runs about 5 ms before the next press, and no press waits on it. In every batch where runs missed, the plain output missed as often as the check, or more.
+2. **What makes periods late is a mouse button's own `SendInput`.** On this PC it takes about 0.5 ms (p50 495 to 508 µs per press in each arm of the traced runs b1 to b5), most of it waiting rather than working. In some spells it takes 1 to 16 ms. Most periods off by 1 ms or more are presses whose `SendInput` took 1 ms or more to return. The event reaches the window about 0.13 ms after the call returns at the median, and within 0.6 ms at every run's p99.
 3. **The output path does not change.** Nothing found is in the program's reach there. Finding what a slow `SendInput` waits on, and whether the program can avoid it, is WN14 (#138).
 4. **#135's first criterion is not met by a quiet spell.** In quiet spells the unchanged timing test passes with the check. In bad spells it fails with or without the check. So 30 passing runs at each interval would prove no fix, and the criterion is left unticked.
 
@@ -36,9 +36,9 @@
 | b5, the display turned off or on before each run | 0 of 20 | 0 of 20 |
 | b6, just after a second reboot (08:37) | 20 of 20 | 20 of 20 |
 
-- **In b1,** 104 of the plain output's 138 periods off by 1 ms or more had a press `SendInput` of 1 ms or more, against 53 of the check's 90. Most of the rest were presses that started late.
+- **In b1,** 104 of the plain output's 138 periods off by 1 ms or more had a press `SendInput` of 1 ms or more, against 53 of the check's 90. Of the rest, 18 and 11 were presses that started late, and 16 and 24 had neither a long send nor a late start.
 - **In b6,** the PC was nearly idle: the test was the only process with noticeable CPU over the 8 minutes, and Explorer and Settings used under 2 s each. About a quarter of button `SendInput` calls took about 16 ms, one 60 Hz frame, and the p99 error was 13 to 22 ms in every run.
-- **Across all batches,** the timer woke 0.18 ms after the deadline at the median and 0.65 ms at p99, and the task was polled 0.07 ms after that, in every arm.
+- **In b1 to b5,** the timer woke 0.17 to 0.22 ms after the deadline at the median and 0.65 to 0.68 ms at the median run's p99, and the task was polled 0.07 ms after that, in every arm. In b6 it woke 0.29 to 0.31 ms late at the median and 0.73 ms at p99, still far from the 16 ms sends.
 - **Ruled out:**
   - CPU load (b4).
   - The priority class, in a quiet batch (b2). Tests started through `pc run` inherit the runner task's BelowNormal priority.
