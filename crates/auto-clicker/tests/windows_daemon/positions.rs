@@ -46,16 +46,18 @@ fn holding_recording(what: &str, recording: &str) -> (Home, Daemon) {
     (home, daemon)
 }
 
-/// Plays the daemon's recording by its hotkey from [`START_AT`]; where the
-/// pointer is once its moves have played.
-fn played_to() -> desktop::Point {
+/// Plays the daemon's recording by its hotkey from [`START_AT`], and waits
+/// for the pointer to reach a place that is `played`: its moves are done
+/// within 100 ms of the start, which waits up to 2 s for the hotkey's
+/// modifiers to come up.
+fn play_to(what: &str, played: impl Fn(desktop::Point) -> bool) {
     desktop::move_pointer(START_AT).unwrap();
     assert_eq!(desktop::pointer().unwrap(), START_AT);
     combination(F8);
-    // Its moves are done within 100 ms of the start; the start waits for
-    // the hotkey's modifiers, which are up already.
-    sleep(Duration::from_secs(1));
-    desktop::pointer().unwrap()
+    wait_for(what, || {
+        let at = desktop::pointer().unwrap();
+        played(at).then_some(())
+    });
 }
 
 #[test]
@@ -63,11 +65,8 @@ fn played_to() -> desktop::Point {
 fn positions_play_only_on_the_system_that_took_them() {
     // Taken on Windows, on these screens: the positions play.
     let (_home, daemon) = holding_recording("positions-windows", &positioned("windows"));
-    assert_eq!(
-        played_to(),
-        desktop::Point { x: 640, y: 400 },
-        "a Windows recording's positions"
-    );
+    let position = desktop::Point { x: 640, y: 400 };
+    play_to("a Windows recording's positions", |at| at == position);
     let icon = promoted_icon(daemon.process());
     let text = popup_once(daemon.process(), icon, |text| text.contains("From windows"));
     assert!(
@@ -81,8 +80,9 @@ fn positions_play_only_on_the_system_that_took_them() {
     // the notice says the positions are not used.
     for source in ["kwin", "hyprland"] {
         let (_home, daemon) = holding_recording(source, &positioned(source));
-        let at = played_to();
-        assert!(at.x > START_AT.x && at.y == START_AT.y, "{source}: {at:?}");
+        play_to(&format!("{source}'s relative motion"), |at| {
+            at.x > START_AT.x && at.y == START_AT.y
+        });
         let icon = promoted_icon(daemon.process());
         popup_once(daemon.process(), icon, |text| {
             text.contains("Playing with relative motion: a screen this recording used")
