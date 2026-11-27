@@ -10,15 +10,14 @@
 //! combinations of the hotkeys that stop it. One registration serves both:
 //! it is made while either needs it and removed once neither does.
 //!
-//! One press can arrive both ways, in either order, and counts once: each
-//! half waits for its pair until the press's key comes up. (On Windows a
-//! hotkey that fires never shows its key's press in raw input, so the pair
-//! is a safeguard: the backend hands in the raw input queued before a
-//! hotkey first, the hotkey after.) A press counted
-//! from raw input keeps the keyboard read until then, so its hotkey is
-//! known for the same press however late it comes. A hotkey counted first
-//! needs no such hold: once nothing matches stops, a raw key-down fires
-//! nothing anyway.
+//! One press can arrive both ways and counts once. A stop counted from raw
+//! input waits for its hotkey until the press's key comes up, and keeps
+//! the keyboard read until then, so its hotkey is known for the same press
+//! however late it comes. A hotkey counted first needs no pair: its key is
+//! then down in what is followed (from raw input, or from the key state
+//! read at the hotkey), so a raw down of it after is a repeat. (On Windows
+//! a hotkey that fires never shows its key's press in raw input, and the
+//! backend hands in the raw input queued before a hotkey first.)
 //!
 //! Everything here is plain logic over key codes; the backend does the
 //! reading through [`Keyboard`], and its own events never get here (the
@@ -56,15 +55,6 @@ pub trait Keyboard {
     fn held(&self, code: u16) -> bool;
 }
 
-/// Which way an activation came.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Source {
-    /// The system's hotkey message.
-    Hotkey,
-    /// A stop combination matched in raw input.
-    Keys,
-}
-
 /// A hotkey the system took.
 #[derive(Debug)]
 struct Taken {
@@ -97,8 +87,9 @@ pub struct Registered {
     owed: bool,
     /// The modifiers were reported up since the last activation.
     released: bool,
-    /// Activations whose other half may still come, by the way they came.
-    unpaired: Vec<(Action, Source)>,
+    /// Stops raw input counted whose hotkey may still come for the same
+    /// press.
+    unpaired: Vec<Action>,
 }
 
 impl Registered {
@@ -144,15 +135,16 @@ impl Registered {
     /// other half of a press already counted, and its modifiers are waited
     /// for. The events to send, in order.
     pub fn hotkey(&mut self, action: Action, keyboard: &mut impl Keyboard) -> Vec<HotkeyEvent> {
-        if !self.took(action) || self.paired(action, Source::Keys) {
+        if !self.took(action) || self.paired(action) {
             return Vec::new();
         }
         let mut events = vec![HotkeyEvent::Fired(action)];
         self.activated();
         if self.reading {
-            self.unpaired.push((action, Source::Hotkey));
             // Raw events of this very press may still be queued behind the
-            // hotkey: what the system's state says is down counts too.
+            // hotkey: what the system's state says is down counts too. Its
+            // key among them, should it show: a raw down of it after is then
+            // a repeat, never a second press.
             self.seed(keyboard);
         }
         self.settle(keyboard, &mut events);
@@ -176,7 +168,7 @@ impl Registered {
             self.held.retain(|&held| held != code);
             self.forget_seeded_aliases(code, keyboard);
             let hotkeys = &self.hotkeys;
-            self.unpaired.retain(|(action, _)| {
+            self.unpaired.retain(|action| {
                 !hotkeys
                     .iter()
                     .any(|taken| taken.action == *action && taken.keys.contains(&code))
@@ -269,13 +261,10 @@ impl Registered {
         self.hotkeys.iter().any(|taken| taken.action == action)
     }
 
-    /// Whether `action` was counted from `other` and waits for this half;
-    /// the pair is used up.
-    fn paired(&mut self, action: Action, other: Source) -> bool {
-        let index = self
-            .unpaired
-            .iter()
-            .position(|&pair| pair == (action, other));
+    /// Whether `action` was counted from raw input and waits for its
+    /// hotkey; the pair is used up.
+    fn paired(&mut self, action: Action) -> bool {
+        let index = self.unpaired.iter().position(|&counted| counted == action);
         index
             .map(|index| self.unpaired.swap_remove(index))
             .is_some()
@@ -299,12 +288,9 @@ impl Registered {
         let Some(action) = stop else {
             return;
         };
-        if self.paired(action, Source::Hotkey) {
-            return;
-        }
         events.push(HotkeyEvent::Fired(action));
         self.activated();
-        self.unpaired.push((action, Source::Keys));
+        self.unpaired.push(action);
     }
 
     /// Whether `code` is read: a modifier, or a hotkey's key.
@@ -357,12 +343,7 @@ impl Registered {
     /// arrives after the stop it duplicates, behind the controller's
     /// answer to it, is still known for the same press.
     fn wanted(&self) -> bool {
-        self.owed
-            || !self.watching.stops.is_empty()
-            || self
-                .unpaired
-                .iter()
-                .any(|&(_, source)| source == Source::Keys)
+        self.owed || !self.watching.stops.is_empty() || !self.unpaired.is_empty()
     }
 
     /// Starts reading when something needs it and stops once nothing

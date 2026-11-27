@@ -275,17 +275,16 @@ fn one_press_seen_both_ways_counts_once_in_either_order() {
     hotkeys.key(SHIFT, true, &mut keyboard);
     assert_eq!(hotkeys.key(F6, true, &mut keyboard), [Fired(CLICKING)]);
     assert_eq!(hotkeys.hotkey(CLICKING, &mut keyboard), []);
-    // The hotkey first, while its raw events are still queued: the key
-    // state says the keys are up (an instant injected press).
-    let mut keyboard = FakeKeyboard::default();
+    // The hotkey first, its key still down: a raw down of it that comes
+    // after (Windows has been measured never to send one) is no second
+    // press. (The backend hands in the raw input queued before a hotkey
+    // first, so a release older than it is never seen after it.)
+    let mut keyboard = holding(&[CTRL, SHIFT, F6]);
     let mut hotkeys = registered();
     hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
-    assert_eq!(
-        hotkeys.hotkey(CLICKING, &mut keyboard),
-        [Fired(CLICKING), ModifiersReleased]
-    );
-    hotkeys.key(CTRL, true, &mut keyboard);
-    hotkeys.key(SHIFT, true, &mut keyboard);
+    keyboard.down = vec![CTRL, SHIFT, F6];
+    hotkeys.key(F6, false, &mut keyboard);
+    assert_eq!(hotkeys.hotkey(CLICKING, &mut keyboard), [Fired(CLICKING)]);
     assert_eq!(hotkeys.key(F6, true, &mut keyboard), []);
 }
 
@@ -598,4 +597,26 @@ fn a_session_change_during_the_modifier_wait_loses_it() {
     keyboard.down.clear();
     let changed = hotkeys.session_changed(&mut keyboard);
     assert_eq!(after(changed, &keyboard), (vec![ReleaseLost], false));
+}
+
+#[test]
+fn a_hotkey_whose_key_is_already_up_waits_for_no_other_half() {
+    const F8: u16 = 66;
+    let playback = Action::TogglePlayback;
+    let mut keyboard = FakeKeyboard::default();
+    let mut hotkeys = registered();
+    // Reading already, for another wait: the tap's raw release is handled
+    // before its hotkey, and the key state shows F8 up.
+    hotkeys.watch(stops(&[CLICKING]), &mut keyboard);
+    hotkeys.key(F8, false, &mut keyboard);
+    assert_eq!(
+        hotkeys.hotkey(playback, &mut keyboard),
+        [Fired(playback), ModifiersReleased]
+    );
+    // Playback then runs: its first raw stop counts.
+    hotkeys.watch(stops(&Action::ALL), &mut keyboard);
+    assert_eq!(
+        press(&mut hotkeys, &mut keyboard, F8),
+        [Fired(playback), ModifiersReleased]
+    );
 }

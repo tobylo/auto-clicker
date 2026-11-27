@@ -1144,11 +1144,20 @@ fn quietly(script: &str) {
 /// panicking.
 fn kill_quietly(pid: u32, tree: bool) {
     let tree = if tree { " /T" } else { "" };
-    let _ = Command::new("cmd")
+    let spawned = Command::new("cmd")
         .args(["/c", &format!("taskkill /F{tree} /PID {pid}")])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status();
+        .spawn();
+    // At most ten seconds: the held handles end what it leaves.
+    if let Ok(mut child) = spawned {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+            sleep(Duration::from_millis(50));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 /// Whether process `pid` still runs, for cleanup: taken as running when it

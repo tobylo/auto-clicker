@@ -448,7 +448,7 @@ fn register(hwnd: HWND, wish: &Wish) -> Active {
         send: Arc::clone(&wish.send),
         ids,
         watching: Watching::default(),
-        registered: Registered::new(taken, |binding| setting_off(binding.key())),
+        registered: Registered::new(taken, |binding| set_off_here(binding.key())),
     }
 }
 
@@ -562,6 +562,18 @@ fn layouts() -> Vec<HKL> {
 /// NumLock decides between; Z for a Y on a German layout), and `key`
 /// itself whatever it maps to. A layout installed later is not covered
 /// until the hotkeys are registered again.
+/// The keys that set off a hotkey on `key` on this thread's layout, the one
+/// it was registered with: what raw input matches a stop against, so a key
+/// another layout maps there (Z for a Y) stops nothing Windows would not.
+fn set_off_here(key: Key) -> Vec<Key> {
+    let Some(vk) = virtual_key(key) else {
+        return vec![key];
+    };
+    let mut keys = vec![key];
+    keys.extend(keys::sendable().filter(|&other| other != key && virtual_key(other) == Some(vk)));
+    keys
+}
+
 fn setting_off(key: Key) -> Vec<Key> {
     let Some(vk) = virtual_key(key) else {
         return vec![key];
