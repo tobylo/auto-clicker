@@ -598,21 +598,11 @@ fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LR
         // A notice the program does not follow is still a wake, reported
         // as such.
         WM_WTSSESSION_CHANGE => {
-            let change = SessionChange::from_code(wparam);
-            if change.is_some() {
-                hotkeys::session_changed(hwnd);
-            }
-            emit(change.map_or(WindowEvent::Other(message), WindowEvent::Session));
+            session_notice(hwnd, wparam);
             Some(0)
         }
         WM_POWERBROADCAST => {
-            if matches!(
-                u32::try_from(wparam),
-                Ok(PBT_APMSUSPEND | PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND)
-            ) {
-                hotkeys::session_changed(hwnd);
-            }
-            power(wparam, lparam);
+            power(hwnd, wparam, lparam);
             Some(1)
         }
         // Never holds up a logoff: answered at once, before anything that
@@ -660,15 +650,33 @@ fn answer(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LR
     }
 }
 
+/// A `WM_WTSSESSION_CHANGE`: the hotkeys forget the keys followed, since
+/// the keyboard went to another desktop meanwhile, and the handler hears it;
+/// one the program does not follow is still a wake, reported as such.
+fn session_notice(hwnd: HWND, code: WPARAM) {
+    let change = SessionChange::from_code(code);
+    if change.is_some() {
+        hotkeys::session_changed(hwnd);
+    }
+    emit(change.map_or(
+        WindowEvent::Other(WM_WTSSESSION_CHANGE),
+        WindowEvent::Session,
+    ));
+}
+
 /// A `WM_POWERBROADCAST`; one the program does not follow (the power
 /// source changing, say) is still a wake, reported as such.
-fn power(event: WPARAM, lparam: LPARAM) {
+fn power(hwnd: HWND, event: WPARAM, lparam: LPARAM) {
     let event = match u32::try_from(event) {
         Ok(PBT_APMSUSPEND) => Some(WindowEvent::Suspend),
         Ok(PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND) => Some(WindowEvent::Resume),
         Ok(PBT_POWERSETTINGCHANGE) => display_setting(lparam).map(WindowEvent::Display),
         _ => None,
     };
+    // What the keyboard did across sleep is not known.
+    if matches!(event, Some(WindowEvent::Suspend | WindowEvent::Resume)) {
+        hotkeys::session_changed(hwnd);
+    }
     emit(event.unwrap_or(WindowEvent::Other(WM_POWERBROADCAST)));
 }
 

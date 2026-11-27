@@ -356,3 +356,12 @@ fn a_replacement_reader_takes_hotkey_ids_of_its_own() {
         }
     }
 }
+
+#[test]
+fn a_key_the_layouts_disagree_on_moves() {
+    assert!(moves(&[Some(0x59), Some(0x5a)]));
+    assert!(!moves(&[Some(0x75), Some(0x75), Some(0x75)]));
+    assert!(!moves(&[Some(0x75)]));
+    // The function keys are the same key on every layout.
+    assert_eq!(not_yet(binding("Ctrl+Shift+F7")), None);
+}

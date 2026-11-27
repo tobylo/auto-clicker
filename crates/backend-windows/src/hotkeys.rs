@@ -474,13 +474,32 @@ const READ_BACK_LATER: [u16; 4] = [99, 119, 122, 123];
 
 /// Why `binding` is not registered yet, if it is not.
 fn not_yet(binding: Binding) -> Option<NotRegistered> {
-    READ_BACK_LATER.contains(&binding.key().code()).then(|| {
-        NotRegistered::Failed(
-            "its key cannot be read back on Windows yet"
-                .to_owned()
-                .into(),
-        )
-    })
+    let why = if READ_BACK_LATER.contains(&binding.key().code()) {
+        "its key cannot be read back on Windows yet"
+    } else if moves(&layouts_give(binding.key())) {
+        // Raw input would match its stop on this thread's layout alone, and
+        // a game with another layout in front turns the hotkey off (WN10
+        // matches across layouts).
+        "its key is another key on one of your keyboard layouts"
+    } else {
+        return None;
+    };
+    Some(NotRegistered::Failed(why.to_owned().into()))
+}
+
+/// The virtual key each installed layout, and this thread's, gives `key`.
+fn layouts_give(key: Key) -> Vec<Option<u16>> {
+    let mut given: Vec<Option<u16>> = layouts()
+        .into_iter()
+        .map(|layout| virtual_key_in(key, layout))
+        .collect();
+    given.push(virtual_key(key));
+    given
+}
+
+/// Whether the layouts do not agree on a key's virtual key.
+fn moves(given: &[Option<u16>]) -> bool {
+    given.windows(2).any(|pair| pair[0] != pair[1])
 }
 
 #[allow(unsafe_code)]

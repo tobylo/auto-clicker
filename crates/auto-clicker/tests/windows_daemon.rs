@@ -1164,6 +1164,14 @@ fn kill_quietly(pid: u32, tree: bool) {
     }
 }
 
+/// Waits up to `within` for process `pid` to end, for cleanup.
+fn wait_for_end(pid: u32, within: Duration) {
+    let deadline = Instant::now() + within;
+    while alive_quietly(pid) && Instant::now() < deadline {
+        sleep(Duration::from_millis(100));
+    }
+}
+
 /// Whether process `pid` still runs, for cleanup: taken as running when it
 /// cannot be asked, so a watchdog keeps its time to release.
 fn alive_quietly(pid: u32) -> bool {
@@ -1259,9 +1267,9 @@ impl Drop for Unelevated {
             }
         };
         for watchdog in watchdogs {
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while self.daemon.is_some() && alive_quietly(watchdog) && Instant::now() < deadline {
-                sleep(Duration::from_millis(100));
+            // Its daemon ended: up to five seconds to release what it held.
+            if self.daemon.is_some() {
+                wait_for_end(watchdog, Duration::from_secs(5));
             }
             kill_quietly(watchdog, true);
         }
