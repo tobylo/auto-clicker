@@ -119,7 +119,15 @@ fn monitors_a_layout_cannot_hold_are_not_whole() {
 
 /// The next event that is a screens change or a wake by `message`.
 fn next_display_event(received: &mpsc::Receiver<WindowEvent>, message: u32) -> String {
-    let deadline = Instant::now() + ARRIVAL;
+    next_display_event_by(received, message, Instant::now() + ARRIVAL)
+}
+
+/// The same, arriving by `deadline`.
+fn next_display_event_by(
+    received: &mpsc::Receiver<WindowEvent>,
+    message: u32,
+    deadline: Instant,
+) -> String {
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         match received.recv_timeout(left).unwrap() {
@@ -130,10 +138,11 @@ fn next_display_event(received: &mpsc::Receiver<WindowEvent>, message: u32) -> S
     }
 }
 
-/// Waits for the screens to be told changed; the wakes of display changes
-/// that left them as they were may come first.
+/// Waits for the screens to be told changed, at most [`ARRIVAL`] in all;
+/// the wakes of display changes that left them as they were may come first.
 fn changed(received: &mpsc::Receiver<WindowEvent>) {
-    while next_display_event(received, WM_DISPLAYCHANGE) != "ScreensChanged" {}
+    let deadline = Instant::now() + ARRIVAL;
+    while next_display_event_by(received, WM_DISPLAYCHANGE, deadline) != "ScreensChanged" {}
 }
 
 /// The bounding box of `layout`'s outputs.
