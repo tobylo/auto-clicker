@@ -70,8 +70,8 @@ fn a_release_windows_refused_stays_owed() {
 #[test]
 fn an_unlock_or_a_reconnect_wakes_a_pass_and_the_sessions_end_stops_the_wait() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        WTS_CONSOLE_CONNECT, WTS_REMOTE_CONNECT, WTS_SESSION_LOCK, WTS_SESSION_LOGON,
-        WTS_SESSION_UNLOCK,
+        WTS_CONSOLE_CONNECT, WTS_CONSOLE_DISCONNECT, WTS_REMOTE_CONNECT, WTS_SESSION_LOCK,
+        WTS_SESSION_LOGON, WTS_SESSION_UNLOCK,
     };
     let notice = |code: u32| answer(WM_WTSSESSION_CHANGE, code as WPARAM);
     let _ = crate::resend::take_signals_here();
@@ -79,7 +79,7 @@ fn an_unlock_or_a_reconnect_wakes_a_pass_and_the_sessions_end_stops_the_wait() {
         assert_eq!(notice(code), Some(0));
         assert_eq!(crate::resend::take_signals_here(), (true, false), "{code}");
     }
-    for code in [WTS_SESSION_LOCK, WTS_SESSION_LOGON] {
+    for code in [WTS_SESSION_LOCK, WTS_SESSION_LOGON, WTS_CONSOLE_DISCONNECT] {
         assert_eq!(notice(code), Some(0));
         assert_eq!(crate::resend::take_signals_here(), (false, false), "{code}");
     }

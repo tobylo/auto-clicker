@@ -5,7 +5,9 @@
 //! notices its window hears ([`follow`]): a disconnected session (a remote
 //! desktop left, a switch to another user) has no input, though
 //! `OpenInputDesktop` still opens the desktop it gets back on reconnect, so
-//! decision 7's check asks this as well ([`connected`]).
+//! decision 7's check asks this as well ([`connected`]). The watchdog,
+//! whose notices wait behind the pass that checks, reads it at each check
+//! instead ([`read_connected`]).
 
 use std::io;
 use std::ptr::null_mut;
@@ -116,6 +118,12 @@ fn kept(heard: Heard) -> u8 {
 /// a session not known to be connected is never taken for one.
 pub(crate) fn connected() -> bool {
     connected_by(CONNECTED.load(Ordering::Acquire), query)
+}
+
+/// Whether this process's session is connected, read now and not kept; one
+/// that cannot be read counts as not connected.
+pub(crate) fn read_connected() -> bool {
+    connected_by(UNKNOWN, query)
 }
 
 /// Whether `kept` says connected, reading the state with `read` when it

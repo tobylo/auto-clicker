@@ -11,10 +11,11 @@
 //! One test locks the session and waits up to three minutes for it to be
 //! unlocked by hand: `vm key` types the password from the dev box. It
 //! passes by unless `AUTO_CLICKER_TEST_UNLOCK` is set; run it alone, and
-//! unlock once the VM's screen shows the lock:
+//! unlock once the VM's screen shows the lock. The quotes keep the `&&`
+//! for the VM's `cmd.exe`, which runs the command:
 //!
 //! ```text
-//! scripts/windows-vm/vm run --timeout 900 --workdir 'C:\work\<dir>' -- set AUTO_CLICKER_TEST_UNLOCK=1 && cargo test --locked -p auto-clicker --test windows_daemon -- --ignored --exact resend::a_release_the_lock_screen_blocked_is_sent_again_after_unlock
+//! scripts/windows-vm/vm run --timeout 900 --workdir 'C:\work\<dir>' -- 'set AUTO_CLICKER_TEST_UNLOCK=1&& cargo test --locked -p auto-clicker --test windows_daemon -- --ignored --exact resend::a_release_the_lock_screen_blocked_is_sent_again_after_unlock'
 //! ```
 //!
 //! Four tests need an elevated process and pass by otherwise; run each

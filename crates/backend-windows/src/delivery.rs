@@ -7,10 +7,9 @@
 //! `SendInput`'s result nor the key state says whether a release arrived;
 //! the context does: a release counts as delivered only when, both before
 //! and after it was sent, the session is connected, the user's desktop has
-//! input and the window in
-//! front belongs to a process whose integrity can be read and is not above
-//! this program's own, with the same window in front both times
-//! (docs/decisions/0006, point 6).
+//! input and the window in front belongs to a process whose integrity can
+//! be read and is not above this program's own, with the same window in
+//! front both times (docs/decisions/0006, point 6).
 
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
@@ -92,9 +91,21 @@ pub fn foreground_takes_input() -> bool {
     context().allows_delivery()
 }
 
-/// What is in front now.
+/// What is in front now, the session's connection as last heard
+/// ([`session::connected`]): the daemon's notices are handled on a thread
+/// of their own, so they keep up, and a release needs no read of its own.
 pub fn context() -> Context {
-    let connected = session::connected();
+    context_with(session::connected())
+}
+
+/// What is in front now, the session's connection read now: for the
+/// watchdog, whose notices wait in its queue behind the pass that checks.
+pub(crate) fn context_read() -> Context {
+    context_with(session::read_connected())
+}
+
+/// What is in front now, `connected` saying whether the session is.
+fn context_with(connected: bool) -> Context {
     let desktop_has_input = input_desktop();
     // SAFETY: no arguments.
     #[allow(unsafe_code)]

@@ -30,8 +30,7 @@ use crate::message::wide;
 use crate::message_thread::{SessionChange, hidden_window, unregister_class};
 use crate::output::Output;
 use crate::resend::{self, Also, Cause, Ended, Resend, Stop, Via};
-use crate::session::{self, Heard};
-use crate::watched::{Desktop, Probe};
+use crate::watched::{Probe, ReadDesktop};
 
 /// What the table owed, once sent the first time.
 #[derive(Debug)]
@@ -55,10 +54,10 @@ pub fn release(owed: &Owed) -> Released {
 }
 
 /// SendInput's output, judged on the desktop as it is.
-fn desktop() -> Via<Output, Desktop> {
+fn desktop() -> Via<Output, ReadDesktop> {
     Via {
         output: Output::bare(),
-        probe: Desktop,
+        probe: ReadDesktop,
     }
 }
 
@@ -150,8 +149,9 @@ struct Window {
 }
 
 impl Window {
-    /// Creates it, registers for session notices and reads the session's
-    /// state, which decision 7's check then follows.
+    /// Creates it and registers for session notices. Decision 7's check
+    /// reads the session's connection itself ([`ReadDesktop`]): a notice
+    /// waits in the queue behind the pass that checks.
     #[allow(unsafe_code)]
     fn open() -> io::Result<Window> {
         let class = wide(&format!(
@@ -166,12 +166,6 @@ impl Window {
             return Err(io::Error::last_os_error());
         }
         WATCHED.set(true);
-        // A notice that comes meanwhile waits in the queue, and is newer.
-        session::follow(
-            session::query()
-                .as_ref()
-                .map_or(Heard::Lost, |state| Heard::Read(*state)),
-        );
         Ok(window)
     }
 }
@@ -190,8 +184,7 @@ impl Drop for Window {
     }
 }
 
-/// The window procedure: a session notice is followed, and an unlock or a
-/// reconnect wakes a pass; the session's end ends the wait. Nothing in it
+/// The window procedure: an unlock or a reconnect wakes a pass; the session's end ends the wait. Nothing in it
 /// can panic.
 #[allow(unsafe_code)]
 unsafe extern "system" fn window_procedure(
@@ -211,8 +204,10 @@ unsafe extern "system" fn window_procedure(
 fn answer(message: u32, wparam: WPARAM) -> Option<LRESULT> {
     match message {
         WM_WTSSESSION_CHANGE => {
-            if let Some(heard) = SessionChange::from_code(wparam).and_then(SessionChange::heard) {
-                session::follow(heard);
+            if matches!(
+                SessionChange::from_code(wparam),
+                Some(SessionChange::Unlock | SessionChange::Connect)
+            ) {
                 resend::wake_here();
             }
             Some(0)

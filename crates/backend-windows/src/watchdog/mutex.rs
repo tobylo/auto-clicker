@@ -8,6 +8,10 @@
 //! watchdog's start would keep its own daemon refused for good. So a new
 //! daemon can look between an old daemon's end and its watchdog taking the
 //! mutex; that window is narrow, and its worst outcome a stray key-up.
+//! Only through it can two watchdogs owe releases at once (a daemon that
+//! finds the mutex presses nothing until it is free); then a new daemon may
+//! take the mutex between them and allow starts while the second still
+//! sends, with the same worst outcome.
 
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};

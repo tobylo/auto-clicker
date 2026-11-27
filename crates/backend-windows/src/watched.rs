@@ -16,7 +16,7 @@ use auto_clicker_core::input::{
 };
 use auto_clicker_core::log;
 
-use crate::delivery::{Context, Delivery, context, judge};
+use crate::delivery::{Context, Delivery, context, context_read, judge};
 use crate::output::Output;
 use crate::watchdog::Table;
 
@@ -32,6 +32,19 @@ pub struct Desktop;
 impl Probe for Desktop {
     fn context(&mut self) -> Context {
         context()
+    }
+}
+
+/// The desktop as it is, the session's connection read at each look
+/// rather than as last heard: the watchdog's own notices wait in its queue
+/// behind the pass that checks, so a disconnect they report could not be
+/// heard in time.
+#[derive(Debug, Default)]
+pub struct ReadDesktop;
+
+impl Probe for ReadDesktop {
+    fn context(&mut self) -> Context {
+        context_read()
     }
 }
 
