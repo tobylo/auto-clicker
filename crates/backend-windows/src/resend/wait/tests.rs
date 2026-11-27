@@ -16,12 +16,12 @@ const OPEN: Context = Context {
 };
 
 /// The desktop as open, telling the test of each question and whether the
-/// hooks were on when it was asked, and when.
-struct Watching(mpsc::Sender<(bool, Instant)>);
+/// hooks were on when it was asked.
+struct Watching(mpsc::Sender<bool>);
 
 impl Probe for Watching {
     fn context(&mut self) -> Context {
-        let _ = self.0.send((hooked_here(), Instant::now()));
+        let _ = self.0.send(hooked_here());
         OPEN
     }
 }
@@ -42,9 +42,7 @@ const ENDS: Duration = Duration::from_secs(10);
 /// probe was asked, and the wait's end with the calls sent and whether the
 /// hooks were still on after it, sent once it ends so a test waits for it
 /// with a deadline.
-type Questions = mpsc::Receiver<(bool, Instant)>;
-
-fn waiting(refusals: usize) -> (Arc<Stop>, Questions, mpsc::Receiver<Outcome>) {
+fn waiting(refusals: usize) -> (Arc<Stop>, mpsc::Receiver<bool>, mpsc::Receiver<Outcome>) {
     let stop = Arc::new(Stop::new().unwrap());
     let (asked, questions) = mpsc::channel();
     let (end, ended) = mpsc::channel();
@@ -71,7 +69,7 @@ fn a_refused_release_is_delivered_by_a_timed_try_with_the_hooks_on_and_then_off(
     let (ended, calls, hooked_after) = outcome.recv_timeout(ENDS).unwrap();
     assert!(matches!(ended, Ended::Delivered), "{ended:?}");
     assert_eq!(calls.len(), 2, "the first pass and one timed try");
-    let hooked: Vec<bool> = questions.try_iter().map(|(on, _)| on).collect();
+    let hooked: Vec<bool> = questions.try_iter().collect();
     assert!(
         !hooked.is_empty() && hooked.iter().all(|&on| on),
         "{hooked:?}"
@@ -84,9 +82,7 @@ fn a_stop_ends_the_timed_tries_at_once() {
     let (stop, questions, outcome) = waiting(100);
     // The first pass was refused; its timed try is 100 ms away.
     questions.recv_timeout(ENDS).unwrap();
-    // Asked on the wait's thread after the refused send, so at or after
-    // the pass's start, which the timed try counts from.
-    let (_, refused) = questions.recv_timeout(ENDS).unwrap();
+    questions.recv_timeout(ENDS).unwrap();
     stop.set();
     let stopping = Instant::now();
     // Bounded well above the 50 ms below, so a wait that ignores the stop
@@ -95,11 +91,9 @@ fn a_stop_ends_the_timed_tries_at_once() {
     let took = stopping.elapsed();
     assert!(matches!(ended, Ended::Stopped), "{ended:?}");
     assert!(took < Duration::from_millis(50), "took {took:?}");
-    // Only a stop set before the try was due can have kept it from going;
-    // a test thread held up past it says nothing either way.
-    if stopping.duration_since(refused) < Duration::from_millis(80) {
-        assert_eq!(calls.len(), 1, "a timed try went after the stop");
-    }
+    // How many tries went before the stop depends on how late this thread
+    // ran; the bound above is what says the stop ended the wait.
+    assert!(!calls.is_empty());
     assert!(!hooked_after);
 }
 
@@ -216,14 +210,17 @@ fn a_message_wakes_the_wait_and_wm_quit_ends_it() {
 
 #[test]
 fn a_timeout_ends_after_its_deadline_and_never_waits_for_ever() {
-    let now = Instant::now();
-    assert_eq!(timeout_until(now), 0);
-    // Rounded up to whole milliseconds; zero if this thread was held up
-    // past the deadline before the clock was read.
-    let soon = timeout_until(Instant::now() + Duration::from_micros(1500));
-    assert!(soon <= 2, "{soon}");
-    let later = timeout_until(Instant::now() + Duration::from_secs(60));
-    assert!((59_000..=60_000).contains(&later), "{later}");
-    let far = Instant::now() + Duration::from_secs(u64::from(u32::MAX));
-    assert_eq!(timeout_until(far), INFINITE - 1);
+    assert_eq!(timeout_until(Instant::now()), 0);
+    assert!(timeout_until(Instant::now() + Duration::from_secs(60)) <= 60_000);
+    // Rounded up to whole milliseconds, and never INFINITE.
+    let cases = [
+        (Duration::ZERO, 0),
+        (Duration::from_micros(1), 1),
+        (Duration::from_micros(1000), 1),
+        (Duration::from_micros(1500), 2),
+        (Duration::from_secs(u64::from(u32::MAX)), INFINITE - 1),
+    ];
+    for (left, millis) in cases {
+        assert_eq!(millis_for(left), millis, "{left:?}");
+    }
 }

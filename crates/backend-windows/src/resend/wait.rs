@@ -15,7 +15,7 @@ use std::cell::Cell;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr::{null, null_mut};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use auto_clicker_core::input::InputBackend;
 use auto_clicker_core::log;
@@ -230,7 +230,11 @@ fn taken<A: Also + ?Sized>(woken: u32, also: Option<&mut A>) -> io::Result<Woke>
 /// The wait's timeout in milliseconds until `deadline`, rounded up so the
 /// deadline has passed when it ends; short of `INFINITE`.
 fn timeout_until(deadline: Instant) -> u32 {
-    let left = deadline.saturating_duration_since(Instant::now());
+    millis_for(deadline.saturating_duration_since(Instant::now()))
+}
+
+/// `left` in whole milliseconds, rounded up; short of `INFINITE`.
+fn millis_for(left: Duration) -> u32 {
     let millis = left.as_micros().div_ceil(1000);
     u32::try_from(millis).map_or(INFINITE - 1, |millis| millis.min(INFINITE - 1))
 }
