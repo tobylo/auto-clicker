@@ -36,7 +36,7 @@
 | b5, the display turned off or on before each run | 0 of 20 | 0 of 20 |
 | b6, just after a second reboot (08:37) | 20 of 20 | 20 of 20 |
 
-- **In b1,** 104 of the plain output's 138 periods off by 1 ms or more had a press `SendInput` of 1 ms or more, against 53 of the check's 90. Of the rest, 18 and 11 were presses that started late, and 16 and 24 had neither a long send nor a late start.
+- **In b1,** 104 of the plain output's 138 periods off by 1 ms or more had a press `SendInput` of 1 ms or more, against 53 of the check's 90. Of the rest, 18 and 11 were presses that started late, 16 and 24 had neither a long send nor a late start, and 2 of the check's reached the window late after a short send.
 - **In b6,** the PC was nearly idle: the test was the only process with noticeable CPU over the 8 minutes, and Explorer and Settings used under 2 s each. About a quarter of button `SendInput` calls took about 16 ms, one 60 Hz frame, and the p99 error was 13 to 22 ms in every run.
 - **In b1 to b5,** the timer woke 0.17 to 0.22 ms after the deadline at the median and 0.65 to 0.68 ms at the median run's p99, and the task was polled 0.07 ms after that, in every arm. In b6 it woke 0.29 to 0.31 ms late at the median and 0.73 ms at p99, still far from the 16 ms sends.
 - **Ruled out:**
