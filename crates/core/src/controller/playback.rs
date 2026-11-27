@@ -32,7 +32,6 @@ use crate::playback::{MIN_LOOP_LENGTH, Motion, Playback, play};
 use crate::recording::{Change, FileName, Layout, LoadError, Recording, System, load};
 use crate::run::Signals;
 
-/// A recording about to play: loaded, checked, and named for the tray.
 /// The screens a playback starts on: the layout now, if known, and the
 /// system it belongs to.
 #[derive(Clone, Copy)]
@@ -41,6 +40,7 @@ pub(super) struct Screens<'a> {
     pub(super) system: System,
 }
 
+/// A recording about to play: loaded, checked, and named for the tray.
 pub(super) struct Playing {
     playback: Playback,
     label: Titled,

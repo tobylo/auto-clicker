@@ -100,8 +100,7 @@ impl Recording {
     /// version other than 1, 2 or 3, is a version 1 file with a layout or a
     /// position, a version 2 or 3 file without a layout, a version 3 file
     /// whose positions are from neither Hyprland nor Windows, a version 1 or
-    /// 2 file that says
-    /// where its positions came from, or holds a recording
+    /// 2 file that says where its positions came from, or holds a recording
     /// [`Recording::new`] or [`Recording::with_positions`] refuses.
     pub fn from_json(bytes: &[u8]) -> Result<Recording, InvalidRecording> {
         let header: Header = serde_json::from_slice(bytes).map_err(malformed)?;
