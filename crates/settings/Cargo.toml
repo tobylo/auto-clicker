@@ -32,6 +32,16 @@ rustix = { version = "1.0.7", default-features = false, features = ["std", "stdi
 # backend are pinned to one exact version, so an upgrade moves them together.
 i-slint-backend-winit = { version = "=1.18.1", default-features = false, features = ["wayland", "renderer-femtovg"] }
 
+# The window on Windows (src/windows/): Slint's winit backend alone, set as
+# the platform by hand as on Linux, drawn by Slint's software renderer
+# (softbuffer, GDI): femtovg's OpenGL drew nothing on the owner's PC's Intel
+# graphics (WN10). The pipes, DPI awareness and the rest of Win32 are
+# backend-windows'. The tests draw on the same renderer, with no display.
+[target.'cfg(windows)'.dependencies]
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-18", "renderer-software"] }
+i-slint-backend-winit = { version = "=1.18.1", default-features = false, features = ["renderer-software"] }
+auto-clicker-backend-windows = { path = "../backend-windows" }
+
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # Tests show the window on Slint's software renderer, with no display: the
 # same crate, one feature more, and nothing new in Cargo.lock.

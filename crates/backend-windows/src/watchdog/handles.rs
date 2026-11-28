@@ -5,26 +5,22 @@
 //! inherited handles, and the daemon takes them on, checks each and makes
 //! sure no child of its own inherits them.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::io;
-use std::iter::once;
-use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, DuplicateHandle, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
-    GetExitCodeProcess, GetProcessId, INFINITE, InitializeProcThreadAttributeList,
-    LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, STARTUPINFOEXW,
-    UpdateProcThreadAttribute, WaitForSingleObject,
+    GetCurrentProcess, GetExitCodeProcess, GetProcessId, INFINITE,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, WaitForSingleObject,
 };
 
 use super::table::{Section, Table, map};
+use crate::spawn::{Standard, spawn};
 
 /// The values of the two handles a daemon inherits, as its command line
 /// names them.
@@ -78,7 +74,6 @@ impl Daemon {
 /// # Errors
 /// The handle to this process or the list of inherited handles could not be
 /// made, or the program could not be started.
-#[allow(unsafe_code)]
 pub fn start_daemon(
     program: &Path,
     section: &Section,
@@ -90,41 +85,9 @@ pub fn start_daemon(
         table: inherited[0] as usize,
         watchdog: inherited[1] as usize,
     };
-    let mut line = command_line(program.as_os_str(), &arguments(handles));
-    let program = wide_path(program.as_os_str());
-    let mut list = AttributeList::with_handles(&inherited)?;
-    let mut startup = STARTUPINFOEXW::default();
-    startup.StartupInfo.cb = u32::try_from(size_of::<STARTUPINFOEXW>()).unwrap_or(u32::MAX);
-    startup.lpAttributeList = list.as_mut_ptr();
-    let mut started = PROCESS_INFORMATION::default();
-    // SAFETY: `program` and `line` are NUL-terminated UTF-16, `line`
-    // writable as Windows requires, both alive for the call; inheritance is
-    // on, limited by the attribute list to the two handles in `inherited`,
-    // which stay open until the call returns; the environment and folder
-    // are this process's; `startup` and `started` are live.
-    let created = unsafe {
-        CreateProcessW(
-            program.as_ptr(),
-            line.as_mut_ptr(),
-            null(),
-            null(),
-            1,
-            EXTENDED_STARTUPINFO_PRESENT,
-            null(),
-            null(),
-            &startup.StartupInfo,
-            &mut started,
-        )
-    };
-    if created == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: the thread handle is new and only closed here.
-    unsafe { CloseHandle(started.hThread) };
-    // SAFETY: the process handle is new and owned from here on.
-    let process = unsafe { OwnedHandle::from_raw_handle(started.hProcess) };
+    let process = spawn(program, &arguments(handles), &inherited, Standard::Kept)?;
     // The daemon holds its own copy of `watchdog` now; this one goes when
-    // dropped, as does the list.
+    // dropped.
     drop(watchdog);
     Ok(Daemon { process })
 }
@@ -152,68 +115,6 @@ fn own_process() -> io::Result<OwnedHandle> {
     }
     // SAFETY: a new handle that nothing else owns.
     Ok(unsafe { OwnedHandle::from_raw_handle(duplicate) })
-}
-
-/// A list of attributes naming the handles a child inherits.
-struct AttributeList {
-    /// The list's memory, as `usize`s so it is aligned for pointers.
-    memory: Vec<usize>,
-    /// The handles named, kept where the list points until it is gone.
-    _handles: Box<[HANDLE]>,
-}
-
-impl AttributeList {
-    #[allow(unsafe_code)]
-    fn with_handles(handles: &[HANDLE]) -> io::Result<AttributeList> {
-        let mut bytes = 0usize;
-        // SAFETY: a null list asks only for the size, written to `bytes`;
-        // this call fails by design.
-        unsafe { InitializeProcThreadAttributeList(null_mut(), 1, 0, &mut bytes) };
-        if bytes == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let mut memory = vec![0usize; bytes.div_ceil(size_of::<usize>())];
-        let list: LPPROC_THREAD_ATTRIBUTE_LIST = memory.as_mut_ptr().cast();
-        // SAFETY: `list` points at at least `bytes` writable, aligned bytes.
-        if unsafe { InitializeProcThreadAttributeList(list, 1, 0, &mut bytes) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let handles: Box<[HANDLE]> = handles.into();
-        let mut built = AttributeList {
-            memory,
-            _handles: handles,
-        };
-        // SAFETY: the list was initialised above for one attribute; the
-        // handles live in `built`, which outlives every use of the list.
-        let updated = unsafe {
-            UpdateProcThreadAttribute(
-                built.as_mut_ptr(),
-                0,
-                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                built._handles.as_ptr().cast(),
-                size_of_val(&*built._handles),
-                null_mut(),
-                null(),
-            )
-        };
-        if updated == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(built)
-    }
-
-    /// The list, for Windows to write: from the memory's mutable pointer.
-    fn as_mut_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
-        self.memory.as_mut_ptr().cast()
-    }
-}
-
-impl Drop for AttributeList {
-    #[allow(unsafe_code)]
-    fn drop(&mut self) {
-        // SAFETY: the list was initialised and is deleted once.
-        unsafe { DeleteProcThreadAttributeList(self.as_mut_ptr()) };
-    }
 }
 
 /// What the daemon takes on from its watchdog: the table, mapped, and the
@@ -266,58 +167,6 @@ pub fn attach(handles: Handles) -> io::Result<Attached> {
 
 fn context(err: io::Error, what: &str) -> io::Error {
     io::Error::new(err.kind(), format!("{what}: {err}"))
-}
-
-/// `path` as NUL-terminated UTF-16.
-fn wide_path(path: &OsStr) -> Vec<u16> {
-    path.encode_wide().chain(once(0)).collect()
-}
-
-/// The command line `CreateProcessW` is given: the program, quoted, then
-/// each argument quoted as the C runtime reads it back. NUL-terminated.
-fn command_line(program: &OsStr, arguments: &[OsString]) -> Vec<u16> {
-    let mut line: Vec<u16> = Vec::new();
-    line.push(u16::from(b'"'));
-    line.extend(program.encode_wide());
-    line.push(u16::from(b'"'));
-    for argument in arguments {
-        line.push(u16::from(b' '));
-        quote(argument, &mut line);
-    }
-    line.push(0);
-    line
-}
-
-/// `argument`, quoted when it needs to be, as the C runtime splits a
-/// command line: backslashes count only before a quote.
-fn quote(argument: &OsStr, line: &mut Vec<u16>) {
-    let units: Vec<u16> = argument.encode_wide().collect();
-    let plain = !units.is_empty()
-        && !units.iter().any(|&unit| {
-            unit == u16::from(b' ') || unit == u16::from(b'\t') || unit == u16::from(b'"')
-        });
-    if plain {
-        line.extend(units);
-        return;
-    }
-    line.push(u16::from(b'"'));
-    let mut backslashes = 0usize;
-    for unit in units {
-        if unit == u16::from(b'\\') {
-            backslashes += 1;
-            continue;
-        }
-        let doubled = if unit == u16::from(b'"') {
-            backslashes * 2 + 1
-        } else {
-            backslashes
-        };
-        line.extend(std::iter::repeat_n(u16::from(b'\\'), doubled));
-        backslashes = 0;
-        line.push(unit);
-    }
-    line.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes * 2));
-    line.push(u16::from(b'"'));
 }
 
 #[cfg(test)]

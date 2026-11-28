@@ -21,8 +21,13 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Security",
     # The module handle a window class is registered for.
     "Win32_System_LibraryLoader",
+    # The settings window's pipes (WN10): opening the window's ends, and
+    # checking the ones it inherits.
+    "Win32_Storage_FileSystem",
     # The watchdog's shared table (an unnamed section).
     "Win32_System_Memory",
+    # A tick in the settings window's pipe names.
+    "Win32_System_Performance",
     # The display turning off or on (RegisterPowerSettingNotification).
     "Win32_System_Power",
     # Session notices and the session's state (WTS).
@@ -47,8 +52,8 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 # The deadlines a run's timer is handed (WN04); already in the tree through
-# core.
-tokio = { version = "1.54.1", default-features = false, features = ["time"] }
+# core. `net` for the daemon's ends of the settings window's pipes (WN10).
+tokio = { version = "1.54.1", default-features = false, features = ["time", "net"] }
 
 [features]
 # A driver for the device tests: the pointer, the tray icon, its popup and
@@ -62,4 +67,7 @@ workspace = true
 # Runs over the fake output, to test the run timer (WN04).
 auto-clicker-core = { path = "../core", features = ["fake"] }
 fastrand = "2.5.0"
-tokio = { version = "1.54.1", features = ["rt", "time", "macros"] }
+tokio = { version = "1.54.1", features = ["rt", "time", "macros", "net", "io-util"] }
+# The settings window's pipe tests check the child has no standard handles,
+# and how far the daemon could act as the window (impersonation).
+windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_System_Pipes"] }

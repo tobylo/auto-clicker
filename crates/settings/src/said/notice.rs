@@ -12,8 +12,8 @@ use auto_clicker_core::window::{RecordingOutcome, Removal};
 use slint::SharedString;
 
 use super::{Said, s};
-use crate::linux::model::key_text;
-use crate::linux::ui::Texts;
+use crate::model::key_text;
+use crate::ui::Texts;
 
 impl Said<'_> {
     pub fn recording(&self, outcome: &RecordingOutcome) -> SharedString {
@@ -143,9 +143,8 @@ impl Said<'_> {
             Hindrance::NoClock => t.invoke_no_clock(),
             Hindrance::Hotkeys(why) => self.unavailable(why),
             Hindrance::Screens(why) => self.point_screens(*why),
-            // Windows' alone: this window never sees it on Linux, and the
-            // Windows window (WN10) says it in its own words.
-            Hindrance::Elevated => s(why),
+            // Windows' alone: this window never sees it on Linux.
+            Hindrance::Elevated => t.invoke_elevated(),
         }
     }
 
@@ -213,6 +212,9 @@ impl Said<'_> {
                     _ => s(name),
                 };
                 t.invoke_saved_as(shown)
+            }
+            Saving::Failed(SaveFailure::NoDataDirectory) if self.windows => {
+                t.invoke_save_failed(t.invoke_no_data_directory_windows())
             }
             Saving::Failed(SaveFailure::NoDataDirectory) => {
                 t.invoke_save_failed(t.invoke_no_data_directory())

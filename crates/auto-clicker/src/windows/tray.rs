@@ -18,10 +18,6 @@ use crate::tray_icon;
 use crate::tray_menu::{Choice, Entry, entries};
 use crate::tray_text;
 
-/// What the Settings item says until the settings window comes to Windows
-/// (WN10).
-const SETTINGS_OFF: &str = "Settings (not on Windows yet)";
-
 /// The menu's commands. Each item keeps its command for the daemon's life,
 /// and so does each recording the menu ever listed, so a choice from a menu
 /// opened before the view changed sends what its item said.
@@ -30,6 +26,9 @@ const STOP: u32 = 2;
 const RECORD: u32 = 3;
 const STOP_RECORDING: u32 = 4;
 const QUIT: u32 = 5;
+/// Settings, which opens the settings window: the window's keeper hears it,
+/// not the controller.
+pub const SETTINGS: u32 = 6;
 /// The first recording's command; the next ones follow.
 const FIRST_RECORDING: u32 = 100;
 
@@ -133,12 +132,10 @@ pub fn content(view: &View, language: Language, side: u16, commands: &Commands) 
 }
 
 /// `entry` as the Windows menu shows it: a submenu with its shown items,
-/// or an item with its command. Settings is off until WN10, and says so.
+/// or an item with its command.
 fn menu_entry(entry: Entry, language: Language, commands: &Commands) -> MenuEntry {
     let label = if entry.named {
         entry.label.clone()
-    } else if entry.sends == Some(Choice::Settings) {
-        tray_text::label(SETTINGS_OFF, language)
     } else {
         tray_text::label(&entry.label, language)
     };
@@ -153,7 +150,8 @@ fn menu_entry(entry: Entry, language: Language, commands: &Commands) -> MenuEntr
     }
     let command = match &entry.sends {
         Some(Choice::Send(message)) => commands.command(message),
-        Some(Choice::Settings) | None => None,
+        Some(Choice::Settings) => Some(SETTINGS),
+        None => None,
     };
     MenuEntry::Item {
         label,

@@ -4,7 +4,7 @@
 
 use auto_clicker_core::config::Reason;
 use auto_clicker_core::controller::{Blocked, NoRecording};
-use auto_clicker_core::hotkeys::Unavailable;
+use auto_clicker_core::hotkeys::{NotRegistered, Unavailable, Unregistered};
 use auto_clicker_core::message::{
     ConfigProblem, Failure, InputFailure, NoOnScreen, NoPointer, NoPositions, NoScreens, Problem,
     Unavailability,
@@ -12,14 +12,17 @@ use auto_clicker_core::message::{
 use auto_clicker_core::playback::Speed;
 use slint::SharedString;
 
-use crate::linux::ui::Texts;
+use crate::ui::Texts;
 
 mod notice;
 
-/// Shows numbers with the decimal separator of the window's language.
+/// Shows numbers with the decimal separator of the window's language, and
+/// names folders and refusals as the window's system does.
 pub struct Said<'a> {
     pub texts: &'a Texts<'a>,
     pub decimal: char,
+    /// The window runs on Windows.
+    pub windows: bool,
 }
 
 /// `text` as Slint takes it.
@@ -33,9 +36,12 @@ impl Said<'_> {
         match problem {
             Problem::Config(problem) => self.config(problem),
             Problem::Hotkeys(why) => self.unavailable(why),
-            // Windows' alone: this window never sees it on Linux, and the
-            // Windows window (WN10) says it in its own words.
-            Problem::HotkeysRefused(_) => s(problem),
+            // Windows' alone: this window never sees it on Linux.
+            Problem::HotkeysRefused(refused) => {
+                let said: Vec<SharedString> =
+                    refused.iter().map(|r| self.unregistered(r)).collect();
+                s(said.join("; "))
+            }
             Problem::Blocked(why) => t.invoke_problem_clicking(self.blocked(why)),
             Problem::Input(why) => t.invoke_problem_clicking(self.input(why)),
             Problem::Unlisted(why) => t.invoke_problem_unlisted(s(why)),
@@ -92,6 +98,7 @@ impl Said<'_> {
     fn config(&self, problem: &ConfigProblem) -> SharedString {
         let t = self.texts;
         match problem {
+            ConfigProblem::NoDirectory if self.windows => t.invoke_config_no_directory_windows(),
             ConfigProblem::NoDirectory => t.invoke_config_no_directory(),
             ConfigProblem::Unreadable { file, why } => t.invoke_config_unreadable(s(file), s(why)),
             ConfigProblem::Invalid {
@@ -152,9 +159,21 @@ impl Said<'_> {
         }
     }
 
+    /// A hotkey Windows did not take.
+    fn unregistered(&self, refused: &Unregistered) -> SharedString {
+        let hotkey = s(refused.hotkey);
+        match &refused.why {
+            NotRegistered::Taken => self.texts.invoke_hotkey_taken(hotkey),
+            NotRegistered::Failed(why) => self.texts.invoke_hotkey_refused(hotkey, s(why)),
+        }
+    }
+
     pub fn failure(&self, why: &Failure) -> SharedString {
         let t = self.texts;
         match why {
+            Failure::NoConfigDirectory if self.windows => {
+                t.invoke_failure_no_config_directory_windows()
+            }
             Failure::NoConfigDirectory => t.invoke_failure_no_config_directory(),
             Failure::Write(why) => t.invoke_failure_write(s(why)),
             Failure::BadToken => t.invoke_failure_bad_token(),

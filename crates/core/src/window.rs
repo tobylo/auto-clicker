@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{Draft, InputDraft, Refusal, Stale};
 use crate::controller::{Activity, Hotkey, Listed, NoRecording, Routes, WINDOW_RECORDINGS};
-use crate::hotkeys::{Action, Binding, Capture};
+use crate::hotkeys::{Action, Binding, Capture, Captured};
+use crate::input::Key;
 use crate::message::{
     ChangeFailure, Failure, NoOnScreen, NoScreens, Notice, Problem, Quoted, Titled, Unavailability,
 };
@@ -54,7 +55,8 @@ pub enum Update {
 /// one thing at a time: it sends the next request once the view answers
 /// this one, since the view holds only the answer to the last request. A
 /// request while a capture or the desktop's settings are pending is
-/// answered [`Outcome::Busy`].
+/// answered [`Outcome::Busy`], but for [`Ask::Pressed`], which ends the
+/// capture it answers.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
@@ -78,8 +80,16 @@ pub enum Ask {
     /// Read what the user presses next, for a hotkey or the clicker's key.
     /// Hotkeys do nothing until it ends: with a capture, Esc, after
     /// [`CAPTURE_TIME`], when the window goes, or when anything else
-    /// happens to the program. The answer comes when it ends.
+    /// happens to the program. The answer comes when it ends. Where the
+    /// window captures from its own key events (Windows: M5 brief decision
+    /// 9), the daemon only lets go of its hotkeys meanwhile, and the
+    /// window's [`Ask::Pressed`] ends the capture.
     Capture(Capture),
+    /// What the user pressed during the capture pending, read from the
+    /// window's own key events: it ends that capture, and its answer is the
+    /// capture's. Answered [`CaptureEnd::Interrupted`] when no capture of
+    /// its kind is pending, or the daemon reads the keys itself.
+    Pressed(Pressed),
     /// Open the desktop's settings for the program's shortcuts, where the
     /// desktop delivers the hotkeys. The token, from the window's
     /// activation, lets the desktop raise the settings.
@@ -99,6 +109,31 @@ pub enum Ask {
     /// [`Outcome::Busy`] unless the program is idle and no run began since,
     /// so a click of its own is never taken for a pick.
     Locate { at: Spot, on: Rect, since: Since },
+}
+
+/// What a capture in the window got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Pressed {
+    /// A hotkey: the modifiers held and a key other than a modifier.
+    Hotkey(Binding),
+    /// The clicker's key.
+    Key(Key),
+    /// Esc, or the window lost the keyboard: the user changed their mind.
+    Cancelled,
+    /// A key without a name, which no hotkey can use.
+    Unnamed,
+}
+
+impl From<Captured> for Pressed {
+    fn from(captured: Captured) -> Pressed {
+        match captured {
+            Captured::Hotkey(binding) => Pressed::Hotkey(binding),
+            Captured::Key(key) => Pressed::Key(key),
+            Captured::Cancelled => Pressed::Cancelled,
+            Captured::Unnamed => Pressed::Unnamed,
+        }
+    }
 }
 
 /// A position on the screens in logical pixels from the layout's top-left

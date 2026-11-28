@@ -7,19 +7,23 @@ use std::rc::Rc;
 use auto_clicker_core::config::Field;
 use auto_clicker_core::config::Stale;
 use auto_clicker_core::hotkeys::Action;
+#[cfg(windows)]
+use auto_clicker_core::hotkeys::Capture;
 use auto_clicker_core::recording::FileName;
+#[cfg(windows)]
+use auto_clicker_core::window::Pressed;
 use auto_clicker_core::window::{
     CaptureEnd, RecordingAction, RecordingsView, Request, Since, Update, WindowView,
 };
 use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use crate::linux::link::Link;
-use crate::linux::model::{Fields, Unreadable, hotkey_text, key_text};
-use crate::linux::pick::Pick;
-use crate::linux::said::Said;
-use crate::linux::shelf::{self, Click, Selection};
-use crate::linux::state::{self, Note, Question, State, Target};
-use crate::linux::ui::{RecordingRow, SettingsWindow, Texts};
+use crate::link::Link;
+use crate::model::{Fields, Unreadable, hotkey_text, key_text};
+use crate::pick::Pick;
+use crate::said::Said;
+use crate::shelf::{self, Click, Selection};
+use crate::state::{self, Note, Question, State, Target};
+use crate::ui::{RecordingRow, SettingsWindow, Texts};
 
 /// The window, its link to the daemon and its state.
 pub struct App {
@@ -46,6 +50,8 @@ pub struct App {
 impl App {
     /// Connects the window's callbacks to a new app over `link`.
     pub fn start(window: &SettingsWindow, link: Link, decimal: char) -> Rc<RefCell<App>> {
+        // Linux's routes are neither shown nor changed on Windows.
+        window.set_on_windows(cfg!(windows));
         let app = Rc::new(RefCell::new(App {
             window: window.clone_strong(),
             link,
@@ -133,12 +139,15 @@ impl App {
     pub fn update(&mut self, update: Update) {
         match update {
             Update::View(view) => self.view(&view),
-            // Shows the window if it is hidden. On Wayland a window cannot
-            // bring itself forward or out of the minimised state: that needs
-            // an activation token from the tray's click, which neither the
-            // menu nor Slint's Wayland-only build can pass on yet.
+            // Shows the window if it is hidden, and brings it forward where
+            // the system lets it. On Wayland a window cannot bring itself
+            // forward or out of the minimised state: that needs an
+            // activation token from the tray's click, which neither the menu
+            // nor Slint's Wayland-only build can pass on yet. On Windows the
+            // daemon lets it.
             Update::Raise => {
                 let _ = self.window.show();
+                crate::system::bring_forward(self.window.window());
             }
         }
     }
@@ -399,6 +408,21 @@ impl App {
         }
     }
 
+    /// What the capture the window waits on reads, while one does: where
+    /// the window captures from its own key events, they go to it.
+    #[cfg(windows)]
+    pub fn capturing(&self) -> Option<Capture> {
+        self.state.capturing()
+    }
+
+    /// The window captured `pressed` from its own key events.
+    #[cfg(windows)]
+    pub fn pressed(&mut self, pressed: Pressed) {
+        if let Some(request) = self.state.pressed(pressed) {
+            self.send(&request);
+        }
+    }
+
     fn configure(&mut self) {
         if let Some(request) = self.state.configure() {
             self.send(&request);
@@ -447,6 +471,7 @@ impl App {
         Said {
             texts,
             decimal: self.decimal,
+            windows: cfg!(windows),
         }
     }
 

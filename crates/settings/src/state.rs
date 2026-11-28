@@ -12,7 +12,7 @@ use auto_clicker_core::window::{
     Removal, Request, Since, Spot, WindowView,
 };
 
-use crate::linux::model::{Fields, Picked, Unreadable, with_hotkey};
+use crate::model::{Fields, Picked, Unreadable, with_hotkey};
 
 /// What a capture is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +20,16 @@ pub enum Target {
     /// The hotkey of the action at this place (0 to 2).
     Hotkey(i32),
     Key,
+}
+
+impl Target {
+    /// What a capture for it reads.
+    fn capture(self) -> Capture {
+        match self {
+            Target::Hotkey(_) => Capture::Hotkey,
+            Target::Key => Capture::Key,
+        }
+    }
 }
 
 /// A line the window shows under its tabs.
@@ -125,9 +135,26 @@ struct Agreed {
 enum Asked {
     Save(Agreed),
     Capture(Target),
+    /// What the window captured for `Target` was sent; its answer ends the
+    /// capture, and nothing more is captured meanwhile.
+    #[cfg(any(windows, test))]
+    Pressed(Target),
     Configure,
     Recording,
     Locate,
+}
+
+impl Asked {
+    /// What the capture asked is for, whether it waits on a key or on the
+    /// answer to what the window captured.
+    fn captures_for(&self) -> Option<Target> {
+        match self {
+            Asked::Capture(target) => Some(*target),
+            #[cfg(any(windows, test))]
+            Asked::Pressed(target) => Some(*target),
+            _ => None,
+        }
+    }
 }
 
 /// What a new view changes on screen.
@@ -191,8 +218,8 @@ impl State {
             Outcome::Confirm(confirm) => return self.ask(confirm, asked),
             Outcome::CapturedHotkey(binding) => {
                 let text = binding.to_string();
-                if let (Asked::Capture(Target::Hotkey(action)), Some(hotkeys)) =
-                    (asked, &mut self.hotkeys)
+                if let (Some(Target::Hotkey(action)), Some(hotkeys)) =
+                    (asked.captures_for(), &mut self.hotkeys)
                 {
                     *hotkeys = with_hotkey(hotkeys, action, text.clone());
                 }
@@ -311,11 +338,28 @@ impl State {
         if !self.may_ask() {
             return None;
         }
-        let capture = match target {
-            Target::Hotkey(_) => Capture::Hotkey,
-            Target::Key => Capture::Key,
+        Some(self.send(Ask::Capture(target.capture()), Asked::Capture(target)))
+    }
+
+    /// What the capture the window waits on reads, while one does.
+    #[cfg(any(windows, test))]
+    pub fn capturing(&self) -> Option<Capture> {
+        match self.asked {
+            Some((_, Asked::Capture(target))) => Some(target.capture()),
+            _ => None,
+        }
+    }
+
+    /// What the window captured from its own key events, for the capture
+    /// it waits on, which the answer to this ends; `None` when it waits on
+    /// none (the daemon ended it already), or already sent what it
+    /// captured: one capture gets one result.
+    #[cfg(any(windows, test))]
+    pub fn pressed(&mut self, pressed: auto_clicker_core::window::Pressed) -> Option<Request> {
+        let Some((_, Asked::Capture(target))) = self.asked else {
+            return None;
         };
-        Some(self.send(Ask::Capture(capture), Asked::Capture(target)))
+        Some(self.send(Ask::Pressed(pressed), Asked::Pressed(target)))
     }
 
     /// A request for the desktop's shortcut settings; `None` while the user

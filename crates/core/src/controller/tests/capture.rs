@@ -8,7 +8,7 @@ use super::settings::{Setup, Window, draft, setup, setup_with};
 use super::*;
 use crate::hotkeys::{Captured, Trigger, Triggers};
 use crate::message::{Failure, Quoted, Unavailability};
-use crate::window::{Ask, CAPTURE_TIME, CaptureEnd, Outcome};
+use crate::window::{Ask, CAPTURE_TIME, CaptureEnd, Outcome, Pressed};
 
 fn ctrl_f9() -> Binding {
     Binding::parse("Ctrl+F9").unwrap()
@@ -497,6 +497,84 @@ async fn the_routes_each_offer_only_their_own() {
             .await;
         assert!(matches!(asked, Outcome::Unavailable(_)), "{asked:?}");
         assert!(captures(&desktop.d).iter().all(Option::is_none));
+    })
+    .await;
+}
+
+/// A setup where the window captures, as on Windows.
+async fn window_captures() -> Setup {
+    let shared = Shared::default();
+    shared.with(|r| r.window_captures = true);
+    setup_with(None, shared).await
+}
+
+#[tokio::test(start_paused = true)]
+async fn what_the_window_pressed_answers_its_request_and_the_hotkeys_come_back() {
+    local(async {
+        let mut s = window_captures().await;
+        for (pressed, outcome) in [
+            (
+                Pressed::Hotkey(ctrl_f9()),
+                Outcome::CapturedHotkey(ctrl_f9()),
+            ),
+            (Pressed::Cancelled, ended(CaptureEnd::Cancelled).unwrap()),
+            (Pressed::Unnamed, ended(CaptureEnd::Unnamed).unwrap()),
+        ] {
+            let capture = capturing(&mut s).await;
+            let id = s.window.send(&s.d, Ask::Pressed(pressed)).await;
+            assert_eq!(s.window.answer_to(id), Some(outcome), "{pressed:?}");
+            assert_eq!(s.window.answer_to(capture), None);
+            assert!(hotkeys_back(&s.d), "{pressed:?}");
+        }
+        let id = s.window.send(&s.d, Ask::Capture(Capture::Key)).await;
+        assert_eq!(s.window.answer_to(id), None);
+        let a = crate::input::Key::new(30).unwrap();
+        let id = s.window.send(&s.d, Ask::Pressed(Pressed::Key(a))).await;
+        assert_eq!(s.window.answer_to(id), Some(Outcome::CapturedKey(30)));
+        assert!(hotkeys_back(&s.d));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_press_with_no_capture_of_its_kind_pending_ends_whatever_is_pending() {
+    local(async {
+        let mut s = window_captures().await;
+        // None pending: nothing to end, and no reader started again.
+        let readers = captures(&s.d).len();
+        let id = s.window.send(&s.d, Ask::Pressed(Pressed::Cancelled)).await;
+        assert_eq!(s.window.answer_to(id), ended(CaptureEnd::Interrupted));
+        assert_eq!(captures(&s.d).len(), readers);
+        // A key for a hotkey's capture ends it, as interrupted.
+        capturing(&mut s).await;
+        let a = crate::input::Key::new(30).unwrap();
+        let id = s.window.send(&s.d, Ask::Pressed(Pressed::Key(a))).await;
+        assert_eq!(s.window.answer_to(id), ended(CaptureEnd::Interrupted));
+        assert!(hotkeys_back(&s.d));
+        // After its deadline the capture is over: it timed out.
+        capturing(&mut s).await;
+        tokio::time::advance(CAPTURE_TIME).await;
+        let id = s
+            .window
+            .send(&s.d, Ask::Pressed(Pressed::Hotkey(ctrl_f9())))
+            .await;
+        assert_eq!(s.window.answer_to(id), ended(CaptureEnd::Interrupted));
+        assert!(hotkeys_back(&s.d));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn where_the_daemon_captures_a_press_from_the_window_takes_nothing() {
+    local(async {
+        let mut s = setup().await;
+        capturing(&mut s).await;
+        let id = s
+            .window
+            .send(&s.d, Ask::Pressed(Pressed::Hotkey(ctrl_f9())))
+            .await;
+        assert_eq!(s.window.answer_to(id), ended(CaptureEnd::Interrupted));
+        assert!(hotkeys_back(&s.d));
     })
     .await;
 }

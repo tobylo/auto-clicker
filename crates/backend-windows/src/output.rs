@@ -27,6 +27,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::run_timer::WaitableTimer;
 use keys::Code;
 pub use keys::key as received_key;
+pub use keys::window_message_key;
 
 /// The mark on every event the program injects, in its extra information
 /// (`dwExtraInfo`), by which the hotkey reader and the recorder tell the

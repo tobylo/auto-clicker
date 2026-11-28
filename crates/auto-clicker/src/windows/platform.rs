@@ -2,8 +2,9 @@
 //! table the watchdog releases from should the daemon die (M5 brief
 //! decision 6): the daemon runs only with a watchdog attached, so no press
 //! is ever sent without one. Hotkeys are registered on the message thread
-//! (decision 9), which also reads the screens (decision 10); recording
-//! arrives with WN09b.
+//! (decision 9), but for while the settings window captures one, and the
+//! thread also reads the screens (decision 10); recording arrives with
+//! WN09b.
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -61,9 +62,16 @@ impl Platform for Windows {
         foreground_takes_input()
     }
 
+    /// The settings window captures a hotkey from its own key events
+    /// (decision 9): Windows hands it no key a registered hotkey takes.
+    fn window_captures(&self) -> bool {
+        true
+    }
+
     /// Registers the hotkeys on the message thread for as long as the
     /// reader runs, and passes on what the controller wants the keyboard
-    /// read for.
+    /// read for. A reader started for a capture registers none: the window
+    /// captures, and no hotkey fires on what the user presses meanwhile.
     fn read_input(&mut self, _own: Option<&Input<Watched>>, reading: ReadInput) -> HotkeyReader {
         let ReadInput {
             bindings,
@@ -79,9 +87,8 @@ impl Platform for Windows {
                 let why = Unavailable::ReadFailed(why.into());
                 send.send(HotkeyEvent::Status(HotkeyStatus::Unavailable(why)));
             };
-            // The settings window that captures keys arrives with WN10.
             if capture.is_some() {
-                return failed("keys cannot be captured on Windows yet".to_owned());
+                return std::future::pending().await;
             }
             let Some(thread) = thread else {
                 return failed("the message thread is not running".to_owned());

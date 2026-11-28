@@ -21,10 +21,6 @@ const SWEDISH: &[(&str, &str)] = &[
     ("Play", "Spela upp"),
     ("Stop playing", "Sluta spela upp"),
     ("Settings", "Inställningar"),
-    (
-        "Settings (not on Windows yet)",
-        "Inställningar (finns inte på Windows än)",
-    ),
     ("Quit", "Avsluta"),
     ("No recordings yet", "Inga inspelningar än"),
     (

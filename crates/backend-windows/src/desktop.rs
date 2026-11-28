@@ -32,9 +32,11 @@ use crate::message::wide;
 
 mod front;
 mod screen;
+mod windows;
 
 pub use front::Front;
 pub use screen::{DisplayMode, display_sizes, pointer, screen_size};
+pub use windows::{Window, windows_of};
 
 /// A rectangle on the screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

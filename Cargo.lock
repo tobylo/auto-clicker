@@ -411,6 +411,7 @@ dependencies = [
 name = "auto-clicker-settings"
 version = "1.0.0"
 dependencies = [
+ "auto-clicker-backend-windows",
  "auto-clicker-core",
  "i-slint-backend-winit",
  "rustix 1.1.6",

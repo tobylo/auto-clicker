@@ -21,6 +21,7 @@ pub mod elevation;
 mod notices;
 mod platform;
 mod tray;
+mod window;
 
 use std::io;
 use std::process::{Command, ExitCode};
@@ -215,7 +216,9 @@ fn claim_text(err: &ClaimError, language: Language) -> String {
 /// watchdog's end or the message thread's end; then ends the message
 /// thread. The status, and whether the watchdog ended.
 fn run(attached: Attached) -> (ExitCode, bool) {
+    // The I/O driver carries the settings window's pipes.
     let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
     {
@@ -236,6 +239,7 @@ fn run(attached: Attached) -> (ExitCode, bool) {
     if earlier.is_some() {
         notices.earlier_watchdog();
     }
+    notices.open_settings_with(keep_window(&runtime, controller.window_opener()));
     let commands = notices.commands();
     let thread =
         match MessageThread::spawn(move |event| notices.handle(event), MESSAGE_THREAD_START) {
@@ -286,6 +290,16 @@ fn run(attached: Attached) -> (ExitCode, bool) {
     released.raise(ENDED);
     stop_waits(wait, earlier);
     (end(thread), watchdog_ended.load(Ordering::Acquire))
+}
+
+/// Starts the settings window's keeper on `runtime`, which runs it once the
+/// controller does; a choice of Settings goes to what this returns.
+fn keep_window(
+    runtime: &tokio::runtime::Runtime,
+    opener: auto_clicker_core::controller::WindowOpener,
+) -> tokio::sync::mpsc::UnboundedSender<()> {
+    let _inside = runtime.enter();
+    window::keep(opener)
 }
 
 /// Stops the waits on the watchdog and on an earlier one, each within its

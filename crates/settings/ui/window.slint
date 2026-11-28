@@ -62,6 +62,7 @@ export global Texts {
     public pure function problem-clicking(why: string) -> string { @tr("Clicking cannot start: {}", why) }
     public pure function problem-unlisted(why: string) -> string { @tr("The recordings cannot be listed: {}", why) }
     public pure function config-no-directory() -> string { @tr("no config directory: neither XDG_CONFIG_HOME nor HOME is set") }
+    public pure function config-no-directory-windows() -> string { @tr("no config directory: APPDATA is not set to an absolute folder") }
     public pure function config-unreadable(file: string, why: string) -> string { @tr("{}: could not read the file: {}", file, why) }
     public pure function config-invalid-at(file: string, line: string, why: string) -> string { @tr("{}:{}: {}", file, line, why) }
     public pure function config-invalid(file: string, why: string) -> string { @tr("config file" => "{}: {}", file, why) }
@@ -87,6 +88,7 @@ export global Texts {
     public pure function hotkeys-desktop(why: string) -> string { @tr("hotkeys are unavailable: {}", why) }
     public pure function no-recording-desktop() -> string { @tr("recording is unavailable with the desktop's shortcuts") }
     public pure function failure-no-config-directory() -> string { @tr("there is no config directory: neither XDG_CONFIG_HOME nor HOME is set") }
+    public pure function failure-no-config-directory-windows() -> string { @tr("there is no config directory: APPDATA is not set to an absolute folder") }
     public pure function failure-write(why: string) -> string { @tr("the config file could not be written: {}", why) }
     public pure function failure-bad-token() -> string { @tr("the activation token is not one") }
     public pure function failure-not-opened() -> string { @tr("the desktop did not open its settings") }
@@ -143,6 +145,9 @@ export global Texts {
     public pure function clicking-on() -> string { @tr("clicking is on; stop it first") }
     public pure function unlisted(why: string) -> string { @tr("the recordings cannot be listed: {}", why) }
     public pure function no-clock() -> string { @tr("the clock could not be read") }
+    public pure function elevated() -> string { @tr("Auto Clicker can't click into a program running as administrator") }
+    public pure function hotkey-taken(hotkey: string) -> string { @tr("hotkey {} does not work: another program uses it", hotkey) }
+    public pure function hotkey-refused(hotkey: string, why: string) -> string { @tr("hotkey {} does not work: Windows refused it: {}", hotkey, why) }
     public pure function file-missing() -> string { @tr("the file is no longer there") }
     public pure function file-unreadable(why: string) -> string { @tr("the file could not be read: {}", why) }
     public pure function file-too-large(mib: string) -> string { @tr("the file is larger than {} MiB", mib) }
@@ -163,6 +168,7 @@ export global Texts {
     public pure function saved-as(name: string) -> string { @tr("Saved “{}”", name) }
     public pure function save-failed(why: string) -> string { @tr("The recording could not be saved: {}", why) }
     public pure function no-data-directory() -> string { @tr("no data directory: neither XDG_DATA_HOME nor HOME is set") }
+    public pure function no-data-directory-windows() -> string { @tr("no data directory: LOCALAPPDATA is not set to an absolute folder") }
     public pure function recorded-invalid(why: string) -> string { @tr("recorded invalid" => "{}", why) }
     public pure function own-key-modifier(key: string) -> string { @tr("{} is a modifier, and the program holding it would change which hotkey the desktop sees", key) }
     public pure function own-key-hotkey(key: string, trigger: string) -> string { @tr("{} is the key of the hotkey {}, and the desktop cannot tell the program's key presses from yours", key, trigger) }
@@ -213,7 +219,9 @@ export component SettingsWindow inherits Window {
     in property <string> hotkey-recording;
     in property <string> hotkey-playback;
     in property <bool> desktop-hotkeys;
-    // Input
+    // Input: the routes are Linux's; on Windows they are neither shown nor
+    // changed.
+    in property <bool> on-windows;
     in-out property <int> output-route;
     in-out property <int> hotkeys-route;
     in property <bool> routes-pending;
@@ -476,7 +484,7 @@ export component SettingsWindow inherits Window {
                         enabled: root.may-ask;
                         clicked => { root.configure-shortcuts(); }
                     }
-                    Row {
+                    if !root.on-windows: Row {
                         label: @tr("Hotkeys come from");
                         ComboBox {
                             enabled: !root.waiting;
@@ -484,7 +492,7 @@ export component SettingsWindow inherits Window {
                             current-index <=> root.hotkeys-route;
                         }
                     }
-                    Row {
+                    if !root.on-windows: Row {
                         label: @tr("Clicks and keys go through");
                         ComboBox {
                             enabled: !root.waiting;
@@ -492,7 +500,7 @@ export component SettingsWindow inherits Window {
                             current-index <=> root.output-route;
                         }
                     }
-                    if root.routes-pending: Text {
+                    if root.routes-pending && !root.on-windows: Text {
                         text: @tr("A change of route applies after the program restarts.");
                         wrap: word-wrap;
                     }
@@ -597,7 +605,7 @@ export component SettingsWindow inherits Window {
                     padding: 8px;
                     alignment: start;
                     Text {
-                        text: @tr("Auto clicker for KDE Plasma on Wayland.");
+                        text: root.on-windows ? @tr("Auto clicker for Windows 11.") : @tr("Auto clicker for KDE Plasma on Wayland.");
                     }
                     AboutSlint { }
                 }

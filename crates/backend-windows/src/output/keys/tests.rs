@@ -109,3 +109,31 @@ fn a_key_windows_lacks_has_no_code() {
     }
     assert_eq!(key(0x00, false, 0), None);
 }
+
+#[test]
+fn a_window_messages_scan_code_reads_back_as_its_key() {
+    let cases = [
+        (0x1e, Some("a")),
+        (0x1d, Some("leftctrl")),
+        (0xe01d, Some("rightctrl")),
+        (0x1c, Some("enter")),
+        (0xe01c, Some("kpenter")),
+        (0xe048, Some("up")),
+        (0x48, Some("kp8")),
+        // Pause and NumLock, as winit and window messages tell them.
+        (0x45, Some("pause")),
+        (0xe045, Some("numlock")),
+        (0x40, Some("f6")),
+        // Only an E0 prefix, and only a scan code the table has.
+        (0xe11d, None),
+        (0x0100, None),
+        (0x00, None),
+    ];
+    for (scan_code, expected) in cases {
+        assert_eq!(
+            window_message_key(scan_code),
+            expected.map(named),
+            "{scan_code:#x}"
+        );
+    }
+}

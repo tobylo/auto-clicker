@@ -17,8 +17,8 @@ use auto_clicker_core::window::{PICK_TIME, Since, WindowView};
 use slint::ComponentHandle;
 
 use super::App;
-use crate::linux::pick::{self, Pick, PickEnd, Target};
-use crate::linux::state::{self, Note};
+use crate::pick::{self, Pick, PickEnd, Target};
+use crate::state::{self, Note};
 
 impl App {
     /// Opens the overlays, when the user may ask and the screens are known.

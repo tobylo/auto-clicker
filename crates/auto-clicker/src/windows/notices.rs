@@ -21,7 +21,7 @@ use auto_clicker_core::controller::{Blocked, Message, SessionFacts};
 use auto_clicker_core::log;
 use tokio::sync::mpsc;
 
-use super::tray::Commands;
+use super::tray::{Commands, SETTINGS};
 
 /// How long the thread waits before sleep for the controller to let go of
 /// everything. Windows suspends about two seconds after it tells programs.
@@ -77,6 +77,8 @@ pub struct Notices {
     /// Whether the taskbar refuses the icon since it last showed: each try
     /// is reported, and only the first is logged.
     icon_refused: bool,
+    /// Where a choice of Settings goes: the settings window's keeper.
+    settings: Option<mpsc::UnboundedSender<()>>,
 }
 
 impl Notices {
@@ -87,7 +89,14 @@ impl Notices {
             released,
             commands: Commands::default(),
             icon_refused: false,
+            settings: None,
         }
+    }
+
+    /// A choice of Settings goes to `settings`, the settings window's
+    /// keeper; until this is called, it opens nothing.
+    pub fn open_settings_with(&mut self, settings: mpsc::UnboundedSender<()>) {
+        self.settings = Some(settings);
     }
 
     /// Refuses starts until [`WindowEvent::EarlierWatchdogDone`]: an
@@ -189,6 +198,12 @@ impl Notices {
             // A stop chosen from the menu trims the trip from the click
             // that opened it, as on Linux.
             WindowEvent::TrayMenuOpening => self.send(Message::MenuOpened),
+            WindowEvent::TrayChosen(SETTINGS) => {
+                // The keeper is gone only once the daemon is quitting.
+                if let Some(settings) = &self.settings {
+                    let _ = settings.send(());
+                }
+            }
             WindowEvent::TrayChosen(command) => {
                 if let Some(message) = self.commands.message(*command) {
                     self.send(message);

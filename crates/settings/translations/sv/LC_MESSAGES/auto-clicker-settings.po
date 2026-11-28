@@ -281,6 +281,9 @@ msgstr "Om"
 msgid "Auto clicker for KDE Plasma on Wayland."
 msgstr "Autoklickare för KDE Plasma på Wayland."
 
+msgid "Auto clicker for Windows 11."
+msgstr "Autoklickare för Windows 11."
+
 msgid "Yes"
 msgstr "Ja"
 
@@ -713,3 +716,21 @@ msgstr "filen kunde inte skrivas: inspelningen med det nya namnet skulle bli st�
 
 msgid "Recording {}"
 msgstr "Inspelning {}"
+
+msgid "no config directory: APPDATA is not set to an absolute folder"
+msgstr "ingen konfigurationsmapp: APPDATA är inte satt till en absolut mapp"
+
+msgid "there is no config directory: APPDATA is not set to an absolute folder"
+msgstr "det finns ingen konfigurationsmapp: APPDATA är inte satt till en absolut mapp"
+
+msgid "no data directory: LOCALAPPDATA is not set to an absolute folder"
+msgstr "ingen datamapp: LOCALAPPDATA är inte satt till en absolut mapp"
+
+msgid "Auto Clicker can't click into a program running as administrator"
+msgstr "Auto Clicker kan inte klicka i ett program som körs som administratör"
+
+msgid "hotkey {} does not work: another program uses it"
+msgstr "snabbtangenten {} fungerar inte: ett annat program använder den"
+
+msgid "hotkey {} does not work: Windows refused it: {}"
+msgstr "snabbtangenten {} fungerar inte: Windows nekade den: {}"

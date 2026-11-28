@@ -15,7 +15,7 @@ use super::hotkeys::{HotkeySource, ReaderCommand};
 use super::{Controller, InputReader, Message, Platform};
 use crate::hotkeys::{Capture, Captured, HotkeyStatus};
 use crate::message::{Failure, Quoted, Unavailability};
-use crate::window::{Answer, CAPTURE_TIME, CaptureEnd, MAX_TOKEN, Outcome};
+use crate::window::{Answer, CAPTURE_TIME, CaptureEnd, MAX_TOKEN, Outcome, Pressed};
 
 /// How long the desktop may take to open its shortcut settings. The reader
 /// bounds its own call by less; this ends the wait if the reader is gone.
@@ -139,6 +139,37 @@ impl<P: Platform> Controller<P> {
         self.end_capture(outcome);
     }
 
+    /// The window captured `pressed` from its own key events, where it
+    /// captures: the capture pending ends with it, as when the reader
+    /// captures, and the answer is this request's. One that comes after
+    /// the deadline, with no capture of its kind pending, or where the
+    /// daemon reads the keys itself, ends whatever capture is pending.
+    pub(super) fn pressed(&mut self, pressed: Pressed) -> Outcome {
+        self.pending_expired();
+        let ours = self.platform.window_captures()
+            && self
+                .settings
+                .capturing()
+                .is_some_and(|capture| fits(capture, pressed));
+        let outcome = match pressed {
+            _ if !ours => Outcome::CaptureEnded(CaptureEnd::Interrupted),
+            Pressed::Hotkey(binding) => Outcome::CapturedHotkey(binding),
+            Pressed::Key(key) => Outcome::CapturedKey(key.code()),
+            Pressed::Cancelled => Outcome::CaptureEnded(CaptureEnd::Cancelled),
+            Pressed::Unnamed => Outcome::CaptureEnded(CaptureEnd::Unnamed),
+        };
+        // The capture's own request gets no answer: this one carries it.
+        if self
+            .settings
+            .pending
+            .take_if(|p| p.capture().is_some())
+            .is_some()
+        {
+            self.restart_reader();
+        }
+        outcome
+    }
+
     /// The reader answered `operation`, a request to open the desktop's
     /// settings; an answer to any other than the one pending, or after its
     /// deadline, is dropped.
@@ -221,6 +252,15 @@ impl<P: Platform> Controller<P> {
     pub(super) fn restart_reader(&mut self) {
         self.hotkeys = HotkeySource::none();
         self.start_reader();
+    }
+}
+
+/// Whether `pressed` is what a capture of `capture` gets.
+fn fits(capture: Capture, pressed: Pressed) -> bool {
+    match pressed {
+        Pressed::Hotkey(_) | Pressed::Unnamed => capture == Capture::Hotkey,
+        Pressed::Key(_) => capture == Capture::Key,
+        Pressed::Cancelled => true,
     }
 }
 

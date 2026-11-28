@@ -318,6 +318,38 @@ fn a_captured_hotkey_is_kept_for_the_next_save_and_a_key_is_noted() {
 }
 
 #[test]
+fn a_capture_in_the_window_sends_what_was_pressed_and_its_answer_ends_it() {
+    use auto_clicker_core::window::Pressed;
+    let mut state = started();
+    // Nothing is captured while no capture is waited on.
+    assert_eq!(state.capturing(), None);
+    assert_eq!(state.pressed(Pressed::Cancelled), None);
+    let capture = state.capture(Target::Hotkey(2)).unwrap();
+    assert_eq!(state.capturing(), Some(Capture::Hotkey));
+    let ctrl_f9 = Binding::parse("Ctrl+F9").unwrap();
+    let pressed = state.pressed(Pressed::Hotkey(ctrl_f9)).unwrap();
+    assert_eq!(pressed.ask, Ask::Pressed(Pressed::Hotkey(ctrl_f9)));
+    assert_ne!(pressed.id, capture.id);
+    // One result per capture: a second press, or the keyboard going,
+    // before the answer sends nothing, and the first result still counts.
+    assert_eq!(state.capturing(), None);
+    assert_eq!(state.pressed(Pressed::Cancelled), None);
+    // The answer to the capture itself no longer counts; the press's does.
+    let ended = Outcome::CaptureEnded(CaptureEnd::TimedOut);
+    assert_eq!(answered(&mut state, capture.id, ended).note, None);
+    let note = answered(&mut state, pressed.id, Outcome::CapturedHotkey(ctrl_f9)).note;
+    assert_eq!(note, Some(Note::CapturedHotkey("Ctrl+F9".to_owned())));
+    assert_eq!(state.hotkeys().unwrap().toggle_playback, "Ctrl+F9");
+    assert_eq!(state.capturing(), None);
+    // A capture the daemon ended first takes nothing pressed after.
+    let key = state.capture(Target::Key).unwrap();
+    assert_eq!(state.capturing(), Some(Capture::Key));
+    let ended = Outcome::CaptureEnded(CaptureEnd::TimedOut);
+    assert!(answered(&mut state, key.id, ended).note.is_some());
+    assert_eq!(state.pressed(Pressed::Cancelled), None);
+}
+
+#[test]
 fn the_view_says_whether_idle_where_hotkeys_come_from_and_what_waits_for_a_restart() {
     // `auto` in the config, and the desktop's shortcuts picked at start.
     let mut shown = view(defaults(), None);

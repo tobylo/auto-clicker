@@ -91,6 +91,8 @@ struct Record {
     registered_triggers: bool,
     /// The window in front runs as administrator.
     elevated_front: bool,
+    /// The settings window captures hotkeys itself, as on Windows.
+    window_captures: bool,
     /// Opens wait until the test releases them through `open_gate`.
     hold_opens: bool,
     open_gate: Option<tokio::sync::oneshot::Sender<()>>,
@@ -415,6 +417,11 @@ impl Platform for FakePlatform {
 
     fn foreground_takes_input(&self) -> bool {
         !self.0.with(|r| r.elevated_front)
+    }
+
+    fn window_captures(&self) -> bool {
+        // Where the fake captures in the daemon, the default answers.
+        self.0.with(|r| r.window_captures) || super::window_captures(self.input_reader())
     }
 
     fn read_input(&mut self, own: Option<&Input<Devices>>, reading: ReadInput) -> HotkeyReader {
