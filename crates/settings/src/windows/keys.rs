@@ -85,37 +85,49 @@ impl Keys {
         synthetic: bool,
         capture: Option<Capture>,
     ) -> (bool, Option<Pressed>) {
-        let down = event.state == ElementState::Pressed;
-        let fresh = down && !event.repeat && !synthetic;
+        let motion = match event.state {
+            ElementState::Released => Motion::Up,
+            ElementState::Pressed if event.repeat || synthetic => Motion::Held,
+            ElementState::Pressed => Motion::Down,
+        };
         let capture = capture.map(|capture| (capture, window_message_modifiers()));
-        self.route(event.physical_key, down, fresh, capture)
+        self.route(event.physical_key, motion, capture)
     }
 
-    /// [`Keys::key`] for `key` going down or up; `fresh` when it went
-    /// down just now, not a repeat nor held as the window got the
-    /// keyboard; `capture` with the modifiers held, while one is waited on.
+    /// [`Keys::key`] for `key` moving as `motion` says; `capture` with
+    /// the modifiers held, while one is waited on.
     fn route(
         &mut self,
         key: PhysicalKey,
-        down: bool,
-        fresh: bool,
+        motion: Motion,
         capture: Option<(Capture, Modifiers)>,
     ) -> (bool, Option<Pressed>) {
         let taken = self.taken.iter().position(|&held| held == key);
-        match (down, taken, capture) {
+        match (motion, taken, capture) {
             // Up: Slint sees it only if it saw it go down.
-            (false, Some(at), _) => {
+            (Motion::Up, Some(at), _) => {
                 self.taken.swap_remove(at);
                 (true, None)
             }
-            (true, Some(_), _) => (true, None),
-            (true, None, Some((capture, modifiers))) if fresh => {
+            (Motion::Down | Motion::Held, Some(_), _) => (true, None),
+            (Motion::Down, None, Some((capture, modifiers))) => {
                 self.taken.push(key);
                 (true, pressed(capture, key, modifiers))
             }
             _ => (false, None),
         }
     }
+}
+
+/// How a key moved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Motion {
+    /// It went down just now.
+    Down,
+    /// Down still: a repeat, or held as the window got the keyboard, which
+    /// winit reports as `synthetic`.
+    Held,
+    Up,
 }
 
 /// What a capture of `capture` gets from a press of `key` with `modifiers`
@@ -214,19 +226,19 @@ mod tests {
         let ctrl = code(KeyCode::ControlLeft);
         let hotkey = Some((Capture::Hotkey, Modifiers::NONE));
         // Ctrl went down before the capture: Slint sees it come up.
-        assert_eq!(keys.route(ctrl, true, true, None), (false, None));
-        assert_eq!(keys.route(ctrl, true, false, hotkey), (false, None));
-        assert_eq!(keys.route(ctrl, false, false, hotkey), (false, None));
+        assert_eq!(keys.route(ctrl, Motion::Down, None), (false, None));
+        assert_eq!(keys.route(ctrl, Motion::Held, hotkey), (false, None));
+        assert_eq!(keys.route(ctrl, Motion::Up, hotkey), (false, None));
         // Space is captured; its repeats and its release, after the
         // capture is over, stay away too, and are captured no more.
         let space_key = Some(Pressed::Key(Key::new(57).unwrap()));
         let key = Some((Capture::Key, Modifiers::NONE));
-        assert_eq!(keys.route(space, true, true, key), (true, space_key));
-        assert_eq!(keys.route(space, true, false, None), (true, None));
-        assert_eq!(keys.route(space, true, false, key), (true, None));
-        assert_eq!(keys.route(space, false, false, None), (true, None));
+        assert_eq!(keys.route(space, Motion::Down, key), (true, space_key));
+        assert_eq!(keys.route(space, Motion::Held, None), (true, None));
+        assert_eq!(keys.route(space, Motion::Held, key), (true, None));
+        assert_eq!(keys.route(space, Motion::Up, None), (true, None));
         // Up once: the next press is Slint's again.
-        assert_eq!(keys.route(space, true, true, None), (false, None));
-        assert_eq!(keys.route(space, false, false, None), (false, None));
+        assert_eq!(keys.route(space, Motion::Down, None), (false, None));
+        assert_eq!(keys.route(space, Motion::Up, None), (false, None));
     }
 }
