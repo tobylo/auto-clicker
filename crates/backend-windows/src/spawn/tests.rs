@@ -2,8 +2,9 @@ use std::ffi::{OsStr, OsString};
 
 use super::*;
 
+/// `line` without its NUL, which it must end with.
 fn split(line: &[u16]) -> String {
-    String::from_utf16(&line[..line.len() - 1]).unwrap()
+    String::from_utf16(line.strip_suffix(&[0]).expect("a NUL at the end")).unwrap()
 }
 
 #[test]

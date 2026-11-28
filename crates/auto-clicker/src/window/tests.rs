@@ -97,13 +97,15 @@ async fn views_and_raises_are_written_until_the_controller_ends_it() {
     });
     let mut lines = BufReader::new(theirs).lines();
     view_sender.send_replace(Some(view()));
-    let first = lines.next_line().await.unwrap().unwrap();
+    let first = timeout(Duration::from_secs(5), lines.next_line());
+    let first = first.await.expect("a view written").unwrap().unwrap();
     assert_eq!(
         parse::<Update>(first.as_bytes()).unwrap(),
         Update::View(Box::new(view()))
     );
     raise.send(()).unwrap();
-    let second = lines.next_line().await.unwrap().unwrap();
+    let second = timeout(Duration::from_secs(5), lines.next_line());
+    let second = second.await.expect("a raise written").unwrap().unwrap();
     assert_eq!(parse::<Update>(second.as_bytes()).unwrap(), Update::Raise);
     drop(view_sender);
     let stopped = timeout(Duration::from_secs(5), writing)
