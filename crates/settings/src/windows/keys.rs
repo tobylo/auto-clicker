@@ -13,15 +13,16 @@
 //! A key is told by the scan code Windows reports (winit's physical key),
 //! read back through the same table output and raw input use, so a hotkey
 //! captured here is the one the daemon matches. The modifiers are those
-//! Windows says are held. What is captured goes to the daemon as the
+//! Windows says are held with the key's message, AltGr as Ctrl and Alt,
+//! as Windows' hotkeys take it (winit's leave AltGr out). What is captured goes to the daemon as the
 //! window's answer; like every key event, it is never logged.
 
-use auto_clicker_backend_windows::window_message_key;
-use auto_clicker_core::hotkeys::{Capture, Modifier, Modifiers};
+use auto_clicker_backend_windows::{window_message_key, window_message_modifiers};
+use auto_clicker_core::hotkeys::{Capture, Modifiers};
 use auto_clicker_core::window::Pressed;
 use i_slint_backend_winit::winit::event::{ElementState, KeyEvent, WindowEvent};
 use i_slint_backend_winit::winit::event_loop::ActiveEventLoop;
-use i_slint_backend_winit::winit::keyboard::{ModifiersState, PhysicalKey};
+use i_slint_backend_winit::winit::keyboard::PhysicalKey;
 use i_slint_backend_winit::winit::platform::scancode::PhysicalKeyExtScancode;
 use i_slint_backend_winit::winit::window::{Window, WindowId};
 use i_slint_backend_winit::{CustomApplicationHandler, EventResult};
@@ -31,8 +32,6 @@ use crate::APP;
 /// Reads the window's key events for a capture, while one is waited on.
 #[derive(Default)]
 pub struct Keys {
-    /// The modifiers Windows last said are held.
-    modifiers: Modifiers,
     /// The keys whose press a capture took, until each comes up.
     taken: Vec<PhysicalKey>,
 }
@@ -47,10 +46,6 @@ impl CustomApplicationHandler for Keys {
         event: &WindowEvent,
     ) -> EventResult {
         match event {
-            WindowEvent::ModifiersChanged(modifiers) => {
-                self.modifiers = held(modifiers.state());
-                EventResult::Propagate
-            }
             WindowEvent::KeyboardInput {
                 event,
                 is_synthetic,
@@ -92,18 +87,19 @@ impl Keys {
     ) -> (bool, Option<Pressed>) {
         let down = event.state == ElementState::Pressed;
         let fresh = down && !event.repeat && !synthetic;
+        let capture = capture.map(|capture| (capture, window_message_modifiers()));
         self.route(event.physical_key, down, fresh, capture)
     }
 
     /// [`Keys::key`] for `key` going down or up; `fresh` when it went
     /// down just now, not a repeat nor held as the window got the
-    /// keyboard.
+    /// keyboard; `capture` with the modifiers held, while one is waited on.
     fn route(
         &mut self,
         key: PhysicalKey,
         down: bool,
         fresh: bool,
-        capture: Option<Capture>,
+        capture: Option<(Capture, Modifiers)>,
     ) -> (bool, Option<Pressed>) {
         let taken = self.taken.iter().position(|&held| held == key);
         match (down, taken, capture) {
@@ -113,9 +109,9 @@ impl Keys {
                 (true, None)
             }
             (true, Some(_), _) => (true, None),
-            (true, None, Some(capture)) if fresh => {
+            (true, None, Some((capture, modifiers))) if fresh => {
                 self.taken.push(key);
-                (true, pressed(capture, key, self.modifiers))
+                (true, pressed(capture, key, modifiers))
             }
             _ => (false, None),
         }
@@ -136,19 +132,6 @@ fn pressed(capture: Capture, key: PhysicalKey, modifiers: Modifiers) -> Option<P
     }
 }
 
-/// The modifiers of `state`.
-fn held(state: ModifiersState) -> Modifiers {
-    [
-        (state.control_key(), Modifier::Ctrl),
-        (state.shift_key(), Modifier::Shift),
-        (state.alt_key(), Modifier::Alt),
-        (state.super_key(), Modifier::Meta),
-    ]
-    .into_iter()
-    .filter(|&(down, _)| down)
-    .fold(Modifiers::NONE, |all, (_, modifier)| all.with(modifier))
-}
-
 /// What the capture the window waits on reads, if it waits on one.
 fn capturing() -> Option<Capture> {
     APP.with(|slot| slot.borrow().as_ref()?.try_borrow().ok()?.capturing())
@@ -166,7 +149,7 @@ fn tell(pressed: Pressed) {
 
 #[cfg(test)]
 mod tests {
-    use auto_clicker_core::hotkeys::Binding;
+    use auto_clicker_core::hotkeys::{Binding, Modifier};
     use auto_clicker_core::input::Key;
     use i_slint_backend_winit::winit::keyboard::KeyCode;
 
@@ -229,7 +212,7 @@ mod tests {
         let mut keys = Keys::default();
         let space = code(KeyCode::Space);
         let ctrl = code(KeyCode::ControlLeft);
-        let hotkey = Some(Capture::Hotkey);
+        let hotkey = Some((Capture::Hotkey, Modifiers::NONE));
         // Ctrl went down before the capture: Slint sees it come up.
         assert_eq!(keys.route(ctrl, true, true, None), (false, None));
         assert_eq!(keys.route(ctrl, true, false, hotkey), (false, None));
@@ -237,7 +220,7 @@ mod tests {
         // Space is captured; its repeats and its release, after the
         // capture is over, stay away too, and are captured no more.
         let space_key = Some(Pressed::Key(Key::new(57).unwrap()));
-        let key = Some(Capture::Key);
+        let key = Some((Capture::Key, Modifiers::NONE));
         assert_eq!(keys.route(space, true, true, key), (true, space_key));
         assert_eq!(keys.route(space, true, false, None), (true, None));
         assert_eq!(keys.route(space, true, false, key), (true, None));
@@ -245,16 +228,5 @@ mod tests {
         // Up once: the next press is Slint's again.
         assert_eq!(keys.route(space, true, true, None), (false, None));
         assert_eq!(keys.route(space, false, false, None), (false, None));
-    }
-
-    #[test]
-    fn windows_modifiers_are_the_programs() {
-        let state = ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER;
-        let expected = Modifiers::NONE
-            .with(Modifier::Ctrl)
-            .with(Modifier::Alt)
-            .with(Modifier::Meta);
-        assert_eq!(held(state), expected);
-        assert_eq!(held(ModifiersState::empty()), Modifiers::NONE);
     }
 }
