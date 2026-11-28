@@ -68,5 +68,6 @@ workspace = true
 auto-clicker-core = { path = "../core", features = ["fake"] }
 fastrand = "2.5.0"
 tokio = { version = "1.54.1", features = ["rt", "time", "macros", "net", "io-util"] }
-# The settings window's pipe test checks the child has no standard handles.
-windows-sys = { version = "0.61.2", features = ["Win32_System_Console"] }
+# The settings window's pipe tests check the child has no standard handles,
+# and how far the daemon could act as the window (impersonation).
+windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_System_Pipes"] }

@@ -224,3 +224,58 @@ fn a_pipe_another_program_connected_to_first_starts_no_window() {
     assert!(server(&name, Way::ToWindow).is_err());
     assert_ne!(pipe_name(), pipe_name());
 }
+
+/// How far the daemon's end of a pipe may act as the window that opened
+/// the other: the impersonation level its token gets.
+#[allow(unsafe_code)]
+fn impersonation_level(server: &NamedPipeServer) -> i32 {
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, RevertToSelf, TOKEN_QUERY, TokenImpersonationLevel,
+    };
+    use windows_sys::Win32::System::Pipes::ImpersonateNamedPipeClient;
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
+    // SAFETY: the pipe is this test's, with a byte read from it, as
+    // impersonation requires.
+    assert_ne!(
+        unsafe { ImpersonateNamedPipeClient(server.as_raw_handle()) },
+        0
+    );
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: the thread impersonates now; `token` is live.
+    let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) };
+    // SAFETY: plain call; the thread goes back to its own token.
+    assert_ne!(unsafe { RevertToSelf() }, 0);
+    assert_ne!(opened, 0, "{}", io::Error::last_os_error());
+    // SAFETY: a new token handle, owned from here on.
+    let token = unsafe { OwnedHandle::from_raw_handle(token) };
+    let mut level = 0i32;
+    let mut size = 0u32;
+    // SAFETY: `level` is live and as large as the size passed.
+    let read = unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenImpersonationLevel,
+            (&raw mut level).cast(),
+            u32::try_from(size_of::<i32>()).unwrap(),
+            &mut size,
+        )
+    };
+    assert_ne!(read, 0, "{}", io::Error::last_os_error());
+    level
+}
+
+#[tokio::test]
+async fn the_daemon_may_identify_the_window_but_never_act_as_it() {
+    use tokio::io::AsyncReadExt;
+    use windows_sys::Win32::Security::SecurityIdentification;
+    let name = pipe_name();
+    let mut server = server(&name, Way::FromWindow).unwrap();
+    let theirs = window_end(&name, Way::FromWindow).unwrap();
+    connected(&server).unwrap();
+    let mut theirs = File::from(theirs);
+    theirs.write_all(b"x").unwrap();
+    let mut byte = [0u8; 1];
+    let read = tokio::time::timeout(Duration::from_secs(5), server.read_exact(&mut byte));
+    read.await.unwrap().unwrap();
+    assert_eq!(impersonation_level(&server), SecurityIdentification);
+}

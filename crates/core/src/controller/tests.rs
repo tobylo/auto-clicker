@@ -420,7 +420,8 @@ impl Platform for FakePlatform {
     }
 
     fn window_captures(&self) -> bool {
-        self.0.with(|r| r.window_captures)
+        // Where the fake captures in the daemon, the default answers.
+        self.0.with(|r| r.window_captures) || super::window_captures(self.input_reader())
     }
 
     fn read_input(&mut self, own: Option<&Input<Devices>>, reading: ReadInput) -> HotkeyReader {

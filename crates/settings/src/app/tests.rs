@@ -223,6 +223,15 @@ fn problems(said: &Said<'_>) {
         said.no_recording(&NoRecording::DesktopHotkeys),
         "inspelning går inte med skrivbordets genvägar"
     );
+    // The Linux window names the XDG folders, not Windows'.
+    assert_eq!(
+        said.problem(&Problem::Config(ConfigProblem::NoDirectory)),
+        "ingen konfigurationsmapp: varken XDG_CONFIG_HOME eller HOME är satt"
+    );
+    assert_eq!(
+        said.failure(&Failure::NoConfigDirectory),
+        "det finns ingen konfigurationsmapp: varken XDG_CONFIG_HOME eller HOME är satt"
+    );
     assert_eq!(
         note(Note::SavedUnsynced(Quoted::new("EIO"))),
         "Sparat, men det kanske inte klarar ett strömavbrott: EIO"
