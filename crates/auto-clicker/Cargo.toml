@@ -40,9 +40,10 @@ zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 # The daemon on Windows (src/windows/): every Win32 call is in backend-windows.
 [target.'cfg(windows)'.dependencies]
 auto-clicker-backend-windows = { path = "../backend-windows" }
-# The controller's runtime, its timers, and its I/O driver for the settings
+# The controller's runtime, its timers, the settings window keeper's `select!`
+# (`macros`), and its I/O driver for the settings
 # window's pipes (`net`, `io-util`).
-tokio = { version = "1.54.1", default-features = false, features = ["rt", "sync", "time", "net", "io-util"] }
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "macros", "sync", "time", "net", "io-util"] }
 
 [lints]
 workspace = true

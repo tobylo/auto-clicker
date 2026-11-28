@@ -94,7 +94,9 @@ pub(crate) fn arguments(pipes: Pipes) -> Vec<OsString> {
 }
 
 /// The pipes a window's command line names: exactly [`arguments`]' form,
-/// two distinct values that are not zero; anything else is refused, and
+/// two distinct values that are not zero, each a multiple of four, as
+/// Windows makes handles (it ignores their low two bits, so two values
+/// that differ only there name one handle); anything else is refused, and
 /// says why.
 ///
 /// # Errors
@@ -109,7 +111,7 @@ pub(crate) fn parse(mut arguments: impl Iterator<Item = OsString>) -> Result<Pip
         text.as_deref()
             .and_then(OsStr::to_str)
             .and_then(|text| Some((text, text.parse::<usize>().ok()?)))
-            .filter(|&(text, value)| value != 0 && value.to_string() == text)
+            .filter(|&(text, value)| value != 0 && value % 4 == 0 && value.to_string() == text)
             .map(|(_, value)| value)
             .ok_or_else(|| format!("{flag} names no handle"))
     };
@@ -334,7 +336,7 @@ fn pipe_name() -> OsString {
 }
 
 /// Brings the settings window `hwnd` to the front, restored if it was
-/// minimised, as far as the daemon let it ([`Window::let_forward`]).
+/// minimised, as far as the daemon let it ([`let_forward`]).
 #[allow(unsafe_code)]
 pub fn bring_forward(hwnd: isize) {
     let hwnd = hwnd as HWND;

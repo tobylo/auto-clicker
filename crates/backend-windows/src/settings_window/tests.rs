@@ -49,6 +49,9 @@ fn the_pipes_are_read_back_in_the_form_they_are_written_only() {
         &["--requests", "+420", "--updates", "432"],
         &["--requests", "-420", "--updates", "432"],
         &["--requests", "0x1a4", "--updates", "432"],
+        // A handle's low two bits are Windows' own: 421 is 420.
+        &["--requests", "421", "--updates", "432"],
+        &["--requests", "420", "--updates", "422"],
         &["--requests", "420", "--updates", "432", "more"],
     ] {
         assert!(parse(args(refused)).is_err(), "{refused:?}");
@@ -85,13 +88,16 @@ fn taken_pipes_are_kept_from_children() {
     for handle in [&read, &write] {
         // SAFETY: a handle of this test's own.
         #[allow(unsafe_code)]
-        unsafe {
+        let set = unsafe {
             SetHandleInformation(
                 handle.as_raw_handle(),
                 HANDLE_FLAG_INHERIT,
                 HANDLE_FLAG_INHERIT,
             )
         };
+        assert_ne!(set, 0);
+        let flags = flags(handle.as_raw_handle() as usize).unwrap();
+        assert_eq!(flags & HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
     }
     let pipes = Pipes {
         requests: write.as_raw_handle() as usize,
@@ -125,8 +131,10 @@ fn the_window_side_of_the_pipes() {
         ]
     };
     assert!(standard.iter().all(|handle| handle.is_null()));
-    println!("{PRINTED}");
-    eprintln!("{PRINTED}");
+    // Straight to the standard streams, as a library prints: the test
+    // harness captures `println!`, and would keep it from them.
+    let _ = writeln!(io::stdout(), "{PRINTED}");
+    let _ = writeln!(io::stderr(), "{PRINTED}");
     let pipes = parse(given[at..].iter().cloned()).unwrap();
     let (mut requests, updates) = take(pipes).unwrap();
     writeln!(requests, "{SENT}").unwrap();
@@ -161,18 +169,20 @@ async fn only_what_the_window_sends_on_its_pipe_reaches_the_daemon() {
     // The window exits; nothing else ever came on the pipe.
     line.clear();
     let read = tokio::time::timeout(Duration::from_secs(20), requests.read_line(&mut line));
-    assert_eq!(read.await.unwrap().unwrap_or(0), 0, "{line}");
+    assert_eq!(read.await.unwrap().unwrap(), 0, "{line}");
     drop(window);
 }
 
-/// A child that reads its updates until they end, then exits.
+/// A child that says it is ready, then reads its updates until they end,
+/// then exits.
 #[test]
 fn a_window_that_waits_for_its_updates() {
     let given: Vec<OsString> = std::env::args_os().collect();
     let Some(at) = given.iter().position(|arg| arg == REQUESTS) else {
         return;
     };
-    let (_requests, updates) = take(parse(given[at..].iter().cloned()).unwrap()).unwrap();
+    let (mut requests, updates) = take(parse(given[at..].iter().cloned()).unwrap()).unwrap();
+    writeln!(requests, "{SENT}").unwrap();
     let _ = BufReader::new(updates).lines().count();
 }
 
@@ -184,12 +194,17 @@ async fn a_dropped_window_is_killed_and_its_pipes_end() {
         updates,
     } = start_child("settings_window::tests::a_window_that_waits_for_its_updates");
     let mut requests = tokio::io::BufReader::new(requests);
+    // The window runs, and holds its pipes.
+    let mut line = String::new();
+    let read = tokio::time::timeout(Duration::from_secs(20), requests.read_line(&mut line));
+    read.await.unwrap().unwrap();
+    assert_eq!(line.trim_end(), SENT);
     drop(window);
     // The window was killed: its end of the requests pipe closed, though
     // the daemon still holds the updates pipe it was waiting on.
-    let mut line = String::new();
+    line.clear();
     let read = tokio::time::timeout(Duration::from_secs(5), requests.read_line(&mut line));
-    assert_eq!(read.await.unwrap().unwrap_or(0), 0);
+    assert_eq!(read.await.unwrap().unwrap(), 0, "{line}");
     drop(updates);
 }
 
