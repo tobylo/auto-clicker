@@ -59,6 +59,8 @@ fn gone(pid: u32, why: &str) {
         assert!(Instant::now() < deadline, "the window outlived {why}");
         sleep(Duration::from_millis(20));
     }
+    // An exit seen only after the deadline is too late.
+    assert!(Instant::now() < deadline, "the window outlived {why}");
 }
 
 /// The window's memory now, as Task Manager counts it, in KiB.
@@ -187,7 +189,9 @@ fn save_until(home: &Home, window: desktop::Window, lines: &[&str]) {
         let text = std::fs::read_to_string(&path)
             .unwrap_or_default()
             .to_lowercase();
-        lines.iter().all(|line| text.contains(line)).then_some(())
+        // Whole lines: `interval_ms = 2500` is not `interval_ms = 250`.
+        let held = |line: &&str| text.lines().any(|held| held.trim() == *line);
+        lines.iter().all(held).then_some(())
     });
 }
 
