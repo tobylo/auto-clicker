@@ -4,9 +4,11 @@
 //! here, before Slint sees them, so no key the user presses for a hotkey
 //! also types into a field or presses a button. A key whose press the
 //! capture took stays away from Slint until it comes up, repeats included,
-//! even once the capture is over; a key Slint saw go down, before the
-//! capture, it also sees come up, so it never thinks a key is held that
-//! is not.
+//! even once the capture is over, or until the window loses the keyboard:
+//! a key still held when the keyboard comes back is one held as the window
+//! got it, whose press Slint is handed like any other. A key Slint saw go
+//! down, before the capture, it also sees come up, so it never thinks a
+//! key is held that is not.
 //!
 //! A key is told by the scan code Windows reports (winit's physical key),
 //! read back through the same table output and raw input use, so a hotkey
