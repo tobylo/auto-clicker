@@ -6,7 +6,7 @@ use std::rc::Rc;
 use auto_clicker_core::config::Reason;
 use auto_clicker_core::controller::{Blocked, NoRecording};
 use auto_clicker_core::hotkeys::Refusal;
-use auto_clicker_core::hotkeys::Unavailable;
+use auto_clicker_core::hotkeys::{Binding, NotRegistered, Unavailable, Unregistered};
 use auto_clicker_core::locale::Language;
 use auto_clicker_core::message::{
     ChangeFailure, ConfigProblem, Failure, Hindrance, InputFailure, NoOnScreen, NoPointer,
@@ -48,7 +48,12 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
     let said = Said {
         texts: &texts,
         decimal: ',',
+        windows: false,
     };
+    windows_words(&Said {
+        windows: true,
+        ..said
+    });
     refusals_and_failures(&said);
     problems(&said);
     no_positions(&said);
@@ -63,6 +68,55 @@ fn a_swedish_window_says_the_daemons_messages_in_swedish() {
     list::the_actions_follow_the_selection();
     list::a_delete_asks_once_and_sends_the_selection_whole();
     on_screen::the_group_shows_the_switches_saves_them_and_says_why_it_cannot_show();
+}
+
+/// What a window on Windows says its own way: its folders, and the
+/// refusals only Windows gives.
+fn windows_words(said: &Said<'_>) {
+    assert_eq!(
+        said.problem(&Problem::Config(ConfigProblem::NoDirectory)),
+        "ingen konfigurationsmapp: APPDATA är inte satt till en absolut mapp"
+    );
+    assert_eq!(
+        said.failure(&Failure::NoConfigDirectory),
+        "det finns ingen konfigurationsmapp: APPDATA är inte satt till en absolut mapp"
+    );
+    let recorded = Notice::Recorded {
+        stop: None,
+        saving: Saving::Failed(SaveFailure::NoDataDirectory),
+    };
+    assert!(
+        said.notice(&recorded)
+            .ends_with("ingen datamapp: LOCALAPPDATA är inte satt till en absolut mapp"),
+        "{}",
+        said.notice(&recorded)
+    );
+    let elevated = Notice::Refused {
+        start: Start::Clicking,
+        why: Hindrance::Elevated,
+    };
+    assert!(
+        said.notice(&elevated)
+            .ends_with("Auto Clicker kan inte klicka i ett program som körs som administratör"),
+        "{}",
+        said.notice(&elevated)
+    );
+    let ctrl_f9 = Binding::parse("Ctrl+F9").unwrap();
+    let refused = Problem::HotkeysRefused(vec![
+        Unregistered {
+            hotkey: ctrl_f9,
+            why: NotRegistered::Taken,
+        },
+        Unregistered {
+            hotkey: ctrl_f9,
+            why: NotRegistered::Failed(Quoted::new("Access is denied. (os error 5)")),
+        },
+    ]);
+    assert_eq!(
+        said.problem(&refused),
+        "snabbtangenten Ctrl+F9 fungerar inte: ett annat program använder den; snabbtangenten \
+         Ctrl+F9 fungerar inte: Windows nekade den: Access is denied. (os error 5)"
+    );
 }
 
 /// A refusal, a failure and an unavailable, as a note.

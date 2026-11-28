@@ -471,6 +471,7 @@ impl App {
         Said {
             texts,
             decimal: self.decimal,
+            windows: cfg!(windows),
         }
     }
 
