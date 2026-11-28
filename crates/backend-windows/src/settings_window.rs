@@ -21,7 +21,7 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 use std::pin::pin;
 use std::ptr::null;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use tokio::net::windows::named_pipe::{NamedPipeServer, PipeMode, ServerOptions};
@@ -49,15 +49,39 @@ const UPDATES: &str = "--updates";
 /// The values of the window's two pipe ends, as its command line names
 /// them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Pipes {
+pub(crate) struct Pipes {
     /// Where the window writes its requests.
-    pub requests: usize,
+    pub(crate) requests: usize,
     /// Where the window reads the daemon's updates.
-    pub updates: usize,
+    pub(crate) updates: usize,
+}
+
+/// Whether the window took on its pipes already.
+static TAKEN: AtomicBool = AtomicBool::new(false);
+
+/// The window's side: takes on the pipes its command line names, inherited
+/// from the daemon, as [`take`] does: where it writes its requests, and
+/// where it reads updates. Only the values on this process's own command
+/// line, and only once, so no handle ever has two owners.
+///
+/// # Errors
+/// The command line names no pipes in the form the daemon writes, they
+/// were taken already, or [`take`] refuses them.
+pub fn take_inherited() -> io::Result<(File, File)> {
+    if TAKEN.swap(true, Ordering::AcqRel) {
+        return Err(io::Error::other("the pipes were taken already"));
+    }
+    let pipes = parse(std::env::args_os().skip(1)).map_err(|why| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("started with arguments it does not take ({why})"),
+        )
+    })?;
+    take(pipes)
 }
 
 /// The window's command line for `pipes`, after its program.
-pub fn arguments(pipes: Pipes) -> Vec<OsString> {
+pub(crate) fn arguments(pipes: Pipes) -> Vec<OsString> {
     [
         REQUESTS.to_owned(),
         pipes.requests.to_string(),
@@ -75,7 +99,7 @@ pub fn arguments(pipes: Pipes) -> Vec<OsString> {
 ///
 /// # Errors
 /// The arguments are not in that form.
-pub fn parse(mut arguments: impl Iterator<Item = OsString>) -> Result<Pipes, String> {
+pub(crate) fn parse(mut arguments: impl Iterator<Item = OsString>) -> Result<Pipes, String> {
     let mut value = |flag: &str| {
         if arguments.next().as_deref() != Some(OsStr::new(flag)) {
             return Err(format!("{flag} is missing"));
@@ -111,7 +135,7 @@ pub fn parse(mut arguments: impl Iterator<Item = OsString>) -> Result<Pipes, Str
 /// # Errors
 /// A handle is no pipe, or its inheritance could not be turned off.
 #[allow(unsafe_code)]
-pub fn take(pipes: Pipes) -> io::Result<(File, File)> {
+pub(crate) fn take(pipes: Pipes) -> io::Result<(File, File)> {
     for (value, which) in [(pipes.requests, REQUESTS), (pipes.updates, UPDATES)] {
         let handle = value as HANDLE;
         // SAFETY: any value may be asked; one that names no handle is no

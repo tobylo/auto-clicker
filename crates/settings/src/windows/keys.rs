@@ -2,7 +2,11 @@
 //! waits on a capture, the daemon has let go of its hotkeys, and the keys
 //! the user presses reach this window as its own key events. They are read
 //! here, before Slint sees them, so no key the user presses for a hotkey
-//! also types into a field or presses a button.
+//! also types into a field or presses a button. A key whose press the
+//! capture took stays away from Slint until it comes up, repeats included,
+//! even once the capture is over; a key Slint saw go down, before the
+//! capture, it also sees come up, so it never thinks a key is held that
+//! is not.
 //!
 //! A key is told by the scan code Windows reports (winit's physical key),
 //! read back through the same table output and raw input use, so a hotkey
@@ -27,6 +31,8 @@ use crate::APP;
 pub struct Keys {
     /// The modifiers Windows last said are held.
     modifiers: Modifiers,
+    /// The keys whose press a capture took, until each comes up.
+    taken: Vec<PhysicalKey>,
 }
 
 impl CustomApplicationHandler for Keys {
@@ -48,23 +54,24 @@ impl CustomApplicationHandler for Keys {
                 is_synthetic,
                 ..
             } => {
-                let Some(capture) = capturing() else {
-                    return EventResult::Propagate;
-                };
-                let fresh = fresh_press(event, *is_synthetic);
-                if let Some(pressed) = fresh
-                    .then(|| pressed(capture, event.physical_key, self.modifiers))
-                    .flatten()
-                {
+                let (taken, pressed) = self.key(event, *is_synthetic, capturing());
+                if let Some(pressed) = pressed {
                     tell(pressed);
                 }
-                EventResult::PreventDefault
+                if taken {
+                    EventResult::PreventDefault
+                } else {
+                    EventResult::Propagate
+                }
             }
             // The keyboard went to another window: what the user presses
             // there is no capture's, so it ends now and the daemon takes
-            // its hotkeys back at once.
-            WindowEvent::Focused(false) if capturing().is_some() => {
-                tell(Pressed::Cancelled);
+            // its hotkeys back at once. No key is held here any more.
+            WindowEvent::Focused(false) => {
+                self.taken.clear();
+                if capturing().is_some() {
+                    tell(Pressed::Cancelled);
+                }
                 EventResult::Propagate
             }
             _ => EventResult::Propagate,
@@ -72,11 +79,45 @@ impl CustomApplicationHandler for Keys {
     }
 }
 
-/// Whether `event` is a key going down: not a repeat, and not a key held
-/// as the window got the keyboard, which winit reports as `synthetic`.
-fn fresh_press(event: &KeyEvent, synthetic: bool) -> bool {
-    let down = event.state == ElementState::Pressed;
-    down && !event.repeat && !synthetic
+impl Keys {
+    /// Whether `event` stays away from Slint, and what it captures for
+    /// `capture`, the capture waited on, if any.
+    fn key(
+        &mut self,
+        event: &KeyEvent,
+        synthetic: bool,
+        capture: Option<Capture>,
+    ) -> (bool, Option<Pressed>) {
+        let down = event.state == ElementState::Pressed;
+        let fresh = down && !event.repeat && !synthetic;
+        self.route(event.physical_key, down, fresh, capture)
+    }
+
+    /// [`Keys::key`] for `key` going down or up; `fresh` when it went
+    /// down just now, not a repeat nor held as the window got the
+    /// keyboard.
+    fn route(
+        &mut self,
+        key: PhysicalKey,
+        down: bool,
+        fresh: bool,
+        capture: Option<Capture>,
+    ) -> (bool, Option<Pressed>) {
+        let taken = self.taken.iter().position(|&held| held == key);
+        match (down, taken, capture) {
+            // Up: Slint sees it only if it saw it go down.
+            (false, Some(at), _) => {
+                self.taken.swap_remove(at);
+                (true, None)
+            }
+            (true, Some(_), _) => (true, None),
+            (true, None, Some(capture)) if fresh => {
+                self.taken.push(key);
+                (true, pressed(capture, key, self.modifiers))
+            }
+            _ => (false, None),
+        }
+    }
 }
 
 /// What a capture of `capture` gets from a press of `key` with `modifiers`
@@ -179,6 +220,29 @@ mod tests {
             Some(Pressed::Unnamed)
         );
         assert_eq!(pressed(Capture::Key, unknown, Modifiers::NONE), None);
+    }
+
+    #[test]
+    fn a_key_the_capture_took_stays_away_from_slint_until_it_comes_up() {
+        let mut keys = Keys::default();
+        let space = code(KeyCode::Space);
+        let ctrl = code(KeyCode::ControlLeft);
+        let hotkey = Some(Capture::Hotkey);
+        // Ctrl went down before the capture: Slint sees it come up.
+        assert_eq!(keys.route(ctrl, true, true, None), (false, None));
+        assert_eq!(keys.route(ctrl, true, false, hotkey), (false, None));
+        assert_eq!(keys.route(ctrl, false, false, hotkey), (false, None));
+        // Space is captured; its repeats and its release, after the
+        // capture is over, stay away too, and are captured no more.
+        let space_key = Some(Pressed::Key(Key::new(57).unwrap()));
+        let key = Some(Capture::Key);
+        assert_eq!(keys.route(space, true, true, key), (true, space_key));
+        assert_eq!(keys.route(space, true, false, None), (true, None));
+        assert_eq!(keys.route(space, true, false, key), (true, None));
+        assert_eq!(keys.route(space, false, false, None), (true, None));
+        // Up once: the next press is Slint's again.
+        assert_eq!(keys.route(space, true, true, None), (false, None));
+        assert_eq!(keys.route(space, false, false, None), (false, None));
     }
 
     #[test]

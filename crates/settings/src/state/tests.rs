@@ -330,6 +330,10 @@ fn a_capture_in_the_window_sends_what_was_pressed_and_its_answer_ends_it() {
     let pressed = state.pressed(Pressed::Hotkey(ctrl_f9)).unwrap();
     assert_eq!(pressed.ask, Ask::Pressed(Pressed::Hotkey(ctrl_f9)));
     assert_ne!(pressed.id, capture.id);
+    // One result per capture: a second press, or the keyboard going,
+    // before the answer sends nothing, and the first result still counts.
+    assert_eq!(state.capturing(), None);
+    assert_eq!(state.pressed(Pressed::Cancelled), None);
     // The answer to the capture itself no longer counts; the press's does.
     let ended = Outcome::CaptureEnded(CaptureEnd::TimedOut);
     assert_eq!(answered(&mut state, capture.id, ended).note, None);

@@ -22,6 +22,16 @@ fn args(words: &[&str]) -> impl Iterator<Item = OsString> {
 }
 
 #[test]
+fn the_pipes_are_taken_from_the_command_line_and_only_once() {
+    // The test's own command line names no pipes; a second try is refused
+    // before it reads one.
+    let first = take_inherited().unwrap_err();
+    assert_eq!(first.kind(), io::ErrorKind::InvalidInput, "{first}");
+    let second = take_inherited().unwrap_err();
+    assert_ne!(second.kind(), io::ErrorKind::InvalidInput, "{second}");
+}
+
+#[test]
 fn the_pipes_are_read_back_in_the_form_they_are_written_only() {
     let pipes = Pipes {
         requests: 0x1a4,

@@ -9,7 +9,7 @@ pub mod place;
 
 use std::process::ExitCode;
 
-use auto_clicker_backend_windows::settings_window::{self, parse, take};
+use auto_clicker_backend_windows::settings_window::{self, take_inherited};
 use auto_clicker_backend_windows::{become_per_monitor_aware, display_languages};
 use auto_clicker_core::dirs::log_path;
 use auto_clicker_core::locale::Language;
@@ -49,17 +49,13 @@ pub fn main() -> ExitCode {
             "auto-clicker-settings: not per-monitor DPI aware ({err})"
         ));
     }
-    let pipes = match parse(std::env::args_os().skip(1)) {
-        Ok(pipes) => pipes,
-        Err(why) => {
+    let (requests, updates) = match take_inherited() {
+        Ok(ends) => ends,
+        Err(err) => {
             return fail(&format!(
-                "started with arguments it does not take ({why}): it opens from the tray"
+                "the daemon's pipes cannot be used ({err}): it opens from the tray"
             ));
         }
-    };
-    let (requests, updates) = match take(pipes) {
-        Ok(ends) => ends,
-        Err(err) => return fail(&format!("the daemon's pipes cannot be used: {err}")),
     };
     let backend = i_slint_backend_winit::Backend::builder()
         .with_window_attributes_hook(crate::pick::hook)
