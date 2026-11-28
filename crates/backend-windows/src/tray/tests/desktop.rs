@@ -204,7 +204,7 @@ fn the_menu_shows_its_entries_and_reports_the_choice() {
             // An ampersand in a label shows as one: never an access key.
             ("Start clicking".to_owned(), false),
             ("Play".to_owned(), false),
-            ("Settings (not on Windows yet)".to_owned(), true),
+            ("Record".to_owned(), true),
             (String::new(), true),
             ("Quit".to_owned(), false),
         ]

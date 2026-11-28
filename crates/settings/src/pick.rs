@@ -9,8 +9,6 @@
 //! layout plus the click is the point on the layout (decision 0001), to a
 //! fraction of a pixel.
 
-mod place;
-
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -21,9 +19,9 @@ use auto_clicker_core::window::PICK_TIME;
 use auto_clicker_core::window::Spot;
 use slint::{CloseRequestResponse, ComponentHandle, Timer, TimerMode};
 
-use crate::linux::ui::PickWindow;
+use crate::ui::PickWindow;
 
-pub use place::{Screen, corner, hook, left_full_screen, monitors, place, units};
+pub use crate::system::place::{Screen, corner, hook, left_full_screen, monitors, place, units};
 
 /// How a pick ended.
 #[derive(Clone, Copy, Debug, PartialEq)]

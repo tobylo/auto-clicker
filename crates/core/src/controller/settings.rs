@@ -157,6 +157,7 @@ impl<P: Platform> Controller<P> {
                         without_modifier,
                     } => Some(self.save_settings(&settings, replace, &without_modifier)),
                     Ask::Capture(capture) => self.start_capture(id, capture),
+                    Ask::Pressed(pressed) => Some(self.pressed(pressed)),
                     Ask::ConfigureShortcuts { activation_token } => {
                         self.configure_shortcuts(id, activation_token)
                     }

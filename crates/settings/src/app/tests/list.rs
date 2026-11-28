@@ -4,8 +4,9 @@
 
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader};
-use std::os::unix::net::UnixStream;
 use std::rc::Rc;
+use std::sync::mpsc;
+use std::time::Duration;
 
 use auto_clicker_core::controller::{Activity, Listed};
 use auto_clicker_core::window::{
@@ -16,9 +17,9 @@ use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, VecModel};
 
 use super::super::App;
-use crate::linux::link::Link;
-use crate::linux::state::tests::{defaults, view};
-use crate::linux::ui::SettingsWindow;
+use crate::link::Link;
+use crate::state::tests::{defaults, view};
+use crate::ui::SettingsWindow;
 
 /// The recordings list alone in a window: `ui/tests/recordings.slint`.
 mod alone {
@@ -182,11 +183,13 @@ fn listing(minutes: &[u32], more: u64) -> WindowView {
     shown
 }
 
-/// The next request the window sent.
-pub(super) fn sent(read: &mut BufReader<UnixStream>) -> Request {
-    let mut line = Vec::new();
-    read.read_until(b'\n', &mut line).unwrap();
-    parse(&line[..line.len() - 1]).unwrap()
+/// The requests a window sends, as a thread of the test reads them.
+pub(super) struct Sent(mpsc::Receiver<Request>);
+
+/// The next request the window sent. A request that never comes fails the
+/// test instead of hanging it.
+pub(super) fn sent(read: &mut Sent) -> Request {
+    read.0.recv_timeout(Duration::from_secs(10)).unwrap()
 }
 
 /// Which rows are marked selected.
@@ -199,15 +202,20 @@ fn marked(window: &SettingsWindow) -> Vec<bool> {
 }
 
 /// A window over a new link, its app, and the link's other end.
-pub(super) fn opened() -> (SettingsWindow, Rc<RefCell<App>>, BufReader<UnixStream>) {
+pub(super) fn opened() -> (SettingsWindow, Rc<RefCell<App>>, Sent) {
     let window = SettingsWindow::new().unwrap();
     let (link, other) = Link::pair().unwrap();
-    // A request that never comes fails the test instead of hanging it.
-    other
-        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
-        .unwrap();
+    let (requests, received) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(other).split(b'\n') {
+            let Ok(line) = line else { return };
+            if requests.send(parse(&line).unwrap()).is_err() {
+                return;
+            }
+        }
+    });
     let app = App::start(&window, link, ',');
-    (window, app, BufReader::new(other))
+    (window, app, Sent(received))
 }
 
 /// Whether the actions on one, on those selected and on all may go.

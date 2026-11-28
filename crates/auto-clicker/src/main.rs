@@ -9,6 +9,7 @@ mod config;
 mod tray_icon;
 mod tray_menu;
 mod tray_text;
+mod window;
 
 #[cfg(target_os = "linux")]
 mod linux;

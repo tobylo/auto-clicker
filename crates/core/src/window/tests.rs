@@ -198,10 +198,33 @@ fn every_request_reads_back_as_sent() {
                 layouts: 2,
             },
         },
+        Ask::Pressed(Pressed::Hotkey(Binding::parse("Ctrl+Shift+F9").unwrap())),
+        Ask::Pressed(Pressed::Key(crate::input::Key::new(30).unwrap())),
+        Ask::Pressed(Pressed::Cancelled),
+        Ask::Pressed(Pressed::Unnamed),
     ];
     for ask in asks {
         let request = Request { id: 4, ask };
         assert_eq!(parse::<Request>(&body(&request)).unwrap(), request);
+    }
+}
+
+#[test]
+fn a_press_names_only_a_key_the_program_has_and_a_hotkey_it_can_bind() {
+    let key = crate::input::Key::new(30).unwrap();
+    let ask = Ask::Pressed(Pressed::Key(key));
+    let pressed = serde_json::from_slice::<serde_json::Value>(&body(&Request { id: 1, ask }));
+    let mut value = pressed.unwrap();
+    for refused in [
+        serde_json::json!({ "key": 0 }),
+        serde_json::json!({ "key": 65536 }),
+        serde_json::json!({ "key": "a" }),
+        serde_json::json!({ "hotkey": "Ctrl+Shift" }),
+        serde_json::json!("held"),
+    ] {
+        value["ask"]["pressed"] = refused.clone();
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert!(parse::<Request>(&bytes).is_err(), "{refused}");
     }
 }
 

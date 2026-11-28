@@ -107,7 +107,7 @@ pub fn content(title: &str) -> TrayContent {
                     checked: Some(true),
                 }],
             },
-            item("Settings (not on Windows yet)", None, false),
+            item("Record", None, false),
             MenuEntry::Separator,
             item("Quit", Some(7), true),
         ],

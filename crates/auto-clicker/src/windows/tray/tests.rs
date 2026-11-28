@@ -26,7 +26,7 @@ fn item(label: &str, enabled: bool, command: Option<u32>) -> (String, bool, Opti
 }
 
 #[test]
-fn the_menu_is_linuxs_with_settings_off_until_the_window_comes() {
+fn the_menu_is_linuxs() {
     let commands = Commands::default();
     let idle = content(&view(Activity::Idle), Language::English, 16, &commands);
     assert_eq!(
@@ -35,7 +35,7 @@ fn the_menu_is_linuxs_with_settings_off_until_the_window_comes() {
             item("Start clicking", true, Some(START)),
             item("Record", true, Some(RECORD)),
             item("Play >", true, None),
-            item("Settings (not on Windows yet)", false, None),
+            item("Settings", true, Some(SETTINGS)),
             item("-", false, None),
             item("Quit", true, Some(QUIT)),
         ]
@@ -47,7 +47,7 @@ fn the_menu_is_linuxs_with_settings_off_until_the_window_comes() {
             item("Sluta klicka", true, Some(STOP)),
             item("Spela in", false, Some(RECORD)),
             item("Spela upp >", true, None),
-            item("Inställningar (finns inte på Windows än)", false, None),
+            item("Inställningar", true, Some(SETTINGS)),
             item("-", false, None),
             item("Avsluta", true, Some(QUIT)),
         ]

@@ -38,8 +38,10 @@ pub enum Captured {
 impl Capture {
     /// What a press of `code` with `modifiers` held captures; `None` for a
     /// press that does not end the capture: a modifier while capturing a
-    /// hotkey, or a button that is no key.
-    pub(super) fn press(self, code: u16, modifiers: Modifiers) -> Option<Captured> {
+    /// hotkey, or a button that is no key. The reader of the keyboards asks
+    /// it, and so does the settings window where it captures from its own
+    /// key events (Windows).
+    pub fn press(self, code: u16, modifiers: Modifiers) -> Option<Captured> {
         let key = Key::new(code)?;
         if code == ESC {
             return Some(Captured::Cancelled);

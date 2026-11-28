@@ -281,6 +281,9 @@ msgstr "Om"
 msgid "Auto clicker for KDE Plasma on Wayland."
 msgstr "Autoklickare för KDE Plasma på Wayland."
 
+msgid "Auto clicker for Windows 11."
+msgstr "Autoklickare för Windows 11."
+
 msgid "Yes"
 msgstr "Ja"
 

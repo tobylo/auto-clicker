@@ -53,6 +53,8 @@ use auto_clicker_core::locale::Language;
 mod positions;
 #[path = "windows_daemon/resend.rs"]
 mod resend;
+#[path = "windows_daemon/settings.rs"]
+mod settings;
 #[path = "windows_daemon/unelevated.rs"]
 mod unelevated;
 
@@ -590,10 +592,7 @@ const LABELS: &[(&str, &str)] = &[
     ("Stop recording", "Sluta spela in"),
     ("Play", "Spela upp"),
     ("Stop playing", "Sluta spela upp"),
-    (
-        "Settings (not on Windows yet)",
-        "Inställningar (finns inte på Windows än)",
-    ),
+    ("Settings", "Inställningar"),
     ("", ""),
     ("Quit", "Avsluta"),
 ];
@@ -672,7 +671,7 @@ fn every_tray_item_sends_what_it_sends_on_linux() {
             // says so.
             line("Record (movement only)", false),
             line("Play", false),
-            line("Settings (not on Windows yet)", true),
+            line("Settings", false),
             line("", true),
             line("Quit", false),
         ]

@@ -249,5 +249,20 @@ pub fn key(scan: u8, extended: bool, virtual_key: u16) -> Option<Key> {
     Key::new(code)
 }
 
+/// The key a window message reports as `scan_code`: its scan code, with
+/// 0xE000 for an extended key, as winit's `to_scancode` gives it on
+/// Windows. Pause comes as a plain 0x45 there, NumLock as an extended one.
+/// For the settings window, which captures a hotkey from its own key
+/// events (WN10).
+pub fn window_message_key(scan_code: u32) -> Option<Key> {
+    let extended = scan_code & 0xFF00 == 0xE000;
+    if scan_code & 0xFF00 != 0 && !extended {
+        return None;
+    }
+    let scan = u8::try_from(scan_code & 0xFF).ok()?;
+    let virtual_key = if scan_code == 0x45 { VK_PAUSE } else { 0 };
+    key(scan, extended, virtual_key)
+}
+
 #[cfg(test)]
 mod tests;

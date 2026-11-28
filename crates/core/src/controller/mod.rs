@@ -214,6 +214,14 @@ pub trait Platform {
         reports_triggers(self.input_reader())
     }
 
+    /// Whether the settings window captures hotkeys from its own key
+    /// events, while the reader registers none (Windows: M5 brief decision
+    /// 9), rather than the reader capturing from the keyboards. The
+    /// default reads them itself.
+    fn window_captures(&self) -> bool {
+        window_captures(self.input_reader())
+    }
+
     /// Whether a run started now could reach the window in front. On
     /// Windows, not while that window runs as administrator (or might),
     /// nor on the secure desktop: Windows drops what the program sends
@@ -387,6 +395,14 @@ struct Running<B: InputBackend> {
     loss: InputLoss,
     /// Why the devices were lost, once `loss` fired.
     lost: Option<InputError>,
+}
+
+/// Whether the settings window captures hotkeys itself when the platform
+/// does not say: never, since a reader of the keyboards captures, and the
+/// desktop's shortcuts capture nothing.
+pub(super) fn window_captures(reader: InputReader) -> bool {
+    let _ = reader;
+    false
 }
 
 /// Whether a platform's reader reports its triggers when the platform does

@@ -12,7 +12,7 @@ use auto_clicker_core::message::{
 use auto_clicker_core::playback::Speed;
 use slint::SharedString;
 
-use crate::linux::ui::Texts;
+use crate::ui::Texts;
 
 mod notice;
 

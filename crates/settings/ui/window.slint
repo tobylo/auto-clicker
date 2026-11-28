@@ -213,7 +213,9 @@ export component SettingsWindow inherits Window {
     in property <string> hotkey-recording;
     in property <string> hotkey-playback;
     in property <bool> desktop-hotkeys;
-    // Input
+    // Input: the routes are Linux's; on Windows they are neither shown nor
+    // changed.
+    in property <bool> on-windows;
     in-out property <int> output-route;
     in-out property <int> hotkeys-route;
     in property <bool> routes-pending;
@@ -476,7 +478,7 @@ export component SettingsWindow inherits Window {
                         enabled: root.may-ask;
                         clicked => { root.configure-shortcuts(); }
                     }
-                    Row {
+                    if !root.on-windows: Row {
                         label: @tr("Hotkeys come from");
                         ComboBox {
                             enabled: !root.waiting;
@@ -484,7 +486,7 @@ export component SettingsWindow inherits Window {
                             current-index <=> root.hotkeys-route;
                         }
                     }
-                    Row {
+                    if !root.on-windows: Row {
                         label: @tr("Clicks and keys go through");
                         ComboBox {
                             enabled: !root.waiting;
@@ -492,7 +494,7 @@ export component SettingsWindow inherits Window {
                             current-index <=> root.output-route;
                         }
                     }
-                    if root.routes-pending: Text {
+                    if root.routes-pending && !root.on-windows: Text {
                         text: @tr("A change of route applies after the program restarts.");
                         wrap: word-wrap;
                     }
@@ -597,7 +599,7 @@ export component SettingsWindow inherits Window {
                     padding: 8px;
                     alignment: start;
                     Text {
-                        text: @tr("Auto clicker for KDE Plasma on Wayland.");
+                        text: root.on-windows ? @tr("Auto clicker for Windows 11.") : @tr("Auto clicker for KDE Plasma on Wayland.");
                     }
                     AboutSlint { }
                 }
